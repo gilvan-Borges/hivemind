@@ -1,0 +1,61 @@
+version: 1
+active: padrao
+settings:
+  jira_enabled: true
+  auto_commit: false
+  auto_pr: false
+  max_qa_loops: 3
+  base_branch: main
+  confirm_shell: true
+  shell_allowlist:
+    - git
+    - go
+    - python
+    - pytest
+teams:
+  - name: padrao
+    description: Time de exemplo com um desenvolvedor
+    agents:
+      - name: pm
+        role: project_manager
+        provider: agy
+        model: agy
+      - name: tech_lead
+        role: tech_lead
+        provider: agy
+        model: agy:gemini-3.8-flash-medium:medium
+      - name: architect
+        role: architect
+        provider: agy
+        model: agy
+      - name: dev_1
+        role: developer
+        provider: agy
+        model: agy
+      - name: qa
+        role: qa
+        provider: agy
+        model: agy
+  - name: revisao
+    description: Time em que o QA usa outro modelo
+    agents:
+      - name: pm
+        role: project_manager
+        provider: gemini
+        model: gemini-flash-latest
+      - name: tech_lead
+        role: tech_lead
+        provider: gemini
+        model: gemini-flash-latest
+      - name: architect
+        role: architect
+        provider: gemini
+        model: gemini-flash-latest
+      - name: dev_1
+        role: developer
+        provider: openai
+        model: gpt-4.1
+      - name: qa
+        role: qa
+        provider: anthropic
+        model: claude-sonnet-4-5

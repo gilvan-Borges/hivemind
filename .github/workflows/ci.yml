@@ -1,0 +1,63 @@
+name: HiveMind CLI
+
+on:
+  push:
+    branches:
+      - hivemind-cli-go
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - name: Testes com LLM, git, gh e Jira simulados
+        run: go test ./...
+
+  build:
+    name: Binário ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            bin: hivemind
+          - goos: windows
+            goarch: amd64
+            bin: hivemind.exe
+          - goos: darwin
+            goarch: amd64
+            bin: hivemind
+          - goos: darwin
+            goarch: arm64
+            bin: hivemind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - name: Compilar binário estático
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w" -o "dist/${{ matrix.bin }}" ./cmd/hivemind
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hivemind-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ matrix.bin }}
