@@ -9,6 +9,7 @@ function escapeHtml(text: string): string {
 
 function formatInline(escapedLine: string): string {
   return escapedLine
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
     .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
 }
@@ -24,6 +25,17 @@ export function renderMarkdownLite(raw: string): string {
     if (prose) {
       const lines = prose.split("\n");
       const formattedLines = lines.map((line) => {
+        const heading = line.match(/^(#{1,4})\s+(.*)$/);
+        if (heading) {
+          return `<div class="md-h${heading[1].length}">${formatInline(heading[2])}</div>`;
+        }
+        const quote = line.match(/^&gt;\s?(.*)$/);
+        if (quote) {
+          return `<div class="md-quote">${formatInline(quote[1])}</div>`;
+        }
+        if (/^\s*(---|___)\s*$/.test(line)) {
+          return `<hr class="md-hr" />`;
+        }
         const bullet = line.match(/^\s*[-*]\s+(.*)$/);
         if (bullet) {
           return `<div class="md-li"><span class="md-bullet">•</span><span>${formatInline(bullet[1])}</span></div>`;

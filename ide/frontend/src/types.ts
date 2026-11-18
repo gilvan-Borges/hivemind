@@ -176,6 +176,7 @@ export interface EditorTab {
   content: string;
   dirty: boolean;
   diff?: FileDiff;
+  mdView?: "preview" | "source";
 }
 
 export interface GitHubStatus {
