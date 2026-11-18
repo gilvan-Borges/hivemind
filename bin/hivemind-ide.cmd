@@ -1,9 +1,9 @@
 @echo off
 setlocal
 set "ROOT=%~dp0.."
-set "EXE=%ROOT%\ide\build\hivemind-ide.exe"
+set "EXE=%ROOT%\ide\build\bin\hivemind-ide.exe"
 if not exist "%EXE%" (
-  set "EXE=%ROOT%\ide\build\bin\hivemind-ide.exe"
+  set "EXE=%ROOT%\ide\build\hivemind-ide.exe"
 )
 if not exist "%EXE%" (
   echo Erro: executavel da HiveMind IDE nao encontrado em "%ROOT%\ide\build\".
