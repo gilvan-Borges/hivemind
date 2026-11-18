@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
@@ -18,10 +19,21 @@ import (
 
 // App exposes backend capabilities to the Wails frontend.
 type App struct {
-	ctx        context.Context
-	initialDir string
-	smokeCheck bool
-	sessions   *idecore.SessionManager
+	ctx         context.Context
+	initialDir  string
+	smokeCheck  bool
+	sessions    *idecore.SessionManager
+	fileIndex   *idecore.FileIndex
+	mu          sync.Mutex
+	agyStatus   modelx.AgyStatus
+	modelsCache []modelx.AgyModel
+	agyCachedAt time.Time
+}
+
+// AgyBootstrap carries the cached or freshly probed agy status and model list.
+type AgyBootstrap struct {
+	Status modelx.AgyStatus  `json:"status"`
+	Models []modelx.AgyModel `json:"models"`
 }
 
 // InitialState is returned when the IDE frontend boots.
@@ -51,6 +63,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 	app := &App{
 		initialDir: initialDir,
 		smokeCheck: smokeCheck,
+		fileIndex:  idecore.NewFileIndex(),
 	}
 	app.sessions = idecore.NewSessionManager(func(ev idecore.LaneEvent) {
 		if app.ctx != nil {
@@ -91,7 +104,15 @@ func (a *App) WindowClose() {
 	}
 }
 
-// GetInitialState loads the initial workspace, recent list, agy status, and models.
+// WindowIsMaximized returns whether the window is currently maximized.
+func (a *App) WindowIsMaximized() bool {
+	if a.ctx == nil {
+		return false
+	}
+	return wailsrt.WindowIsMaximised(a.ctx)
+}
+
+// GetInitialState loads the initial workspace and recent list without blocking on agy.
 func (a *App) GetInitialState() InitialState {
 	dir := a.initialDir
 	if dir == "" {
@@ -99,13 +120,12 @@ func (a *App) GetInitialState() InitialState {
 	}
 	proj, _ := a.OpenProject(dir)
 	recent := idecore.LoadRecentProjects("")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	agy := modelx.ProbeAgy(ctx)
-	var models []modelx.AgyModel
-	if agy.LoggedIn {
-		models, _ = modelx.ListAgyModels(ctx)
-	}
+
+	a.mu.Lock()
+	agy := a.agyStatus
+	models := append([]modelx.AgyModel(nil), a.modelsCache...)
+	a.mu.Unlock()
+
 	return InitialState{
 		InitialWorkspace: dir,
 		InitialProject:   proj,
@@ -114,6 +134,36 @@ func (a *App) GetInitialState() InitialState {
 		Models:           models,
 		GoVersion:        runtime.Version(),
 		OS:               runtime.GOOS,
+	}
+}
+
+// BootstrapAgy probes agy and fetches its models in a single process invocation,
+// caching the result for 5 minutes unless force is true.
+func (a *App) BootstrapAgy(force bool) AgyBootstrap {
+	a.mu.Lock()
+	if !force && !a.agyCachedAt.IsZero() && time.Since(a.agyCachedAt) < 5*time.Minute && a.agyStatus.Found {
+		out := AgyBootstrap{
+			Status: a.agyStatus,
+			Models: append([]modelx.AgyModel(nil), a.modelsCache...),
+		}
+		a.mu.Unlock()
+		return out
+	}
+	a.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	status, models := modelx.ProbeAndListAgy(ctx)
+
+	a.mu.Lock()
+	a.agyStatus = status
+	a.modelsCache = models
+	a.agyCachedAt = time.Now()
+	a.mu.Unlock()
+
+	return AgyBootstrap{
+		Status: status,
+		Models: models,
 	}
 }
 
@@ -152,8 +202,13 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		proj.HasTeam = true
 		proj.TeamConfig = cfg
 	}
-	files, _ := idecore.ListFileTree(abs, 5)
+	files, _ := idecore.ListDir(abs, "")
 	proj.Files = files
+	if a.fileIndex != nil {
+		go func(target string) {
+			_ = a.fileIndex.Refresh(target)
+		}(abs)
+	}
 	return proj, nil
 }
 
@@ -162,14 +217,22 @@ func (a *App) GetRecentProjects() []string {
 	return idecore.LoadRecentProjects("")
 }
 
-// ListFiles refreshes the explorer file tree.
+// ListFiles refreshes the shallow root explorer entries.
 func (a *App) ListFiles(workspace string) ([]idecore.FileNode, error) {
-	return idecore.ListFileTree(workspace, 5)
+	return idecore.ListDir(workspace, "")
 }
 
-// SearchFiles returns matching relative paths for @arquivo autocomplete.
+// ListDirectory lists immediate children of relDir for lazy tree expansion.
+func (a *App) ListDirectory(workspace, relDir string) ([]idecore.FileNode, error) {
+	return idecore.ListDir(workspace, relDir)
+}
+
+// SearchFiles returns matching relative paths for @arquivo and Ctrl+P Quick Open.
 func (a *App) SearchFiles(workspace, query string) []string {
-	return idecore.SearchFiles(workspace, query, 20)
+	if a.fileIndex != nil {
+		return a.fileIndex.Search(workspace, query, 25)
+	}
+	return idecore.SearchFiles(workspace, query, 25)
 }
 
 // ReadFile reads a workspace file.
@@ -182,18 +245,18 @@ func (a *App) SaveFile(workspace, relOrAbs, content string) error {
 	return idecore.WriteWorkspaceFile(workspace, relOrAbs, content)
 }
 
-// ListModels fetches available models from `agy models`.
+// ListModels fetches available models using the cached agy bootstrap.
 func (a *App) ListModels() ([]modelx.AgyModel, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	return modelx.ListAgyModels(ctx)
+	boot := a.BootstrapAgy(false)
+	if !boot.Status.LoggedIn && len(boot.Models) == 0 {
+		return nil, fmt.Errorf("%s", boot.Status.Detail)
+	}
+	return boot.Models, nil
 }
 
-// DoctorAgy checks `agy` installation and login status.
+// DoctorAgy forces a fresh `agy` check and refreshes the model cache.
 func (a *App) DoctorAgy() modelx.AgyStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	return modelx.ProbeAgy(ctx)
+	return a.BootstrapAgy(true).Status
 }
 
 // SaveTeamWizard creates or updates a team in .hivemind/team.yaml without altering .gitignore.

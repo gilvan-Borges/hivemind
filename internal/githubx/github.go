@@ -191,6 +191,7 @@ func (c *CLI) Enabled() bool { return c.Bin != "" && c.Owner != "" && c.Repo != 
 
 func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
+	hideWindow(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

@@ -18,9 +18,14 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
+const MAX_HIGHLIGHT_CHARS = 150000;
+
 export function highlightCode(code: string, filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   const escaped = escapeHtml(code);
+  if (code.length > MAX_HIGHLIGHT_CHARS) {
+    return escaped;
+  }
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
 
   if (ext === "json" || ext === "yaml" || ext === "yml") {
     return escaped

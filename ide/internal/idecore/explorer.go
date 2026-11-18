@@ -6,15 +6,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // FileNode represents a file or directory in the workspace explorer tree.
 type FileNode struct {
-	Name     string     `json:"name"`
-	Path     string     `json:"path"`
-	RelPath  string     `json:"relPath"`
-	IsDir    bool       `json:"isDir"`
-	Children []FileNode `json:"children,omitempty"`
+	Name        string     `json:"name"`
+	Path        string     `json:"path"`
+	RelPath     string     `json:"relPath"`
+	IsDir       bool       `json:"isDir"`
+	HasChildren bool       `json:"hasChildren,omitempty"`
+	Children    []FileNode `json:"children,omitempty"`
 }
 
 var ignoredDirs = map[string]bool{
@@ -46,6 +48,53 @@ func ResolveSafe(root, relOrAbs string) (string, error) {
 		return "", fmt.Errorf("caminho fora do workspace: %s", relOrAbs)
 	}
 	return target, nil
+}
+
+// ListDir returns immediate entries inside relDir (or root when relDir is empty)
+// without descending into subdirectories, enabling lazy folder expansion.
+func ListDir(root, relDir string) ([]FileNode, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	absRoot = filepath.Clean(absRoot)
+	target := absRoot
+	if strings.TrimSpace(relDir) != "" {
+		target, err = ResolveSafe(absRoot, relDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		di, dj := entries[i].IsDir(), entries[j].IsDir()
+		if di != dj {
+			return di
+		}
+		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	})
+	nodes := make([]FileNode, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() && ignoredDirs[name] {
+			continue
+		}
+		full := filepath.Join(target, name)
+		rel, _ := filepath.Rel(absRoot, full)
+		rel = filepath.ToSlash(rel)
+		isDir := entry.IsDir()
+		nodes = append(nodes, FileNode{
+			Name:        name,
+			Path:        full,
+			RelPath:     rel,
+			IsDir:       isDir,
+			HasChildren: isDir && name != ".hivemind",
+		})
+	}
+	return nodes, nil
 }
 
 // ListFileTree builds a bounded directory tree for the File Explorer.
@@ -165,4 +214,118 @@ func SearchFiles(root, query string, limit int) []string {
 		return nil
 	})
 	return results
+}
+
+const maxIndexedFiles = 20000
+
+// FileIndex maintains a thread-safe in-memory index of workspace file paths
+// for sub-millisecond @arquivo and Ctrl+P Quick Open searches.
+type FileIndex struct {
+	mu    sync.RWMutex
+	root  string
+	files []string
+}
+
+// NewFileIndex constructs an empty FileIndex.
+func NewFileIndex() *FileIndex {
+	return &FileIndex{}
+}
+
+// Refresh walks root once and replaces the indexed file list.
+func (f *FileIndex) Refresh(root string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	absRoot = filepath.Clean(absRoot)
+	var collected []string
+	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if ignoredDirs[d.Name()] || d.Name() == ".hivemind" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(absRoot, path)
+		if err != nil {
+			return nil
+		}
+		collected = append(collected, filepath.ToSlash(rel))
+		if len(collected) >= maxIndexedFiles {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	f.mu.Lock()
+	f.root = absRoot
+	f.files = collected
+	f.mu.Unlock()
+	return nil
+}
+
+// Search returns up to limit paths matching query, ranking filename matches
+// ahead of directory path matches.
+func (f *FileIndex) Search(root, query string, limit int) []string {
+	if limit <= 0 {
+		limit = 25
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	absRoot = filepath.Clean(absRoot)
+
+	f.mu.RLock()
+	needPopulate := f.root != absRoot || len(f.files) == 0
+	f.mu.RUnlock()
+	if needPopulate {
+		_ = f.Refresh(absRoot)
+	}
+
+	f.mu.RLock()
+	files := f.files
+	f.mu.RUnlock()
+
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		if len(files) <= limit {
+			out := make([]string, len(files))
+			copy(out, files)
+			return out
+		}
+		out := make([]string, limit)
+		copy(out, files[:limit])
+		return out
+	}
+
+	var basePrefix, baseSub, pathSub []string
+	for _, rel := range files {
+		lowerRel := strings.ToLower(rel)
+		base := lowerRel
+		if idx := strings.LastIndex(lowerRel, "/"); idx >= 0 {
+			base = lowerRel[idx+1:]
+		}
+		switch {
+		case strings.HasPrefix(base, q):
+			basePrefix = append(basePrefix, rel)
+		case strings.Contains(base, q):
+			baseSub = append(baseSub, rel)
+		case strings.Contains(lowerRel, q):
+			pathSub = append(pathSub, rel)
+		}
+	}
+
+	out := make([]string, 0, limit)
+	for _, bucket := range [][]string{basePrefix, baseSub, pathSub} {
+		for _, item := range bucket {
+			out = append(out, item)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
 }

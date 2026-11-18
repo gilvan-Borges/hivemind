@@ -820,3 +820,34 @@ func ParseAgyModelsOutput(raw string) []AgyModel {
 	}
 	return models
 }
+
+// ProbeAndListAgy runs `agy models` once (15s timeout) and returns both AgyStatus and parsed models.
+func ProbeAndListAgy(ctx context.Context) (AgyStatus, []AgyModel) {
+	path, err := LookAgy()
+	if err != nil {
+		return AgyStatus{Detail: "ausente do PATH. Instale o Antigravity CLI e entre com `agy`"}, nil
+	}
+	status := AgyStatus{Found: true, Path: path}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := agyCommand(probeCtx, path, []string{"models"})
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		status.LoggedIn = true
+		status.Detail = "autenticado (`agy models` ok)"
+		return status, ParseAgyModelsOutput(stdout.String())
+	}
+	if probeCtx.Err() != nil {
+		status.Detail = "encontrado, mas `agy models` excedeu o tempo"
+		return status, nil
+	}
+	if looksLikeAuth(stderr.String()) {
+		status.Detail = "encontrado, sem login. Rode `agy` e entre com a conta Google Pro"
+		return status, nil
+	}
+	status.Detail = "encontrado, mas `agy models` falhou"
+	return status, nil
+}

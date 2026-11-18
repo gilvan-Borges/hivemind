@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
@@ -118,8 +120,40 @@ func WorkspaceDiff(ctx context.Context, workspace string) ([]FileDiff, error) {
 	return ParseUnifiedDiff(raw), nil
 }
 
+// FastCurrentBranch reads <workspace>/.git/HEAD directly without spawning git.
+// Returns empty string when .git is absent, unreadable, or a worktree file pointer.
+func FastCurrentBranch(workspace string) string {
+	gitPath := filepath.Join(workspace, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(gitPath, "HEAD"))
+	if err != nil {
+		return ""
+	}
+	head := strings.TrimSpace(string(data))
+	if strings.HasPrefix(head, "ref: refs/heads/") {
+		return strings.TrimSpace(strings.TrimPrefix(head, "ref: refs/heads/"))
+	}
+	if strings.HasPrefix(head, "ref: ") {
+		ref := strings.TrimSpace(strings.TrimPrefix(head, "ref: "))
+		if idx := strings.LastIndex(ref, "/"); idx >= 0 && idx+1 < len(ref) {
+			return ref[idx+1:]
+		}
+		return ref
+	}
+	if len(head) >= 7 {
+		return head[:7]
+	}
+	return ""
+}
+
 // CurrentBranch returns the active git branch or empty string if not a git repo.
 func CurrentBranch(ctx context.Context, workspace string) string {
+	if b := FastCurrentBranch(workspace); b != "" {
+		return b
+	}
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspace) {
 		return ""

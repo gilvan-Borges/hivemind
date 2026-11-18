@@ -171,3 +171,81 @@ func TestParseAgyModelsOutput(t *testing.T) {
 		t.Fatalf("unexpected model[0]: %+v", models[0])
 	}
 }
+
+func TestFastCurrentBranch(t *testing.T) {
+	t.Run("BranchRef", func(t *testing.T) {
+		dir := t.TempDir()
+		gitDir := filepath.Join(dir, ".git")
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/feature/x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := FastCurrentBranch(dir); got != "feature/x" {
+			t.Fatalf("expected feature/x, got %q", got)
+		}
+	})
+
+	t.Run("DetachedHash", func(t *testing.T) {
+		dir := t.TempDir()
+		gitDir := filepath.Join(dir, ".git")
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("0123456789abcdef0123456789abcdef01234567\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := FastCurrentBranch(dir); got != "0123456" {
+			t.Fatalf("expected 0123456, got %q", got)
+		}
+	})
+
+	t.Run("NonGitDir", func(t *testing.T) {
+		dir := t.TempDir()
+		if got := FastCurrentBranch(dir); got != "" {
+			t.Fatalf("expected empty branch, got %q", got)
+		}
+	})
+}
+
+func TestListDirAndFileIndex(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "src", "app"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# app"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "src", "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "src", "app", "service.go"), []byte("package app"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "node_modules", "pkg", "index.js"), []byte(""), 0o644)
+
+	nodes, err := ListDir(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 root entries (src + README.md, ignoring node_modules), got %+v", nodes)
+	}
+	if !nodes[0].IsDir || nodes[0].Name != "src" || !nodes[0].HasChildren || len(nodes[0].Children) != 0 {
+		t.Fatalf("expected shallow dir node with HasChildren=true and empty Children, got %+v", nodes[0])
+	}
+	if _, err := ListDir(dir, "../escape"); err == nil {
+		t.Fatal("expected traversal rejection")
+	}
+
+	idx := NewFileIndex()
+	if err := idx.Refresh(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Searching "app" should rank "src/app/service.go" (only path match) and ignore node_modules.
+	res := idx.Search(dir, "index.js", 10)
+	if len(res) != 0 {
+		t.Fatalf("expected node_modules ignored, got %+v", res)
+	}
+	// Create a file whose basename starts with "app" to test basename prefix ranking ahead of directory match.
+	_ = os.WriteFile(filepath.Join(dir, "src", "app_config.yaml"), []byte("x: 1"), 0o644)
+	_ = idx.Refresh(dir)
+	ranked := idx.Search(dir, "app", 10)
+	if len(ranked) != 2 || ranked[0] != "src/app_config.yaml" {
+		t.Fatalf("expected basename prefix ranked first, got %+v", ranked)
+	}
+}
