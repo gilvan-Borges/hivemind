@@ -25,6 +25,8 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	switch provider {
 	case "agy", "antigravity":
 		return NewAgy("", modelName)
+	case "opencode", "opencode-zen", "zen":
+		return NewOpenCode(ctx, modelName)
 	case "gemini", "vertex":
 		return newGemini(ctx, provider, modelName)
 	case "anthropic":
@@ -32,7 +34,7 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	case "openai", "openai-responses":
 		return newOpenAI(ctx, provider, modelName)
 	default:
-		return nil, fmt.Errorf("provedor %q não é suportado; use agy, gemini, vertex, anthropic ou openai", provider)
+		return nil, fmt.Errorf("provedor %q não é suportado; use agy, opencode, gemini, vertex, anthropic ou openai", provider)
 	}
 }
 

@@ -350,6 +350,8 @@ func NormalizeProvider(provider, model string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "agy", "antigravity":
 		return "agy"
+	case "opencode", "opencode-zen", "zen":
+		return "opencode"
 	case "gemini", "google":
 		return "gemini"
 	case "vertex":
@@ -372,6 +374,8 @@ func inferProvider(model string) string {
 	switch {
 	case m == "agy" || strings.HasPrefix(m, "agy:"):
 		return "agy"
+	case m == "opencode" || strings.HasPrefix(m, "opencode:") || strings.HasPrefix(m, "opencode/") || strings.HasPrefix(m, "zen:"):
+		return "opencode"
 	case strings.Contains(m, "claude"):
 		return "anthropic"
 	case strings.HasPrefix(m, "gpt-"), strings.HasPrefix(m, "gpt"), strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"), strings.HasPrefix(m, "chatgpt"):

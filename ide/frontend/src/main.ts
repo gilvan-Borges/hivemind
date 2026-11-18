@@ -14,6 +14,7 @@ import type {
   FileNode,
   GitHubStatus,
   ImageAttachment,
+  OpenCodeStatus,
   PermissionMode,
   ProjectInfo,
   ProjectIssue,
@@ -60,6 +61,8 @@ const state = {
   recent: [] as string[],
   models: [] as AgyModel[],
   agyStatus: null as AgyStatus | null,
+  openCodeModels: [] as AgyModel[],
+  openCodeStatus: null as OpenCodeStatus | null,
   ghStatus: null as GitHubStatus | null,
   goVersion: "",
   os: "windows",
@@ -81,6 +84,7 @@ const state = {
   diffs: [] as FileDiff[],
   showFileMenu: false,
   showWizard: false,
+  showOpenCodeModal: false,
   doctorModal: null as AgyStatus | null,
   confirmModal: null as ConfirmDialogState | null,
   pathModal: null as null | {
@@ -494,6 +498,7 @@ function mountShell() {
         <span id="status-team">Equipe: -</span>
         <span class="status-chip" id="status-tokens" style="cursor:pointer" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</span>
         <span id="status-agy" class="dim" style="cursor:pointer" title="Clique para abrir Doctor (agy)">agy: verificando…</span>
+        <span id="status-opencode" class="dim" style="cursor:pointer" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</span>
         <button class="ghost mini" id="status-term-btn" style="height:20px;padding:0 6px" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
@@ -583,6 +588,24 @@ async function openDoctorModal() {
   setStatus("Pronto");
 }
 
+async function openOpenCodeModal() {
+  state.showOpenCodeModal = true;
+  renderModalLayer();
+  const backend = api();
+  if (!backend?.BootstrapOpenCode) return;
+  try {
+    const res = await backend.BootstrapOpenCode(true);
+    state.openCodeStatus = res.status;
+    if (res.models && res.models.length > 0) {
+      state.openCodeModels = res.models;
+    }
+    updateStatusBar();
+    renderModalLayer();
+  } catch {
+    // keep modal open for token entry
+  }
+}
+
 function bindStaticShellEvents() {
   const titlebar = document.getElementById("titlebar");
   titlebar?.addEventListener("dblclick", (e) => {
@@ -634,6 +657,7 @@ function bindStaticShellEvents() {
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
   document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
+  document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -806,6 +830,9 @@ function bindStaticShellEvents() {
       } else if (state.mentionResults.length > 0) {
         state.mentionResults = [];
         renderMentionPopup();
+      } else if (state.showOpenCodeModal) {
+        state.showOpenCodeModal = false;
+        renderModalLayer();
       } else if (state.doctorModal) {
         state.doctorModal = null;
         renderModalLayer();
@@ -971,6 +998,7 @@ function renderFileMenu() {
     <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Substituir Projeto na Aba Atual…</span></button>
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
     <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
+    <button class="dropdown-item" id="menu-opencode">${icons.bolt}<span>Token OpenCode Zen (API portátil)…</span></button>
     <button class="dropdown-item" id="menu-doctor">${icons.bolt}<span>Doctor — Antigravity CLI (agy)</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
@@ -998,6 +1026,11 @@ function renderFileMenu() {
     renderFileMenu();
     state.showWizard = true;
     renderModalLayer();
+  });
+  menu.querySelector("#menu-opencode")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    openOpenCodeModal();
   });
   menu.querySelector("#menu-doctor")?.addEventListener("click", () => {
     state.showFileMenu = false;
@@ -1069,6 +1102,22 @@ function updateStatusBar() {
     } else {
       agyEl.textContent = `agy: ${state.agyStatus.Detail}`;
       agyEl.style.color = "var(--amber)";
+    }
+  }
+  const ocEl = document.getElementById("status-opencode");
+  if (ocEl) {
+    const oc = state.openCodeStatus;
+    if (!oc) {
+      ocEl.textContent = "opencode: …";
+      ocEl.style.color = "";
+    } else if (oc.configured) {
+      ocEl.textContent = `opencode: token ok (${state.openCodeModels.length})`;
+      ocEl.style.color = "var(--green)";
+      ocEl.title = oc.detail;
+    } else {
+      ocEl.textContent = `opencode: configurar token (${state.openCodeModels.length})`;
+      ocEl.style.color = "var(--text-dim)";
+      ocEl.title = oc.detail || "Clique para configurar OPENCODE_API_KEY";
     }
   }
   if (envEl) envEl.textContent = `${state.goVersion} · ${state.os}`;
@@ -1283,6 +1332,10 @@ async function boot() {
     state.recent = init.recentProjects || [];
     state.models = init.models || [];
     if (init.agyStatus?.Found) state.agyStatus = init.agyStatus;
+    if (init.openCodeModels && init.openCodeModels.length > 0) state.openCodeModels = init.openCodeModels;
+    if (init.openCodeStatus && (init.openCodeStatus.configured || init.openCodeStatus.modelCount > 0)) {
+      state.openCodeStatus = init.openCodeStatus;
+    }
     state.goVersion = init.goVersion || "";
     state.os = init.os || "windows";
     applyProject(init.initialProject);
@@ -1309,6 +1362,17 @@ function bootstrapAsync(rootDir?: string) {
     updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     if (state.showWizard || state.doctorModal) renderModalLayer();
+  }).catch(() => {});
+
+  backend.BootstrapOpenCode?.(false).then((res) => {
+    state.openCodeStatus = res.status;
+    if (res.models && res.models.length > 0) {
+      state.openCodeModels = res.models;
+    }
+    updateStatusBar();
+    updateMissionBoardIfOpen();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    if (state.showWizard || state.showOpenCodeModal) renderModalLayer();
   }).catch(() => {});
 
   if (rootDir) {
@@ -1877,23 +1941,49 @@ function highlightActiveTreeRow() {
   });
 }
 
-function buildModelSelectOptions(currentModel: string): string {
-  const cur = currentModel || "agy";
-  const hasCurInList = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
-  const head = !hasCurInList ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : "";
-  if (state.models.length === 0) {
-    return head || `<option value="agy" selected>agy (padrão)</option>`;
+function buildModelSelectOptions(currentModel: string, includeDefaultBlank = false): string {
+  const cur = (currentModel || "").trim();
+  const blank = includeDefaultBlank ? `<option value="" ${!cur ? "selected" : ""}>(usar padrão)</option>` : "";
+
+  const inAgy = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
+  const inOpenCode = state.openCodeModels.some(
+    (m) => `opencode:${m.slug}` === cur || `opencode/${m.slug}` === cur
+  );
+  const effectiveCur = cur || (!includeDefaultBlank ? (state.openCodeStatus?.configured && state.openCodeModels.length > 0 ? `opencode:${state.openCodeModels[0].slug}` : "agy") : "");
+  const head =
+    effectiveCur && !inAgy && !inOpenCode
+      ? `<option value="${escapeHtml(effectiveCur)}" selected>${escapeHtml(effectiveCur)}</option>`
+      : "";
+
+  const groups: string[] = [];
+  if (state.openCodeModels.length > 0) {
+    const ocLabel = state.openCodeStatus?.configured
+      ? `OpenCode Zen — Token OK (${state.openCodeModels.length})`
+      : `OpenCode Zen — Sem token (modelos -free / configure o token)`;
+    const opts = state.openCodeModels
+      .map((m) => {
+        const val = `opencode:${m.slug}`;
+        const sel = cur === val || cur === `opencode/${m.slug}` ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${sel}>opencode:${escapeHtml(m.slug)}</option>`;
+      })
+      .join("");
+    groups.push(`<optgroup label="${escapeHtml(ocLabel)}">${opts}</optgroup>`);
   }
-  return (
-    head +
-    state.models
+  if (state.models.length > 0) {
+    const opts = state.models
       .map((m) => {
         const val = `agy:${m.slug}`;
-        const sel = val === cur || m.slug === cur ? "selected" : "";
-        return `<option value="${escapeHtml(val)}" ${sel}>${escapeHtml(m.slug)}</option>`;
+        const sel = cur === val || cur === m.slug ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${sel}>agy:${escapeHtml(m.slug)}</option>`;
       })
-      .join("")
-  );
+      .join("");
+    groups.push(`<optgroup label="Antigravity CLI (agy)">${opts}</optgroup>`);
+  }
+
+  if (groups.length === 0) {
+    return blank + (head || `<option value="agy" selected>agy (padrão)</option>`);
+  }
+  return blank + head + groups.join("");
 }
 
 async function handleInlineModelChange(agentName: string, newModel: string) {
@@ -4113,6 +4203,7 @@ function getCommandActions(): CommandAction[] {
     { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
     { id: "wizard", label: "Configurar Equipe (.hivemind/team.yaml)", run: () => { state.showWizard = true; renderModalLayer(); } },
+    { id: "opencode-token", label: "Configurar Token OpenCode Zen (OPENCODE_API_KEY)", run: () => openOpenCodeModal() },
     { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
     { id: "open-folder-tab", label: "Abrir Outro Projeto em Nova Aba Isolada…", shortcut: "Ctrl+Shift+O", run: () => openFolderDialog(true) },
     { id: "open-folder", label: "Substituir Projeto na Aba Atual…", run: () => openFolderDialog(false) },
@@ -4598,6 +4689,115 @@ function renderModalLayer() {
     return;
   }
 
+  if (state.showOpenCodeModal) {
+    const oc = state.openCodeStatus;
+    const baseUrl = oc?.baseUrl || "https://opencode.ai/zen/v1";
+    const statusBadge = oc?.configured
+      ? `<span style="color:var(--green);font-weight:600">Conectado (${escapeHtml(oc.keyMasked)}${oc.source === "env" ? " via OPENCODE_API_KEY" : " salvo localmente"})</span>`
+      : `<span style="color:var(--amber)">Sem token salvo (apenas modelos <code>-free</code> liberados)</span>`;
+
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="oc-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:520px">
+          <h3 class="modal-title">OpenCode Zen — Autenticação via Token (Portátil)</h3>
+          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px">
+            Funciona via HTTPS puro em qualquer máquina sem precisar do CLI do OpenCode instalado.
+            O token é salvo fora do repositório Git (em <code>credentials.json</code> do seu usuário) ou lido de <code>OPENCODE_API_KEY</code>.
+          </p>
+          <div style="font-size:12px;margin-bottom:10px"><strong>Status:</strong> ${statusBadge}</div>
+          <div class="form-grid">
+            <label>Token OpenCode:</label>
+            <input id="oc-api-key" type="password" placeholder="${oc?.configured ? "Cole novo token para substituir…" : "Cole sua chave OpenCode Zen (OPENCODE_API_KEY)"}" autocomplete="off" />
+
+            <label>Base URL:</label>
+            <input id="oc-base-url" value="${escapeHtml(baseUrl)}" placeholder="https://opencode.ai/zen/v1" />
+          </div>
+          <div style="margin-top:10px">
+            <div class="dim" style="font-size:11.5px;margin-bottom:4px">
+              Modelos disponíveis no catálogo (${state.openCodeModels.length}) — selecione <code>opencode:&lt;modelo&gt;</code> no Quadro ou Equipe:
+            </div>
+            <div style="max-height:150px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
+              ${state.openCodeModels.length === 0
+                ? `<span class="dim">Carregando catálogo de https://opencode.ai/zen/v1/models…</span>`
+                : state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`).join("")
+              }
+            </div>
+          </div>
+          <div id="oc-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          <div class="modal-footer">
+            ${oc?.configured && oc.source !== "env" ? `<button class="danger mini" id="oc-clear-token">Remover Token</button>` : ""}
+            <div class="spacer"></div>
+            <button id="oc-close">Fechar</button>
+            <button class="primary" id="oc-save">Salvar & Testar</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const closeOc = () => {
+      state.showOpenCodeModal = false;
+      renderModalLayer();
+    };
+    document.getElementById("oc-close")?.addEventListener("click", closeOc);
+    document.getElementById("oc-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "oc-modal-backdrop") closeOc();
+    });
+    document.getElementById("oc-clear-token")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SaveOpenCodeConfig) return;
+      try {
+        const res = await backend.SaveOpenCodeConfig("", "");
+        state.openCodeStatus = res.status;
+        if (res.models) state.openCodeModels = res.models;
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+        renderModalLayer();
+        setStatus("Token do OpenCode removido.");
+      } catch (err: any) {
+        const errEl = document.getElementById("oc-modal-err");
+        if (errEl) {
+          errEl.textContent = err?.message || String(err);
+          errEl.style.display = "block";
+        }
+      }
+    });
+    document.getElementById("oc-save")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SaveOpenCodeConfig) return;
+      const keyIn = (document.getElementById("oc-api-key") as HTMLInputElement | null)?.value.trim() || "";
+      const urlIn = (document.getElementById("oc-base-url") as HTMLInputElement | null)?.value.trim() || "";
+      if (!keyIn && !state.openCodeStatus?.configured) {
+        const errEl = document.getElementById("oc-modal-err");
+        if (errEl) {
+          errEl.textContent = "Cole seu token do OpenCode Zen antes de salvar.";
+          errEl.style.display = "block";
+        }
+        return;
+      }
+      try {
+        setStatus("Salvando e validando token OpenCode Zen…");
+        const res = keyIn
+          ? await backend.SaveOpenCodeConfig(keyIn, urlIn)
+          : await backend.BootstrapOpenCode(true);
+        state.openCodeStatus = res.status;
+        if (res.models && res.models.length > 0) state.openCodeModels = res.models;
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+        renderModalLayer();
+        setStatus(`OpenCode Zen pronto: ${res.status.detail}`);
+      } catch (err: any) {
+        const errEl = document.getElementById("oc-modal-err");
+        if (errEl) {
+          errEl.textContent = err?.message || String(err);
+          errEl.style.display = "block";
+        }
+      }
+    });
+    return;
+  }
+
   if (state.showWizard) {
     const settings = state.project?.teamConfig?.settings;
     const activeTeamName = state.project?.teamConfig?.active || "principal";
@@ -4613,20 +4813,8 @@ function renderModalLayer() {
     const curHomolog = settings?.homolog_branch || "homolog";
     const autoCommitChecked = settings ? settings.auto_commit !== false : true;
     const autoPRChecked = settings ? settings.auto_pr !== false : true;
-    const buildOptWithSel = (selectedModel?: string, includeDefaultBlank = false) => {
-      const sel = selectedModel || "";
-      const blank = includeDefaultBlank ? `<option value="" ${!sel ? "selected" : ""}>(usar padrão)</option>` : "";
-      if (state.models.length === 0) {
-        return blank + (sel ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)}</option>` : `<option value="agy">agy (padrão)</option>`);
-      }
-      const hasSel = sel && state.models.some((m) => `agy:${m.slug}` === sel || m.slug === sel);
-      const customOpt = sel && !hasSel ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)}</option>` : "";
-      return blank + customOpt + state.models.map((m) => {
-        const val = `agy:${m.slug}`;
-        const isSel = sel === val || sel === m.slug ? "selected" : "";
-        return `<option value="${escapeHtml(val)}" ${isSel}>${escapeHtml(m.name)} (${escapeHtml(m.slug)})</option>`;
-      }).join("");
-    };
+    const buildOptWithSel = (selectedModel?: string, includeDefaultBlank = false) =>
+      buildModelSelectOptions(selectedModel || "", includeDefaultBlank);
 
     layer.innerHTML = `
       <div class="modal-backdrop">
@@ -4691,6 +4879,8 @@ function renderModalLayer() {
           <div class="dim" style="margin-top:10px">Time base: <strong>3 agentes</strong> (Chefe/Arquiteto, Dev e QA). Em tarefas grandes, o Arquiteto dispara automaticamente de <strong>2 até ${curMaxDynDevs} devs paralelos</strong> em worktrees separadas.</div>
           <div id="wiz-error" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
+            <button class="mini" id="wiz-opencode-btn" title="Configurar token portátil do OpenCode Zen (OPENCODE_API_KEY)">${icons.bolt}<span>Token OpenCode…</span></button>
+            <div class="spacer"></div>
             <button id="wiz-cancel">Cancelar</button>
             <button class="primary" id="wiz-save">Salvar Equipe</button>
           </div>
@@ -4698,6 +4888,10 @@ function renderModalLayer() {
       </div>
     `;
 
+    document.getElementById("wiz-opencode-btn")?.addEventListener("click", () => {
+      state.showWizard = false;
+      openOpenCodeModal();
+    });
     document.getElementById("wiz-cancel")?.addEventListener("click", () => {
       state.showWizard = false;
       renderModalLayer();

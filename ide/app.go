@@ -19,17 +19,20 @@ import (
 
 // App exposes backend capabilities to the Wails frontend.
 type App struct {
-	ctx         context.Context
-	initialDir  string
-	smokeCheck  bool
-	sessions    *idecore.SessionManager
-	fileIndex   *idecore.FileIndex
-	mu          sync.Mutex
-	agyStatus   modelx.AgyStatus
-	modelsCache []modelx.AgyModel
-	agyCachedAt time.Time
-	termMu      sync.Mutex
-	termCancels map[string]context.CancelFunc
+	ctx              context.Context
+	initialDir       string
+	smokeCheck       bool
+	sessions         *idecore.SessionManager
+	fileIndex        *idecore.FileIndex
+	mu               sync.Mutex
+	agyStatus        modelx.AgyStatus
+	modelsCache      []modelx.AgyModel
+	agyCachedAt      time.Time
+	openCodeStatus   modelx.OpenCodeStatus
+	openCodeModels   []modelx.AgyModel
+	openCodeCachedAt time.Time
+	termMu           sync.Mutex
+	termCancels      map[string]context.CancelFunc
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -38,15 +41,23 @@ type AgyBootstrap struct {
 	Models []modelx.AgyModel `json:"models"`
 }
 
+// OpenCodeBootstrap carries the OpenCode Zen token status and HTTP model catalog.
+type OpenCodeBootstrap struct {
+	Status modelx.OpenCodeStatus `json:"status"`
+	Models []modelx.AgyModel     `json:"models"`
+}
+
 // InitialState is returned when the IDE frontend boots.
 type InitialState struct {
-	InitialWorkspace string           `json:"initialWorkspace"`
-	InitialProject   ProjectInfo      `json:"initialProject"`
-	RecentProjects   []string         `json:"recentProjects"`
-	AgyStatus        modelx.AgyStatus `json:"agyStatus"`
-	Models           []modelx.AgyModel `json:"models"`
-	GoVersion        string           `json:"goVersion"`
-	OS               string           `json:"os"`
+	InitialWorkspace string                `json:"initialWorkspace"`
+	InitialProject   ProjectInfo           `json:"initialProject"`
+	RecentProjects   []string              `json:"recentProjects"`
+	AgyStatus        modelx.AgyStatus      `json:"agyStatus"`
+	Models           []modelx.AgyModel     `json:"models"`
+	OpenCodeStatus   modelx.OpenCodeStatus `json:"openCodeStatus"`
+	OpenCodeModels   []modelx.AgyModel     `json:"openCodeModels"`
+	GoVersion        string                `json:"goVersion"`
+	OS               string                `json:"os"`
 }
 
 // ProjectInfo holds workspace metadata loaded when opening a folder.
@@ -135,6 +146,8 @@ func (a *App) GetInitialState() InitialState {
 	a.mu.Lock()
 	agy := a.agyStatus
 	models := append([]modelx.AgyModel(nil), a.modelsCache...)
+	ocStatus := a.openCodeStatus
+	ocModels := append([]modelx.AgyModel(nil), a.openCodeModels...)
 	a.mu.Unlock()
 
 	return InitialState{
@@ -143,9 +156,50 @@ func (a *App) GetInitialState() InitialState {
 		RecentProjects:   recent,
 		AgyStatus:        agy,
 		Models:           models,
+		OpenCodeStatus:   ocStatus,
+		OpenCodeModels:   ocModels,
 		GoVersion:        runtime.Version(),
 		OS:               runtime.GOOS,
 	}
+}
+
+// BootstrapOpenCode probes the OpenCode Zen HTTP API using the configured token
+// (OPENCODE_API_KEY or user credentials.json) and fetches the live model catalog.
+func (a *App) BootstrapOpenCode(force bool) OpenCodeBootstrap {
+	a.mu.Lock()
+	if !force && !a.openCodeCachedAt.IsZero() && time.Since(a.openCodeCachedAt) < 5*time.Minute && len(a.openCodeModels) > 0 {
+		out := OpenCodeBootstrap{
+			Status: a.openCodeStatus,
+			Models: append([]modelx.AgyModel(nil), a.openCodeModels...),
+		}
+		a.mu.Unlock()
+		return out
+	}
+	a.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	status, models := modelx.ProbeAndListOpenCode(ctx)
+
+	a.mu.Lock()
+	a.openCodeStatus = status
+	a.openCodeModels = models
+	a.openCodeCachedAt = time.Now()
+	a.mu.Unlock()
+
+	return OpenCodeBootstrap{
+		Status: status,
+		Models: models,
+	}
+}
+
+// SaveOpenCodeConfig stores or clears the OpenCode Zen API token in the user's local
+// credentials.json (never inside the project Git repo) and refreshes the model catalog.
+func (a *App) SaveOpenCodeConfig(apiKey, baseURL string) (OpenCodeBootstrap, error) {
+	if err := modelx.SaveOpenCodeCredentials(apiKey, baseURL); err != nil {
+		return OpenCodeBootstrap{}, err
+	}
+	return a.BootstrapOpenCode(true), nil
 }
 
 // BootstrapAgy probes agy and fetches its models in a single process invocation,

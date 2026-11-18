@@ -19,6 +19,15 @@ export interface AgyStatus {
   Detail: string;
 }
 
+export interface OpenCodeStatus {
+  configured: boolean;
+  source: string;
+  baseUrl: string;
+  keyMasked: string;
+  modelCount: number;
+  detail: string;
+}
+
 export interface TeamAgent {
   name: string;
   role: string;
@@ -253,6 +262,8 @@ export interface InitialStatePayload {
   recentProjects: string[];
   agyStatus: AgyStatus;
   models: AgyModel[];
+  openCodeStatus?: OpenCodeStatus;
+  openCodeModels?: AgyModel[];
   goVersion: string;
   os: string;
 }
@@ -334,6 +345,8 @@ export interface ProjectWorkspaceContext {
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
+  BootstrapOpenCode(force: boolean): Promise<{ status: OpenCodeStatus; models: AgyModel[] }>;
+  SaveOpenCodeConfig(apiKey: string, baseURL: string): Promise<{ status: OpenCodeStatus; models: AgyModel[] }>;
   ChooseDirectory(): Promise<string>;
   OpenProject(dir: string): Promise<ProjectInfo>;
   GetRecentProjects(): Promise<string[]>;
