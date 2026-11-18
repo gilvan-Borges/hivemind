@@ -44,6 +44,7 @@ export interface TeamSettings {
   protected_branches?: string[];
   require_main_merge_approval?: boolean;
   base_branch: string;
+  max_dynamic_devs?: number;
   max_tokens?: number;
 }
 
@@ -111,6 +112,11 @@ export interface ChatMessage {
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
+  toolName?: string;
+  toolDetail?: string;
+  toolOutput?: string;
+  startedAt?: number;
+  durationMs?: number;
 }
 
 export interface AgentRuntime {
@@ -266,6 +272,7 @@ export interface WizardInputPayload {
   teamName: string;
   chiefRole: string;
   devCount: number;
+  maxDynamicDevs?: number;
   defaultModel: string;
   agentModels?: Record<string, string>;
   permissionMode?: PermissionMode;
@@ -348,6 +355,8 @@ export interface WailsBackendApp {
   OpenPR(workspace: string, title: string, body: string, baseBranch: string): Promise<string>;
   CommentJira(workspace: string, issueKey: string, comment: string): Promise<void>;
   DiscardChanges(workspace: string): Promise<void>;
+  DiscardFile(workspace: string, relPath: string): Promise<void>;
+  RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;
@@ -358,6 +367,7 @@ export interface WailsBackendApp {
   StartRunWithOptions(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, runMode: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<RunResultPayload>;
   CancelRun(laneID: string): Promise<boolean>;
   RunCommand(workspace: string, command: string): Promise<{ command: string; output: string; exitCode: number; durationMs: number }>;
+  CancelCommand(workspace: string): Promise<boolean>;
   ListSessions(workspace: string): Promise<WorkspaceSessionsSummary>;
   LoadSession(workspace: string, sessionID: string): Promise<SessionDetail>;
   DeleteSession(workspace: string, sessionID: string): Promise<void>;

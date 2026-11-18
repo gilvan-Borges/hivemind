@@ -39,6 +39,7 @@ type Settings struct {
 	ProtectedBranches        []string `yaml:"protected_branches,omitempty" json:"protected_branches,omitempty"`
 	RequireMainMergeApproval *bool    `yaml:"require_main_merge_approval,omitempty" json:"require_main_merge_approval,omitempty"`
 	MaxQALoops               int      `yaml:"max_qa_loops" json:"max_qa_loops"`
+	MaxDynamicDevs           int      `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
 	MaxLLMCalls              int      `yaml:"max_llm_calls" json:"max_llm_calls"`
 	MaxTokens                int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	BaseBranch               string   `yaml:"base_branch" json:"base_branch"`
@@ -62,6 +63,7 @@ func DefaultSettings() Settings {
 		ProtectedBranches:        []string{"main", "master", "production"},
 		RequireMainMergeApproval: &reqMain,
 		MaxQALoops:               3,
+		MaxDynamicDevs:           5,
 		BaseBranch:               "main",
 		ShellAllowlist:           append([]string(nil), DefaultAllowlist...),
 		ConfirmShell:             &confirm,
@@ -78,6 +80,18 @@ func NormalizePermissionMode(raw string) string {
 	default:
 		return PermissionGoverned
 	}
+}
+
+// EffectiveMaxDynamicDevs returns how many parallel dev agents the Chief/Architect
+// may dynamically spawn for a large task (default 5, range 1..6).
+func (s Settings) EffectiveMaxDynamicDevs() int {
+	if s.MaxDynamicDevs <= 0 {
+		return 5
+	}
+	if s.MaxDynamicDevs > 6 {
+		return 6
+	}
+	return s.MaxDynamicDevs
 }
 
 // EffectivePermissionMode returns the normalized permission mode (default "governed").
@@ -206,6 +220,9 @@ func (f *File) Normalize() {
 	if f.Settings.MaxQALoops <= 0 {
 		f.Settings.MaxQALoops = 3
 	}
+	if f.Settings.MaxDynamicDevs <= 0 {
+		f.Settings.MaxDynamicDevs = 5
+	}
 	if strings.TrimSpace(f.Settings.BaseBranch) == "" {
 		f.Settings.BaseBranch = "main"
 	}
@@ -275,8 +292,9 @@ func (t Team) Validate() error {
 	return nil
 }
 
-// ValidateForRun requires one coordinator, one tech lead, one architect,
-// at least one developer and one QA so the pipeline can execute.
+// ValidateForRun requires a Chief (architect or project_manager), at least one
+// developer (base template that can dynamically scale up to MaxDynamicDevs), and one QA.
+// Optional roles such as tech_lead remain supported when present in team.yaml.
 func (t Team) ValidateForRun() error {
 	if err := t.Validate(); err != nil {
 		return err
@@ -285,11 +303,14 @@ func (t Team) ValidateForRun() error {
 	for _, a := range t.Agents {
 		counts[NormalizeRole(a.Role)]++
 	}
-	required := []string{RoleProjectManager, RoleTechLead, RoleArchitect, RoleDeveloper, RoleQA}
-	for _, role := range required {
-		if counts[role] == 0 {
-			return fmt.Errorf("o time %s precisa de um agente com papel %s", t.Name, role)
-		}
+	if counts[RoleArchitect] == 0 && counts[RoleProjectManager] == 0 {
+		return fmt.Errorf("o time %s precisa de um Chefe com papel %s ou %s", t.Name, RoleArchitect, RoleProjectManager)
+	}
+	if counts[RoleDeveloper] == 0 {
+		return fmt.Errorf("o time %s precisa de ao menos um agente com papel %s", t.Name, RoleDeveloper)
+	}
+	if counts[RoleQA] == 0 {
+		return fmt.Errorf("o time %s precisa de um agente com papel %s", t.Name, RoleQA)
 	}
 	return nil
 }

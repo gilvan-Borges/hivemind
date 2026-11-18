@@ -406,6 +406,85 @@ func DiscardWorkspaceChanges(ctx context.Context, workspaceDir string) error {
 	return err
 }
 
+// DiscardFileChanges restores a single tracked file to HEAD or deletes an untracked file inside workspaceDir.
+func DiscardFileChanges(ctx context.Context, workspaceDir, relPath string) error {
+	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
+	if relClean == "" || relClean == ".hivemind" || strings.HasPrefix(relClean, ".hivemind/") {
+		return fmt.Errorf("caminho de arquivo inválido: %s", relPath)
+	}
+	full, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean))
+	if err != nil {
+		return err
+	}
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) {
+		return fmt.Errorf("o diretório não é um repositório Git")
+	}
+	// Check if file is tracked in HEAD
+	if g.HasCommit(ctx, workspaceDir) {
+		if _, err := runGit(ctx, workspaceDir, "ls-files", "--error-unmatch", "--", relClean); err == nil {
+			_, _ = runGit(ctx, workspaceDir, "reset", "HEAD", "--", relClean)
+			_, err := runGit(ctx, workspaceDir, "checkout", "--", relClean)
+			return err
+		}
+	}
+	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// RevertDiffHunk reverses a single unified diff hunk on relPath using `git apply --reverse`.
+// If the hunk starts at -0,0 (entire untracked file), it falls back to DiscardFileChanges.
+func RevertDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader string, hunkLines []string) error {
+	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
+	if relClean == "" {
+		return fmt.Errorf("caminho de arquivo vazio")
+	}
+	if _, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean)); err != nil {
+		return err
+	}
+	header := strings.TrimSpace(hunkHeader)
+	if !strings.HasPrefix(header, "@@") {
+		return fmt.Errorf("cabeçalho de hunk inválido: %s", header)
+	}
+	if strings.Contains(header, "@@ -0,0 ") {
+		return DiscardFileChanges(ctx, workspaceDir, relClean)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", relClean, relClean))
+	sb.WriteString(fmt.Sprintf("--- a/%s\n", relClean))
+	sb.WriteString(fmt.Sprintf("+++ b/%s\n", relClean))
+	sb.WriteString(header + "\n")
+	for _, ln := range hunkLines {
+		if ln == "" {
+			sb.WriteString(" \n")
+			continue
+		}
+		first := ln[0]
+		if first == '+' || first == '-' || first == ' ' || first == '\\' {
+			sb.WriteString(ln + "\n")
+		} else {
+			sb.WriteString(" " + ln + "\n")
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "hivemind-hunk-*.patch")
+	if err != nil {
+		return err
+	}
+	patchPath := tmpFile.Name()
+	defer os.Remove(patchPath)
+	if _, err := tmpFile.WriteString(sb.String()); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	_ = tmpFile.Close()
+
+	_, err = runGit(ctx, workspaceDir, "apply", "--reverse", "--recount", "--whitespace=nowarn", patchPath)
+	return err
+}
+
 // GitHubStatusInfo reports whether the GitHub CLI (`gh`) is authenticated and the repo remote.
 type GitHubStatusInfo struct {
 	Installed bool   `json:"installed"`

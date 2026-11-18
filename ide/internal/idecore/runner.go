@@ -26,6 +26,7 @@ type WizardInput struct {
 	TeamName       string            `json:"teamName"`
 	ChiefRole      string            `json:"chiefRole"` // "architect" or "project_manager"
 	DevCount       int               `json:"devCount"`
+	MaxDynamicDevs int               `json:"maxDynamicDevs,omitempty"`
 	DefaultModel   string            `json:"defaultModel"`
 	AgentModels    map[string]string `json:"agentModels,omitempty"`
 	PermissionMode string            `json:"permissionMode,omitempty"` // "governed", "auto_edit", "full_access"
@@ -39,8 +40,9 @@ type WizardInput struct {
 	MaxTokens      int64             `json:"maxTokens"`
 }
 
-// BuildTeamFromWizard constructs a team.Team and updates/creates .hivemind/team.yaml
-// without modifying the project's root .gitignore.
+// BuildTeamFromWizard constructs a lean 3-agent team (Chefe + Dev + QA) by default
+// with dynamic dev scaling (1..MaxDynamicDevs) controlled by the Chief/Architect,
+// updating/creating .hivemind/team.yaml without modifying the project's root .gitignore.
 func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	name := strings.TrimSpace(in.TeamName)
 	if name == "" {
@@ -51,6 +53,13 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	}
 	if in.DevCount > 6 {
 		in.DevCount = 6
+	}
+	maxDyn := in.MaxDynamicDevs
+	if maxDyn <= 0 {
+		maxDyn = 5
+	}
+	if maxDyn > 6 {
+		maxDyn = 6
 	}
 	defaultModel := strings.TrimSpace(in.DefaultModel)
 	if defaultModel == "" {
@@ -79,27 +88,6 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 			Provider: team.NormalizeProvider("", pickModel("chefe")),
 			Model:    pickModel("chefe"),
 		},
-		{
-			Name:     "tech_lead",
-			Role:     team.RoleTechLead,
-			Provider: team.NormalizeProvider("", pickModel("tech_lead")),
-			Model:    pickModel("tech_lead"),
-		},
-	}
-	if chiefRole != team.RoleArchitect {
-		agents = append(agents, team.Agent{
-			Name:     "arquiteto",
-			Role:     team.RoleArchitect,
-			Provider: team.NormalizeProvider("", pickModel("arquiteto")),
-			Model:    pickModel("arquiteto"),
-		})
-	} else {
-		agents = append(agents, team.Agent{
-			Name:     "pm",
-			Role:     team.RoleProjectManager,
-			Provider: team.NormalizeProvider("", pickModel("pm")),
-			Model:    pickModel("pm"),
-		})
 	}
 	for i := 1; i <= in.DevCount; i++ {
 		devName := fmt.Sprintf("dev_%d", i)
@@ -107,6 +95,9 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 			devName = "dev"
 		}
 		m := pickModel(devName)
+		if m == defaultModel && devName != "dev" {
+			m = pickModel("dev")
+		}
 		agents = append(agents, team.Agent{
 			Name:     devName,
 			Role:     team.RoleDeveloper,
@@ -136,6 +127,7 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	if strings.TrimSpace(in.PermissionMode) != "" {
 		file.Settings.PermissionMode = team.NormalizePermissionMode(in.PermissionMode)
 	}
+	file.Settings.MaxDynamicDevs = maxDyn
 	wt := in.Worktrees
 	file.Settings.Worktrees = &wt
 	file.Settings.AutoCommit = in.AutoCommit
@@ -273,6 +265,7 @@ func UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec string) (tea
 		return team.File{}, fmt.Errorf("informe o modelo")
 	}
 	updated := false
+	isDynamicDev := strings.HasPrefix(strings.ToLower(strings.TrimSpace(agentName)), "dev_")
 	for ti := range cfg.Teams {
 		if teamName != "" && !strings.EqualFold(cfg.Teams[ti].Name, teamName) {
 			continue
@@ -282,6 +275,16 @@ func UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec string) (tea
 				cfg.Teams[ti].Agents[ai].Model = spec
 				cfg.Teams[ti].Agents[ai].Provider = team.NormalizeProvider("", spec)
 				updated = true
+			}
+		}
+		if !updated && isDynamicDev {
+			for ai := range cfg.Teams[ti].Agents {
+				if team.NormalizeRole(cfg.Teams[ti].Agents[ai].Role) == team.RoleDeveloper {
+					cfg.Teams[ti].Agents[ai].Model = spec
+					cfg.Teams[ti].Agents[ai].Provider = team.NormalizeProvider("", spec)
+					updated = true
+					break
+				}
 			}
 		}
 	}

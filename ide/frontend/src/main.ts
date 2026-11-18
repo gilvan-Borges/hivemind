@@ -129,12 +129,23 @@ const state = {
     cmdInput: "",
     entries: [] as TerminalEntry[],
   },
+  diffViewMode: "unified" as "unified" | "split",
+  editorFind: {
+    open: false,
+    showReplace: false,
+    query: "",
+    replaceText: "",
+    matchIndex: 0,
+    matches: [] as Array<{ start: number; end: number }>,
+  },
 };
 
 let laneSeq = 1;
 let projectSeq = 1;
 let chatFlushRaf = 0;
 let editorHighlightRaf = 0;
+let editorHighlightTimer = 0;
+let lastRenderedGutterLines = -1;
 let mentionTimer = 0;
 let quickOpenTimer = 0;
 let globalSearchTimer = 0;
@@ -750,6 +761,22 @@ function bindStaticShellEvents() {
       toggleTerminal();
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+      const activeTab = state.editorTabs.find((t) => t.kind === "file" && t.relPath === state.activeEditorPath);
+      if (activeTab) {
+        e.preventDefault();
+        openEditorFind(false);
+        return;
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "h") {
+      const activeTab = state.editorTabs.find((t) => t.kind === "file" && t.relPath === state.activeEditorPath);
+      if (activeTab) {
+        e.preventDefault();
+        openEditorFind(true);
+        return;
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       saveActiveEditor();
@@ -765,6 +792,9 @@ function bindStaticShellEvents() {
       } else if (state.pathModal) {
         state.pathModal = null;
         renderModalLayer();
+      } else if (state.editorFind.open) {
+        state.editorFind.open = false;
+        renderEditorFindBar();
       } else if (state.branchPopover.open) {
         state.branchPopover.open = false;
         renderBranchPopover();
@@ -1111,6 +1141,10 @@ async function boot() {
         label: ev.label || "Permissão Solicitada pelo Chefe",
         text: ev.text || "",
       });
+    } else if (ev.kind === "devs_scaled") {
+      if (Array.isArray(ev.devs) && ev.devs.length > 0) {
+        syncDynamicDevsInLane(lane, ev.devs.map(String));
+      }
     } else if (ev.kind === "handoff") {
       markToolsDone(lane);
       lane.messages.push({
@@ -1129,6 +1163,10 @@ async function boot() {
         const count = match ? parseInt(match[1], 10) + 1 : 2;
         last.text = `${baseText} ×${count}`;
         last.active = true;
+        if (ev.detail) {
+          last.toolDetail = last.toolDetail ? `${last.toolDetail}\n${ev.detail}` : ev.detail;
+        }
+        if (!last.startedAt) last.startedAt = Date.now();
       } else {
         markToolsDone(lane);
         lane.messages.push({
@@ -1137,10 +1175,13 @@ async function boot() {
           label: toolLabel,
           text: baseText,
           active: true,
+          toolName: ev.toolName,
+          toolDetail: ev.detail || "",
+          startedAt: Date.now(),
         });
       }
     } else if (ev.kind === "tool_result") {
-      markToolsDone(lane);
+      markToolsDone(lane, ev.detail);
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
       markToolsDone(lane);
       updateAgentStatus(lane, ev.author, ev.label, "running", "");
@@ -1207,6 +1248,33 @@ async function boot() {
     }
     if (state.sidebarView === "team" && state.showLeftSidebar) {
       updateTeamStatusPills();
+    }
+  });
+
+  window.runtime?.EventsOn("hivemind:terminal-output", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    const chunk = String(payload?.chunk || "");
+    if (!wsKey || !chunk) return;
+    saveActiveToProjectContext();
+    const targetCtx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    const term = targetCtx
+      ? targetCtx.terminal
+      : (state.project && normalizePathKey(state.project.root) === wsKey ? state.terminal : null);
+    if (!term) return;
+    const runningEntry = [...term.entries].reverse().find((e) => e.running);
+    if (!runningEntry) return;
+    if (runningEntry.output === "Executando…") {
+      runningEntry.output = chunk;
+    } else {
+      runningEntry.output += chunk;
+    }
+    if (state.project && normalizePathKey(state.project.root) === wsKey && state.terminal.open) {
+      const liveNode = document.querySelector<HTMLElement>(`[data-term-out="${CSS.escape(runningEntry.id)}"]`);
+      if (liveNode) {
+        liveNode.textContent = runningEntry.output;
+        const outBox = document.getElementById("terminal-output");
+        if (outBox) outBox.scrollTop = outBox.scrollHeight;
+      }
     }
   });
 
@@ -1288,10 +1356,57 @@ async function refreshSessions(targetRoot?: string) {
   }
 }
 
-function markToolsDone(lane: TeamLane) {
+function markToolsDone(lane: TeamLane, resultDetail?: string) {
+  const now = Date.now();
   for (const m of lane.messages) {
-    if (m.kind === "tool") m.active = false;
+    if (m.kind === "tool" && m.active) {
+      m.active = false;
+      if (m.startedAt && !m.durationMs) {
+        m.durationMs = Math.max(1, now - m.startedAt);
+      }
+      if (resultDetail) {
+        m.toolOutput = m.toolOutput ? `${m.toolOutput}\n${resultDetail}` : resultDetail;
+      }
+    }
   }
+}
+
+function syncDynamicDevsInLane(lane: TeamLane, devNames: string[]) {
+  if (!devNames || devNames.length === 0) return;
+  const existingByName = new Map<string, AgentRuntime>();
+  for (const a of lane.agents) {
+    existingByName.set(a.name.toLowerCase(), a);
+  }
+  const baseDev = lane.agents.find((a) => a.role === "developer");
+  const baseDevModel = baseDev?.model || "agy";
+
+  const beforeQA: AgentRuntime[] = [];
+  const qaAndAfter: AgentRuntime[] = [];
+  for (const a of lane.agents) {
+    if (a.role === "developer") continue;
+    if (a.role === "qa") {
+      qaAndAfter.push(a);
+    } else {
+      beforeQA.push(a);
+    }
+  }
+
+  const nextDevs: AgentRuntime[] = devNames.map((name) => {
+    const prev = existingByName.get(name.toLowerCase());
+    if (prev) return prev;
+    return {
+      name,
+      role: "developer",
+      model: baseDevModel,
+      status: "running",
+      inTokens: 0,
+      outTokens: 0,
+      tokens: 0,
+      calls: 0,
+    };
+  });
+
+  lane.agents = [...beforeQA, ...nextDevs, ...qaAndAfter];
 }
 
 function updateAgentStatus(lane: TeamLane, author: string, label: string | undefined, status: AgentRuntime["status"], tool: string) {
@@ -1616,6 +1731,22 @@ async function refreshDiffsAndSummarize(lane: TeamLane) {
   }
 }
 
+function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<string> } {
+  const files = new Map<string, "M" | "U">();
+  const dirs = new Set<string>();
+  for (const d of state.diffs) {
+    const p = (d.path || "").replace(/\\/g, "/");
+    if (!p) continue;
+    const isNew = d.lines.some((ln) => ln.kind === "header" && ln.text.startsWith("new file mode"));
+    files.set(p, isNew ? "U" : "M");
+    const parts = p.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(parts.slice(0, i).join("/"));
+    }
+  }
+  return { files, dirs };
+}
+
 async function refreshDiffs() {
   const backend = api();
   if (!backend || !state.project) return;
@@ -1626,8 +1757,34 @@ async function refreshDiffs() {
       badge.textContent = String(state.diffs.length);
       badge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
     }
+    // Sync any open diff tabs with updated diff objects
+    let activeDiffChanged = false;
+    for (const tab of [...state.editorTabs]) {
+      if (tab.kind !== "diff" || !tab.diff) continue;
+      const updated = state.diffs.find((d) => d.path === tab.diff?.path);
+      if (updated) {
+        tab.diff = updated;
+        if (state.activeEditorPath === tab.relPath) activeDiffChanged = true;
+      } else {
+        state.editorTabs = state.editorTabs.filter((t) => t.relPath !== tab.relPath);
+        if (state.activeEditorPath === tab.relPath) {
+          state.activeEditorPath = state.editorTabs[0]?.relPath || "";
+          activeDiffChanged = true;
+        }
+      }
+    }
+    if (activeDiffChanged) {
+      renderEditorTabs();
+      renderEditorBody();
+    }
     if (state.sidebarView === "git" && state.showLeftSidebar) {
       renderLeftSidebar();
+    } else if (state.sidebarView === "explorer" && state.showLeftSidebar) {
+      const treeBody = document.getElementById("explorer-tree-body");
+      if (treeBody) {
+        treeBody.innerHTML = renderExplorerTreeHtml();
+        bindTreeRowClicks();
+      }
     }
   } catch {
     // ignore non-git
@@ -1655,7 +1812,12 @@ async function refreshExplorerTree() {
   }
 }
 
-function renderTreeNodes(nodes: FileNode[], depth = 0, filter = ""): string {
+function renderTreeNodes(
+  nodes: FileNode[],
+  depth = 0,
+  filter = "",
+  gitMap = getGitStatusMap()
+): string {
   const q = filter.trim().toLowerCase();
   return nodes
     .map((n) => {
@@ -1663,32 +1825,42 @@ function renderTreeNodes(nodes: FileNode[], depth = 0, filter = ""): string {
       if (n.isDir) {
         const open = state.expandedDirs.has(n.relPath);
         const children = state.dirCache.get(n.relPath) ?? n.children ?? [];
-        const childrenHtml = open ? renderTreeNodes(children, depth + 1, filter) : "";
+        const childrenHtml = open ? renderTreeNodes(children, depth + 1, filter, gitMap) : "";
         if (q && !n.name.toLowerCase().includes(q) && !childrenHtml) {
           return "";
         }
+        const hasModChild = gitMap.dirs.has(n.relPath);
         return `
-          <div class="tree-row" data-dir="${escapeHtml(n.relPath)}" style="padding-left:${pad}px">
+          <div class="tree-row ${hasModChild ? "git-mod" : ""}" data-dir="${escapeHtml(n.relPath)}" style="padding-left:${pad}px">
             <span class="tree-chevron">${open ? icons.chevronDown : icons.chevronRight}</span>
             <span class="tree-folder-icon">${open ? icons.folderOpen : icons.folderClosed}</span>
             <span class="tree-name">${escapeHtml(n.name)}</span>
+            ${hasModChild ? `<span class="tree-dir-dot" title="Contém arquivos modificados"></span>` : ""}
             <span class="tree-actions">
               <button class="tree-act-btn" data-tree-newfile="${escapeHtml(n.relPath)}" title="Novo arquivo nesta pasta">${icons.plus}</button>
               <button class="tree-act-btn" data-tree-rename="${escapeHtml(n.relPath)}" title="Renomear">${icons.editPen}</button>
               <button class="tree-act-btn" data-tree-delete="${escapeHtml(n.relPath)}" title="Excluir">${icons.trash}</button>
             </span>
           </div>
-          ${childrenHtml}
+          ${childrenHtml ? `<div style="border-left:1px solid rgba(255,255,255,0.06);margin-left:${pad + 6}px">${childrenHtml}</div>` : ""}
         `;
       }
       if (q && !n.name.toLowerCase().includes(q) && !n.relPath.toLowerCase().includes(q)) {
         return "";
       }
       const isAct = state.activeEditorPath === n.relPath ? "active" : "";
+      const gitSt = gitMap.files.get(n.relPath);
+      const gitCls = gitSt === "U" ? "git-add" : gitSt === "M" ? "git-mod" : "";
+      const gitBadge = gitSt === "U"
+        ? `<span class="tree-git-badge add" title="Arquivo novo / não rastreado">U</span>`
+        : gitSt === "M"
+          ? `<span class="tree-git-badge mod" title="Arquivo modificado">M</span>`
+          : "";
       return `
-        <div class="tree-row ${isAct}" data-file="${escapeHtml(n.relPath)}" data-name="${escapeHtml(n.name)}" style="padding-left:${pad + 14}px">
+        <div class="tree-row ${isAct} ${gitCls}" data-file="${escapeHtml(n.relPath)}" data-name="${escapeHtml(n.name)}" style="padding-left:${pad + 14}px">
           ${fileBadge(n.name)}
           <span class="tree-name">${escapeHtml(n.name)}</span>
+          ${gitBadge}
           <span class="tree-actions">
             <button class="tree-act-btn" data-tree-rename="${escapeHtml(n.relPath)}" title="Renomear">${icons.editPen}</button>
             <button class="tree-act-btn" data-tree-delete="${escapeHtml(n.relPath)}" title="Excluir">${icons.trash}</button>
@@ -1846,7 +2018,7 @@ function renderLeftSidebar() {
           <span>Memória do Time (.hivemind/MEMORY.md)</span>
         </button>
         <div class="dim" style="margin-bottom:8px">
-          Fluxo: Chefe → Dev (worktree) → QA → Fecho (Chefe/Arq comita & PR)${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
+          Fluxo: Chefe → 1..${proj?.teamConfig?.settings?.max_dynamic_devs || 5} Devs dinâmicos (worktree) → QA → Fecho${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
         </div>
         <div id="team-agents-list">
           ${renderAgentCardsHtml(lane?.agents || [])}
@@ -2115,6 +2287,7 @@ function bindSessionsSidebarEvents() {
 function renderExplorerTreeHtml(): string {
   const rootNodes = state.dirCache.get("") ?? state.project?.files ?? [];
   if (!state.project) return `<div class="dim" style="padding:8px">Abra uma pasta</div>`;
+  const gitMap = getGitStatusMap();
   const q = state.explorerFilter.trim();
   if (q && state.explorerFilterResults.length > 0) {
     return state.explorerFilterResults
@@ -2122,16 +2295,24 @@ function renderExplorerTreeHtml(): string {
         const name = rel.split("/").pop() || rel;
         const dirPart = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
         const isAct = state.activeEditorPath === rel ? "active" : "";
+        const gitSt = gitMap.files.get(rel);
+        const gitCls = gitSt === "U" ? "git-add" : gitSt === "M" ? "git-mod" : "";
+        const gitBadge = gitSt === "U"
+          ? `<span class="tree-git-badge add">U</span>`
+          : gitSt === "M"
+            ? `<span class="tree-git-badge mod">M</span>`
+            : "";
         return `
-          <div class="tree-row ${isAct}" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" style="padding-left:10px" title="${escapeHtml(rel)}">
+          <div class="tree-row ${isAct} ${gitCls}" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" style="padding-left:10px" title="${escapeHtml(rel)}">
             ${fileBadge(name)}
             <span class="tree-name">${escapeHtml(name)}${dirPart ? ` <span class="dim" style="font-size:10.5px">· ${escapeHtml(dirPart)}</span>` : ""}</span>
+            ${gitBadge}
           </div>
         `;
       })
       .join("");
   }
-  const html = renderTreeNodes(rootNodes, 0, q);
+  const html = renderTreeNodes(rootNodes, 0, q, gitMap);
   return html || `<div class="dim" style="padding:8px">Nenhum arquivo correspondente</div>`;
 }
 
@@ -2632,6 +2813,322 @@ function updateMissionBoardIfOpen() {
   }
 }
 
+interface DiffHunkParsed {
+  header: string;
+  oldStart: number;
+  newStart: number;
+  lines: Array<{ kind: string; text: string }>;
+}
+
+function parseDiffHunks(diff: FileDiff): { headers: string[]; hunks: DiffHunkParsed[] } {
+  const headers: string[] = [];
+  const hunks: DiffHunkParsed[] = [];
+  let cur: DiffHunkParsed | null = null;
+  for (const ln of diff.lines) {
+    if (ln.kind === "header") {
+      if (!cur) headers.push(ln.text);
+      continue;
+    }
+    if (ln.kind === "hunk") {
+      const m = ln.text.match(/@@\s*-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s*@@/);
+      cur = {
+        header: ln.text,
+        oldStart: m ? parseInt(m[1], 10) : 1,
+        newStart: m ? parseInt(m[2], 10) : 1,
+        lines: [],
+      };
+      hunks.push(cur);
+      continue;
+    }
+    if (!cur) {
+      cur = { header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: [] };
+      hunks.push(cur);
+    }
+    cur.lines.push(ln);
+  }
+  return { headers, hunks };
+}
+
+function renderUnifiedDiffHtml(hunks: DiffHunkParsed[]): string {
+  if (hunks.length === 0) {
+    return `<div class="dim" style="padding:12px">Sem blocos de diff para exibir.</div>`;
+  }
+  return hunks
+    .map(
+      (h, idx) => `
+      <div class="diff-hunk-bar">
+        <span>${escapeHtml(h.header)}</span>
+        <button class="diff-hunk-revert" data-revert-hunk="${idx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>
+      </div>
+      ${h.lines.map((ln) => `<div class="diff-line ${ln.kind}">${escapeHtml(ln.text)}</div>`).join("")}
+    `
+    )
+    .join("");
+}
+
+function renderSplitDiffHtml(hunks: DiffHunkParsed[]): string {
+  if (hunks.length === 0) {
+    return `<div class="dim" style="padding:12px">Sem blocos de diff para exibir.</div>`;
+  }
+  const sections: string[] = [];
+  for (let hIdx = 0; hIdx < hunks.length; hIdx++) {
+    const h = hunks[hIdx];
+    let oldLine = h.oldStart;
+    let newLine = h.newStart;
+    const rows: string[] = [];
+    let i = 0;
+    while (i < h.lines.length) {
+      const ln = h.lines[i];
+      if (ln.kind === "context") {
+        const body = ln.text.startsWith(" ") ? ln.text.slice(1) : ln.text;
+        rows.push(`
+          <tr>
+            <td class="diff-split-num">${oldLine++}</td>
+            <td class="diff-split-code">${escapeHtml(body)}</td>
+            <td class="diff-split-num">${newLine++}</td>
+            <td class="diff-split-code">${escapeHtml(body)}</td>
+          </tr>
+        `);
+        i++;
+        continue;
+      }
+      const removedBatch: string[] = [];
+      const addedBatch: string[] = [];
+      while (i < h.lines.length && h.lines[i].kind === "removed") {
+        removedBatch.push(h.lines[i].text.slice(1));
+        i++;
+      }
+      while (i < h.lines.length && h.lines[i].kind === "added") {
+        addedBatch.push(h.lines[i].text.slice(1));
+        i++;
+      }
+      const maxLen = Math.max(removedBatch.length, addedBatch.length);
+      if (maxLen === 0) {
+        i++;
+        continue;
+      }
+      for (let k = 0; k < maxLen; k++) {
+        const hasOld = k < removedBatch.length;
+        const hasNew = k < addedBatch.length;
+        rows.push(`
+          <tr>
+            <td class="diff-split-num">${hasOld ? oldLine++ : ""}</td>
+            <td class="diff-split-code ${hasOld ? "removed" : "empty"}">${hasOld ? escapeHtml(removedBatch[k]) : ""}</td>
+            <td class="diff-split-num">${hasNew ? newLine++ : ""}</td>
+            <td class="diff-split-code ${hasNew ? "added" : "empty"}">${hasNew ? escapeHtml(addedBatch[k]) : ""}</td>
+          </tr>
+        `);
+      }
+    }
+    sections.push(`
+      <div class="diff-hunk-bar">
+        <span>${escapeHtml(h.header)}</span>
+        <button class="diff-hunk-revert" data-revert-hunk="${hIdx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>
+      </div>
+      <table class="diff-split-table"><tbody>${rows.join("")}</tbody></table>
+    `);
+  }
+  return `<div class="diff-split-wrap">${sections.join("")}</div>`;
+}
+
+function countLinesFast(text: string): number {
+  let count = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) count++;
+  }
+  return count;
+}
+
+function openEditorFind(showReplace: boolean) {
+  const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
+  if (ta) {
+    const sel = ta.value.slice(ta.selectionStart || 0, ta.selectionEnd || 0);
+    if (sel && !sel.includes("\n") && sel.length <= 120) {
+      state.editorFind.query = sel;
+    }
+  }
+  state.editorFind.open = true;
+  state.editorFind.showReplace = showReplace;
+  renderEditorFindBar();
+  recomputeEditorFindMatches(false);
+  const input = document.getElementById("editor-find-query") as HTMLInputElement | null;
+  if (input) {
+    input.focus();
+    input.select();
+  }
+}
+
+function recomputeEditorFindMatches(selectMatch = true) {
+  const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
+  const q = state.editorFind.query;
+  state.editorFind.matches = [];
+  if (!ta || !q) {
+    state.editorFind.matchIndex = 0;
+    updateEditorFindCounter();
+    return;
+  }
+  const hay = ta.value.toLowerCase();
+  const needle = q.toLowerCase();
+  let pos = 0;
+  while (pos <= hay.length - needle.length) {
+    const idx = hay.indexOf(needle, pos);
+    if (idx === -1) break;
+    state.editorFind.matches.push({ start: idx, end: idx + needle.length });
+    pos = idx + Math.max(1, needle.length);
+    if (state.editorFind.matches.length >= 2000) break;
+  }
+  if (state.editorFind.matches.length === 0) {
+    state.editorFind.matchIndex = 0;
+  } else if (state.editorFind.matchIndex >= state.editorFind.matches.length) {
+    state.editorFind.matchIndex = 0;
+  }
+  updateEditorFindCounter();
+  if (selectMatch && state.editorFind.matches.length > 0) {
+    focusCurrentEditorMatch();
+  }
+}
+
+function updateEditorFindCounter() {
+  const counterEl = document.getElementById("editor-find-count");
+  if (!counterEl) return;
+  const total = state.editorFind.matches.length;
+  if (!state.editorFind.query) {
+    counterEl.textContent = "0 de 0";
+  } else if (total === 0) {
+    counterEl.textContent = "Sem ocorr.";
+  } else {
+    counterEl.textContent = `${state.editorFind.matchIndex + 1} de ${total}`;
+  }
+}
+
+function focusCurrentEditorMatch() {
+  const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
+  const pre = document.getElementById("editor-highlight");
+  const gutter = document.getElementById("editor-gutter");
+  const m = state.editorFind.matches[state.editorFind.matchIndex];
+  if (!ta || !m) return;
+  const lineNum = countLinesFast(ta.value.slice(0, m.start));
+  const topPx = Math.max(0, (lineNum - 1) * 20 - 90);
+  ta.setSelectionRange(m.start, m.end);
+  ta.scrollTop = topPx;
+  if (pre) pre.scrollTop = topPx;
+  if (gutter) gutter.scrollTop = topPx;
+}
+
+function stepEditorFind(delta: number) {
+  const total = state.editorFind.matches.length;
+  if (total === 0) return;
+  state.editorFind.matchIndex = (state.editorFind.matchIndex + delta + total) % total;
+  updateEditorFindCounter();
+  focusCurrentEditorMatch();
+}
+
+function replaceEditorCurrentMatch() {
+  const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
+  const m = state.editorFind.matches[state.editorFind.matchIndex];
+  if (!ta || !m) return;
+  const rep = state.editorFind.replaceText;
+  ta.value = ta.value.slice(0, m.start) + rep + ta.value.slice(m.end);
+  ta.dispatchEvent(new Event("input"));
+  recomputeEditorFindMatches(true);
+}
+
+function replaceEditorAllMatches() {
+  const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
+  const q = state.editorFind.query;
+  if (!ta || !q || state.editorFind.matches.length === 0) return;
+  const count = state.editorFind.matches.length;
+  const rep = state.editorFind.replaceText;
+  let out = "";
+  let lastIdx = 0;
+  for (const m of state.editorFind.matches) {
+    out += ta.value.slice(lastIdx, m.start) + rep;
+    lastIdx = m.end;
+  }
+  out += ta.value.slice(lastIdx);
+  ta.value = out;
+  ta.dispatchEvent(new Event("input"));
+  recomputeEditorFindMatches(false);
+  setStatus(`${count} ocorrência(s) substituída(s).`);
+}
+
+function renderEditorFindBar() {
+  const layer = document.getElementById("editor-find-layer");
+  if (!layer) return;
+  if (!state.editorFind.open) {
+    layer.innerHTML = "";
+    return;
+  }
+  const total = state.editorFind.matches.length;
+  const countLabel = !state.editorFind.query
+    ? "0 de 0"
+    : total === 0
+      ? "Sem ocorr."
+      : `${state.editorFind.matchIndex + 1} de ${total}`;
+
+  layer.innerHTML = `
+    <div class="editor-find-bar">
+      <div class="editor-find-row">
+        <button class="mini ghost" id="ef-toggle-replace" title="Mostrar/ocultar Substituir (Ctrl+H)" style="padding:2px 5px">
+          ${state.editorFind.showReplace ? icons.chevronDown : icons.chevronRight}
+        </button>
+        <input class="editor-find-input" id="editor-find-query" placeholder="Localizar no arquivo (Ctrl+F)…" value="${escapeHtml(state.editorFind.query)}" />
+        <span class="editor-find-count" id="editor-find-count">${countLabel}</span>
+        <button class="mini" id="ef-prev" title="Anterior (Shift+Enter)">↑</button>
+        <button class="mini" id="ef-next" title="Próximo (Enter)">↓</button>
+        <button class="icon-btn" id="ef-close" title="Fechar (Esc)">${icons.closeSmall}</button>
+      </div>
+      ${state.editorFind.showReplace ? `
+        <div class="editor-find-row" style="padding-left:24px">
+          <input class="editor-find-input" id="editor-find-replace" placeholder="Substituir por…" value="${escapeHtml(state.editorFind.replaceText)}" />
+          <button class="mini" id="ef-replace-one" title="Substituir atual">Substituir</button>
+          <button class="mini primary" id="ef-replace-all" title="Substituir todas">Tudo</button>
+        </div>
+      ` : ""}
+    </div>
+  `;
+
+  const qIn = document.getElementById("editor-find-query") as HTMLInputElement | null;
+  const rIn = document.getElementById("editor-find-replace") as HTMLInputElement | null;
+  qIn?.addEventListener("input", () => {
+    state.editorFind.query = qIn.value;
+    state.editorFind.matchIndex = 0;
+    recomputeEditorFindMatches(true);
+  });
+  qIn?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      stepEditorFind(e.shiftKey ? -1 : 1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      state.editorFind.open = false;
+      renderEditorFindBar();
+      (document.getElementById("editor-textarea") as HTMLTextAreaElement | null)?.focus();
+    }
+  });
+  rIn?.addEventListener("input", () => {
+    state.editorFind.replaceText = rIn.value;
+  });
+  rIn?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      replaceEditorCurrentMatch();
+    }
+  });
+  document.getElementById("ef-toggle-replace")?.addEventListener("click", () => {
+    state.editorFind.showReplace = !state.editorFind.showReplace;
+    renderEditorFindBar();
+  });
+  document.getElementById("ef-prev")?.addEventListener("click", () => stepEditorFind(-1));
+  document.getElementById("ef-next")?.addEventListener("click", () => stepEditorFind(1));
+  document.getElementById("ef-replace-one")?.addEventListener("click", () => replaceEditorCurrentMatch());
+  document.getElementById("ef-replace-all")?.addEventListener("click", () => replaceEditorAllMatches());
+  document.getElementById("ef-close")?.addEventListener("click", () => {
+    state.editorFind.open = false;
+    renderEditorFindBar();
+  });
+}
+
 function renderEditorBody() {
   const body = document.getElementById("editor-body");
   if (!body) return;
@@ -2655,6 +3152,7 @@ function renderEditorBody() {
           <span class="dim">Quadro Multiagente</span><span class="kbd">Ctrl + Shift + A</span>
           <span class="dim">Busca rápida de arquivo</span><span class="kbd">Ctrl + P</span>
           <span class="dim">Busca global no código</span><span class="kbd">Ctrl + Shift + F</span>
+          <span class="dim">Localizar / Substituir</span><span class="kbd">Ctrl + F / Ctrl + H</span>
           <span class="dim">Enviar seleção ao Chefe</span><span class="kbd">Ctrl + L</span>
           <span class="dim">Terminal integrado</span><span class="kbd">Ctrl + J</span>
         </div>
@@ -2674,27 +3172,90 @@ function renderEditorBody() {
   }
 
   if (activeTab.kind === "diff" && activeTab.diff) {
+    const diff = activeTab.diff;
+    const { hunks } = parseDiffHunks(diff);
+    const isSplit = state.diffViewMode === "split";
     body.innerHTML = `
       <div class="editor-breadcrumb">
-        <span class="dim">${escapeHtml(activeTab.diff.path)}</span>
-        <span style="color:var(--green)">+${activeTab.diff.added}</span>
-        <span style="color:var(--red)">-${activeTab.diff.removed}</span>
+        <span class="dim">${escapeHtml(diff.path)}</span>
+        <span style="color:var(--green)">+${diff.added}</span>
+        <span style="color:var(--red)">-${diff.removed}</span>
+        <div class="spacer"></div>
+        <button class="mini ${!isSplit ? "primary" : ""}" id="btn-diff-unified">Unificado</button>
+        <button class="mini ${isSplit ? "primary" : ""}" id="btn-diff-split">Lado a Lado</button>
+        <button class="mini" id="btn-diff-open-file" title="Abrir arquivo no editor">Abrir Arquivo</button>
+        <button class="mini danger" id="btn-diff-revert-file" title="Reverter todas as alterações deste arquivo">Reverter Arquivo</button>
       </div>
-      <div class="diff-lines">
-        ${activeTab.diff.lines.map((ln) => `<div class="diff-line ${ln.kind}">${escapeHtml(ln.text)}</div>`).join("")}
-      </div>
+      ${isSplit ? renderSplitDiffHtml(hunks) : `<div class="diff-lines">${renderUnifiedDiffHtml(hunks)}</div>`}
     `;
+    document.getElementById("btn-diff-unified")?.addEventListener("click", () => {
+      state.diffViewMode = "unified";
+      renderEditorBody();
+    });
+    document.getElementById("btn-diff-split")?.addEventListener("click", () => {
+      state.diffViewMode = "split";
+      renderEditorBody();
+    });
+    document.getElementById("btn-diff-open-file")?.addEventListener("click", () => {
+      const name = diff.path.split("/").pop() || diff.path;
+      openFileInEditor(diff.path, name);
+    });
+    document.getElementById("btn-diff-revert-file")?.addEventListener("click", () => {
+      if (!state.project) return;
+      askConfirm({
+        title: `Reverter "${diff.path}"`,
+        body: `Deseja descartar todas as alterações de "${diff.path}" (restaurando para HEAD ou removendo se for arquivo novo)?`,
+        confirmLabel: "Reverter Arquivo",
+        danger: true,
+        onConfirm: async () => {
+          if (!state.project) return;
+          try {
+            await api()?.DiscardFile(state.project.root, diff.path);
+            setStatus(`Arquivo revertido: ${diff.path}`);
+            await refreshExplorerTree();
+            await reloadCleanOpenTabs();
+            await refreshDiffs();
+          } catch (err: any) {
+            setStatus(`Erro ao reverter arquivo: ${err?.message || err}`);
+          }
+        },
+      });
+    });
+    body.querySelectorAll("[data-revert-hunk]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!state.project) return;
+        const idx = parseInt((btn as HTMLElement).dataset.revertHunk || "0", 10);
+        const h = hunks[idx];
+        if (!h) return;
+        try {
+          await api()?.RevertHunk(
+            state.project.root,
+            diff.path,
+            h.header,
+            h.lines.map((l) => l.text)
+          );
+          setStatus(`Bloco revertido em ${diff.path}.`);
+          await reloadCleanOpenTabs();
+          await refreshDiffs();
+        } catch (err: any) {
+          setStatus(`Erro ao reverter bloco: ${err?.message || err}`);
+        }
+      });
+    });
     return;
   }
 
+  lastRenderedGutterLines = countLinesFast(activeTab.content);
   body.innerHTML = `
     <div class="editor-breadcrumb">
       <span class="dim">${escapeHtml(activeTab.relPath)}</span>
       <div class="spacer"></div>
+      <button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar (Ctrl+F)</span></button>
       <button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Enviar p/ Chefe (Ctrl+L)</span></button>
       <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
     </div>
     <div class="editor-live-wrap">
+      <div id="editor-find-layer"></div>
       <pre class="line-gutter" id="editor-gutter">${renderLineNumbers(activeTab.content)}</pre>
       <div class="editor-code-stack">
         <pre class="code-highlight" id="editor-highlight"><code id="editor-highlight-code">${highlightCode(activeTab.content, activeTab.name)}</code></pre>
@@ -2703,6 +3264,10 @@ function renderEditorBody() {
     </div>
   `;
 
+  if (state.editorFind.open) {
+    renderEditorFindBar();
+  }
+
   const ta = document.getElementById("editor-textarea") as HTMLTextAreaElement | null;
   const pre = document.getElementById("editor-highlight");
   const gutter = document.getElementById("editor-gutter");
@@ -2710,6 +3275,9 @@ function renderEditorBody() {
 
   if (ta) {
     ta.value = activeTab.content;
+    if (state.editorFind.open && state.editorFind.query) {
+      recomputeEditorFindMatches(false);
+    }
     ta.addEventListener("scroll", () => {
       if (pre) {
         pre.scrollTop = ta.scrollTop;
@@ -2721,12 +3289,27 @@ function renderEditorBody() {
       activeTab.content = ta.value;
       activeTab.dirty = true;
       syncActiveTabDirtyUI(activeTab);
+
+      const newLineCount = countLinesFast(activeTab.content);
+      if (gutter && newLineCount !== lastRenderedGutterLines) {
+        lastRenderedGutterLines = newLineCount;
+        gutter.textContent = renderLineNumbers(activeTab.content);
+      }
+
       if (editorHighlightRaf) cancelAnimationFrame(editorHighlightRaf);
-      editorHighlightRaf = requestAnimationFrame(() => {
+      if (editorHighlightTimer) window.clearTimeout(editorHighlightTimer);
+
+      const applyHighlight = () => {
         editorHighlightRaf = 0;
+        editorHighlightTimer = 0;
         if (codeEl) codeEl.innerHTML = highlightCode(activeTab.content, activeTab.name);
-        if (gutter) gutter.textContent = renderLineNumbers(activeTab.content);
-      });
+      };
+
+      if (activeTab.content.length >= 40000) {
+        editorHighlightTimer = window.setTimeout(applyHighlight, 120);
+      } else {
+        editorHighlightRaf = requestAnimationFrame(applyHighlight);
+      }
     });
     ta.addEventListener("keydown", (e) => {
       if (e.key === "Tab") {
@@ -2739,6 +3322,7 @@ function renderEditorBody() {
     });
   }
 
+  document.getElementById("btn-editor-find")?.addEventListener("click", () => openEditorFind(false));
   document.getElementById("btn-send-selection")?.addEventListener("click", sendEditorSelectionToChief);
   document.getElementById("btn-save-file")?.addEventListener("click", saveActiveEditor);
 }
@@ -2972,7 +3556,7 @@ function attachImageFiles(files: FileList | File[]) {
 }
 
 function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.durationMs || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function createMessageElement(m: ChatMessage): HTMLElement {
@@ -2983,15 +3567,42 @@ function createMessageElement(m: ChatMessage): HTMLElement {
   return div;
 }
 
+function formatToolDuration(ms?: number): string {
+  if (!ms || ms <= 0) return "";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const digest = messageDigest(m);
   if (el.dataset.digest === digest) return;
   el.dataset.digest = digest;
 
   if (m.kind === "tool") {
+    const durLabel = formatToolDuration(m.durationMs);
+    const hasDrawer = Boolean(m.toolDetail || m.toolOutput);
+    const shortArg = m.toolDetail ? m.toolDetail.split("\n")[0].slice(0, 72) : "";
+    if (!hasDrawer) {
+      el.innerHTML = `
+        <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
+        <span class="msg-body">${escapeHtml(m.text)}</span>
+        ${durLabel ? `<span class="tool-duration">${escapeHtml(durLabel)}</span>` : ""}
+      `;
+      return;
+    }
+    const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
+    const drawerLines: string[] = [];
+    if (m.toolDetail) drawerLines.push(`Args: ${m.toolDetail}`);
+    if (m.toolOutput) drawerLines.push(`Saída: ${m.toolOutput}`);
     el.innerHTML = `
-      <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
-      <span class="msg-body">${escapeHtml(m.text)}</span>
+      <details class="tool-details" ${wasOpen ? "open" : ""}>
+        <summary>
+          <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
+          <span class="msg-body">${escapeHtml(m.text)}${shortArg ? ` <span class="dim">· ${escapeHtml(shortArg)}</span>` : ""}</span>
+          ${durLabel ? `<span class="tool-duration">${escapeHtml(durLabel)}</span>` : ""}
+        </summary>
+        <div class="tool-drawer">${escapeHtml(drawerLines.join("\n\n"))}</div>
+      </details>
     `;
     return;
   }
@@ -3263,6 +3874,20 @@ function bindRightStaticEvents() {
     if (!lane || !chatBox) return;
     lane.autoScroll = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 28;
   });
+  chatBox?.addEventListener("click", (e) => {
+    const target = (e.target as HTMLElement)?.closest<HTMLButtonElement>("[data-copy-code]");
+    if (!target) return;
+    const wrap = target.closest(".md-code-wrap");
+    const codeText = wrap?.querySelector("code")?.textContent ?? "";
+    if (!codeText) return;
+    navigator.clipboard?.writeText(codeText).then(() => {
+      const prev = target.textContent;
+      target.textContent = "Copiado!";
+      window.setTimeout(() => {
+        target.textContent = prev || "Copiar";
+      }, 1400);
+    }).catch(() => {});
+  });
 
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
   chatInput?.addEventListener("input", () => {
@@ -3482,6 +4107,8 @@ function getCommandActions(): CommandAction[] {
     { id: "perm-full", label: "Permissão: Full Acesso & Permissão Total (estilo Claude Code / GPT)", run: () => setProjectPermissionMode("full_access") },
     { id: "memory", label: "Abrir Memória Compartilhada (.hivemind/MEMORY.md)", run: () => openTeamMemoryFile() },
     { id: "sessions", label: "Ver Sessões Salvas & Consumo de Tokens", run: () => { openSidebarView("sessions"); refreshSessions(); } },
+    { id: "find-file", label: "Localizar e Substituir no Arquivo Atual", shortcut: "Ctrl+F / Ctrl+H", run: () => openEditorFind(true) },
+    { id: "diff-toggle", label: `Alternar Modo de Diff (${state.diffViewMode === "split" ? "Lado a Lado → Unificado" : "Unificado → Lado a Lado"})`, run: () => { state.diffViewMode = state.diffViewMode === "split" ? "unified" : "split"; renderEditorBody(); } },
     { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
     { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
@@ -3672,6 +4299,7 @@ function renderTerminalDrawer() {
       <span class="eyebrow">${icons.terminal}<span>Terminal</span></span>
       ${hint ? `<button class="mini success" id="term-run-hint" ${state.terminal.running ? "disabled" : ""}>${icons.play}<span>${escapeHtml(hint)}</span></button>` : ""}
       <button class="mini" id="term-run-status" ${state.terminal.running ? "disabled" : ""}>git status</button>
+      ${state.terminal.running ? `<button class="mini danger" id="term-cancel-cmd" title="Interromper comando em execução">${icons.stop}<span>Parar Comando</span></button>` : ""}
       <div class="spacer"></div>
       <button class="mini ghost" id="term-clear">Limpar</button>
       <button class="icon-btn" id="term-close" title="Fechar Terminal (Ctrl+J)">${icons.closeSmall}</button>
@@ -3688,7 +4316,7 @@ function renderTerminalDrawer() {
                 : `<span class="dim" style="color:${en.exitCode === 0 ? "var(--green)" : "var(--red)"}">[exit ${en.exitCode} · ${en.durationMs}ms]</span>`
               }
             </div>
-            <div>${escapeHtml(en.output)}</div>
+            <div data-term-out="${escapeHtml(en.id)}">${escapeHtml(en.output)}</div>
           </div>
         `).join("")
       }
@@ -3696,12 +4324,23 @@ function renderTerminalDrawer() {
     <div class="term-input-bar">
       <span class="dim">$</span>
       <input id="term-cmd-input" placeholder="Executar comando no projeto (Enter)…" value="${escapeHtml(state.terminal.cmdInput)}" ${state.terminal.running ? "disabled" : ""} />
-      <button class="primary mini" id="term-send" ${state.terminal.running ? "disabled" : ""}>Executar</button>
+      ${state.terminal.running
+        ? `<button class="danger mini" id="term-cancel-bottom">${icons.stop}<span>Parar</span></button>`
+        : `<button class="primary mini" id="term-send">Executar</button>`
+      }
     </div>
   `;
 
   const outBox = document.getElementById("terminal-output");
   if (outBox) outBox.scrollTop = outBox.scrollHeight;
+
+  const cancelRunningTerm = async () => {
+    if (!state.project) return;
+    await api()?.CancelCommand(state.project.root);
+    setStatus("Comando do terminal interrompido.");
+  };
+  document.getElementById("term-cancel-cmd")?.addEventListener("click", cancelRunningTerm);
+  document.getElementById("term-cancel-bottom")?.addEventListener("click", cancelRunningTerm);
 
   document.getElementById("term-close")?.addEventListener("click", () => toggleTerminal());
   document.getElementById("term-clear")?.addEventListener("click", () => {
@@ -3962,15 +4601,32 @@ function renderModalLayer() {
   if (state.showWizard) {
     const settings = state.project?.teamConfig?.settings;
     const activeTeamName = state.project?.teamConfig?.active || "principal";
+    const curTeam = (state.project?.teamConfig?.teams || []).find((t) => t.name === activeTeamName) || state.project?.teamConfig?.teams?.[0];
+    const existingChief = curTeam?.agents?.find((a) => a.name === "chefe" || a.role === "architect" || a.role === "project_manager");
+    const existingDev = curTeam?.agents?.find((a) => a.role === "developer");
+    const existingQA = curTeam?.agents?.find((a) => a.role === "qa");
+    const curChiefRole = existingChief?.role === "project_manager" ? "project_manager" : "architect";
+    const curMaxDynDevs = settings?.max_dynamic_devs && settings.max_dynamic_devs > 0 ? settings.max_dynamic_devs : 5;
     const existingMaxTok = settings?.max_tokens || 0;
     const curPerm = settings?.permission_mode || "governed";
     const curBase = settings?.base_branch || "main";
     const curHomolog = settings?.homolog_branch || "homolog";
     const autoCommitChecked = settings ? settings.auto_commit !== false : true;
     const autoPRChecked = settings ? settings.auto_pr !== false : true;
-    const modelOpts = state.models.length > 0
-      ? state.models.map((m) => `<option value="agy:${escapeHtml(m.slug)}">${escapeHtml(m.name)} (${escapeHtml(m.slug)})</option>`).join("")
-      : `<option value="agy">agy (padrão)</option>`;
+    const buildOptWithSel = (selectedModel?: string, includeDefaultBlank = false) => {
+      const sel = selectedModel || "";
+      const blank = includeDefaultBlank ? `<option value="" ${!sel ? "selected" : ""}>(usar padrão)</option>` : "";
+      if (state.models.length === 0) {
+        return blank + (sel ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)}</option>` : `<option value="agy">agy (padrão)</option>`);
+      }
+      const hasSel = sel && state.models.some((m) => `agy:${m.slug}` === sel || m.slug === sel);
+      const customOpt = sel && !hasSel ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)}</option>` : "";
+      return blank + customOpt + state.models.map((m) => {
+        const val = `agy:${m.slug}`;
+        const isSel = sel === val || sel === m.slug ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${isSel}>${escapeHtml(m.name)} (${escapeHtml(m.slug)})</option>`;
+      }).join("");
+    };
 
     layer.innerHTML = `
       <div class="modal-backdrop">
@@ -3982,8 +4638,8 @@ function renderModalLayer() {
 
             <label>Chefe da equipe:</label>
             <select id="wiz-chief">
-              <option value="architect">Arquiteto</option>
-              <option value="project_manager">Gerente de Projeto</option>
+              <option value="architect" ${curChiefRole === "architect" ? "selected" : ""}>Arquiteto</option>
+              <option value="project_manager" ${curChiefRole === "project_manager" ? "selected" : ""}>Gerente de Projeto</option>
             </select>
 
             <label>Permissão / Autonomia:</label>
@@ -3993,20 +4649,20 @@ function renderModalLayer() {
               <option value="full_access" ${curPerm === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total (estilo Claude Code / GPT)</option>
             </select>
 
-            <label>Qtd. Desenvolvedores:</label>
-            <input id="wiz-devs" type="number" min="1" max="6" value="1" />
+            <label>Máx. Devs dinâmicos:</label>
+            <input id="wiz-max-devs" type="number" min="1" max="5" value="${curMaxDynDevs}" title="Padrão: 3 agentes (Chefe, Dev, QA). Para tarefas grandes, o Chefe/Arquiteto pode disparar até N devs paralelos sob demanda." />
 
             <label>Modelo padrão:</label>
-            <select id="wiz-model">${modelOpts}</select>
+            <select id="wiz-model">${buildOptWithSel(existingChief?.model || existingDev?.model)}</select>
 
             <label>Modelo do Chefe:</label>
-            <select id="wiz-model-chief"><option value="">(usar padrão)</option>${modelOpts}</select>
+            <select id="wiz-model-chief">${buildOptWithSel(existingChief?.model, true)}</select>
 
             <label>Modelo do Dev:</label>
-            <select id="wiz-model-dev"><option value="">(usar padrão)</option>${modelOpts}</select>
+            <select id="wiz-model-dev">${buildOptWithSel(existingDev?.model, true)}</select>
 
             <label>Modelo do QA:</label>
-            <select id="wiz-model-qa"><option value="">(usar padrão)</option>${modelOpts}</select>
+            <select id="wiz-model-qa">${buildOptWithSel(existingQA?.model, true)}</select>
 
             <label>Branch Base / Homolog:</label>
             <div style="display:flex;gap:8px">
@@ -4032,7 +4688,7 @@ function renderModalLayer() {
               <input id="wiz-jira-key" placeholder="Projeto Jira (ex: PROJ)" value="${escapeHtml(settings?.jira_project || "")}" style="flex:1" />
             </div>
           </div>
-          <div class="dim" style="margin-top:10px">Governança: Somente o Chefe ou Arquiteto comitam na worktree separada e abrem/respondem/mesclam PRs.</div>
+          <div class="dim" style="margin-top:10px">Time base: <strong>3 agentes</strong> (Chefe/Arquiteto, Dev e QA). Em tarefas grandes, o Arquiteto dispara automaticamente de <strong>2 até ${curMaxDynDevs} devs paralelos</strong> em worktrees separadas.</div>
           <div id="wiz-error" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
             <button id="wiz-cancel">Cancelar</button>
@@ -4051,23 +4707,19 @@ function renderModalLayer() {
       if (!backend || !state.project) return;
       const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement)?.value || "";
       const chk = (id: string) => (document.getElementById(id) as HTMLInputElement)?.checked || false;
-      const devCount = parseInt(val("wiz-devs"), 10) || 1;
+      const maxDynamicDevs = Math.max(1, Math.min(5, parseInt(val("wiz-max-devs"), 10) || 5));
       const maxTokens = Math.max(0, parseInt(val("wiz-maxtokens"), 10) || 0);
       const defaultModel = val("wiz-model") || "agy";
       const agentModels: Record<string, string> = {};
       if (val("wiz-model-chief")) agentModels["chefe"] = val("wiz-model-chief");
       if (val("wiz-model-qa")) agentModels["qa"] = val("wiz-model-qa");
-      if (val("wiz-model-dev")) {
-        if (devCount === 1) agentModels["dev"] = val("wiz-model-dev");
-        else {
-          for (let i = 1; i <= devCount; i++) agentModels[`dev_${i}`] = val("wiz-model-dev");
-        }
-      }
+      if (val("wiz-model-dev")) agentModels["dev"] = val("wiz-model-dev");
       try {
         const cfg = await backend.SaveTeamWizard(state.project.root, {
           teamName: val("wiz-name") || "principal",
           chiefRole: val("wiz-chief") || "architect",
-          devCount,
+          devCount: 1,
+          maxDynamicDevs,
           defaultModel,
           agentModels,
           permissionMode: (val("wiz-permission") || "governed") as PermissionMode,

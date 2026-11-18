@@ -30,6 +30,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
@@ -37,17 +38,19 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind         string `json:"kind"` // "stage", "handoff", "usage", "text", "tool_call", "tool_result", "finish", "error"
-	Stage        string `json:"stage,omitempty"`
-	Author       string `json:"author,omitempty"`
-	Label        string `json:"label,omitempty"`
-	Text         string `json:"text,omitempty"`
-	ToolName     string `json:"toolName,omitempty"`
-	Partial      bool   `json:"partial,omitempty"`
-	Thought      bool   `json:"thought,omitempty"`
-	InputTokens  int32  `json:"inputTokens,omitempty"`
-	OutputTokens int32  `json:"outputTokens,omitempty"`
-	Tokens       int32  `json:"tokens,omitempty"`
+	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required"
+	Stage        string   `json:"stage,omitempty"`
+	Author       string   `json:"author,omitempty"`
+	Label        string   `json:"label,omitempty"`
+	Text         string   `json:"text,omitempty"`
+	ToolName     string   `json:"toolName,omitempty"`
+	Detail       string   `json:"detail,omitempty"`
+	Devs         []string `json:"devs,omitempty"`
+	Partial      bool     `json:"partial,omitempty"`
+	Thought      bool     `json:"thought,omitempty"`
+	InputTokens  int32    `json:"inputTokens,omitempty"`
+	OutputTokens int32    `json:"outputTokens,omitempty"`
+	Tokens       int32    `json:"tokens,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
@@ -213,7 +216,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	msg := buildUserContent(objective, req.Attachments)
 
-	useTriage := (runMode == "" && r.EnableTriage) || runMode == "auto" || runMode == "direct" || runMode == "plan"
+	useTriage := (runMode == "" && r.EnableTriage) ||
+		runMode == "auto" ||
+		runMode == "direct" ||
+		runMode == "plan" ||
+		(runMode == "squad" && r.EnableTriage && r.chiefPlan == "")
 	if useTriage {
 		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode, runMode)
 		result.InputTokens = r.turnInputTokens
@@ -251,7 +258,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			}
 			return result, nil
 		}
-		if !delegated || runMode == "direct" {
+		if (!delegated && runMode != "squad") || runMode == "direct" {
 			result.Summary = summary
 			fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
 			if r.OnEvent != nil {
@@ -363,8 +370,66 @@ func (r *Runner) detectGitHub(ctx context.Context) githubx.Client {
 	return githubx.Detect(owner, repo)
 }
 
+func (r *Runner) maxAllowedDevs() int {
+	baseCount := len(r.Team.ByRole(team.RoleDeveloper))
+	maxDevs := r.Project.Settings.EffectiveMaxDynamicDevs()
+	if baseCount > maxDevs {
+		return baseCount
+	}
+	return maxDevs
+}
+
+// resolveDynamicDevs picks the exact set of Developer agents for this execution.
+// By default the team defines 1 base Dev template; if the Chief/Architect splits a large
+// task into 2..MaxDynamicDevs non-overlapping slices in dev_tasks, extra Dev workers
+// (dev_1..dev_N) are dynamically cloned from the base Dev template (model/instructions).
+func (r *Runner) resolveDynamicDevs() []team.Agent {
+	baseDevs := r.Team.ByRole(team.RoleDeveloper)
+	if len(baseDevs) == 0 {
+		return nil
+	}
+	desired := len(r.devSlices)
+	if desired == 0 {
+		return baseDevs
+	}
+	maxDevs := r.maxAllowedDevs()
+	if desired > maxDevs {
+		desired = maxDevs
+	}
+	if desired == 1 {
+		return []team.Agent{baseDevs[0]}
+	}
+
+	out := make([]team.Agent, 0, desired)
+	used := make(map[string]bool, desired)
+	for i := 0; i < desired; i++ {
+		var a team.Agent
+		if i < len(baseDevs) {
+			a = baseDevs[i]
+			if len(baseDevs) == 1 && strings.EqualFold(a.Name, "dev") {
+				a.Name = "dev_1"
+			}
+		} else {
+			a = baseDevs[i%len(baseDevs)]
+			a.Name = fmt.Sprintf("dev_%d", i+1)
+		}
+		if used[strings.ToLower(a.Name)] {
+			for k := i + 1; k <= desired+10; k++ {
+				cand := fmt.Sprintf("dev_%d", k)
+				if !used[strings.ToLower(cand)] {
+					a.Name = cand
+					break
+				}
+			}
+		}
+		used[strings.ToLower(a.Name)] = true
+		out = append(out, a)
+	}
+	return out
+}
+
 func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devEnv, error) {
-	agents := r.Team.ByRole(team.RoleDeveloper)
+	agents := r.resolveDynamicDevs()
 	envs := make([]devEnv, 0, len(agents))
 	allowWorktrees := r.Project.Settings.Worktrees == nil || *r.Project.Settings.Worktrees
 	hasGitRepo := r.Git.IsRepo(ctx, r.Workspace) && r.Git.HasCommit(ctx, r.Workspace)
@@ -394,6 +459,7 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 		r.deliveryRoot = r.Workspace
 	}
 
+	devNames := make([]string, 0, len(agents))
 	for _, a := range agents {
 		adkName := names.ADK(a.Name)
 		branch := names.Branch(key, a.Name, objective)
@@ -406,6 +472,14 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 			root = wt
 		}
 		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch})
+		devNames = append(devNames, a.Name)
+	}
+	if r.OnEvent != nil && len(devNames) > 0 {
+		r.OnEvent(Event{
+			Kind:  "devs_scaled",
+			Stage: "dev",
+			Devs:  devNames,
+		})
 	}
 	return envs, nil
 }
@@ -690,6 +764,14 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 		if m, ok := r.Models[a.Name]; ok && m != nil {
 			return m, nil
 		}
+		if a.Role == team.RoleDeveloper {
+			if m, ok := r.Models["dev"]; ok && m != nil {
+				return m, nil
+			}
+			if m, ok := r.Models["dev_1"]; ok && m != nil {
+				return m, nil
+			}
+		}
 	}
 	if r.NewModel != nil {
 		return r.NewModel(ctx, a)
@@ -744,6 +826,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 			resetMap["chief_plan"] = ""
 		}
 		_ = sessionx.UpdateState(got.Session, resetMap)
+		_ = sessionx.CompactOldToolOutputs(got.Session, 10)
 		return got.Session, nil
 	}
 	created, err := r.Sessions.Create(ctx, &session.CreateRequest{
@@ -944,6 +1027,7 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 				Author:   ev.Author,
 				Label:    label,
 				ToolName: part.FunctionCall.Name,
+				Detail:   summarizeToolArgs(part.FunctionCall.Name, part.FunctionCall.Args),
 				Tokens:   tokens,
 			})
 			if part.FunctionCall.Name == "qa_approve" {
@@ -972,6 +1056,7 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 				Author:   ev.Author,
 				Label:    label,
 				ToolName: part.FunctionResponse.Name,
+				Detail:   summarizeToolResult(part.FunctionResponse.Response),
 				Tokens:   tokens,
 			})
 		} else if part.Text != "" {
@@ -1001,6 +1086,36 @@ func inferStage(author, label string) string {
 	default:
 		return "chief"
 	}
+}
+
+func summarizeToolArgs(name string, args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	for _, key := range []string{"path", "command", "message", "title", "number", "key", "jql", "ref", "note", "notes"} {
+		if v, ok := args[key]; ok && v != nil {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" {
+				return strx.TruncateRunes(strings.ReplaceAll(s, "\n", " "), 120, "…")
+			}
+		}
+	}
+	return ""
+}
+
+func summarizeToolResult(res map[string]any) string {
+	if len(res) == 0 {
+		return ""
+	}
+	for _, key := range []string{"text", "status", "error", "entries"} {
+		if v, ok := res[key]; ok && v != nil {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" {
+				return strx.TruncateRunes(s, 360, "\n…")
+			}
+		}
+	}
+	return ""
 }
 
 func buildUserContent(objective string, attachments []Attachment) *genai.Content {
@@ -1053,7 +1168,7 @@ func (r *Runner) primaryChief() team.Agent {
 
 type delegateArgs struct {
 	Plan      string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
-	DevTasks  []string `json:"dev_tasks" jsonschema:"Lista de subtarefas sem sobreposição de arquivos, uma por desenvolvedor do time na ordem dos devs."`
+	DevTasks  []string `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos. Cada item dispara 1 desenvolvedor paralelo em worktree isolada (use 1 item para tarefas pequenas/focadas, ou 2 a 5 itens para entregas grandes e paralelizáveis)."`
 	PRNumber  int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
 	PRBranch  string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
 	Reviewers []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
@@ -1089,11 +1204,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		return false, "", err
 	}
 
-	devs := r.Team.ByRole(team.RoleDeveloper)
-	var devNames []string
-	for _, d := range devs {
-		devNames = append(devNames, d.Name)
-	}
+	baseDevs := r.Team.ByRole(team.RoleDeveloper)
+	maxDevs := r.maxAllowedDevs()
 
 	var delegated bool
 	var planCardEmitted bool
@@ -1102,11 +1214,22 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if runMode != "direct" {
 		delegateTool, err := functiontool.New(functiontool.Config{
 			Name:        "delegate_to_squad",
-			Description: "Registra o plano técnico e as subtarefas por desenvolvedor para acionar o pipeline em worktree separada (Dev → QA → Chefe).",
+			Description: fmt.Sprintf("Registra o plano técnico e dispara dinamicamente de 1 até %d desenvolvedores paralelos em worktrees separadas (Dev(s) → QA → Chefe).", maxDevs),
 		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
 			delegated = true
 			r.chiefPlan = strings.TrimSpace(args.Plan)
-			r.devSlices = append([]string(nil), args.DevTasks...)
+
+			cleaned := make([]string, 0, len(args.DevTasks))
+			for _, s := range args.DevTasks {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					cleaned = append(cleaned, trimmed)
+				}
+			}
+			if len(cleaned) > maxDevs && maxDevs > 0 {
+				tail := strings.Join(cleaned[maxDevs-1:], "\n")
+				cleaned = append(cleaned[:maxDevs-1], tail)
+			}
+			r.devSlices = cleaned
 			r.prNumber = args.PRNumber
 			r.prBranch = strings.TrimSpace(args.PRBranch)
 			r.prReviewers = append([]string(nil), args.Reviewers...)
@@ -1120,6 +1243,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				actions.StateDelta["chief_plan"] = r.chiefPlan
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
 			}
+
+			resolved := r.resolveDynamicDevs()
 			if r.OnEvent != nil {
 				var hb strings.Builder
 				if r.chiefPlan != "" {
@@ -1130,12 +1255,18 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				}
 				for i, slice := range r.devSlices {
 					dn := fmt.Sprintf("dev_%d", i+1)
-					if i < len(devNames) {
-						dn = devNames[i]
+					if i < len(resolved) {
+						dn = resolved[i].Name
+					} else if len(r.devSlices) == 1 && len(baseDevs) > 0 {
+						dn = baseDevs[0].Name
 					}
 					if strings.TrimSpace(slice) != "" {
 						fmt.Fprintf(&hb, "\n- **%s**: %s", dn, strings.TrimSpace(slice))
 					}
+				}
+				devCountLabel := fmt.Sprintf("%d Desenvolvedor", len(resolved))
+				if len(resolved) > 1 {
+					devCountLabel = fmt.Sprintf("%d Desenvolvedores em paralelo", len(resolved))
 				}
 				if runMode == "plan" {
 					planCardEmitted = true
@@ -1143,7 +1274,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 						Kind:   "plan_ready",
 						Stage:  "chief",
 						Author: chief.Name,
-						Label:  "Plano pronto para aprovação",
+						Label:  fmt.Sprintf("Plano pronto para aprovação (%s)", devCountLabel),
 						Text:   strings.TrimSpace(hb.String()),
 					})
 				} else {
@@ -1151,21 +1282,27 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 						Kind:   "handoff",
 						Stage:  "dev",
 						Author: chief.Name,
-						Label:  "Chefe delegou → Desenvolvedores",
+						Label:  fmt.Sprintf("Chefe delegou → %s", devCountLabel),
 						Text:   strings.TrimSpace(hb.String()),
 					})
 				}
 			}
 			if runMode == "plan" {
-				return delegateResult{Status: "plano registrado; aguardando aprovação do usuário antes de acionar os desenvolvedores"}, nil
+				return delegateResult{Status: fmt.Sprintf("plano registrado (%d dev(s) previstos); aguardando aprovação do usuário", len(resolved))}, nil
 			}
-			return delegateResult{Status: "delegado ao time de desenvolvimento e QA em worktree separada"}, nil
+			return delegateResult{Status: fmt.Sprintf("delegado para %d desenvolvedor(es) e QA em worktree separada", len(resolved))}, nil
 		})
 		if err != nil {
 			return false, "", err
 		}
 		allTools = append(baseTools, delegateTool)
 	}
+
+	scaleGuidance := fmt.Sprintf(`ESCALA DINÂMICA DE DESENVOLVEDORES (1 até %d devs):
+- O time base tem 3 agentes (Chefe/Arquiteto, Dev e QA), sem quantidade fixa de devs.
+- Você decide quantos desenvolvedores disparar passando de 1 até %d itens em "dev_tasks":
+  • Tarefa pequena/média ou concentrada nos mesmos arquivos: passe apenas 1 item em "dev_tasks" (dispara 1 dev, mais rápido e econômico).
+  • Tarefa grande com módulos/arquivos independentes: divida em 2, 3, 4 ou até %d itens em "dev_tasks" (cada item dispara um dev paralelo em sua própria worktree isolada, SEM sobreposição de arquivos).`, maxDevs, maxDevs, maxDevs)
 
 	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
@@ -1185,21 +1322,32 @@ Inspecione arquivos/git/PRs se necessário e responda diretamente ao usuário co
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO (Human-in-the-Loop). Desenvolvedores disponíveis (%d): %s.
+Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO (Human-in-the-Loop).
 1. Inspecione os arquivos/PRs relevantes do projeto com read_file/list_dir/git_status/github_get_pr.
-2. Elabore um plano arquitetural claro e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (uma subtarefa sem conflito de arquivos por desenvolvedor em [%s]).
-3. Apresente um resumo objetivo do plano ao usuário informando que a execução iniciará em worktree separada assim que ele aprovar.
+2. Elabore um plano arquitetural claro e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (escolhendo dinamicamente de 1 até %d desenvolvedores conforme o tamanho da demanda).
+3. Apresente um resumo objetivo do plano ao usuário informando quantos devs serão disparados e que a execução iniciará em worktree separada assim que ele aprovar.
+%s
 %s`,
-			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "), govRules)
+			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
+	case "squad":
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) operando em MODO SQUAD.
+1. Inspecione os arquivos/PRs relevantes do projeto rapidamente.
+2. Monte um plano objetivo, decida quantos desenvolvedores são necessários (1 até %d) e chame OBRIGATORIAMENTE delegate_to_squad passando "plan" e "dev_tasks" (e "pr_number", "pr_branch", "reviewers" se for revisão de PR existente).
+%s
+%s`,
+			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
 	default:
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Chefe da equipe (%s). Desenvolvedores disponíveis (%d): %s.
+Você é o Chefe da equipe (%s).
 REGRA DE TRIAGEM:
 1. Se o usuário fez uma pergunta, pediu análise/diagnóstico, revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado pelo revisor (github_merge_pr) SEM precisar alterar código agora: execute as ferramentas de leitura/PR cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
-2. Se o usuário pediu para criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso: monte um plano objetivo e chame delegate_to_squad passando "plan", "dev_tasks" (uma subtarefa por desenvolvedor em [%s]) e, se for revisão de PR existente, "pr_number", "pr_branch" e "reviewers".
+2. Se o usuário pediu para criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso: monte um plano objetivo e chame delegate_to_squad passando "plan", "dev_tasks" (1 item para demandas pequenas/focadas, ou 2 a %d itens sem conflito de arquivos para demandas grandes) e, se for revisão de PR existente, "pr_number", "pr_branch" e "reviewers".
+%s
 %s`,
-			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "), govRules)
+			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")

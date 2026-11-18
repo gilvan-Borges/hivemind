@@ -1751,3 +1751,231 @@ button.icon-btn:hover:not(:disabled) {
   flex-direction: column;
   gap: 6px;
 }
+
+/* Explorer Tree Indentation Guides & Git Status Badges */
+.tree-row {
+  position: relative;
+}
+.tree-row.git-mod .tree-name {
+  color: #93c5fd;
+}
+.tree-row.git-add .tree-name {
+  color: #6ee7b7;
+}
+.tree-git-badge {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  flex-shrink: 0;
+}
+.tree-row:hover .tree-git-badge {
+  display: none;
+}
+.tree-git-badge.mod {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(96, 165, 250, 0.25);
+}
+.tree-git-badge.add {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+}
+.tree-dir-dot {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #60a5fa;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+.tree-row:hover .tree-dir-dot {
+  display: none;
+}
+
+/* Floating In-Editor Find & Replace Bar (Ctrl+F / Ctrl+H) */
+.editor-find-bar {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  background: #0a0c10;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.82);
+  min-width: 340px;
+}
+.editor-find-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.editor-find-input {
+  flex: 1;
+  min-width: 150px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  background: #050608;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+}
+.editor-find-input:focus {
+  border-color: var(--accent-soft);
+  outline: none;
+}
+.editor-find-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 58px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Diff Hunk Bar & Side-by-Side (Split) Diff View */
+.diff-hunk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 12px;
+  background: rgba(59, 130, 246, 0.11);
+  border-top: 1px solid rgba(96, 165, 250, 0.18);
+  border-bottom: 1px solid rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.diff-hunk-revert {
+  padding: 1px 8px;
+  font-size: 10.5px;
+  font-family: var(--sans);
+  font-weight: 600;
+  border-radius: 5px;
+  background: rgba(251, 113, 133, 0.12);
+  border: 1px solid rgba(251, 113, 133, 0.32);
+  color: #fda4af;
+  cursor: pointer;
+}
+.diff-hunk-revert:hover {
+  background: rgba(251, 113, 133, 0.22);
+  color: #ffe4e6;
+}
+.diff-split-wrap {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--bg-editor);
+}
+.diff-split-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.diff-split-table td {
+  vertical-align: top;
+  padding: 0;
+}
+.diff-split-num {
+  width: 42px;
+  padding: 1px 6px !important;
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+  background: rgba(255, 255, 255, 0.015);
+  border-right: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.diff-split-code {
+  width: calc(50% - 42px);
+  padding: 1px 10px !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-right: 1px solid var(--border);
+}
+.diff-split-code.added {
+  background: rgba(52, 211, 153, 0.12);
+  color: #a7f3d0;
+}
+.diff-split-code.removed {
+  background: rgba(251, 113, 133, 0.12);
+  color: #fecdd3;
+}
+.diff-split-code.empty {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+/* Expandable Tool Cards in Chat & Markdown Copy Button */
+.tool-details {
+  width: 100%;
+}
+.tool-details > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+.tool-details > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-duration {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.tool-drawer {
+  margin-top: 6px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #040507;
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+.md-code-lang {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.md-copy-btn {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-family: var(--sans);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.md-copy-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--border-strong);
+}

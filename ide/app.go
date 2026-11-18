@@ -28,6 +28,8 @@ type App struct {
 	agyStatus   modelx.AgyStatus
 	modelsCache []modelx.AgyModel
 	agyCachedAt time.Time
+	termMu      sync.Mutex
+	termCancels map[string]context.CancelFunc
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -61,9 +63,10 @@ type ProjectInfo struct {
 // NewApp constructs the Wails App.
 func NewApp(initialDir string, smokeCheck bool) *App {
 	app := &App{
-		initialDir: initialDir,
-		smokeCheck: smokeCheck,
-		fileIndex:  idecore.NewFileIndex(),
+		initialDir:  initialDir,
+		smokeCheck:  smokeCheck,
+		fileIndex:   idecore.NewFileIndex(),
+		termCancels: make(map[string]context.CancelFunc),
 	}
 	app.sessions = idecore.NewSessionManager(func(ev idecore.LaneEvent) {
 		if app.ctx != nil {
@@ -81,6 +84,14 @@ func (a *App) shutdown(_ context.Context) {
 	if a.sessions != nil {
 		a.sessions.CancelAll()
 	}
+	a.termMu.Lock()
+	for _, cancel := range a.termCancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	a.termCancels = make(map[string]context.CancelFunc)
+	a.termMu.Unlock()
 }
 
 // WindowMinimize minimizes the IDE window.
@@ -319,6 +330,20 @@ func (a *App) DiscardChanges(workspace string) error {
 	return idecore.DiscardWorkspaceChanges(ctx, workspace)
 }
 
+// DiscardFile restores a single tracked file to HEAD or deletes an untracked file.
+func (a *App) DiscardFile(workspace, relPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.DiscardFileChanges(ctx, workspace, relPath)
+}
+
+// RevertHunk reverses a single unified diff hunk on relPath.
+func (a *App) RevertHunk(workspace, relPath, hunkHeader string, hunkLines []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.RevertDiffHunk(ctx, workspace, relPath, hunkHeader, hunkLines)
+}
+
 // GitHubStatus returns `gh` CLI authentication and workspace remote info.
 func (a *App) GitHubStatus(workspace string) idecore.GitHubStatusInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -389,11 +414,50 @@ func (a *App) CancelRun(laneID string) bool {
 	return a.sessions.Cancel(laneID)
 }
 
-// RunCommand executes a command inside workspace for the integrated IDE terminal (Ctrl+J).
+// RunCommand executes a command inside workspace for the integrated IDE terminal (Ctrl+J),
+// streaming stdout/stderr lines in real time via Wails event "hivemind:terminal-output".
 func (a *App) RunCommand(workspace, command string) (idecore.CommandOutput, error) {
+	key := strings.ToLower(strings.TrimSpace(filepath.Clean(workspace)))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	return idecore.RunWorkspaceCommand(ctx, workspace, command)
+
+	a.termMu.Lock()
+	if prev, ok := a.termCancels[key]; ok && prev != nil {
+		prev()
+	}
+	a.termCancels[key] = cancel
+	a.termMu.Unlock()
+
+	defer func() {
+		cancel()
+		a.termMu.Lock()
+		delete(a.termCancels, key)
+		a.termMu.Unlock()
+	}()
+
+	return idecore.RunWorkspaceCommandStream(ctx, workspace, command, func(chunk string) {
+		if a.ctx != nil && !a.smokeCheck {
+			wailsrt.EventsEmit(a.ctx, "hivemind:terminal-output", map[string]any{
+				"workspace": workspace,
+				"chunk":     chunk,
+			})
+		}
+	})
+}
+
+// CancelCommand aborts the currently running terminal command for workspace.
+func (a *App) CancelCommand(workspace string) bool {
+	key := strings.ToLower(strings.TrimSpace(filepath.Clean(workspace)))
+	a.termMu.Lock()
+	cancel, ok := a.termCancels[key]
+	if ok {
+		delete(a.termCancels, key)
+	}
+	a.termMu.Unlock()
+	if ok && cancel != nil {
+		cancel()
+		return true
+	}
+	return false
 }
 
 // ListSessions returns all persisted sessions and token telemetry for workspace.
@@ -417,9 +481,9 @@ func (a *App) DeleteSession(workspace, sessionID string) error {
 	return idecore.DeleteWorkspaceSession(ctx, workspace, sessionID)
 }
 
-// SearchText performs global text search (Ctrl+Shift+F) across workspace files.
+// SearchText performs parallel global text search (Ctrl+Shift+F) reusing the in-memory FileIndex.
 func (a *App) SearchText(workspace, query string) ([]idecore.TextSearchMatch, error) {
-	return idecore.SearchWorkspaceText(workspace, query, 120)
+	return idecore.SearchWorkspaceTextIndexed(a.fileIndex, workspace, query, 120)
 }
 
 // CreateFile creates a new empty file inside workspace.

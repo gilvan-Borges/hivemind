@@ -37,7 +37,7 @@ export function renderMarkdownLite(raw: string): string {
       const lang = rawLang.replace(/[^a-zA-Z0-9_+-]/g, "") || "code";
       const code = (parts[i + 2] ?? "").replace(/\n$/, "");
       out.push(
-        `<div class="md-code-wrap"><div class="md-code-lang">${lang}</div><pre class="md-code"><code>${code}</code></pre></div>`
+        `<div class="md-code-wrap"><div class="md-code-lang"><span>${lang}</span><button class="md-copy-btn" type="button" data-copy-code="1" title="Copiar código">Copiar</button></div><pre class="md-code"><code>${code}</code></pre></div>`
       );
     }
   }

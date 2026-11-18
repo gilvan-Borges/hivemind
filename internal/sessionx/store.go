@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/session"
+
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 const (
@@ -256,6 +258,58 @@ func UpdateState(sess session.Session, updates map[string]any) error {
 		fs.state[k] = v
 	}
 	fs.updatedAt = time.Now().UTC()
+	meta := fs.metaNoLock()
+	fs.mu.Unlock()
+	return fs.persist(meta)
+}
+
+// CompactOldToolOutputs trims bulky FunctionResponse payloads (such as read_file,
+// git_diff, and run_shell outputs) from older session turns while keeping the most
+// recent keepRecentEvents events intact. This prevents prompt token explosion across
+// multi-turn conversations.
+func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
+	fs, ok := unwrap(sess)
+	if !ok {
+		return nil
+	}
+	if keepRecentEvents <= 0 {
+		keepRecentEvents = 8
+	}
+	const maxOldToolOutputBytes = 420
+	fs.mu.Lock()
+	cutoff := len(fs.events) - keepRecentEvents
+	if cutoff <= 0 {
+		fs.mu.Unlock()
+		return nil
+	}
+	changed := false
+	for i := 0; i < cutoff; i++ {
+		ev := fs.events[i]
+		if ev == nil || ev.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range ev.LLMResponse.Content.Parts {
+			if part == nil || part.FunctionResponse == nil || part.FunctionResponse.Response == nil {
+				continue
+			}
+			for k, val := range part.FunctionResponse.Response {
+				strVal, isStr := val.(string)
+				if !isStr || len(strVal) <= maxOldToolOutputBytes {
+					continue
+				}
+				part.FunctionResponse.Response[k] = strx.TruncateBytes(
+					strVal,
+					maxOldToolOutputBytes,
+					"\n…(saída de turno anterior compactada para economia de tokens)",
+				)
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		fs.mu.Unlock()
+		return nil
+	}
 	meta := fs.metaNoLock()
 	fs.mu.Unlock()
 	return fs.persist(meta)

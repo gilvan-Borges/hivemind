@@ -34,8 +34,49 @@ Não declare sucesso sem ter lido o resultado dos testes ou, na ausência de tes
 	}
 }
 
-// DefaultTeam builds a squad with one of each leadership role and n developers.
+// DefaultTeam builds the lean default squad: 1 Chief (Architect), base Developer(s), and 1 QA.
+// When a task is large, the Chief/Architect can dynamically spawn 2..MaxDynamicDevs parallel
+// developer instances from the base developer template without needing fixed dev entries.
 func DefaultTeam(name, description, model, provider string, devs int) Team {
+	if name == "" {
+		name = "padrao"
+	}
+	if model == "" {
+		model = defaultModel
+	}
+	if provider == "" {
+		provider = "gemini"
+	}
+	if devs < 1 {
+		devs = 1
+	}
+	agents := []Agent{
+		{Name: "chefe", Role: RoleArchitect, Provider: provider, Model: model},
+	}
+	if devs == 1 {
+		agents = append(agents, Agent{Name: "dev", Role: RoleDeveloper, Provider: provider, Model: model})
+	} else {
+		for i := 1; i <= devs; i++ {
+			agents = append(agents, Agent{
+				Name:     fmt.Sprintf("dev_%d", i),
+				Role:     RoleDeveloper,
+				Provider: provider,
+				Model:    model,
+			})
+		}
+	}
+	agents = append(agents, Agent{Name: "qa", Role: RoleQA, Provider: provider, Model: model})
+	t := Team{Name: name, Description: description, Agents: agents}
+	for i := range t.Agents {
+		t.Agents[i].Instructions = DefaultInstructions(t.Agents[i].Role)
+		t.Agents[i].Provider = NormalizeProvider(t.Agents[i].Provider, t.Agents[i].Model)
+	}
+	return t
+}
+
+// FullSquadTeam builds a 5-role squad (pm, tech_lead, architect, dev(s), qa) for
+// teams that explicitly opt into separate leadership specialists.
+func FullSquadTeam(name, description, model, provider string, devs int) Team {
 	if name == "" {
 		name = "padrao"
 	}

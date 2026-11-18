@@ -64,7 +64,7 @@ func TestPipelineWithMocks(t *testing.T) {
 	mustGit(t, g, ctx, repo, "add", "README.md")
 	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
 
-	squad := team.DefaultTeam("padrao", "", "scripted", "gemini", 2)
+	squad := team.FullSquadTeam("padrao", "", "scripted", "gemini", 2)
 	project := team.File{
 		Active: squad.Name,
 		Settings: team.Settings{
@@ -282,7 +282,7 @@ func traceKeys(m *sync.Map) []string {
 
 func TestTriageDirectAnswerAndDelegationWithSlicesAndClosingChief(t *testing.T) {
 	dir := t.TempDir()
-	squad := team.DefaultTeam("ide", "", "scripted", "gemini", 2)
+	squad := team.FullSquadTeam("ide", "", "scripted", "gemini", 2)
 	project := team.File{
 		Active: squad.Name,
 		Settings: team.Settings{
@@ -442,7 +442,7 @@ func TestTriageDirectAnswerAndDelegationWithSlicesAndClosingChief(t *testing.T) 
 
 func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
 	dir := t.TempDir()
-	squad := team.DefaultTeam("ide-plan", "", "scripted", "gemini", 2)
+	squad := team.FullSquadTeam("ide-plan", "", "scripted", "gemini", 2)
 	project := team.File{
 		Active: squad.Name,
 		Settings: team.Settings{
@@ -590,7 +590,7 @@ func TestWorktreesSettingDisabledWritesDirectlyToWorkspace(t *testing.T) {
 	mustGit(t, g, ctx, repo, "add", "README.md")
 	mustGit(t, g, ctx, repo, "commit", "-m", "init")
 
-	squad := team.DefaultTeam("direto", "", "scripted", "gemini", 1)
+	squad := team.FullSquadTeam("direto", "", "scripted", "gemini", 1)
 	project := team.File{
 		Active: squad.Name,
 		Settings: team.Settings{
@@ -792,7 +792,7 @@ func TestPRReviewCycleHomologAutoMergeAndMainApprovalGate(t *testing.T) {
 		},
 	}
 
-	squad := team.DefaultTeam("gov", "", "scripted", "gemini", 1)
+	squad := team.FullSquadTeam("gov", "", "scripted", "gemini", 1)
 	project := team.File{
 		Active:   squad.Name,
 		Settings: team.DefaultSettings(),
@@ -978,5 +978,115 @@ func TestPRReviewCycleHomologAutoMergeAndMainApprovalGate(t *testing.T) {
 	}
 	if promptedInFullAccess || !gh.merged[2] {
 		t.Fatalf("expected full_access to merge main without prompt: prompted=%v merged=%v", promptedInFullAccess, gh.merged[2])
+	}
+}
+
+func TestLeanTeamDynamicDevScaling(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	ctx := context.Background()
+	repo := t.TempDir()
+	g := gitx.Local{}
+	mustGit(t, g, ctx, repo, "init", "-b", "main")
+	mustGit(t, g, ctx, repo, "config", "user.name", "Teste")
+	mustGit(t, g, ctx, repo, "config", "user.email", "teste@local")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("lean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, g, ctx, repo, "add", "README.md")
+	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
+
+	// Lean 3-agent team: chefe (architect), dev (developer), qa (qa).
+	squad := team.DefaultTeam("principal", "", "scripted", "gemini", 1)
+	if len(squad.Agents) != 3 {
+		t.Fatalf("expected 3 default agents (chefe, dev, qa), got %d: %+v", len(squad.Agents), squad.Agents)
+	}
+	if err := squad.ValidateForRun(); err != nil {
+		t.Fatalf("lean 3-agent team should validate: %v", err)
+	}
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			AutoCommit:     false,
+			AutoPR:         false,
+			MaxQALoops:     2,
+			MaxDynamicDevs: 5,
+			BaseBranch:     "main",
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	var scaledDevs []string
+	r := &Runner{
+		Workspace:          repo,
+		Project:            project,
+		Team:               squad,
+		Git:                g,
+		GitHub:             githubx.Disabled{Reason: "off"},
+		Jira:               jirax.Disabled{Reason: "off"},
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		OnEvent: func(ev Event) {
+			if ev.Kind == "devs_scaled" {
+				scaledDevs = append([]string(nil), ev.Devs...)
+			}
+		},
+		Models: map[string]model.LLM{
+			"chefe": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan": "Entrega grande dividida em 3 módulos independentes.",
+						"dev_tasks": []any{
+							"Criar mod1.txt",
+							"Criar mod2.txt",
+							"Criar mod3.txt",
+						},
+					})
+				}
+				return modelx.Text("Entrega com 3 devs dinâmicos finalizada.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "mod1.txt", "content": "1\n"})
+				}
+				return modelx.Text("mod1 pronto")
+			}},
+			"dev_2": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("write_file", "w2", map[string]any{"path": "mod2.txt", "content": "2\n"})
+				}
+				return modelx.Text("mod2 pronto")
+			}},
+			"dev_3": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("write_file", "w3", map[string]any{"path": "mod3.txt", "content": "3\n"})
+				}
+				return modelx.Text("mod3 pronto")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "3 módulos ok"})
+				}
+				return modelx.Text("aprovado")
+			}},
+		},
+	}
+
+	if _, err := r.Run(ctx, Request{Objective: "implementar 3 módulos paralelos"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(scaledDevs) != 3 || scaledDevs[0] != "dev_1" || scaledDevs[1] != "dev_2" || scaledDevs[2] != "dev_3" {
+		t.Fatalf("expected 3 dynamically scaled devs [dev_1 dev_2 dev_3], got %v", scaledDevs)
+	}
+	for _, fn := range []string{"mod1.txt", "mod2.txt", "mod3.txt"} {
+		if _, err := os.Stat(filepath.Join(r.deliveryRoot, fn)); err != nil {
+			t.Fatalf("expected %s integrated in delivery worktree %s: %v", fn, r.deliveryRoot, err)
+		}
 	}
 }

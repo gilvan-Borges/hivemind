@@ -1,14 +1,17 @@
 package idecore
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
@@ -25,6 +28,12 @@ type CommandOutput struct {
 
 // RunWorkspaceCommand runs a user-initiated command inside workspace with CREATE_NO_WINDOW.
 func RunWorkspaceCommand(ctx context.Context, workspace, command string) (CommandOutput, error) {
+	return RunWorkspaceCommandStream(ctx, workspace, command, nil)
+}
+
+// RunWorkspaceCommandStream runs a user-initiated command inside workspace, streaming
+// incremental output lines through onChunk (when non-nil) and returning the final output.
+func RunWorkspaceCommandStream(ctx context.Context, workspace, command string, onChunk func(chunk string)) (CommandOutput, error) {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {
 		return CommandOutput{}, fmt.Errorf("informe um comando para executar")
@@ -44,25 +53,70 @@ func RunWorkspaceCommand(ctx context.Context, workspace, command string) (Comman
 	procx.ConfigureContext(cmd)
 	cmd.Dir = absRoot
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	if onChunk == nil {
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
 
-	runErr := cmd.Run()
-	elapsed := time.Since(start).Milliseconds()
+		runErr := cmd.Run()
+		elapsed := time.Since(start).Milliseconds()
 
-	exitCode := 0
-	if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
+		exitCode := resolveExitCode(runErr)
+		const maxBytes = 64 * 1024
+		out := strx.TruncateBytes(buf.String(), maxBytes, "\n…(saída truncada em 64 KB)")
+		return CommandOutput{
+			Command:    trimmed,
+			Output:     out,
+			ExitCode:   exitCode,
+			DurationMs: elapsed,
+		}, nil
 	}
 
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	if err := cmd.Start(); err != nil {
+		_ = pw.Close()
+		_ = pr.Close()
+		return CommandOutput{}, err
+	}
+
+	var buf bytes.Buffer
+	var bufMu sync.Mutex
 	const maxBytes = 64 * 1024
-	out := strx.TruncateBytes(buf.String(), maxBytes, "\n…(saída truncada em 64 KB)")
+	doneRead := make(chan struct{})
+	go func() {
+		defer close(doneRead)
+		reader := bufio.NewReaderSize(pr, 4096)
+		for {
+			line, rErr := reader.ReadString('\n')
+			if len(line) > 0 {
+				bufMu.Lock()
+				if buf.Len() < maxBytes+16 {
+					buf.WriteString(line)
+				}
+				bufMu.Unlock()
+				onChunk(line)
+			}
+			if rErr != nil {
+				break
+			}
+		}
+	}()
+
+	runErr := cmd.Wait()
+	_ = pw.Close()
+	<-doneRead
+	_ = pr.Close()
+
+	elapsed := time.Since(start).Milliseconds()
+	exitCode := resolveExitCode(runErr)
+
+	bufMu.Lock()
+	rawOut := buf.String()
+	bufMu.Unlock()
+	out := strx.TruncateBytes(rawOut, maxBytes, "\n…(saída truncada em 64 KB)")
 
 	return CommandOutput{
 		Command:    trimmed,
@@ -70,4 +124,15 @@ func RunWorkspaceCommand(ctx context.Context, workspace, command string) (Comman
 		ExitCode:   exitCode,
 		DurationMs: elapsed,
 	}, nil
+}
+
+func resolveExitCode(runErr error) int {
+	if runErr == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
