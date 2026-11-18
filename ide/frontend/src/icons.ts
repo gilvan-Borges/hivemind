@@ -29,6 +29,9 @@ export const icons = {
   winMax: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="2.2" y="2.2" width="7.6" height="7.6" stroke="currentColor" stroke-width="1.2"/></svg>`,
   winClose: `<svg width="11" height="11" viewBox="0 0 12 12"><line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="currentColor" stroke-width="1.3"/><line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="currentColor" stroke-width="1.3"/></svg>`,
   save: svg(`<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>`, 13),
+  image: svg(`<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>`, 14),
+  terminal: svg(`<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>`, 14),
+  arrowRight: svg(`<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>`, 11),
   fileDefault: svg(`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>`, 13),
 };
 

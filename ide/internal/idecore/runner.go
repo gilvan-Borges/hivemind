@@ -2,6 +2,7 @@ package idecore
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -161,10 +162,68 @@ func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	}
 }
 
+// ImageInput carries a base64 or data-URL encoded image from the IDE chat.
+type ImageInput struct {
+	Name       string `json:"name"`
+	MIMEType   string `json:"mimeType"`
+	DataBase64 string `json:"dataBase64"`
+}
+
+// DecodeImageInputs converts frontend ImageInput items into orchestrator.Attachment blobs.
+func DecodeImageInputs(inputs []ImageInput) ([]orchestrator.Attachment, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	out := make([]orchestrator.Attachment, 0, len(inputs))
+	for i, in := range inputs {
+		raw := strings.TrimSpace(in.DataBase64)
+		mime := strings.TrimSpace(in.MIMEType)
+		if strings.HasPrefix(raw, "data:") {
+			if comma := strings.IndexByte(raw, ','); comma > 0 {
+				header := raw[5:comma]
+				if semi := strings.IndexByte(header, ';'); semi > 0 && mime == "" {
+					mime = header[:semi]
+				}
+				raw = raw[comma+1:]
+			}
+		}
+		if raw == "" {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, fmt.Errorf("imagem %d inválida: %w", i+1, err)
+		}
+		if mime == "" {
+			mime = "image/png"
+		}
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			name = fmt.Sprintf("imagem_%d.png", i+1)
+		}
+		out = append(out, orchestrator.Attachment{
+			Name:     name,
+			MIMEType: mime,
+			Data:     decoded,
+		})
+	}
+	return out, nil
+}
+
 // RunTurn executes one user objective on a specific lane (team) with stack context injected.
 func (m *SessionManager) RunTurn(
 	parentCtx context.Context,
 	laneID, workspace, teamName, objective, jiraKey, sessionID string,
+) (orchestrator.Result, error) {
+	return m.RunTurnWithImages(parentCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, nil)
+}
+
+// RunTurnWithImages executes one user objective (and optional attached images) on a specific lane
+// with Chief triage, per-Dev task slicing, and Closing Chief enabled.
+func (m *SessionManager) RunTurnWithImages(
+	parentCtx context.Context,
+	laneID, workspace, teamName, objective, jiraKey, sessionID string,
+	images []ImageInput,
 ) (orchestrator.Result, error) {
 	cfg, err := team.Load(workspace)
 	if err != nil {
@@ -175,8 +234,17 @@ func (m *SessionManager) RunTurn(
 		return orchestrator.Result{}, err
 	}
 
+	attachments, err := DecodeImageInputs(images)
+	if err != nil {
+		return orchestrator.Result{}, err
+	}
+
+	userText := strings.TrimSpace(objective)
+	if userText == "" && len(attachments) > 0 {
+		userText = "Analise a(s) imagem(ns) anexada(s)."
+	}
 	stack := DetectStack(workspace)
-	fullObjective := stack.FormatForChief() + "\n[Objetivo do Usuário]\n" + strings.TrimSpace(objective)
+	fullObjective := stack.FormatForChief() + "\n[Objetivo do Usuário]\n" + userText
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.mu.Lock()
@@ -212,15 +280,17 @@ func (m *SessionManager) RunTurn(
 	}
 
 	runner := &orchestrator.Runner{
-		Workspace: workspace,
-		Project:   cfg,
-		Team:      selected,
-		Git:       g,
-		GitHub:    gh,
-		Jira:      jira,
-		Sessions:  store,
-		Out:       io.Discard,
-		Err:       io.Discard,
+		Workspace:          workspace,
+		Project:            cfg,
+		Team:               selected,
+		Git:                g,
+		GitHub:             gh,
+		Jira:               jira,
+		Sessions:           store,
+		Out:                io.Discard,
+		Err:                io.Discard,
+		EnableTriage:       true,
+		EnableClosingChief: true,
 		OnEvent: func(ev orchestrator.Event) {
 			if m.Emit != nil {
 				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
@@ -228,9 +298,10 @@ func (m *SessionManager) RunTurn(
 		},
 	}
 	return runner.Run(ctx, orchestrator.Request{
-		Objective: fullObjective,
-		JiraKey:   jiraKey,
-		SessionID: sessionID,
+		Objective:   fullObjective,
+		JiraKey:     jiraKey,
+		SessionID:   sessionID,
+		Attachments: attachments,
 	})
 }
 

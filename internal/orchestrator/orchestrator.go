@@ -20,6 +20,7 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
@@ -35,42 +36,55 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind      string `json:"kind"` // "agent_start", "text", "tool_call", "tool_result", "finish", "error"
-	Author    string `json:"author,omitempty"`
-	Label     string `json:"label,omitempty"`
-	Text      string `json:"text,omitempty"`
-	ToolName  string `json:"toolName,omitempty"`
-	Partial   bool   `json:"partial,omitempty"`
-	Thought   bool   `json:"thought,omitempty"`
-	Tokens    int32  `json:"tokens,omitempty"`
+	Kind     string `json:"kind"` // "stage", "handoff", "text", "tool_call", "tool_result", "finish", "error"
+	Stage    string `json:"stage,omitempty"`
+	Author   string `json:"author,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Text     string `json:"text,omitempty"`
+	ToolName string `json:"toolName,omitempty"`
+	Partial  bool   `json:"partial,omitempty"`
+	Thought  bool   `json:"thought,omitempty"`
+	Tokens   int32  `json:"tokens,omitempty"`
+}
+
+// Attachment represents an image or file attached by the user in chat.
+type Attachment struct {
+	Name     string `json:"name"`
+	MIMEType string `json:"mimeType"`
+	Data     []byte `json:"data"`
 }
 
 // Runner executes one team against a workspace.
 type Runner struct {
-	Workspace     string
-	Project       team.File
-	Team          team.Team
-	Git           gitx.Git
-	GitHub        githubx.Client
-	Jira          jirax.Client
-	Sessions      *sessionx.Store
-	Models        map[string]model.LLM
-	NewModel      func(ctx context.Context, a team.Agent) (model.LLM, error)
-	Confirm       shellx.Confirmer
-	Out           io.Writer
-	Err           io.Writer
-	Streaming     agent.StreamingMode
-	OnEvent       func(Event)
-	integration   string
-	issueKey      string
-	objectiveText string
+	Workspace          string
+	Project            team.File
+	Team               team.Team
+	Git                gitx.Git
+	GitHub             githubx.Client
+	Jira               jirax.Client
+	Sessions           *sessionx.Store
+	Models             map[string]model.LLM
+	NewModel           func(ctx context.Context, a team.Agent) (model.LLM, error)
+	Confirm            shellx.Confirmer
+	Out                io.Writer
+	Err                io.Writer
+	Streaming          agent.StreamingMode
+	OnEvent            func(Event)
+	EnableTriage       bool
+	EnableClosingChief bool
+	integration        string
+	issueKey           string
+	objectiveText      string
+	devSlices          []string
+	chiefPlan          string
 }
 
 // Request is one user turn.
 type Request struct {
-	Objective string
-	JiraKey   string
-	SessionID string
+	Objective   string
+	JiraKey     string
+	SessionID   string
+	Attachments []Attachment
 }
 
 // Result is what the CLI prints after the team finishes.
@@ -150,6 +164,41 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	r.issueKey = key
 	r.objectiveText = objective
+	r.devSlices = nil
+	r.chiefPlan = ""
+
+	sess, err := r.openSession(ctx, req.SessionID, objective, key)
+	if err != nil {
+		return result, err
+	}
+	result.SessionID = sess.ID()
+
+	mode := r.Streaming
+	if mode == "" {
+		mode = agent.StreamingModeSSE
+	}
+	msg := buildUserContent(objective, req.Attachments)
+
+	if r.EnableTriage {
+		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode)
+		if err != nil {
+			if r.OnEvent != nil {
+				r.OnEvent(Event{Kind: "error", Text: err.Error()})
+			}
+			return result, err
+		}
+		if !delegated {
+			result.Summary = summary
+			fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
+			if r.OnEvent != nil {
+				r.OnEvent(Event{Kind: "finish", Stage: "chief", Text: fmt.Sprintf("Sessão %s concluída.", result.SessionID)})
+			}
+			return result, nil
+		}
+		// Squad implementation continues with a follow-up kickoff prompt so the user prompt + images remain in session history.
+		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
+	}
+
 	devs, err := r.prepareDevs(ctx, key, objective)
 	if err != nil {
 		return result, err
@@ -159,12 +208,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		return result, err
 	}
 
-	sess, err := r.openSession(ctx, req.SessionID, objective, key)
-	if err != nil {
-		return result, err
-	}
-	result.SessionID = sess.ID()
-
 	adkRunner, err := runner.New(runner.Config{
 		AppName:        sessionx.AppName,
 		Agent:          root,
@@ -173,11 +216,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	mode := r.Streaming
-	if mode == "" {
-		mode = agent.StreamingModeSSE
-	}
-	msg := genai.NewContentFromText(objective, genai.RoleUser)
 	printer := &ui.Printer{Out: r.Out, Labels: labels}
 	for ev, err := range adkRunner.Run(ctx, sessionx.UserID, sess.ID(), msg, agent.RunConfig{
 		StreamingMode: mode,
@@ -272,7 +310,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "pm_plan", "tech_lead_plan", "architect_plan", "qa_feedback"}
+	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	var steps []agent.Agent
 	addGroup := func(output string, agents []team.Agent, root, extra string) error {
@@ -294,23 +332,35 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return nil
 	}
-	if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
-		return nil, nil, err
-	}
-	if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, ""); err != nil {
-		return nil, nil, err
-	}
-	if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
-		return nil, nil, err
+	if !r.EnableTriage {
+		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
+			return nil, nil, err
+		}
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, ""); err != nil {
+			return nil, nil, err
+		}
+		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		// In triage mode, the Chief already planned and sliced tasks; Tech Lead refines technical guardrails if needed.
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe."); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	var parallelSubs []agent.Agent
 	var wtLines []string
-	for _, dev := range devs {
+	for idx, dev := range devs {
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho é %s.\nSua branch é %s.\nNão altere arquivos fora desse diretório.", dev.Root, dev.Branch)
+		extra := fmt.Sprintf("Seu diretório de trabalho é %s.\nSua branch é %s.\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
+		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
+			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
+		} else if len(devs) > 1 {
+			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
+		}
 		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false)
 		if err != nil {
 			return nil, nil, err
@@ -382,6 +432,22 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		return nil, nil, err
 	}
 	steps = append(steps, loop)
+
+	if r.EnableClosingChief {
+		chief := r.primaryChief()
+		closingName := unique(chief.Name + "_fecho")
+		closingAgent := chief
+		// Use read/diff/comment toolset on qaRoot so Closing Chief inspects the integrated diff without editing code.
+		closingAgent.Role = team.RoleTechLead
+		closingExtra := "Você é o Chefe (Fecho) encerrando a entrega após o ciclo Dev → QA.\nRevise [qa_report], [qa_approval_note], [qa_feedback] e use git_diff se necessário.\nEntregue ao usuário um resumo executivo claro em Markdown contendo:\n1. O que foi implementado/alterado por cada Dev;\n2. Resultado da revisão/testes do QA;\n3. Lista dos arquivos impactados e próximos passos."
+		ag, err := r.llm(ctx, closingAgent, closingName, "closing_summary", qaRoot, closingExtra, key, stateKeys, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		labels[closingName] = "Chefe (Fecho) · " + chief.Name
+		steps = append(steps, ag)
+	}
+
 	root, err := sequentialagent.New(sequentialagent.Config{AgentConfig: agent.Config{
 		Name:        "pipeline_root",
 		Description: "Pipeline do time HiveMind: planejamento, implementação paralela e QA.",
@@ -510,14 +576,22 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string) (se
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
+		_ = got.Session.State().Set("qa_feedback", "")
+		_ = got.Session.State().Set("qa_report", "")
+		_ = got.Session.State().Set("qa_approval_note", "")
+		_ = got.Session.State().Set("chief_plan", "")
 		return got.Session, nil
 	}
 	created, err := r.Sessions.Create(ctx, &session.CreateRequest{
 		AppName: sessionx.AppName,
 		UserID:  sessionx.UserID,
 		State: map[string]any{
-			"objective": objective,
-			"jira_key":  key,
+			"objective":        objective,
+			"jira_key":         key,
+			"qa_feedback":      "",
+			"qa_report":        "",
+			"qa_approval_note": "",
+			"chief_plan":       "",
 		},
 	})
 	if err != nil {
@@ -605,6 +679,9 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 	if label == "" {
 		label = ev.Author
 	}
+	stage := inferStage(ev.Author, label)
+	r.OnEvent(Event{Kind: "stage", Stage: stage, Author: ev.Author, Label: label})
+
 	var tokens int32
 	if ev.LLMResponse.UsageMetadata != nil {
 		tokens = ev.LLMResponse.UsageMetadata.TotalTokenCount
@@ -619,14 +696,35 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 		if part.FunctionCall != nil {
 			r.OnEvent(Event{
 				Kind:     "tool_call",
+				Stage:    stage,
 				Author:   ev.Author,
 				Label:    label,
 				ToolName: part.FunctionCall.Name,
 				Tokens:   tokens,
 			})
+			if part.FunctionCall.Name == "qa_approve" {
+				note := fmt.Sprint(part.FunctionCall.Args["note"])
+				r.OnEvent(Event{
+					Kind:   "handoff",
+					Stage:  "qa",
+					Author: ev.Author,
+					Label:  "QA aprovou → Chefe (Fecho)",
+					Text:   strings.TrimSpace(note),
+				})
+			} else if part.FunctionCall.Name == "qa_request_changes" {
+				notes := fmt.Sprint(part.FunctionCall.Args["notes"])
+				r.OnEvent(Event{
+					Kind:   "handoff",
+					Stage:  "dev",
+					Author: ev.Author,
+					Label:  "QA pediu ajustes → Devs",
+					Text:   strings.TrimSpace(notes),
+				})
+			}
 		} else if part.FunctionResponse != nil {
 			r.OnEvent(Event{
 				Kind:     "tool_result",
+				Stage:    stage,
 				Author:   ev.Author,
 				Label:    label,
 				ToolName: part.FunctionResponse.Name,
@@ -635,6 +733,7 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 		} else if part.Text != "" {
 			r.OnEvent(Event{
 				Kind:    "text",
+				Stage:   stage,
 				Author:  ev.Author,
 				Label:   label,
 				Text:    part.Text,
@@ -644,4 +743,216 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 			})
 		}
 	}
+}
+
+func inferStage(author, label string) string {
+	l := strings.ToLower(author + " " + label)
+	switch {
+	case strings.Contains(l, "fecho"):
+		return "closing"
+	case strings.Contains(l, "qa"):
+		return "qa"
+	case strings.Contains(l, "desenvolvedor") || strings.Contains(l, "dev") || strings.Contains(l, "integrate"):
+		return "dev"
+	default:
+		return "chief"
+	}
+}
+
+func buildUserContent(objective string, attachments []Attachment) *genai.Content {
+	parts := make([]*genai.Part, 0, 1+len(attachments))
+	parts = append(parts, &genai.Part{Text: objective})
+	for _, att := range attachments {
+		if len(att.Data) == 0 {
+			continue
+		}
+		mime := strings.TrimSpace(att.MIMEType)
+		if mime == "" {
+			mime = "image/png"
+		}
+		parts = append(parts, &genai.Part{
+			InlineData: &genai.Blob{
+				MIMEType: mime,
+				Data:     att.Data,
+			},
+		})
+	}
+	return &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: parts,
+	}
+}
+
+func (r *Runner) primaryChief() team.Agent {
+	if pms := r.Team.ByRole(team.RoleProjectManager); len(pms) > 0 {
+		for _, a := range pms {
+			if strings.EqualFold(a.Name, "chefe") {
+				return a
+			}
+		}
+	}
+	if archs := r.Team.ByRole(team.RoleArchitect); len(archs) > 0 {
+		for _, a := range archs {
+			if strings.EqualFold(a.Name, "chefe") {
+				return a
+			}
+		}
+	}
+	if pms := r.Team.ByRole(team.RoleProjectManager); len(pms) > 0 {
+		return pms[0]
+	}
+	if archs := r.Team.ByRole(team.RoleArchitect); len(archs) > 0 {
+		return archs[0]
+	}
+	return r.Team.Agents[0]
+}
+
+type delegateArgs struct {
+	Plan     string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	DevTasks []string `json:"dev_tasks" jsonschema:"Lista de subtarefas sem sobreposição de arquivos, uma por desenvolvedor do time na ordem dos devs."`
+}
+
+type delegateResult struct {
+	Status string `json:"status"`
+}
+
+func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode) (bool, string, error) {
+	chief := r.primaryChief()
+	llm, err := r.modelFor(ctx, chief)
+	if err != nil {
+		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
+	}
+	// Read-only inspection tools + Jira/GitHub read so Triage Chief never edits files directly.
+	readChiefRole := team.RoleTechLead
+	if team.NormalizeRole(chief.Role) == team.RoleProjectManager {
+		readChiefRole = team.RoleProjectManager
+	}
+	baseTools, err := tools.ForRole(readChiefRole, tools.Deps{
+		Root:       r.Workspace,
+		Allowlist:  r.Project.Settings.ShellAllowlist,
+		Confirm:    r.Confirm,
+		Git:        r.Git,
+		GitHub:     r.GitHub,
+		Jira:       r.Jira,
+		JiraKey:    jiraKey,
+		BaseBranch: r.Project.Settings.BaseBranch,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	devs := r.Team.ByRole(team.RoleDeveloper)
+	var devNames []string
+	for _, d := range devs {
+		devNames = append(devNames, d.Name)
+	}
+
+	var delegated bool
+	delegateTool, err := functiontool.New(functiontool.Config{
+		Name:        "delegate_to_squad",
+		Description: "Aciona o pipeline Dev → QA → Chefe para implementar mudanças de código. Chame SOMENTE quando o pedido exigir criar/alterar arquivos ou corrigir código.",
+	}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
+		delegated = true
+		r.chiefPlan = strings.TrimSpace(args.Plan)
+		r.devSlices = append([]string(nil), args.DevTasks...)
+		_ = tctx.State().Set("chief_plan", r.chiefPlan)
+		if actions := tctx.Actions(); actions != nil {
+			if actions.StateDelta == nil {
+				actions.StateDelta = map[string]any{}
+			}
+			actions.StateDelta["chief_plan"] = r.chiefPlan
+		}
+		if r.OnEvent != nil {
+			var hb strings.Builder
+			if r.chiefPlan != "" {
+				hb.WriteString(r.chiefPlan)
+			}
+			for i, slice := range r.devSlices {
+				dn := fmt.Sprintf("dev_%d", i+1)
+				if i < len(devNames) {
+					dn = devNames[i]
+				}
+				if strings.TrimSpace(slice) != "" {
+					fmt.Fprintf(&hb, "\n- **%s**: %s", dn, strings.TrimSpace(slice))
+				}
+			}
+			r.OnEvent(Event{
+				Kind:   "handoff",
+				Stage:  "dev",
+				Author: chief.Name,
+				Label:  "Chefe delegou → Desenvolvedores",
+				Text:   strings.TrimSpace(hb.String()),
+			})
+		}
+		return delegateResult{Status: "delegado ao time de desenvolvimento e QA"}, nil
+	})
+	if err != nil {
+		return false, "", err
+	}
+	allTools := append(baseTools, delegateTool)
+
+	triageInstr := fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s). Desenvolvedores disponíveis (%d): %s.
+REGRA DE TRIAGEM:
+1. Se o usuário fez uma pergunta, pediu análise/diagnóstico (incluindo análise de prints/imagens anexadas), revisão ou sugestão SEM pedir para implementar/alterar arquivos agora: inspecione o que precisar com read_file/list_dir/git_status, responda diretamente de forma clara e completa e NÃO chame delegate_to_squad.
+2. Se o usuário pediu para criar, editar, refatorar ou corrigir código/arquivos: monte um plano objetivo e chame delegate_to_squad passando "plan" e "dev_tasks" (uma subtarefa por desenvolvedor em [%s], dividindo arquivos distintos para não haver conflito de merge), e avise brevemente o usuário que acionou a equipe.`,
+		chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+
+	adkName := names.ADK(chief.Name + "_triage")
+	triageAgent, err := llmagent.New(llmagent.Config{
+		Name:                     adkName,
+		Description:              "Triagem e coordenação do Chefe HiveMind.",
+		Model:                    llm,
+		Mode:                     llmagent.ModeChat,
+		IncludeContents:          llmagent.IncludeContentsDefault,
+		DisallowTransferToParent: true,
+		DisallowTransferToPeers:  true,
+		Tools:                    allTools,
+		Instruction:              triageInstr,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	triageRunner, err := runner.New(runner.Config{
+		AppName:        sessionx.AppName,
+		Agent:          triageAgent,
+		SessionService: r.Sessions,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	labels := map[string]string{
+		adkName: roleLabel(chief.Role) + " (Chefe) · " + chief.Name,
+	}
+	if r.OnEvent != nil {
+		r.OnEvent(Event{Kind: "stage", Stage: "chief", Author: adkName, Label: labels[adkName]})
+	}
+	printer := &ui.Printer{Out: r.Out, Labels: labels}
+	var summary string
+	for ev, err := range triageRunner.Run(ctx, sessionx.UserID, sess.ID(), msg, agent.RunConfig{
+		StreamingMode: mode,
+		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
+	}) {
+		if err != nil {
+			return false, "", err
+		}
+		printer.Event(ev)
+		if r.OnEvent != nil && ev != nil {
+			r.emitEvent(ev, labels)
+		}
+		if ev != nil && !ev.Partial && ev.LLMResponse.Content != nil {
+			for _, part := range ev.LLMResponse.Content.Parts {
+				if part != nil && part.Text != "" && !part.Thought {
+					summary = strings.TrimSpace(part.Text)
+				}
+			}
+		}
+	}
+	if delegated && r.chiefPlan != "" {
+		_ = sess.State().Set("chief_plan", r.chiefPlan)
+	}
+	return delegated, summary, nil
 }

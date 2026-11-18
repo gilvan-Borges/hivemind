@@ -1,10 +1,15 @@
 package idecore
 
 import (
+	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -247,5 +252,48 @@ func TestListDirAndFileIndex(t *testing.T) {
 	ranked := idx.Search(dir, "app", 10)
 	if len(ranked) != 2 || ranked[0] != "src/app_config.yaml" {
 		t.Fatalf("expected basename prefix ranked first, got %+v", ranked)
+	}
+}
+
+func TestDecodeImagesAndAgyMultimodalPrompt(t *testing.T) {
+	pngBytes := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
+
+	atts, err := DecodeImageInputs([]ImageInput{{
+		Name:       "print.png",
+		DataBase64: dataURL,
+	}})
+	if err != nil || len(atts) != 1 || atts[0].MIMEType != "image/png" {
+		t.Fatalf("unexpected DecodeImageInputs result: %+v err=%v", atts, err)
+	}
+
+	dir := t.TempDir()
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{
+			Role: "user",
+			Parts: []*genai.Part{
+				{Text: "o que há nesta foto?"},
+				{InlineData: &genai.Blob{MIMEType: "image/png", Data: pngBytes}},
+			},
+		}},
+	}
+	saved, err := modelx.SaveRequestImages(dir, req)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("SaveRequestImages failed: %+v err=%v", saved, err)
+	}
+	prompt := modelx.BuildAgyPromptWithImages(req, nil, saved)
+	if !strings.Contains(prompt, "imagem_1.png") || strings.Contains(prompt, "[conteúdo binário omitido]") {
+		t.Fatalf("expected saved image referenced in agy prompt:\n%s", prompt)
+	}
+}
+
+func TestRunWorkspaceCommand(t *testing.T) {
+	dir := t.TempDir()
+	res, err := RunWorkspaceCommand(context.Background(), dir, "go version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Output, "go version") {
+		t.Fatalf("unexpected command output: %+v", res)
 	}
 }

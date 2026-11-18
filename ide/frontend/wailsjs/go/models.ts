@@ -21,6 +21,24 @@ export namespace githubx {
 
 export namespace idecore {
 	
+	export class CommandOutput {
+	    command: string;
+	    output: string;
+	    exitCode: number;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CommandOutput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.output = source["output"];
+	        this.exitCode = source["exitCode"];
+	        this.durationMs = source["durationMs"];
+	    }
+	}
 	export class DiffLine {
 	    kind: string;
 	    text: string;
@@ -129,6 +147,22 @@ export namespace idecore {
 	        this.user = source["user"];
 	        this.remote = source["remote"];
 	        this.detail = source["detail"];
+	    }
+	}
+	export class ImageInput {
+	    name: string;
+	    mimeType: string;
+	    dataBase64: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.mimeType = source["mimeType"];
+	        this.dataBase64 = source["dataBase64"];
 	    }
 	}
 	export class ProjectStack {

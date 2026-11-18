@@ -265,3 +265,163 @@ func traceKeys(m *sync.Map) []string {
 	})
 	return out
 }
+
+func TestTriageDirectAnswerAndDelegationWithSlicesAndClosingChief(t *testing.T) {
+	dir := t.TempDir()
+	squad := team.DefaultTeam("ide", "", "scripted", "gemini", 2)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			MaxQALoops:   2,
+			BaseBranch:   "main",
+			ConfirmShell: boolPtr(true),
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	store, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Case 1: Triage Chief answers a read-only question directly without invoking Devs or QA.
+	devCalled := false
+	directRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				// Verify multimodal attachment arrives on the Chief's request.
+				hasImage := false
+				for _, c := range req.Contents {
+					for _, p := range c.Parts {
+						if p.InlineData != nil && p.InlineData.MIMEType == "image/png" {
+							hasImage = true
+						}
+					}
+				}
+				if !hasImage {
+					t.Errorf("expected image attachment in Chief request")
+				}
+				return modelx.Text("Analisei o print: basta alinhar o botão.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				devCalled = true
+				return modelx.Text("não deveria rodar")
+			}},
+		},
+	}
+
+	res1, err := directRunner.Run(context.Background(), Request{
+		Objective: "analise este print sem editar nada",
+		Attachments: []Attachment{{
+			Name:     "tela.png",
+			MIMEType: "image/png",
+			Data:     []byte{0x89, 0x50, 0x4E, 0x47},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("direct triage run failed: %v", err)
+	}
+	if devCalled {
+		t.Fatal("expected devs NOT to run on direct triage answer")
+	}
+	if !strings.Contains(res1.Summary, "Analisei o print") {
+		t.Fatalf("unexpected direct summary: %q", res1.Summary)
+	}
+
+	// Case 2: Triage Chief calls delegate_to_squad with per-dev slices -> Dev1 & Dev2 receive slices -> QA approves -> Closing Chief summarizes.
+	var dev1SawSlice, dev2SawSlice bool
+	var events []Event
+	var evMu sync.Mutex
+	pmTurn := 0
+	fullRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		OnEvent: func(ev Event) {
+			evMu.Lock()
+			events = append(events, ev)
+			evMu.Unlock()
+		},
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, _ int) *model.LLMResponse {
+				pmTurn++
+				switch pmTurn {
+				case 1:
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan":      "Dividir front e back",
+						"dev_tasks": []any{"cuidar apenas de ui.ts", "cuidar apenas de api.go"},
+					})
+				case 2:
+					return modelx.Text("Acionei o time.")
+				default:
+					return modelx.Text("Resumo final do Chefe (Fecho): tudo entregue e revisado.")
+				}
+			}},
+			"tech_lead": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Guardrails definidos.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "cuidar apenas de ui.ts") {
+							dev1SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("ui.ts concluído")
+			}},
+			"dev_2": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "cuidar apenas de api.go") {
+							dev2SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("api.go concluído")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "testes verdes"})
+				}
+				return modelx.Text("QA aprovado.")
+			}},
+		},
+	}
+
+	res2, err := fullRunner.Run(context.Background(), Request{Objective: "implementar front e back"})
+	if err != nil {
+		t.Fatalf("delegated triage run failed: %v", err)
+	}
+	if !dev1SawSlice || !dev2SawSlice {
+		t.Fatalf("expected per-dev slices injected: dev1=%v dev2=%v", dev1SawSlice, dev2SawSlice)
+	}
+	if !strings.Contains(res2.Summary, "Resumo final do Chefe (Fecho)") {
+		t.Fatalf("expected Closing Chief summary, got %q", res2.Summary)
+	}
+	sawHandoff := false
+	for _, ev := range events {
+		if ev.Kind == "handoff" {
+			sawHandoff = true
+		}
+	}
+	if !sawHandoff {
+		t.Fatal("expected handoff events emitted for IDE")
+	}
+}

@@ -1068,3 +1068,208 @@ button.icon-btn:hover:not(:disabled) {
   gap: 8px;
   margin-top: 16px;
 }
+
+/* Pipeline Stepper & Handoff Cards */
+.pipeline-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.pipe-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.pipe-step.active {
+  background: var(--bg-active);
+  color: var(--accent);
+  border-color: rgba(196, 160, 255, 0.35);
+  font-weight: 600;
+}
+.pipe-step.done {
+  color: var(--green);
+}
+.pipe-sep {
+  color: rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+}
+
+.handoff-card {
+  background: rgba(196, 160, 255, 0.055);
+  border: 1px solid rgba(196, 160, 255, 0.22);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.handoff-card summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+.handoff-card summary::-webkit-details-marker {
+  display: none;
+}
+.handoff-body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* Diff Summary Card in Chat */
+.msg-card.role-diff {
+  background: rgba(52, 211, 153, 0.06);
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.diff-summary-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.diff-chip-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+}
+
+/* Image Thumbnails in Composer & Messages */
+.composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.img-thumb-wrap {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-deep);
+  flex-shrink: 0;
+}
+.img-thumb-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+.img-thumb-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(12, 12, 18, 0.85);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  font-size: 10px;
+}
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.msg-images img {
+  max-width: 160px;
+  max-height: 110px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  object-fit: cover;
+  cursor: pointer;
+}
+.right-ai-pane.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+/* Integrated Bottom Terminal (Ctrl+J) */
+.terminal-drawer {
+  height: 220px;
+  min-height: 120px;
+  max-height: 55vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+.terminal-drawer.hidden {
+  display: none;
+}
+.terminal-header {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.terminal-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.48;
+  background: var(--bg-deep);
+  color: var(--text);
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.term-entry {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.term-cmd-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.term-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border);
+}
+.term-input-bar input {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 8px;
+}

@@ -74,6 +74,10 @@ export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
 }
 
+export function RunCommand(arg1, arg2) {
+  return window['go']['main']['App']['RunCommand'](arg1, arg2);
+}
+
 export function SaveFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2, arg3);
 }
@@ -92,6 +96,10 @@ export function SetActiveTeam(arg1, arg2) {
 
 export function StartRun(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['StartRun'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function StartRunWithImages(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['StartRunWithImages'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function WindowClose() {

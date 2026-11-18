@@ -335,14 +335,29 @@ func (a *App) InitGit(workspace string) error {
 
 // StartRun runs one objective through Chefe -> Dev -> QA -> Chefe on the given lane.
 func (a *App) StartRun(laneID, workspace, teamName, objective, jiraKey, sessionID string) (orchestrator.Result, error) {
+	return a.StartRunWithImages(laneID, workspace, teamName, objective, jiraKey, sessionID, nil)
+}
+
+// StartRunWithImages runs one objective with optional base64/data-URL image attachments.
+func (a *App) StartRunWithImages(
+	laneID, workspace, teamName, objective, jiraKey, sessionID string,
+	images []idecore.ImageInput,
+) (orchestrator.Result, error) {
 	baseCtx := a.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	return a.sessions.RunTurn(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID)
+	return a.sessions.RunTurnWithImages(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, images)
 }
 
 // CancelRun cancels an active run on laneID.
 func (a *App) CancelRun(laneID string) bool {
 	return a.sessions.Cancel(laneID)
+}
+
+// RunCommand executes a command inside workspace for the integrated IDE terminal (Ctrl+J).
+func (a *App) RunCommand(workspace, command string) (idecore.CommandOutput, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	return idecore.RunWorkspaceCommand(ctx, workspace, command)
 }

@@ -565,7 +565,14 @@ func (d Deps) qaApprove() (tool.Tool, error) {
 	}, func(ctx agent.Context, args struct {
 		Note string `json:"note" jsonschema:"Resumo do que foi verificado."`
 	}) (textResult, error) {
+		_ = ctx.State().Set("qa_approval_note", args.Note)
+		_ = ctx.State().Set("qa_feedback", "")
 		if actions := ctx.Actions(); actions != nil {
+			if actions.StateDelta == nil {
+				actions.StateDelta = map[string]any{}
+			}
+			actions.StateDelta["qa_approval_note"] = args.Note
+			actions.StateDelta["qa_feedback"] = ""
 			actions.Escalate = true
 		}
 		return textResult{Text: "aprovado: " + args.Note}, nil

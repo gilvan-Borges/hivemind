@@ -83,12 +83,27 @@ interface FileDiff {
   lines: DiffLine[];
 }
 
+interface ImageAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
+interface DiffSummaryItem {
+  path: string;
+  added: number;
+  removed: number;
+}
+
 interface ChatMessage {
   id: string;
-  kind: "user" | "chief" | "system" | "tool" | "error";
+  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff";
   label: string;
   text: string;
   active?: boolean;
+  images?: string[];
+  diffItems?: DiffSummaryItem[];
 }
 
 interface AgentRuntime {
@@ -105,9 +120,20 @@ interface TeamLane {
   teamName: string;
   sessionId: string;
   running: boolean;
+  stage: "" | "chief" | "dev" | "qa" | "closing";
+  doneStages: string[];
   messages: ChatMessage[];
   agents: AgentRuntime[];
   autoScroll: boolean;
+}
+
+interface TerminalEntry {
+  id: string;
+  command: string;
+  output: string;
+  exitCode: number | null;
+  durationMs: number;
+  running: boolean;
 }
 
 interface EditorTab {
@@ -157,7 +183,9 @@ declare global {
           WindowToggleMaximize(): Promise<void>;
           WindowClose(): Promise<void>;
           StartRun(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string): Promise<any>;
+          StartRunWithImages(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<any>;
           CancelRun(laneID: string): Promise<boolean>;
+          RunCommand(workspace: string, command: string): Promise<{ command: string; output: string; exitCode: number; durationMs: number }>;
         };
       };
     };
@@ -202,8 +230,16 @@ const state = {
   },
   mentionResults: [] as string[],
   draftObjective: "",
+  draftImages: [] as ImageAttachment[],
+  imagePreviewUrl: "",
   jiraKeyInput: "",
   commitMsgInput: "",
+  terminal: {
+    open: false,
+    running: false,
+    cmdInput: "",
+    entries: [] as TerminalEntry[],
+  },
 };
 
 let laneSeq = 1;
@@ -246,6 +282,8 @@ function createLane(teamName: string): TeamLane {
     teamName,
     sessionId: "",
     running: false,
+    stage: "",
+    doneStages: [],
     autoScroll: true,
     agents: buildAgentRuntimes(teamName),
     messages: [
@@ -253,7 +291,7 @@ function createLane(teamName: string): TeamLane {
         id: `sys-${Date.now()}`,
         kind: "system",
         label: "Sistema",
-        text: `Fluxo ativo: **Chefe → Dev → QA → Chefe**. Stack: \`${state.project?.stack.summary ?? "detectando..."}\`. Use \`@arquivo\` para anexar arquivos ou \`/ajuda\`.`,
+        text: `Fluxo inteligente: **Chefe (Triagem) → Dev → QA → Chefe (Fecho)**. Stack: \`${state.project?.stack.summary ?? "detectando..."}\`. Cole prints com \`Ctrl+V\`, anexe fotos (\`📎\`) ou mencione \`@arquivo\`.`,
       },
     ],
   };
@@ -289,6 +327,7 @@ function mountShell() {
           <span class="stack-tag" id="title-stack-tag" style="display:none"></span>
         </button>
         <div class="spacer"></div>
+        <button class="icon-btn titlebar-interactive" id="btn-toggle-term" title="Alternar Terminal (Ctrl+J)">${icons.terminal}</button>
         <button class="icon-btn titlebar-interactive" id="btn-toggle-left" title="Alternar barra lateral">${icons.sidebarLeft}</button>
         <button class="icon-btn titlebar-interactive" id="btn-toggle-right" title="Alternar painel AI">${icons.sidebarRight}</button>
         <div class="win-controls">
@@ -316,6 +355,7 @@ function mountShell() {
         <section class="center-area" id="center-area">
           <div class="editor-tabs" id="editor-tabs"></div>
           <div class="editor-body-wrap" id="editor-body"></div>
+          <div class="terminal-drawer hidden" id="terminal-drawer"></div>
         </section>
 
         <div class="resizer-v" id="resizer-right"></div>
@@ -327,6 +367,7 @@ function mountShell() {
         <span id="status-stack"></span>
         <span id="status-team">Equipe: -</span>
         <span id="status-agy" class="dim">agy: verificando…</span>
+        <button class="ghost mini" id="status-term-btn" style="height:20px;padding:0 6px" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
         <span id="status-env"></span>
@@ -353,6 +394,8 @@ function bindStaticShellEvents() {
   document.getElementById("win-max")?.addEventListener("click", () => api()?.WindowToggleMaximize());
   document.getElementById("win-close")?.addEventListener("click", () => api()?.WindowClose());
 
+  document.getElementById("btn-toggle-term")?.addEventListener("click", () => toggleTerminal());
+  document.getElementById("status-term-btn")?.addEventListener("click", () => toggleTerminal());
   document.getElementById("btn-toggle-left")?.addEventListener("click", () => {
     state.showLeftSidebar = !state.showLeftSidebar;
     syncLayoutVisibility();
@@ -431,13 +474,21 @@ function bindStaticShellEvents() {
       openQuickOpen();
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j") {
+      e.preventDefault();
+      toggleTerminal();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       saveActiveEditor();
       return;
     }
     if (e.key === "Escape") {
-      if (state.quickOpen.open) {
+      if (state.imagePreviewUrl) {
+        state.imagePreviewUrl = "";
+        renderModalLayer();
+      } else if (state.quickOpen.open) {
         closeQuickOpen();
       } else if (state.showFileMenu) {
         state.showFileMenu = false;
@@ -585,7 +636,23 @@ async function boot() {
     const lane = state.lanes.find((l) => l.id === payload.laneId);
     if (!lane) return;
     const ev = payload.event;
-    if (ev.kind === "tool_call") {
+    if (ev.stage) {
+      if (lane.stage && lane.stage !== ev.stage && !lane.doneStages.includes(lane.stage)) {
+        lane.doneStages.push(lane.stage);
+      }
+      lane.stage = ev.stage;
+    }
+    if (ev.kind === "stage") {
+      // stage updated above
+    } else if (ev.kind === "handoff") {
+      markToolsDone(lane);
+      lane.messages.push({
+        id: `ho-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "handoff",
+        label: ev.label || "Handoff da Equipe",
+        text: ev.text || "",
+      });
+    } else if (ev.kind === "tool_call") {
       updateAgentStatus(lane, ev.author, "running", ev.toolName, ev.tokens);
       const last = lane.messages[lane.messages.length - 1];
       const toolLabel = ev.label || ev.author || "Agente";
@@ -634,6 +701,10 @@ async function boot() {
       });
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
+      if (lane.stage && !lane.doneStages.includes(lane.stage)) {
+        lane.doneStages.push(lane.stage);
+      }
+      lane.stage = "";
       lane.agents.forEach((a) => {
         if (a.status === "running") a.status = "done";
         a.tool = "";
@@ -644,7 +715,7 @@ async function boot() {
         label: "Sistema",
         text: ev.text || "Execução concluída.",
       });
-      refreshDiffs();
+      refreshDiffsAndSummarize(lane);
     }
 
     if (lane.id === activeLane()?.id) {
@@ -735,6 +806,7 @@ function applyProject(proj: ProjectInfo) {
   renderLeftSidebar();
   renderEditorTabs();
   renderEditorBody();
+  renderTerminalDrawer();
   renderRightPane();
   setStatus(`Projeto aberto: ${proj.root}`);
   refreshDiffs();
@@ -831,6 +903,25 @@ async function saveActiveEditor() {
     refreshDiffs();
   } catch (err: any) {
     setStatus(`Erro ao salvar: ${err?.message || err}`);
+  }
+}
+
+async function refreshDiffsAndSummarize(lane: TeamLane) {
+  await refreshDiffs();
+  if (state.diffs.length === 0) return;
+  const last = lane.messages[lane.messages.length - 1];
+  if (last && last.kind === "diff") return;
+  const totalAdd = state.diffs.reduce((s, d) => s + d.added, 0);
+  const totalRem = state.diffs.reduce((s, d) => s + d.removed, 0);
+  lane.messages.push({
+    id: `diff-${Date.now()}`,
+    kind: "diff",
+    label: `${state.diffs.length} arquivo(s) alterado(s) (+${totalAdd} / -${totalRem})`,
+    text: "",
+    diffItems: state.diffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed })),
+  });
+  if (lane.id === activeLane()?.id) {
+    scheduleChatFlush();
   }
 }
 
@@ -1352,13 +1443,17 @@ function renderRightPane() {
       <button class="mini" id="btn-add-lane">${icons.plus}<span>Equipe Paralela</span></button>
     </div>
     <div class="lane-bar" id="lane-bar"></div>
+    <div class="pipeline-bar" id="pipeline-bar"></div>
     <div class="chat-messages" id="chat-messages"></div>
     <div class="composer-wrap">
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
-        <textarea id="chat-input" rows="3" placeholder="Converse com o Chefe… (@arquivo, /ajuda, Enter envia)"></textarea>
+        <div class="composer-images" id="composer-images" style="display:none"></div>
+        <textarea id="chat-input" rows="3" placeholder="Converse com o Chefe… (Ctrl+V cola foto/print, @arquivo, /ajuda, Enter envia)"></textarea>
         <div class="composer-footer">
-          <input id="jira-key-input" style="width:105px" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" />
+          <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
+          <button class="mini" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)">${icons.image}<span>Foto</span></button>
+          <input id="jira-key-input" style="width:96px" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" />
           <span class="dim" id="composer-team-label"></span>
           <div class="spacer"></div>
           <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Cancelar</span></button>
@@ -1372,6 +1467,8 @@ function renderRightPane() {
   if (chatInput) chatInput.value = state.draftObjective;
 
   renderLaneBarOnly();
+  renderPipelineBar();
+  renderComposerImages();
   rebuildChatMessagesFull();
   bindRightStaticEvents();
 }
@@ -1405,8 +1502,82 @@ function renderLaneBarOnly() {
   }
 }
 
+function renderPipelineBar() {
+  const bar = document.getElementById("pipeline-bar");
+  const lane = activeLane();
+  if (!bar) return;
+  const steps: Array<{ id: "chief" | "dev" | "qa" | "closing"; name: string }> = [
+    { id: "chief", name: "Chefe" },
+    { id: "dev", name: "Dev" },
+    { id: "qa", name: "QA" },
+    { id: "closing", name: "Fecho" },
+  ];
+  bar.innerHTML = steps
+    .map((s, idx) => {
+      const isAct = lane?.running && lane.stage === s.id;
+      const isDone = lane?.doneStages?.includes(s.id) && !isAct;
+      const cls = isAct ? "active" : isDone ? "done" : "";
+      const iconHtml = isAct ? icons.spinner : isDone ? icons.check : "";
+      return `${idx > 0 ? `<span class="pipe-sep">${icons.arrowRight}</span>` : ""}<span class="pipe-step ${cls}">${iconHtml}<span>${s.name}</span></span>`;
+    })
+    .join("");
+}
+
+function renderComposerImages() {
+  const wrap = document.getElementById("composer-images");
+  if (!wrap) return;
+  if (state.draftImages.length === 0) {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "flex";
+  wrap.innerHTML = state.draftImages
+    .map((img) => `
+      <div class="img-thumb-wrap" title="${escapeHtml(img.name)}">
+        <img src="${escapeHtml(img.dataBase64)}" data-preview-img="${escapeHtml(img.dataBase64)}" alt="${escapeHtml(img.name)}" />
+        <button class="img-thumb-remove" data-remove-img="${escapeHtml(img.id)}" title="Remover imagem">✕</button>
+      </div>
+    `)
+    .join("");
+  wrap.querySelectorAll("[data-remove-img]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = (btn as HTMLElement).dataset.removeImg!;
+      state.draftImages = state.draftImages.filter((x) => x.id !== id);
+      renderComposerImages();
+    });
+  });
+  wrap.querySelectorAll("[data-preview-img]").forEach((imgEl) => {
+    imgEl.addEventListener("click", () => {
+      state.imagePreviewUrl = (imgEl as HTMLElement).dataset.previewImg || "";
+      renderModalLayer();
+    });
+  });
+}
+
+function attachImageFiles(files: FileList | File[]) {
+  const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+  if (list.length === 0) return;
+  for (const file of list) {
+    if (state.draftImages.length >= 8) break;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        state.draftImages.push({
+          id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name: file.name || "print.png",
+          mimeType: file.type || "image/png",
+          dataBase64: reader.result,
+        });
+        renderComposerImages();
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
 function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.label}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.label}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function createMessageElement(m: ChatMessage): HTMLElement {
@@ -1421,6 +1592,7 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const digest = messageDigest(m);
   if (el.dataset.digest === digest) return;
   el.dataset.digest = digest;
+
   if (m.kind === "tool") {
     el.innerHTML = `
       <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
@@ -1428,11 +1600,83 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     `;
     return;
   }
+
+  if (m.kind === "handoff") {
+    el.className = "handoff-card";
+    el.innerHTML = `
+      <details open>
+        <summary>${icons.team}<span>${escapeHtml(m.label)}</span></summary>
+        <div class="handoff-body">${renderMarkdownLite(m.text)}</div>
+      </details>
+    `;
+    return;
+  }
+
+  if (m.kind === "diff") {
+    const items = m.diffItems || [];
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span class="msg-badge badge-tool">${icons.gitSmall}<span>${escapeHtml(m.label)}</span></span>
+        <div style="display:flex;gap:5px">
+          <button class="mini primary" data-chat-commit="1">${icons.commit}<span>Commitar</span></button>
+          <button class="mini danger" data-chat-discard="1">${icons.trash}<span>Descartar</span></button>
+        </div>
+      </div>
+      <div class="diff-summary-files">
+        ${items.map((it) => `
+          <button class="diff-chip-btn" data-chat-diff-file="${escapeHtml(it.path)}">
+            <span>${escapeHtml(it.path)}</span>
+            <span style="color:var(--green)">+${it.added}</span>
+            <span style="color:var(--red)">-${it.removed}</span>
+          </button>
+        `).join("")}
+      </div>
+    `;
+    el.querySelectorAll("[data-chat-diff-file]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const p = (btn as HTMLElement).dataset.chatDiffFile!;
+        const found = state.diffs.find((d) => d.path === p);
+        if (found) openDiffInEditor(found);
+      });
+    });
+    el.querySelector("[data-chat-commit]")?.addEventListener("click", async () => {
+      if (!state.project) return;
+      try {
+        const msg = await api()?.CommitChanges(state.project.root, state.commitMsgInput || "feat: entrega HiveMind IDE", false);
+        if (msg) setStatus(msg);
+        refreshDiffs();
+      } catch (err: any) {
+        setStatus(`Erro no commit: ${err?.message || err}`);
+      }
+    });
+    el.querySelector("[data-chat-discard]")?.addEventListener("click", async () => {
+      if (!state.project) return;
+      try {
+        await api()?.DiscardChanges(state.project.root);
+        setStatus("Alterações descartadas.");
+        refreshDiffs();
+      } catch (err: any) {
+        setStatus(`Erro ao descartar: ${err?.message || err}`);
+      }
+    });
+    return;
+  }
+
   const bodyHtml = m.kind === "chief" || m.kind === "system" ? renderMarkdownLite(m.text) : escapeHtml(m.text);
+  const imgsHtml = m.images && m.images.length > 0
+    ? `<div class="msg-images">${m.images.map((src) => `<img src="${escapeHtml(src)}" data-preview-img="${escapeHtml(src)}" alt="anexo" />`).join("")}</div>`
+    : "";
   el.innerHTML = `
     <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>
     <div class="msg-body">${bodyHtml}</div>
+    ${imgsHtml}
   `;
+  el.querySelectorAll("[data-preview-img]").forEach((imgEl) => {
+    imgEl.addEventListener("click", () => {
+      state.imagePreviewUrl = (imgEl as HTMLElement).dataset.previewImg || "";
+      renderModalLayer();
+    });
+  });
 }
 
 function rebuildChatMessagesFull() {
@@ -1470,6 +1714,7 @@ function flushChatUpdates() {
     }
   }
   renderLaneBarOnly();
+  renderPipelineBar();
   syncComposerButtons();
   scrollChatIfAuto();
 }
@@ -1577,6 +1822,46 @@ function bindRightStaticEvents() {
       sendToChief();
     }
   });
+  chatInput?.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imgFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        const f = items[i].getAsFile();
+        if (f) imgFiles.push(f);
+      }
+    }
+    if (imgFiles.length > 0) {
+      e.preventDefault();
+      attachImageFiles(imgFiles);
+    }
+  });
+
+  const fileInput = document.getElementById("chat-image-input") as HTMLInputElement | null;
+  document.getElementById("btn-attach-image")?.addEventListener("click", () => fileInput?.click());
+  fileInput?.addEventListener("change", () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+      attachImageFiles(fileInput.files);
+      fileInput.value = "";
+    }
+  });
+
+  const rightPane = document.getElementById("right-pane");
+  rightPane?.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    rightPane.classList.add("drag-over");
+  });
+  rightPane?.addEventListener("dragleave", () => {
+    rightPane.classList.remove("drag-over");
+  });
+  rightPane?.addEventListener("drop", (e) => {
+    e.preventDefault();
+    rightPane.classList.remove("drag-over");
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      attachImageFiles(e.dataTransfer.files);
+    }
+  });
 
   const jiraInput = document.getElementById("jira-key-input") as HTMLInputElement | null;
   jiraInput?.addEventListener("input", () => {
@@ -1592,16 +1877,17 @@ async function sendToChief() {
   const backend = api();
   if (!lane || !backend || !state.project || lane.running) return;
   const text = state.draftObjective.trim();
-  if (!text) return;
+  const attached = [...state.draftImages];
+  if (!text && attached.length === 0) return;
 
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
 
-  if (text === "/ajuda") {
+  if (text === "/ajuda" && attached.length === 0) {
     lane.messages.push({
       id: `sys-${Date.now()}`,
       kind: "system",
       label: "Sistema",
-      text: "Comandos:\n- `@arquivo` — anexa caminho do arquivo\n- `/ajuda` — exibe esta ajuda\n- Fluxo: **Chefe → Dev → QA → Chefe**",
+      text: "Comandos:\n- `Ctrl+V` ou botão **Foto** — anexa prints/imagens para leitura visual\n- `@arquivo` — anexa caminho do arquivo\n- `Ctrl+J` — abre o Terminal integrado\n- `/ajuda` — exibe esta ajuda\n- Fluxo inteligente: **Chefe (Triagem) → Dev → QA → Chefe (Fecho)**",
     });
     state.draftObjective = "";
     if (chatInput) chatInput.value = "";
@@ -1613,14 +1899,19 @@ async function sendToChief() {
     id: `usr-${Date.now()}`,
     kind: "user",
     label: "Usuário",
-    text,
+    text: text || "(imagem anexada)",
+    images: attached.map((x) => x.dataBase64),
   });
   state.draftObjective = "";
+  state.draftImages = [];
   state.mentionResults = [];
   if (chatInput) chatInput.value = "";
+  renderComposerImages();
   renderMentionPopup();
 
   lane.running = true;
+  lane.stage = "chief";
+  lane.doneStages = [];
   lane.agents.forEach((a) => {
     a.status = "idle";
     a.tool = "";
@@ -1630,13 +1921,14 @@ async function sendToChief() {
   if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
 
   try {
-    const res = await backend.StartRun(
+    const res = await backend.StartRunWithImages(
       lane.id,
       state.project.root,
       lane.teamName,
       text,
       state.jiraKeyInput.trim(),
-      lane.sessionId
+      lane.sessionId,
+      attached.map((x) => ({ name: x.name, mimeType: x.mimeType, dataBase64: x.dataBase64 }))
     );
     if (res?.SessionID) lane.sessionId = res.SessionID;
     setStatus(`Equipe "${lane.teamName}" concluída.`);
@@ -1650,8 +1942,9 @@ async function sendToChief() {
     setStatus(`Erro na execução: ${err?.message || err}`);
   } finally {
     lane.running = false;
+    lane.stage = "";
     markToolsDone(lane);
-    refreshDiffs();
+    await refreshDiffsAndSummarize(lane);
     flushChatUpdates();
     if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
   }
@@ -1772,9 +2065,141 @@ function renderQuickOpenList() {
   });
 }
 
+function toggleTerminal() {
+  state.terminal.open = !state.terminal.open;
+  renderTerminalDrawer();
+  if (state.terminal.open) {
+    (document.getElementById("term-cmd-input") as HTMLInputElement | null)?.focus();
+  }
+}
+
+function renderTerminalDrawer() {
+  const drawer = document.getElementById("terminal-drawer");
+  if (!drawer) return;
+  drawer.classList.toggle("hidden", !state.terminal.open);
+  if (!state.terminal.open) return;
+
+  const hint = state.project?.stack?.testHint || "";
+  drawer.innerHTML = `
+    <div class="terminal-header">
+      <span class="eyebrow">${icons.terminal} TERMINAL</span>
+      ${hint ? `<button class="mini" id="term-run-hint" ${state.terminal.running ? "disabled" : ""}>▶ ${escapeHtml(hint)}</button>` : ""}
+      <button class="mini" id="term-run-status" ${state.terminal.running ? "disabled" : ""}>git status</button>
+      <div class="spacer"></div>
+      <button class="mini ghost" id="term-clear">Limpar</button>
+      <button class="icon-btn" id="term-close" title="Fechar Terminal (Ctrl+J)">${icons.closeSmall}</button>
+    </div>
+    <div class="terminal-output" id="terminal-output">
+      ${state.terminal.entries.length === 0
+        ? `<div class="dim">Digite um comando abaixo ou clique no atalho da stack (${escapeHtml(hint || "ex: git status")}).</div>`
+        : state.terminal.entries.map((en) => `
+          <div class="term-entry">
+            <div class="term-cmd-line">
+              <span>$ ${escapeHtml(en.command)}</span>
+              ${en.running
+                ? icons.spinner
+                : `<span class="dim" style="color:${en.exitCode === 0 ? "var(--green)" : "var(--red)"}">[exit ${en.exitCode} · ${en.durationMs}ms]</span>`
+              }
+            </div>
+            <div>${escapeHtml(en.output)}</div>
+          </div>
+        `).join("")
+      }
+    </div>
+    <div class="term-input-bar">
+      <span class="dim">$</span>
+      <input id="term-cmd-input" placeholder="Executar comando no projeto (Enter)…" value="${escapeHtml(state.terminal.cmdInput)}" ${state.terminal.running ? "disabled" : ""} />
+      <button class="primary mini" id="term-send" ${state.terminal.running ? "disabled" : ""}>Executar</button>
+    </div>
+  `;
+
+  const outBox = document.getElementById("terminal-output");
+  if (outBox) outBox.scrollTop = outBox.scrollHeight;
+
+  document.getElementById("term-close")?.addEventListener("click", () => toggleTerminal());
+  document.getElementById("term-clear")?.addEventListener("click", () => {
+    state.terminal.entries = [];
+    renderTerminalDrawer();
+  });
+  document.getElementById("term-run-hint")?.addEventListener("click", () => {
+    if (hint) runTerminalCommand(hint);
+  });
+  document.getElementById("term-run-status")?.addEventListener("click", () => runTerminalCommand("git status"));
+
+  const cmdIn = document.getElementById("term-cmd-input") as HTMLInputElement | null;
+  cmdIn?.addEventListener("input", () => {
+    state.terminal.cmdInput = cmdIn.value;
+  });
+  cmdIn?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runTerminalCommand(state.terminal.cmdInput);
+    }
+  });
+  document.getElementById("term-send")?.addEventListener("click", () => runTerminalCommand(state.terminal.cmdInput));
+}
+
+async function runTerminalCommand(rawCmd: string) {
+  const cmd = rawCmd.trim();
+  const backend = api();
+  if (!cmd || !backend || !state.project || state.terminal.running) return;
+  const entry: TerminalEntry = {
+    id: `cmd-${Date.now()}`,
+    command: cmd,
+    output: "Executando…",
+    exitCode: null,
+    durationMs: 0,
+    running: true,
+  };
+  state.terminal.entries.push(entry);
+  state.terminal.cmdInput = "";
+  state.terminal.running = true;
+  renderTerminalDrawer();
+
+  try {
+    const res = await backend.RunCommand(state.project.root, cmd);
+    entry.output = res.output || "(sem saída)";
+    entry.exitCode = res.exitCode;
+    entry.durationMs = res.durationMs;
+  } catch (err: any) {
+    entry.output = err?.message || String(err);
+    entry.exitCode = -1;
+  } finally {
+    entry.running = false;
+    state.terminal.running = false;
+    renderTerminalDrawer();
+    (document.getElementById("term-cmd-input") as HTMLInputElement | null)?.focus();
+    refreshDiffs();
+  }
+}
+
 function renderModalLayer() {
   const layer = document.getElementById("modal-layer");
   if (!layer) return;
+
+  if (state.imagePreviewUrl) {
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="img-preview-backdrop">
+        <div class="modal-box" style="width:auto;max-width:92vw;padding:12px;text-align:center">
+          <img src="${escapeHtml(state.imagePreviewUrl)}" style="max-width:86vw;max-height:80vh;border-radius:6px;display:block" alt="preview" />
+          <div class="modal-footer" style="margin-top:10px">
+            <button class="primary mini" id="img-preview-close">Fechar</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById("img-preview-close")?.addEventListener("click", () => {
+      state.imagePreviewUrl = "";
+      renderModalLayer();
+    });
+    document.getElementById("img-preview-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "img-preview-backdrop") {
+        state.imagePreviewUrl = "";
+        renderModalLayer();
+      }
+    });
+    return;
+  }
 
   if (state.doctorModal) {
     const d = state.doctorModal;

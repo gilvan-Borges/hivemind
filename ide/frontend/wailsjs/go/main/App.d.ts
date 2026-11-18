@@ -42,6 +42,8 @@ export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
 
 export function ReadFile(arg1:string,arg2:string):Promise<string>;
 
+export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutput>;
+
 export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveTeamWizard(arg1:string,arg2:idecore.WizardInput):Promise<team.File>;
@@ -51,6 +53,8 @@ export function SearchFiles(arg1:string,arg2:string):Promise<Array<string>>;
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
 export function StartRun(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<orchestrator.Result>;
+
+export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
 
 export function WindowClose():Promise<void>;
 

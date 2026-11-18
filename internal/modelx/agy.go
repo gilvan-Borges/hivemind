@@ -194,7 +194,6 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		return nil, fmt.Errorf("não encontrei o comando agy no PATH. Instale o Google Antigravity CLI e entre com `agy`")
 	}
 	decls := toolDecls(req)
-	prompt := buildAgyPrompt(req, decls)
 	timeout := a.Timeout
 	if timeout <= 0 {
 		timeout = DefaultAgyTimeout
@@ -207,11 +206,27 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	dir := a.Dir
+	if dir == "" {
+		fresh, err := os.MkdirTemp("", "hivemind-agy-")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(fresh)
+		dir = fresh
+	}
+
+	images, _ := SaveRequestImages(dir, req)
+	prompt := BuildAgyPromptWithImages(req, decls, images)
+
 	args := []string{
 		"--dangerously-skip-permissions",
 		"--output-format", "json",
 		"--input-format", "text",
 		"--print-timeout", formatAgyTimeout(timeout),
+	}
+	if len(images) > 0 {
+		args = append(args, "--add-dir", dir)
 	}
 	if a.Model != "" {
 		args = append(args, "--model", a.Model)
@@ -226,15 +241,6 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	defer os.Remove(schema)
 	args = append(args, "--json-schema", schema)
 
-	dir := a.Dir
-	if dir == "" {
-		fresh, err := os.MkdirTemp("", "hivemind-agy-")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(fresh)
-		dir = fresh
-	}
 	stdout, stderr, code, err := invokeAgy(runCtx, a.Bin, dir, args, prompt)
 	if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
 		select {
@@ -490,15 +496,72 @@ func toolDecls(req *model.LLMRequest) []toolDecl {
 	return out
 }
 
+// SavedImage describes an inline image written to disk for multimodal inspection by agy.
+type SavedImage struct {
+	Path     string
+	MIMEType string
+}
+
+// SaveRequestImages extracts image InlineData blobs from req and writes them into dir.
+func SaveRequestImages(dir string, req *model.LLMRequest) ([]SavedImage, error) {
+	if req == nil || dir == "" {
+		return nil, nil
+	}
+	var saved []SavedImage
+	seq := 0
+	for _, c := range req.Contents {
+		if c == nil {
+			continue
+		}
+		for _, p := range c.Parts {
+			if p == nil || p.InlineData == nil || len(p.InlineData.Data) == 0 {
+				continue
+			}
+			mime := strings.ToLower(strings.TrimSpace(p.InlineData.MIMEType))
+			if !strings.HasPrefix(mime, "image/") {
+				continue
+			}
+			seq++
+			ext := ".png"
+			switch mime {
+			case "image/jpeg", "image/jpg":
+				ext = ".jpg"
+			case "image/webp":
+				ext = ".webp"
+			case "image/gif":
+				ext = ".gif"
+			}
+			full := filepath.Join(dir, fmt.Sprintf("imagem_%d%s", seq, ext))
+			if err := os.WriteFile(full, p.InlineData.Data, 0o600); err != nil {
+				return saved, err
+			}
+			saved = append(saved, SavedImage{Path: full, MIMEType: mime})
+		}
+	}
+	return saved, nil
+}
+
 func buildAgyPrompt(req *model.LLMRequest, decls []toolDecl) string {
+	return BuildAgyPromptWithImages(req, decls, nil)
+}
+
+// BuildAgyPromptWithImages formats the headless prompt, referencing any saved image files.
+func BuildAgyPromptWithImages(req *model.LLMRequest, decls []toolDecl, images []SavedImage) string {
 	var b strings.Builder
 	b.WriteString("Você é o modelo de um agente do HiveMind. Responda em português quando o pedido estiver em português.\n")
-	b.WriteString("Não use as ferramentas internas do Antigravity (write_to_file, run_command e as demais). ")
-	b.WriteString("Elas não têm acesso ao projeto: este processo roda fora do repositório de propósito.\n")
+	if len(images) > 0 {
+		b.WriteString("O usuário anexou imagem(ns)/print(s) nesta conversa. Você PODE usar apenas a ferramenta de leitura/visualização de arquivo nas imagens listadas abaixo para enxergar o conteúdo visual delas; não use write_to_file, run_command nem altere arquivos por fora.\n")
+		for i, img := range images {
+			fmt.Fprintf(&b, "- Imagem %d (%s): %s\n", i+1, img.MIMEType, img.Path)
+		}
+	} else {
+		b.WriteString("Não use as ferramentas internas do Antigravity (write_to_file, run_command e as demais). ")
+		b.WriteString("Elas não têm acesso ao projeto: este processo roda fora do repositório de propósito.\n")
+	}
 	if len(decls) > 0 {
-		b.WriteString("A única forma de agir é devolver o JSON do schema, com tool_calls para as ferramentas do HiveMind listadas abaixo. ")
+		b.WriteString("A única forma de agir no projeto é devolver o JSON do schema, com tool_calls para as ferramentas do HiveMind listadas abaixo. ")
 		b.WriteString("O HiveMind executa essas chamadas e devolve o resultado na próxima mensagem. ")
-		b.WriteString("Se não precisar de ferramenta, deixe tool_calls vazio e escreva a resposta final em text.\n")
+		b.WriteString("Se não precisar de ferramenta do HiveMind, deixe tool_calls vazio e escreva a resposta final em text.\n")
 		b.WriteString("Não invente que uma ferramenta foi executada.\n\nFerramentas do HiveMind:\n")
 		for _, decl := range decls {
 			fmt.Fprintf(&b, "- %s: %s\n", decl.Name, strings.TrimSpace(decl.Description))
@@ -507,16 +570,17 @@ func buildAgyPrompt(req *model.LLMRequest, decls []toolDecl) string {
 			}
 		}
 	} else {
-		b.WriteString("Não há ferramentas nesta etapa. Responda só com o texto final.\n")
+		b.WriteString("Não há ferramentas do HiveMind nesta etapa. Responda só com o texto final.\n")
 	}
 	if req != nil && req.Config != nil && req.Config.SystemInstruction != nil {
-		if text := contentText(req.Config.SystemInstruction); text != "" {
+		if text := contentTextWithImages(req.Config.SystemInstruction, nil); text != "" {
 			b.WriteString("\n[instrução do sistema]\n")
 			b.WriteString(text)
 			b.WriteByte('\n')
 		}
 	}
 	b.WriteString("\n[conversa]\n")
+	imgIdx := 0
 	if req != nil {
 		for _, content := range req.Contents {
 			if content == nil {
@@ -526,13 +590,23 @@ func buildAgyPrompt(req *model.LLMRequest, decls []toolDecl) string {
 			if role == "" {
 				role = "user"
 			}
-			fmt.Fprintf(&b, "(%s)\n%s\n", role, contentText(content))
+			fmt.Fprintf(&b, "(%s)\n%s\n", role, contentTextWithImageCursor(content, images, &imgIdx))
 		}
 	}
 	return b.String()
 }
 
 func contentText(content *genai.Content) string {
+	idx := 0
+	return contentTextWithImageCursor(content, nil, &idx)
+}
+
+func contentTextWithImages(content *genai.Content, images []SavedImage) string {
+	idx := 0
+	return contentTextWithImageCursor(content, images, &idx)
+}
+
+func contentTextWithImageCursor(content *genai.Content, images []SavedImage, imgIdx *int) string {
 	if content == nil {
 		return ""
 	}
@@ -552,7 +626,13 @@ func contentText(content *genai.Content) string {
 			raw, _ := json.Marshal(part.FunctionResponse.Response)
 			fmt.Fprintf(&b, "resultado %s %s %s\n", part.FunctionResponse.ID, part.FunctionResponse.Name, truncateText(string(raw), 8000))
 		case part.InlineData != nil:
-			b.WriteString("[conteúdo binário omitido]\n")
+			if imgIdx != nil && *imgIdx < len(images) {
+				img := images[*imgIdx]
+				*imgIdx++
+				fmt.Fprintf(&b, "[imagem anexada pelo usuário: %s (%s) — inspecione esta imagem antes de responder]\n", img.Path, img.MIMEType)
+			} else {
+				b.WriteString("[conteúdo binário omitido]\n")
+			}
 		}
 	}
 	return strings.TrimSpace(b.String())
