@@ -18,42 +18,63 @@ import (
 )
 
 func newRunCmd() *cobra.Command {
-	var jiraKey, sessionID string
-	var yes bool
+	var jiraKey, sessionID, permissionMode string
+	var yes, fullAccess bool
 	cmd := &cobra.Command{
 		Use:   "run [objetivo]",
 		Short: "Executa um objetivo com o time, mostrando a saída de cada agente",
 		Example: `  hivemind run "adicionar um endpoint de healthcheck"
   hivemind run --jira PROJ-123
+  hivemind run --full-access "corrigir revisão do PR #1"
   hivemind run "ajuste o texto" --jira PROJ-123 --session 1a2b3c4d5e6f`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			objective := strings.TrimSpace(strings.Join(args, " "))
-			_, err := executeRun(cmd, objective, jiraKey, sessionID, yes)
+			overrideMode := strings.TrimSpace(permissionMode)
+			if fullAccess {
+				overrideMode = team.PermissionFullAccess
+			}
+			_, err := executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, overrideMode)
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&jiraKey, "jira", "", "Usa a issue do Jira Cloud como objetivo")
 	cmd.Flags().StringVar(&sessionID, "session", "", "Retoma uma sessão existente")
-	cmd.Flags().BoolVar(&yes, "yes", false, "Confirma comandos de shell perigosos sem perguntar")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirma comandos de shell perigosos e ações protegidas sem perguntar")
+	cmd.Flags().BoolVar(&fullAccess, "full-access", false, "Concede acesso e permissão total nesta execução (estilo Claude Code / Codex)")
+	cmd.Flags().StringVar(&permissionMode, "permission-mode", "", "Sobrescreve o modo de permissão nesta execução: governed, auto_edit ou full_access")
 	return cmd
 }
 
 func executeRun(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool) (orchestrator.Result, error) {
+	return executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, "")
+}
+
+func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool, permissionOverride string) (orchestrator.Result, error) {
 	dir, project, err := loadProject(cmd)
 	if err != nil {
 		return orchestrator.Result{}, err
+	}
+	if permissionOverride != "" {
+		project.Settings.PermissionMode = team.NormalizePermissionMode(permissionOverride)
 	}
 	squad, err := selectedTeam(cmd, project)
 	if err != nil {
 		return orchestrator.Result{}, err
 	}
-	confirm := confirmer(cmd, project.Settings, yes)
+	var promptMu sync.Mutex
+	var sharedReader *bufio.Reader
+	if isTTY(cmd.InOrStdin()) {
+		sharedReader = bufio.NewReader(cmd.InOrStdin())
+	}
+	confirm := confirmerWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
+	approve := approverWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
 	runner := &orchestrator.Runner{
 		Workspace: dir,
 		Project:   project,
 		Team:      squad,
 		Git:       gitx.Local{},
 		Confirm:   confirm,
+		Approve:   approve,
 		Out:       cmd.OutOrStdout(),
 		Err:       cmd.ErrOrStderr(),
 		Streaming: agent.StreamingModeSSE,
@@ -63,6 +84,44 @@ func executeRun(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bo
 		JiraKey:   jiraKey,
 		SessionID: sessionID,
 	})
+}
+
+func approverWithReader(cmd *cobra.Command, settings team.Settings, yes bool, sharedReader *bufio.Reader, sharedMu *sync.Mutex) func(string) bool {
+	var localMu sync.Mutex
+	mu := sharedMu
+	if mu == nil {
+		mu = &localMu
+	}
+	var reader *bufio.Reader
+	return func(prompt string) bool {
+		if yes || settings.IsFullAccess() {
+			return true
+		}
+		if !isTTY(cmd.InOrStdin()) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ação protegida recusada fora de um terminal: %s\n", prompt)
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		r := sharedReader
+		if r == nil {
+			if reader == nil {
+				reader = bufio.NewReader(cmd.InOrStdin())
+			}
+			r = reader
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\nPermissão solicitada pelo Chefe:\n  %s\n[s/N]: ", prompt)
+		line, err := r.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "s", "sim", "y", "yes":
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 func confirmer(cmd *cobra.Command, settings team.Settings, yes bool) shellx.Confirmer {

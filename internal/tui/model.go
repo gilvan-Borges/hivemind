@@ -36,6 +36,7 @@ const (
 	modalModels
 	modalSessions
 	modalTeams
+	modalPermissions
 	modalApprove
 	modalBring
 )
@@ -78,6 +79,8 @@ type streamed struct {
 	SessionID      string
 	HasIntegration bool
 	Files          map[string]fileChange
+	ApprovalPrompt string
+	ApprovalReply  chan bool
 }
 
 type model struct {
@@ -130,9 +133,10 @@ type model struct {
 	pick       int
 	pickItems  []string
 	slashSel   int
-	atSel      int
-	atQuery    string
-	pending    string
+	atSel         int
+	atQuery       string
+	pending       string
+	approvalReply chan bool
 }
 
 func newModel(ctx context.Context, opt Options) model {
@@ -159,7 +163,7 @@ func newModel(ctx context.Context, opt Options) model {
 		ctx: ctx, workspace: opt.Workspace, sessionID: newSessionID(), started: time.Now(),
 		ta: ta, vp: vp, follow: true, files: map[string]fileChange{},
 		branch: "sem git", efforts: []string{"low", "medium", "high"},
-		wizName: "padrao", wizDevs: "1", wizWT: true, wizEffort: 1,
+		wizName: "padrao", wizDevs: "1", wizWT: true, wizCommit: true, wizPR: true, wizEffort: 1,
 		status: "pronto",
 	}
 	git := gitx.Local{}
@@ -369,6 +373,23 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 	projectSnapshot := m.project
 	workspaceDir := m.workspace
 	ch := make(chan streamed, 64)
+	askHuman := func(prompt string) bool {
+		if projectSnapshot.Settings.IsFullAccess() {
+			return true
+		}
+		reply := make(chan bool, 1)
+		select {
+		case ch <- streamed{ApprovalPrompt: prompt, ApprovalReply: reply}:
+		case <-ctx.Done():
+			return false
+		}
+		select {
+		case ok := <-reply:
+			return ok
+		case <-ctx.Done():
+			return false
+		}
+	}
 	go func() {
 		defer close(ch)
 		r := &orchestrator.Runner{
@@ -376,6 +397,8 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 			Project:            projectSnapshot,
 			Team:               squad,
 			Git:                gitx.Local{},
+			Confirm:            askHuman,
+			Approve:            askHuman,
 			Out:                io.Discard,
 			Err:                io.Discard,
 			EnableTriage:       true,
@@ -424,6 +447,13 @@ func listen(ch chan streamed) tea.Cmd {
 }
 
 func (m model) onStream(msg streamed) (tea.Model, tea.Cmd) {
+	if msg.ApprovalReply != nil {
+		m.pending = msg.ApprovalPrompt
+		m.approvalReply = msg.ApprovalReply
+		m.modal = modalApprove
+		m.refresh()
+		return m, nil
+	}
 	ev := msg.Event
 	switch ev.Kind {
 	case "stage":
@@ -678,7 +708,7 @@ func (m model) filePane(w int) string {
 
 func (m model) statusLine(w int) string {
 	th := m.theme()
-	flags := "commit " + onOff(m.project.Settings.AutoCommit) + "  pr " + onOff(m.project.Settings.AutoPR)
+	flags := "perm " + m.project.Settings.EffectivePermissionMode() + "  commit " + onOff(m.project.Settings.AutoCommit) + "  pr " + onOff(m.project.Settings.AutoPR)
 	session := " · sessão " + m.sessionID
 	if w < 120 {
 		session = ""
@@ -808,11 +838,11 @@ func (m model) modalView(th Theme, w, h int) string {
 	switch m.modal {
 	case modalWizard:
 		return m.wizardView(th, min(72, w-4))
-	case modalModels, modalSessions, modalTeams:
-		title := map[modal]string{modalModels: "Modelo", modalSessions: "Sessões", modalTeams: "Times"}[m.modal]
-		return m.listModal(th, title, m.pickItems, m.pick, min(64, w-4))
+	case modalModels, modalSessions, modalTeams, modalPermissions:
+		title := map[modal]string{modalModels: "Modelo", modalSessions: "Sessões", modalTeams: "Times", modalPermissions: "Permissão e Autonomia"}[m.modal]
+		return m.listModal(th, title, m.pickItems, m.pick, min(68, w-4))
 	case modalApprove:
-		return m.panel(th, min(64, w-4), 8, "Autorizar", "A ferramenta "+m.pending+" pede confirmação.\n\ns sim    n não    esc cancela")
+		return m.panel(th, min(70, w-4), 9, "Permissão Solicitada", m.pending+"\n\ns autorizar    n negar    esc cancela")
 	case modalBring:
 		return m.panel(th, min(68, w-4), 9, "Sua branch", "Trazer as mudanças da integração para "+m.branch+"?\nO checkout atual não foi alterado.\n\ns sim    n não")
 	default:
@@ -1113,6 +1143,7 @@ func (m model) slashMatches() []cmdItem {
 func slashCommands() []cmdItem {
 	return []cmdItem{
 		{"/ajuda", "Lista os comandos e os atalhos"},
+		{"/permissao", "Alterna entre governed, auto_edit e full_access"},
 		{"/time", "Lista ou troca o time ativo"},
 		{"/modelo", "Escolhe o modelo agy dos agentes"},
 		{"/agentes", "Mostra papéis, modelos e estado"},
@@ -1202,6 +1233,21 @@ func (m model) runSlash(text string) (tea.Model, tea.Cmd) {
 		}
 		m.pick = 0
 		m.modal = modalModels
+	case "/permissao":
+		if len(fields) > 1 {
+			mode := team.NormalizePermissionMode(fields[1])
+			m.project.Settings.PermissionMode = mode
+			_ = team.Save(m.workspace, m.project)
+			m.addSystem("Modo de permissão atualizado para **" + mode + "**.")
+		} else {
+			m.pickItems = []string{
+				"governed — Governado (worktree + PR + aprovação p/ main)",
+				"auto_edit — Edição e comandos locais ágeis",
+				"full_access — Acesso e Permissão Total (estilo Claude Code / GPT)",
+			}
+			m.pick = 0
+			m.modal = modalPermissions
+		}
 	case "/sessoes":
 		m.pickItems = sessionNames(m.workspace)
 		m.pick = 0

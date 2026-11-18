@@ -1,9 +1,17 @@
 version: 1
 active: padrao
 settings:
+  permission_mode: governed # governed | auto_edit | full_access
+  worktrees: true
   jira_enabled: true
-  auto_commit: false
-  auto_pr: false
+  auto_commit: true
+  auto_pr: true
+  homolog_branch: homolog
+  protected_branches:
+    - main
+    - master
+    - production
+  require_main_merge_approval: true
   max_qa_loops: 3
   base_branch: main
   confirm_shell: true

@@ -53,13 +53,73 @@ func Evaluate(command string, allowlist []string) Decision {
 
 func inList(base string, allowlist []string) bool {
 	for _, item := range allowlist {
-		item = strings.ToLower(strings.TrimSpace(item))
-		item = strings.TrimSuffix(filepath.Base(item), ".exe")
-		if item == base {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "*" {
+			return true
+		}
+		norm := strings.ToLower(trimmed)
+		norm = strings.TrimSuffix(filepath.Base(norm), ".exe")
+		if norm == base {
 			return true
 		}
 	}
 	return false
+}
+
+// IsCommitOrPRCommand reports whether command attempts to create commits, push, merge,
+// or mutate pull requests — actions restricted exclusively to the Chief or Architect.
+func IsCommitOrPRCommand(command string) (bool, string) {
+	segments := strings.FieldsFunc(command, func(r rune) bool {
+		return r == ';' || r == '\n' || r == '\r' || r == '|' || r == '&'
+	})
+	for _, seg := range segments {
+		argv, err := fields(strings.TrimSpace(seg))
+		if err != nil || len(argv) == 0 {
+			continue
+		}
+		base := strings.ToLower(strings.TrimSuffix(filepath.Base(argv[0]), ".exe"))
+		switch base {
+		case "git":
+			sub := firstSubcommand(argv[1:])
+			switch sub {
+			case "commit", "push", "merge", "rebase", "cherry-pick", "tag":
+				return true, "git " + sub
+			}
+		case "gh":
+			if len(argv) >= 2 {
+				top := strings.ToLower(strings.TrimSpace(argv[1]))
+				if top == "api" {
+					return true, "gh api"
+				}
+				if top == "pr" && len(argv) >= 3 {
+					act := strings.ToLower(strings.TrimSpace(argv[2]))
+					switch act {
+					case "create", "merge", "review", "comment", "edit", "close", "reopen", "ready":
+						return true, "gh pr " + act
+					}
+				}
+			}
+		}
+	}
+	return false, ""
+}
+
+func firstSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		tok := strings.TrimSpace(args[i])
+		if tok == "" {
+			continue
+		}
+		if strings.HasPrefix(tok, "-") {
+			// Skip value argument of flags like -C <dir> or -c <k=v>
+			if tok == "-C" || tok == "-c" || tok == "--git-dir" || tok == "--work-tree" {
+				i++
+			}
+			continue
+		}
+		return strings.ToLower(tok)
+	}
+	return ""
 }
 
 func isDangerous(base string, argv []string, shell bool) (bool, string) {

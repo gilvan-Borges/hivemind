@@ -21,12 +21,30 @@ func (m model) onModalKey(k string) (tea.Model, tea.Cmd) {
 		return m.onWizard(k)
 	case modalApprove:
 		if k == "s" || k == "S" {
-			m.addSystem("Autorizado: " + m.pending + ". O checkout não foi trocado.")
+			if m.approvalReply != nil {
+				m.approvalReply <- true
+				m.approvalReply = nil
+			}
+			m.addSystem("Autorizado: " + m.pending)
 			m.modal = modalNone
+			m.refresh()
+			if m.events != nil {
+				return m, listen(m.events)
+			}
+			return m, nil
 		}
 		if k == "n" || k == "N" || k == "esc" {
-			m.addSystem("Recusado: " + m.pending + ".")
+			if m.approvalReply != nil {
+				m.approvalReply <- false
+				m.approvalReply = nil
+			}
+			m.addSystem("Negado: " + m.pending)
 			m.modal = modalNone
+			m.refresh()
+			if m.events != nil {
+				return m, listen(m.events)
+			}
+			return m, nil
 		}
 	case modalBring:
 		if k == "s" || k == "S" {
@@ -56,6 +74,18 @@ func (m model) onModalKey(k string) (tea.Model, tea.Cmd) {
 		if k == "s" || k == "S" || k == "enter" {
 			if len(m.pickItems) > 0 {
 				m.applyModel(m.pickItems[m.pick])
+			}
+			m.modal = modalNone
+		}
+	case modalPermissions:
+		m.movePick(k)
+		if k == "enter" && len(m.pickItems) > 0 {
+			parts := strings.Fields(m.pickItems[m.pick])
+			if len(parts) > 0 {
+				mode := team.NormalizePermissionMode(parts[0])
+				m.project.Settings.PermissionMode = mode
+				_ = team.Save(m.workspace, m.project)
+				m.addSystem("Modo de permissão atualizado para **" + mode + "**.")
 			}
 			m.modal = modalNone
 		}
@@ -241,16 +271,14 @@ func (m *model) finishWizard() error {
 		spec = "agy:" + slug + ":" + effort
 	}
 	created := team.DefaultTeam(strings.TrimSpace(m.wizName), "", spec, "agy", n)
-	f := team.File{Settings: team.Settings{
-		JiraEnabled: m.wizJira,
-		AutoCommit:  m.wizCommit,
-		AutoPR:      m.wizPR,
-		MaxQALoops:  3,
-		BaseBranch:  "main",
-		JiraProject: strings.TrimSpace(m.wizJiraKey),
-	}}
+	defaults := team.DefaultSettings()
+	defaults.JiraEnabled = m.wizJira
+	defaults.AutoCommit = m.wizCommit
+	defaults.AutoPR = m.wizPR
+	defaults.JiraProject = strings.TrimSpace(m.wizJiraKey)
 	wt := m.wizWT
-	f.Settings.Worktrees = &wt
+	defaults.Worktrees = &wt
+	f := team.File{Settings: defaults}
 	team.UpsertTeam(&f, created)
 	if err := team.Save(m.workspace, f); err != nil {
 		return err

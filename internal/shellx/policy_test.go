@@ -76,4 +76,21 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	if len(quoted.Argv) != 2 || quoted.Argv[1] != "olá mundo" {
 		t.Fatalf("quoted = %#v", quoted.Argv)
 	}
+
+	// Wildcard allowlist ("full_access") allows any executable.
+	full := Evaluate("docker ps", []string{"*"})
+	if !full.Allowed {
+		t.Fatalf("wildcard allowlist should allow docker: %+v", full)
+	}
+
+	// Commit / PR governance detection in shell commands.
+	if blocked, what := IsCommitOrPRCommand(`go test ./... && git commit -m "wip"`); !blocked || what != "git commit" {
+		t.Fatalf("expected git commit blocked, got %v %q", blocked, what)
+	}
+	if blocked, what := IsCommitOrPRCommand(`gh pr merge 1 --merge`); !blocked || what != "gh pr merge" {
+		t.Fatalf("expected gh pr merge blocked, got %v %q", blocked, what)
+	}
+	if blocked, _ := IsCommitOrPRCommand(`git status --short`); blocked {
+		t.Fatal("git status must remain allowed for all roles")
+	}
 }

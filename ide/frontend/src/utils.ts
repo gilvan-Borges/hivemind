@@ -1,4 +1,4 @@
-import type { AgentRuntime, RunMode } from "./types";
+import type { AgentRuntime, PermissionMode, RunMode } from "./types";
 
 export function escapeHtml(text: string | undefined | null): string {
   return String(text ?? "")
@@ -58,6 +58,17 @@ export function runModeLabel(mode: RunMode): string {
       return "Squad Completo";
     default:
       return "Auto (Triagem)";
+  }
+}
+
+export function permissionModeLabel(mode: PermissionMode | string | undefined): string {
+  switch (mode) {
+    case "full_access":
+      return "Full Acesso";
+    case "auto_edit":
+      return "Auto-Edição";
+    default:
+      return "Governado";
   }
 }
 

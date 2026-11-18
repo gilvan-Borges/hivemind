@@ -369,6 +369,16 @@ func (a *App) UpdateAgentModel(workspace, teamName, agentName, modelSpec string)
 	return idecore.UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec)
 }
 
+// UpdatePermissionMode switches settings.permission_mode ("governed", "auto_edit", "full_access") in .hivemind/team.yaml.
+func (a *App) UpdatePermissionMode(workspace, permissionMode string) (team.File, error) {
+	return idecore.UpdateProjectPermissionMode(workspace, permissionMode)
+}
+
+// RespondApproval delivers the user's decision on a pending approval gate (e.g. merging PR into main).
+func (a *App) RespondApproval(laneID string, approved bool) bool {
+	return a.sessions.ResolveApproval(laneID, approved)
+}
+
 // EnsureTeamMemory creates .hivemind/MEMORY.md if absent and returns its relative path for the editor.
 func (a *App) EnsureTeamMemory(workspace string) (string, error) {
 	return idecore.EnsureWorkspaceMemory(workspace)

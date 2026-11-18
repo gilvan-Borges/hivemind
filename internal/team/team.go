@@ -12,6 +12,11 @@ const (
 	RoleArchitect      = "architect"
 	RoleDeveloper      = "developer"
 	RoleQA             = "qa"
+
+	// Permission modes inspired by Claude Code / Codex autonomy levels.
+	PermissionGoverned   = "governed"    // Default: strict worktree/PR/review governance & confirmations
+	PermissionAutoEdit   = "auto_edit"   // Local edits & allowlisted shell run without prompts; main merge still asks
+	PermissionFullAccess = "full_access" // Full autonomy & permissions granted by the user in settings
 )
 
 // File is the on-disk project configuration. Several teams can share one workspace.
@@ -24,17 +29,142 @@ type File struct {
 
 // Settings apply to every team in the project.
 type Settings struct {
-	JiraEnabled    bool     `yaml:"jira_enabled" json:"jira_enabled"`
-	JiraProject    string   `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
-	Worktrees      *bool    `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
-	AutoCommit     bool     `yaml:"auto_commit" json:"auto_commit"`
-	AutoPR         bool     `yaml:"auto_pr" json:"auto_pr"`
-	MaxQALoops     int      `yaml:"max_qa_loops" json:"max_qa_loops"`
-	MaxLLMCalls    int      `yaml:"max_llm_calls" json:"max_llm_calls"`
-	MaxTokens      int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	BaseBranch     string   `yaml:"base_branch" json:"base_branch"`
-	ShellAllowlist []string `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
-	ConfirmShell   *bool    `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
+	PermissionMode           string   `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
+	JiraEnabled              bool     `yaml:"jira_enabled" json:"jira_enabled"`
+	JiraProject              string   `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
+	Worktrees                *bool    `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
+	AutoCommit               bool     `yaml:"auto_commit" json:"auto_commit"`
+	AutoPR                   bool     `yaml:"auto_pr" json:"auto_pr"`
+	HomologBranch            string   `yaml:"homolog_branch,omitempty" json:"homolog_branch,omitempty"`
+	ProtectedBranches        []string `yaml:"protected_branches,omitempty" json:"protected_branches,omitempty"`
+	RequireMainMergeApproval *bool    `yaml:"require_main_merge_approval,omitempty" json:"require_main_merge_approval,omitempty"`
+	MaxQALoops               int      `yaml:"max_qa_loops" json:"max_qa_loops"`
+	MaxLLMCalls              int      `yaml:"max_llm_calls" json:"max_llm_calls"`
+	MaxTokens                int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	BaseBranch               string   `yaml:"base_branch" json:"base_branch"`
+	ShellAllowlist           []string `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
+	ConfirmShell             *bool    `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
+}
+
+// DefaultSettings returns the recommended governance defaults:
+// isolated worktree ON, Chief/Architect auto-commit ON, auto-PR ON, and governed permissions.
+func DefaultSettings() Settings {
+	wt := true
+	confirm := true
+	reqMain := true
+	return Settings{
+		PermissionMode:           PermissionGoverned,
+		JiraEnabled:              true,
+		Worktrees:                &wt,
+		AutoCommit:               true,
+		AutoPR:                   true,
+		HomologBranch:            "homolog",
+		ProtectedBranches:        []string{"main", "master", "production"},
+		RequireMainMergeApproval: &reqMain,
+		MaxQALoops:               3,
+		BaseBranch:               "main",
+		ShellAllowlist:           append([]string(nil), DefaultAllowlist...),
+		ConfirmShell:             &confirm,
+	}
+}
+
+// NormalizePermissionMode canonicalizes user-provided permission mode strings.
+func NormalizePermissionMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case PermissionFullAccess, "full", "full-access", "fullaccess", "bypass", "bypass_permissions", "total", "yolo":
+		return PermissionFullAccess
+	case PermissionAutoEdit, "auto-edit", "autoedit", "accept_edits", "acceptedits":
+		return PermissionAutoEdit
+	default:
+		return PermissionGoverned
+	}
+}
+
+// EffectivePermissionMode returns the normalized permission mode (default "governed").
+func (s Settings) EffectivePermissionMode() string {
+	return NormalizePermissionMode(s.PermissionMode)
+}
+
+// IsFullAccess reports whether the user granted full unrestricted access in settings.
+func (s Settings) IsFullAccess() bool {
+	return s.EffectivePermissionMode() == PermissionFullAccess
+}
+
+// EffectiveAllowlist returns "*" when FullAccess is enabled, or the configured allowlist.
+func (s Settings) EffectiveAllowlist() []string {
+	if s.IsFullAccess() {
+		return []string{"*"}
+	}
+	if len(s.ShellAllowlist) == 0 {
+		return append([]string(nil), DefaultAllowlist...)
+	}
+	return s.ShellAllowlist
+}
+
+// NeedsShellConfirm reports whether dangerous shell commands must ask for human confirmation.
+func (s Settings) NeedsShellConfirm() bool {
+	mode := s.EffectivePermissionMode()
+	if mode == PermissionFullAccess || mode == PermissionAutoEdit {
+		return false
+	}
+	if s.ConfirmShell != nil {
+		return *s.ConfirmShell
+	}
+	return true
+}
+
+// IsHomologBranch reports whether branch is a homologation/staging target where the Chief
+// may merge automatically once a reviewer has approved the PR.
+func (s Settings) IsHomologBranch(branch string) bool {
+	b := strings.ToLower(strings.TrimSpace(branch))
+	if b == "" {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSpace(s.HomologBranch))
+	if h == "" {
+		h = "homolog"
+	}
+	return b == h || b == "homolog" || b == "homologacao" || b == "staging"
+}
+
+// IsProtectedBranch reports whether branch is main/master/production requiring explicit user permission.
+func (s Settings) IsProtectedBranch(branch string) bool {
+	b := strings.ToLower(strings.TrimSpace(branch))
+	if b == "" {
+		return true
+	}
+	list := s.ProtectedBranches
+	if len(list) == 0 {
+		list = []string{"main", "master", "production", "prod"}
+	}
+	for _, item := range list {
+		if strings.EqualFold(strings.TrimSpace(item), b) {
+			return true
+		}
+	}
+	return false
+}
+
+// NeedsMergePermission reports whether merging a PR into baseBranch requires explicit user approval.
+// In full_access mode, user pre-authorized all operations. On homolog, Chief can merge once reviewer approved.
+// On main (or any non-homolog branch when require_main_merge_approval is true), user permission is required.
+func (s Settings) NeedsMergePermission(baseBranch string) bool {
+	if s.IsFullAccess() {
+		return false
+	}
+	if s.IsHomologBranch(baseBranch) {
+		return false
+	}
+	if s.IsProtectedBranch(baseBranch) {
+		if s.RequireMainMergeApproval != nil {
+			return *s.RequireMainMergeApproval
+		}
+		return true
+	}
+	if s.RequireMainMergeApproval != nil {
+		return *s.RequireMainMergeApproval
+	}
+	return true
 }
 
 // Team is one named group of agents.
@@ -57,6 +187,21 @@ type Agent struct {
 func (f *File) Normalize() {
 	if f.Version == 0 {
 		f.Version = 1
+	}
+	f.Settings.PermissionMode = NormalizePermissionMode(f.Settings.PermissionMode)
+	if f.Settings.Worktrees == nil {
+		wt := true
+		f.Settings.Worktrees = &wt
+	}
+	if strings.TrimSpace(f.Settings.HomologBranch) == "" {
+		f.Settings.HomologBranch = "homolog"
+	}
+	if len(f.Settings.ProtectedBranches) == 0 {
+		f.Settings.ProtectedBranches = []string{"main", "master", "production"}
+	}
+	if f.Settings.RequireMainMergeApproval == nil {
+		reqMain := true
+		f.Settings.RequireMainMergeApproval = &reqMain
 	}
 	if f.Settings.MaxQALoops <= 0 {
 		f.Settings.MaxQALoops = 3

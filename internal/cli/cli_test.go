@@ -86,6 +86,18 @@ func TestHelpAndTeamLifecycle(t *testing.T) {
 	root = newRoot()
 	root.SetOut(&buf)
 	root.SetErr(&buf)
+	root.SetArgs([]string{"--workspace", dir, "team", "permission", "full_access"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "full_access") {
+		t.Fatalf("permission output: %s", buf.String())
+	}
+
+	buf.Reset()
+	root = newRoot()
+	root.SetOut(&buf)
+	root.SetErr(&buf)
 	root.SetArgs([]string{"--workspace", dir, "agent", "remove", "--name", "dev_back"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)

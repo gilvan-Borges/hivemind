@@ -28,12 +28,14 @@ type WizardInput struct {
 	DevCount       int               `json:"devCount"`
 	DefaultModel   string            `json:"defaultModel"`
 	AgentModels    map[string]string `json:"agentModels,omitempty"`
+	PermissionMode string            `json:"permissionMode,omitempty"` // "governed", "auto_edit", "full_access"
 	Worktrees      bool              `json:"worktrees"`
 	AutoCommit     bool              `json:"autoCommit"`
 	AutoPR         bool              `json:"autoPR"`
 	JiraEnabled    bool              `json:"jiraEnabled"`
 	JiraProject    string            `json:"jiraProject"`
 	BaseBranch     string            `json:"baseBranch"`
+	HomologBranch  string            `json:"homologBranch,omitempty"`
 	MaxTokens      int64             `json:"maxTokens"`
 }
 
@@ -128,6 +130,11 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	var file team.File
 	if existing, err := team.Load(workspace); err == nil {
 		file = existing
+	} else {
+		file.Settings = team.DefaultSettings()
+	}
+	if strings.TrimSpace(in.PermissionMode) != "" {
+		file.Settings.PermissionMode = team.NormalizePermissionMode(in.PermissionMode)
 	}
 	wt := in.Worktrees
 	file.Settings.Worktrees = &wt
@@ -141,11 +148,27 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	if strings.TrimSpace(in.BaseBranch) != "" {
 		file.Settings.BaseBranch = strings.TrimSpace(in.BaseBranch)
 	}
+	if strings.TrimSpace(in.HomologBranch) != "" {
+		file.Settings.HomologBranch = strings.TrimSpace(in.HomologBranch)
+	}
 	team.UpsertTeam(&file, newTeam)
 	if err := team.Save(workspace, file); err != nil {
 		return team.File{}, err
 	}
 	return file, nil
+}
+
+// UpdateProjectPermissionMode updates settings.permission_mode ("governed", "auto_edit", "full_access") in .hivemind/team.yaml.
+func UpdateProjectPermissionMode(workspace, permissionMode string) (team.File, error) {
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return team.File{}, err
+	}
+	cfg.Settings.PermissionMode = team.NormalizePermissionMode(permissionMode)
+	if err := team.Save(workspace, cfg); err != nil {
+		return team.File{}, err
+	}
+	return cfg, nil
 }
 
 // LaneEvent wraps an orchestrator.Event with the IDE lane ID and team name.
@@ -157,17 +180,38 @@ type LaneEvent struct {
 
 // SessionManager tracks concurrent team runs across parallel IDE lanes.
 type SessionManager struct {
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
-	Emit    func(LaneEvent)
+	mu        sync.Mutex
+	cancels   map[string]context.CancelFunc
+	approvals map[string]chan bool
+	Emit      func(LaneEvent)
 }
 
 // NewSessionManager creates a SessionManager.
 func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	return &SessionManager{
-		cancels: make(map[string]context.CancelFunc),
-		Emit:    emit,
+		cancels:   make(map[string]context.CancelFunc),
+		approvals: make(map[string]chan bool),
+		Emit:      emit,
 	}
+}
+
+// ResolveApproval delivers the user's yes/no decision to a pending lane approval gate
+// (such as merging an approved PR into main or running a protected command).
+func (m *SessionManager) ResolveApproval(laneID string, approved bool) bool {
+	m.mu.Lock()
+	ch, ok := m.approvals[laneID]
+	if ok {
+		delete(m.approvals, laneID)
+	}
+	m.mu.Unlock()
+	if ok && ch != nil {
+		select {
+		case ch <- approved:
+		default:
+		}
+		return true
+	}
+	return false
 }
 
 // ImageInput carries a base64 or data-URL encoded image from the IDE chat.
@@ -411,6 +455,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		cancel()
 		m.mu.Lock()
 		delete(m.cancels, laneID)
+		delete(m.approvals, laneID)
 		m.mu.Unlock()
 	}()
 
@@ -437,6 +482,37 @@ func (m *SessionManager) RunTurnWithOptions(
 		normMode = "auto"
 	}
 
+	askApproval := func(prompt string) bool {
+		if cfg.Settings.IsFullAccess() {
+			return true
+		}
+		if m.Emit == nil {
+			return false
+		}
+		reply := make(chan bool, 1)
+		m.mu.Lock()
+		m.approvals[laneID] = reply
+		m.mu.Unlock()
+
+		m.Emit(LaneEvent{
+			LaneID: laneID,
+			Team:   selected.Name,
+			Event: orchestrator.Event{
+				Kind:   "approval_required",
+				Stage:  "chief",
+				Author: "chefe",
+				Label:  "Permissão Necessária",
+				Text:   prompt,
+			},
+		})
+		select {
+		case ok := <-reply:
+			return ok
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	runner := &orchestrator.Runner{
 		Workspace:          workspace,
 		Project:            cfg,
@@ -445,6 +521,8 @@ func (m *SessionManager) RunTurnWithOptions(
 		GitHub:             gh,
 		Jira:               jira,
 		Sessions:           store,
+		Confirm:            askApproval,
+		Approve:            askApproval,
 		Out:                io.Discard,
 		Err:                io.Discard,
 		EnableTriage:       normMode != "squad",

@@ -131,6 +131,18 @@ func Branch(issueKey, agent, objective string) string {
 	return "hivemind/" + token + "/" + ADK(agent)
 }
 
+// DeliveryBranch is the unified feature branch used by the Chief/Architect to commit
+// consolidated changes in a dedicated worktree and open a single pull request.
+func DeliveryBranch(issueKey, objective string) string {
+	token := IssueKey(issueKey)
+	if token == "" {
+		token = Slug(objective, 32)
+	} else {
+		token = strings.ToLower(token)
+	}
+	return "hivemind/" + token + "/entrega"
+}
+
 // CommitMessage includes the Jira key when the run is bound to an issue.
 func CommitMessage(issueKey, objective string) string {
 	subject := oneLine(objective, 72)

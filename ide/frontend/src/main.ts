@@ -14,6 +14,7 @@ import type {
   FileNode,
   GitHubStatus,
   ImageAttachment,
+  PermissionMode,
   ProjectInfo,
   ProjectIssue,
   RunMode,
@@ -29,6 +30,7 @@ import {
   exactTokens,
   formatTokens,
   matchAgentRuntime,
+  permissionModeLabel,
   roleLabelPt,
   runModeLabel,
   safeImageSrc,
@@ -788,7 +790,8 @@ function updateStatusBar() {
     branchEl.innerHTML = `${icons.gitSmall} <span>${escapeHtml(proj?.branch || "sem git")}</span>`;
   }
   if (stackEl) stackEl.textContent = proj?.stack?.summary || "";
-  if (teamEl) teamEl.textContent = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
+  const perm = proj?.teamConfig?.settings?.permission_mode || "governed";
+  if (teamEl) teamEl.textContent = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)} · ${permissionModeLabel(perm)}`;
   if (tokEl) {
     const sessTok = lane?.sessionTotalTokens || 0;
     const projTok = Math.max(state.sessionsSummary.projectTotalTokens, sessTok);
@@ -863,6 +866,14 @@ async function boot() {
         id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: "plan",
         label: ev.label || "Plano pronto para aprovação",
+        text: ev.text || "",
+      });
+    } else if (ev.kind === "approval_required") {
+      markToolsDone(lane);
+      lane.messages.push({
+        id: `appr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "approval",
+        label: ev.label || "Permissão Solicitada pelo Chefe",
         text: ev.text || "",
       });
     } else if (ev.kind === "handoff") {
@@ -1500,6 +1511,7 @@ function renderLeftSidebar() {
 
   if (state.sidebarView === "team") {
     const maxTok = proj?.teamConfig?.settings?.max_tokens || 0;
+    const permMode = (proj?.teamConfig?.settings?.permission_mode || "governed") as PermissionMode;
     sidebar.innerHTML = `
       <div class="sidebar-header">
         <span class="eyebrow">Equipe (${lane?.agents.length || 0})</span>
@@ -1514,12 +1526,20 @@ function renderLeftSidebar() {
           </select>
           <button class="mini" id="btn-new-team-sb">${icons.plus}<span>Novo</span></button>
         </div>
+        <div style="margin-bottom:8px">
+          <div class="dim" style="font-size:10.5px;margin-bottom:3px">Permissão & Autonomia (estilo Claude Code / GPT):</div>
+          <select id="sb-permission-select" style="width:100%;font-size:11.5px;padding:4px 6px">
+            <option value="governed" ${permMode === "governed" ? "selected" : ""}>Governado (Worktree + PR + Pede permissão p/ main)</option>
+            <option value="auto_edit" ${permMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
+            <option value="full_access" ${permMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
+          </select>
+        </div>
         <button class="mini" id="btn-team-memory" style="width:100%;margin-bottom:8px;justify-content:flex-start">
           ${icons.memory}
           <span>Memória do Time (.hivemind/MEMORY.md)</span>
         </button>
         <div class="dim" style="margin-bottom:8px">
-          Fluxo: Chefe → Dev → QA → Fecho${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
+          Fluxo: Chefe → Dev (worktree) → QA → Fecho (Chefe/Arq comita & PR)${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
         </div>
         <div id="team-agents-list">
           ${renderAgentCardsHtml(lane?.agents || [])}
@@ -1970,7 +1990,31 @@ function bindTeamSidebarEvents() {
     renderLaneBarOnly();
     updateStatusBar();
   });
+  const permSel = document.getElementById("sb-permission-select") as HTMLSelectElement | null;
+  permSel?.addEventListener("change", () => {
+    setProjectPermissionMode(permSel.value as PermissionMode);
+  });
   bindAgentModelSelects(document.getElementById("team-agents-list"), "data-sb-agent-model");
+}
+
+async function setProjectPermissionMode(mode: PermissionMode) {
+  const backend = api();
+  if (!backend || !state.project) return;
+  try {
+    if (backend.UpdatePermissionMode) {
+      const cfg = await backend.UpdatePermissionMode(state.project.root, mode);
+      state.project.teamConfig = cfg;
+    } else if (state.project.teamConfig?.settings) {
+      state.project.teamConfig.settings.permission_mode = mode;
+    }
+    renderComposerModeBar();
+    updateStatusBar();
+    updateMissionBoardIfOpen();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    setStatus(`Modo de permissão atualizado para: ${permissionModeLabel(mode)}.`);
+  } catch (err: any) {
+    setStatus(`Erro ao atualizar permissão: ${err?.message || err}`);
+  }
 }
 
 function bindGitSidebarEvents() {
@@ -2441,11 +2485,13 @@ function renderRightPane() {
 function renderComposerModeBar() {
   const bar = document.getElementById("composer-mode-bar");
   if (!bar) return;
+  const perm = (state.project?.teamConfig?.settings?.permission_mode || "governed") as PermissionMode;
+  const isFull = perm === "full_access";
   const modes: Array<{ id: RunMode; label: string; icon: string; tip: string }> = [
-    { id: "auto", label: "Auto", icon: icons.sparkle, tip: "Triagem inteligente: responde direto ou aciona o Squad" },
+    { id: "auto", label: "Auto", icon: icons.sparkle, tip: "Triagem inteligente: responde direto ou aciona o Squad em worktree" },
     { id: "direct", label: "Direto", icon: icons.bolt, tip: "1 Agente (Chefe) sem delegar — rápido e econômico em tokens" },
     { id: "plan", label: "Planejar", icon: icons.plan, tip: "Gera plano + divisão de arquivos e pausa para aprovação" },
-    { id: "squad", label: "Squad", icon: icons.swarm, tip: "Força pipeline completo: Chefe → Devs Paralelos → QA → Fecho" },
+    { id: "squad", label: "Squad", icon: icons.swarm, tip: "Força pipeline completo em worktree: Chefe → Devs → QA → Fecho" },
   ];
   bar.innerHTML = `
     ${modes.map((m) => `
@@ -2455,6 +2501,10 @@ function renderComposerModeBar() {
       </button>
     `).join("")}
     <div class="spacer"></div>
+    <button class="mode-chip ${isFull ? "active" : ""}" id="btn-composer-perm" title="Alternar nível de permissão e autonomia (Governado / Auto-Edição / Full Acesso)">
+      ${icons.bolt}
+      <span>${escapeHtml(permissionModeLabel(perm))}</span>
+    </button>
     <button class="mode-chip" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)">
       ${icons.memory}
       <span>Memória</span>
@@ -2467,6 +2517,11 @@ function renderComposerModeBar() {
       updateStatusBar();
       updateMissionBoardIfOpen();
     });
+  });
+  bar.querySelector("#btn-composer-perm")?.addEventListener("click", () => {
+    const order: PermissionMode[] = ["governed", "auto_edit", "full_access"];
+    const next = order[(order.indexOf(perm) + 1) % order.length];
+    setProjectPermissionMode(next);
   });
   bar.querySelector("#btn-composer-memory")?.addEventListener("click", () => openTeamMemoryFile());
 }
@@ -2609,7 +2664,7 @@ function attachImageFiles(files: FileList | File[]) {
 }
 
 function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.label}|${m.tokens || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function createMessageElement(m: ChatMessage): HTMLElement {
@@ -2650,6 +2705,40 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
       m.approved = true;
       updateMessageElement(el, m);
       executeApprovedPlan();
+    });
+    return;
+  }
+
+  if (m.kind === "approval") {
+    el.className = "msg-card role-plan";
+    const done = !!m.resolved;
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span class="msg-badge badge-chief" style="margin-bottom:0">${icons.bolt}<span>${escapeHtml(m.label)}</span></span>
+        <div style="display:flex;gap:6px">
+          <button class="mini primary" data-approve-gate="1" ${done ? "disabled" : ""}>
+            ${icons.check}
+            <span>${m.resolved === "approved" ? "Autorizado" : "Autorizar"}</span>
+          </button>
+          <button class="mini danger" data-deny-gate="1" ${done ? "disabled" : ""}>
+            <span>${m.resolved === "denied" ? "Negado" : "Negar"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="msg-body">${escapeHtml(m.text)}</div>
+    `;
+    const lane = activeLane();
+    el.querySelector("[data-approve-gate]")?.addEventListener("click", async () => {
+      if (m.resolved || !lane) return;
+      m.resolved = "approved";
+      updateMessageElement(el, m);
+      await api()?.RespondApproval(lane.id, true);
+    });
+    el.querySelector("[data-deny-gate]")?.addEventListener("click", async () => {
+      if (m.resolved || !lane) return;
+      m.resolved = "denied";
+      updateMessageElement(el, m);
+      await api()?.RespondApproval(lane.id, false);
     });
     return;
   }
@@ -3074,6 +3163,9 @@ function getCommandActions(): CommandAction[] {
     { id: "mode-direct", label: "Modo de Execução: Direto (1 Agente · Rápido)", run: () => { state.runMode = "direct"; renderComposerModeBar(); updateStatusBar(); } },
     { id: "mode-plan", label: "Modo de Execução: Planejar (Aprovação Humana)", run: () => { state.runMode = "plan"; renderComposerModeBar(); updateStatusBar(); } },
     { id: "mode-squad", label: "Modo de Execução: Squad Completo (Paralelo + QA)", run: () => { state.runMode = "squad"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "perm-governed", label: "Permissão: Governado (Worktree + PR + Aprovação p/ main)", run: () => setProjectPermissionMode("governed") },
+    { id: "perm-auto", label: "Permissão: Auto-Edição (Edições e comandos locais livres)", run: () => setProjectPermissionMode("auto_edit") },
+    { id: "perm-full", label: "Permissão: Full Acesso & Permissão Total (estilo Claude Code / GPT)", run: () => setProjectPermissionMode("full_access") },
     { id: "memory", label: "Abrir Memória Compartilhada (.hivemind/MEMORY.md)", run: () => openTeamMemoryFile() },
     { id: "sessions", label: "Ver Sessões Salvas & Consumo de Tokens", run: () => { openSidebarView("sessions"); refreshSessions(); } },
     { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
@@ -3556,6 +3648,11 @@ function renderModalLayer() {
     const settings = state.project?.teamConfig?.settings;
     const activeTeamName = state.project?.teamConfig?.active || "principal";
     const existingMaxTok = settings?.max_tokens || 0;
+    const curPerm = settings?.permission_mode || "governed";
+    const curBase = settings?.base_branch || "main";
+    const curHomolog = settings?.homolog_branch || "homolog";
+    const autoCommitChecked = settings ? settings.auto_commit !== false : true;
+    const autoPRChecked = settings ? settings.auto_pr !== false : true;
     const modelOpts = state.models.length > 0
       ? state.models.map((m) => `<option value="agy:${escapeHtml(m.slug)}">${escapeHtml(m.name)} (${escapeHtml(m.slug)})</option>`).join("")
       : `<option value="agy">agy (padrão)</option>`;
@@ -3574,6 +3671,13 @@ function renderModalLayer() {
               <option value="project_manager">Gerente de Projeto</option>
             </select>
 
+            <label>Permissão / Autonomia:</label>
+            <select id="wiz-permission">
+              <option value="governed" ${curPerm === "governed" ? "selected" : ""}>Governado (Worktree + PR + Pede permissão p/ main)</option>
+              <option value="auto_edit" ${curPerm === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
+              <option value="full_access" ${curPerm === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total (estilo Claude Code / GPT)</option>
+            </select>
+
             <label>Qtd. Desenvolvedores:</label>
             <input id="wiz-devs" type="number" min="1" max="6" value="1" />
 
@@ -3589,17 +3693,23 @@ function renderModalLayer() {
             <label>Modelo do QA:</label>
             <select id="wiz-model-qa"><option value="">(usar padrão)</option>${modelOpts}</select>
 
+            <label>Branch Base / Homolog:</label>
+            <div style="display:flex;gap:8px">
+              <input id="wiz-base-branch" value="${escapeHtml(curBase)}" placeholder="Base (ex: main)" style="flex:1" title="Branch base principal (exige sua permissão para merge)" />
+              <input id="wiz-homolog-branch" value="${escapeHtml(curHomolog)}" placeholder="Homolog (ex: homolog)" style="flex:1" title="Branch de homologação (Chefe mescla automático após aprovação do revisor)" />
+            </div>
+
             <label>Limite tokens/turno:</label>
             <input id="wiz-maxtokens" type="number" min="0" step="1000" value="${existingMaxTok}" placeholder="0 = sem limite (ex: 50000)" />
 
-            <label>Worktree por Dev:</label>
+            <label>Worktree separada:</label>
             <input id="wiz-worktrees" type="checkbox" ${settings?.worktrees !== false ? "checked" : ""} />
 
-            <label>Auto-commit após QA:</label>
-            <input id="wiz-autocommit" type="checkbox" ${settings?.auto_commit ? "checked" : ""} />
+            <label>Commit (Chefe/Arquiteto):</label>
+            <input id="wiz-autocommit" type="checkbox" ${autoCommitChecked ? "checked" : ""} />
 
-            <label>Auto-PR (GitHub gh):</label>
-            <input id="wiz-autopr" type="checkbox" ${settings?.auto_pr ? "checked" : ""} />
+            <label>Criar PR automático:</label>
+            <input id="wiz-autopr" type="checkbox" ${autoPRChecked ? "checked" : ""} />
 
             <label>Jira Cloud:</label>
             <div style="display:flex;gap:8px;align-items:center">
@@ -3607,7 +3717,7 @@ function renderModalLayer() {
               <input id="wiz-jira-key" placeholder="Projeto Jira (ex: PROJ)" value="${escapeHtml(settings?.jira_project || "")}" style="flex:1" />
             </div>
           </div>
-          <div class="dim" style="margin-top:10px">Nota: O init grava apenas em .hivemind/team.yaml e não altera o .gitignore do projeto.</div>
+          <div class="dim" style="margin-top:10px">Governança: Somente o Chefe ou Arquiteto comitam na worktree separada e abrem/respondem/mesclam PRs.</div>
           <div id="wiz-error" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
             <button id="wiz-cancel">Cancelar</button>
@@ -3645,11 +3755,14 @@ function renderModalLayer() {
           devCount,
           defaultModel,
           agentModels,
+          permissionMode: (val("wiz-permission") || "governed") as PermissionMode,
           worktrees: chk("wiz-worktrees"),
           autoCommit: chk("wiz-autocommit"),
           autoPR: chk("wiz-autopr"),
           jiraEnabled: chk("wiz-jira"),
           jiraProject: val("wiz-jira-key"),
+          baseBranch: val("wiz-base-branch") || "main",
+          homologBranch: val("wiz-homolog-branch") || "homolog",
           maxTokens,
         });
         state.project.hasTeam = true;

@@ -158,13 +158,16 @@ Um exemplo completo está em [examples/team.yaml](examples/team.yaml). Campos ú
 
 | Campo | Efeito |
 | --- | --- |
+| `permission_mode` | `governed` (padrão), `auto_edit` ou `full_access` (autonomia e permissão total estilo Claude Code / Codex) |
+| `worktrees` | Sempre trabalha em worktree separada por padrão (`true`) |
 | `jira_enabled` | Liga ou desliga as ferramentas de Jira e o comentário final |
-| `auto_commit` | Commit em cada worktree ao terminar |
-| `auto_pr` | `git push` e abertura do pull request |
+| `auto_commit` | Commit consolidado pelo Chefe/Arquiteto na worktree de entrega (`true` por padrão) |
+| `auto_pr` | `git push` e abertura do pull request da worktree de entrega (`true` por padrão) |
+| `homolog_branch` | Branch de homologação (`homolog`) onde o Chefe pode mesclar após aprovação do revisor |
+| `base_branch` | Branch base principal (`main`); merge em `main` pede permissão explícita ao usuário (salvo em `full_access`) |
 | `max_qa_loops` | Máximo de voltas desenvolvedor/QA |
 | `max_llm_calls` | Limite de chamadas de modelo. `0` usa o padrão do ADK (500). `-1` não limita |
-| `base_branch` | Branch de destino do pull request |
-| `shell_allowlist` | Executáveis que `run_shell` pode chamar |
+| `shell_allowlist` | Executáveis que `run_shell` pode chamar (`full_access` libera todos) |
 | `confirm_shell` | Pede confirmação para comando destrutivo |
 
 Comandos de shell fora da lista são recusados. `git push --force`, `git reset --hard`, `rm` e pipes pedem confirmação. Fora de um terminal a confirmação é negada, a menos que você passe `--yes`.
@@ -210,10 +213,10 @@ Todas as leituras e gravações ficam presas ao diretório de trabalho do agente
 
 | Papel | Ferramentas |
 | --- | --- |
-| Gerente | ler, listar, `git_status`, Jira (ler, JQL, subtarefa, transição, comentário), comentários e CI do GitHub |
-| Tech lead | ler, listar, status, diff, comentário no Jira |
-| Arquiteto | ler, listar, gravar, status |
-| Desenvolvedor | ler, listar, gravar, shell, git (status, diff, commit, push, pull), pull request e CI |
+| Gerente (Chefe) | ler, listar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull`, PR (`github_create_pr`, `github_get_pr`, `github_comment_pr`, `github_request_review`, `github_review_pr`, `github_merge_pr`, `github_ci_status`) e Jira |
+| Tech lead | ler, listar, status, diff, leitura de PR/CI e comentário no Jira |
+| Arquiteto | ler, listar, gravar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull` e governança de PR |
+| Desenvolvedor | ler, listar, gravar, shell (testes/build), `git_status` e `git_diff` (**nunca** comita nem opera PR) |
 | QA | ler, listar, shell, diff, `qa_approve`, `qa_request_changes`, comentário no Jira |
 
 `qa_approve` encerra o loop do ADK. `qa_request_changes` devolve o texto do ajuste aos desenvolvedores na volta seguinte.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"strconv"
 	"strings"
 
 	"google.golang.org/genai"
@@ -68,6 +69,7 @@ type Runner struct {
 	Models             map[string]model.LLM
 	NewModel           func(ctx context.Context, a team.Agent) (model.LLM, error)
 	Confirm            shellx.Confirmer
+	Approve            func(prompt string) bool
 	Out                io.Writer
 	Err                io.Writer
 	Streaming          agent.StreamingMode
@@ -75,8 +77,14 @@ type Runner struct {
 	EnableTriage       bool
 	EnableClosingChief bool
 	integration        string
+	deliveryRoot       string
+	deliveryBranch     string
 	issueKey           string
 	objectiveText      string
+	reviewRequested    bool
+	prNumber           int
+	prBranch           string
+	prReviewers        []string
 	devSlices          []string
 	chiefPlan          string
 	turnInputTokens    int64
@@ -175,9 +183,17 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		return result, fmt.Errorf("informe um objetivo ou uma chave Jira")
 	}
 
+	r.Project.Normalize()
+
 	r.integration = ""
+	r.deliveryRoot = ""
+	r.deliveryBranch = ""
 	r.issueKey = key
 	r.objectiveText = objective
+	r.reviewRequested = githubx.IsExplicitReviewObjective(objective)
+	r.prNumber = 0
+	r.prBranch = ""
+	r.prReviewers = nil
 	r.devSlices = nil
 	r.chiefPlan = ""
 	r.turnInputTokens = 0
@@ -218,6 +234,9 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			_ = sessionx.UpdateState(sess, map[string]any{
 				"chief_plan":            planBody,
 				"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
+				"pr_number":             strconv.Itoa(r.prNumber),
+				"pr_branch":             r.prBranch,
+				"pr_reviewers":          strings.Join(r.prReviewers, ","),
 				"plan_pending_approval": "1",
 			})
 			if r.OnEvent != nil {
@@ -355,25 +374,38 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 	} else if !allowWorktrees {
 		fmt.Fprintln(r.Err, "aviso: worktrees desativadas em settings.worktrees; os desenvolvedores compartilham a pasta do workspace")
 	}
+
+	_ = gitx.EnsureHiveIgnore(r.Workspace)
+
+	if repo {
+		targetBranch := strings.TrimSpace(r.prBranch)
+		preserveExisting := targetBranch != ""
+		if targetBranch == "" {
+			targetBranch = names.DeliveryBranch(key, objective)
+		}
+		delivWT, effBranch, err := gitx.PrepareDeliveryWorktree(ctx, r.Git, r.Workspace, targetBranch, preserveExisting)
+		if err != nil {
+			return nil, fmt.Errorf("worktree de entrega (%s): %w", targetBranch, err)
+		}
+		r.integration = delivWT
+		r.deliveryRoot = delivWT
+		r.deliveryBranch = effBranch
+	} else {
+		r.deliveryRoot = r.Workspace
+	}
+
 	for _, a := range agents {
 		adkName := names.ADK(a.Name)
 		branch := names.Branch(key, a.Name, objective)
 		root := r.Workspace
 		if repo {
-			wt, err := r.Git.EnsureWorktree(ctx, r.Workspace, adkName, branch)
+			wt, err := gitx.AlignDeveloperWorktree(ctx, r.Git, r.Workspace, adkName, branch, r.deliveryBranch)
 			if err != nil {
 				return nil, fmt.Errorf("worktree de %s: %w", a.Name, err)
 			}
 			root = wt
 		}
 		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch})
-	}
-	_ = gitx.EnsureHiveIgnore(r.Workspace)
-	if repo {
-		_, wt, err := r.Git.Integrate(ctx, r.Workspace, nil)
-		if err == nil {
-			r.integration = wt
-		}
 	}
 	return envs, nil
 }
@@ -394,8 +426,15 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	}
 	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
+	qaRoot := r.Workspace
+	if r.deliveryRoot != "" {
+		qaRoot = r.deliveryRoot
+	} else if r.integration != "" {
+		qaRoot = r.integration
+	}
+
 	var steps []agent.Agent
-	addGroup := func(output string, agents []team.Agent, root, extra string) error {
+	addGroup := func(output string, agents []team.Agent, root, extra string, disableGitWrite bool) error {
 		for i, a := range agents {
 			name := unique(a.Name)
 			keyName := output
@@ -405,7 +444,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 				keyName = fmt.Sprintf("%s_%d", output, i+1)
 			}
 			stateKeys = append(stateKeys, keyName)
-			ag, err := r.llm(ctx, a, name, keyName, root, extra, key, stateKeys, false)
+			ag, err := r.llm(ctx, a, name, keyName, root, extra, key, stateKeys, false, disableGitWrite)
 			if err != nil {
 				return err
 			}
@@ -416,17 +455,17 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	}
 	if r.chiefPlan != "" {
 		// Chief already planned and sliced tasks (via auto triage or plan checkpoint); Tech Lead refines technical guardrails if needed.
-		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe."); err != nil {
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe.", true); err != nil {
 			return nil, nil, err
 		}
 	} else {
-		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
+		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), qaRoot, "", true); err != nil {
 			return nil, nil, err
 		}
-		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, ""); err != nil {
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, "", true); err != nil {
 			return nil, nil, err
 		}
-		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
+		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), qaRoot, "", true); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -437,13 +476,13 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho é %s.\nSua branch é %s.\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
+		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {
 			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
 		}
-		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false)
+		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -453,19 +492,15 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	}
 	parallel, err := parallelagent.New(parallelagent.Config{AgentConfig: agent.Config{
 		Name:        "parallel_developers",
-		Description: "Desenvolvedores trabalhando em paralelo, cada um na sua worktree.",
+		Description: "Desenvolvedores trabalhando em paralelo, cada um na sua worktree isolada.",
 		SubAgents:   parallelSubs,
 	}})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	qaRoot := r.Workspace
-	if r.integration != "" {
-		qaRoot = r.integration
-	}
 	qaAgents := r.Team.ByRole(team.RoleQA)
-	qaExtra := "Worktrees para revisar:\n" + strings.Join(wtLines, "\n") + "\nA revisão roda na worktree de integração: " + qaRoot
+	qaExtra := "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
 	var qaSubs []agent.Agent
 	for i, a := range qaAgents {
 		name := unique(a.Name)
@@ -474,7 +509,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 			report = fmt.Sprintf("qa_report_%d", i+1)
 		}
 		stateKeys = append(stateKeys, report)
-		ag, err := r.llm(ctx, a, name, report, qaRoot, qaExtra, key, stateKeys, true)
+		ag, err := r.llm(ctx, a, name, report, qaRoot, qaExtra, key, stateKeys, true, true)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -519,10 +554,17 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		chief := r.primaryChief()
 		closingName := unique(chief.Name + "_fecho")
 		closingAgent := chief
-		// Use read/diff/comment toolset on qaRoot so Closing Chief inspects the integrated diff without editing code.
-		closingAgent.Role = team.RoleTechLead
-		closingExtra := "Você é o Chefe (Fecho) encerrando a entrega após o ciclo Dev → QA.\nRevise [qa_report], [qa_approval_note], [qa_feedback] e use git_diff se necessário.\nEntregue ao usuário um resumo executivo claro em Markdown contendo:\n1. O que foi implementado/alterado por cada Dev;\n2. Resultado da revisão/testes do QA;\n3. Lista dos arquivos impactados e próximos passos."
-		ag, err := r.llm(ctx, closingAgent, closingName, "closing_summary", qaRoot, closingExtra, key, stateKeys, false)
+		// Closing Chief operates with full Chief governance (RoleProjectManager: commit/push/PR/review/merge, without write_file).
+		closingAgent.Role = team.RoleProjectManager
+		closingExtra := "Você é o Chefe (Fecho) encerrando a entrega na worktree separada (" + qaRoot + ", branch " + r.deliveryBranch + ") após aprovação do QA.\n" +
+			"GOVERNANÇA GIT & PR:\n" +
+			"- Apenas você (Chefe) ou o Arquiteto realizam commit, push e operações de Pull Request.\n"
+		if r.prNumber > 0 {
+			closingExtra += fmt.Sprintf("- Esta tarefa atende revisão do PR #%d (revisores: %s). Se houver alterações prontas, faça git_commit, git_push, comente o que foi ajustado com github_comment_pr(number=%d) e peça nova revisão com github_request_review.\n",
+				r.prNumber, strings.Join(r.prReviewers, ", "), r.prNumber)
+		}
+		closingExtra += "Revise [qa_report], [qa_approval_note], [qa_feedback] e use git_diff se necessário.\nEntregue ao usuário um resumo executivo claro em Markdown contendo:\n1. O que foi implementado/alterado;\n2. Resultado da revisão/testes do QA;\n3. Branch/PR e próximos passos."
+		ag, err := r.llm(ctx, closingAgent, closingName, "closing_summary", qaRoot, closingExtra, key, stateKeys, false, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -532,7 +574,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 	root, err := sequentialagent.New(sequentialagent.Config{AgentConfig: agent.Config{
 		Name:        "pipeline_root",
-		Description: "Pipeline do time HiveMind: planejamento, implementação paralela e QA.",
+		Description: "Pipeline do time HiveMind: planejamento, implementação paralela em worktrees e QA.",
 		SubAgents:   steps,
 	}})
 	if err != nil {
@@ -541,20 +583,24 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	return root, labels, nil
 }
 
-func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool) (agent.Agent, error) {
+func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
 	llm, err := r.modelFor(ctx, a)
 	if err != nil {
 		return nil, fmt.Errorf("modelo de %s: %w", a.Name, err)
 	}
 	roleTools, err := tools.ForRole(a.Role, tools.Deps{
-		Root:       root,
-		Allowlist:  r.Project.Settings.ShellAllowlist,
-		Confirm:    r.Confirm,
-		Git:        r.Git,
-		GitHub:     r.GitHub,
-		Jira:       r.Jira,
-		JiraKey:    jiraKey,
-		BaseBranch: r.Project.Settings.BaseBranch,
+		Root:                 root,
+		Settings:             r.Project.Settings,
+		DisableGitWrite:      disableGitWrite,
+		ReviewRequestedInObj: r.reviewRequested,
+		Allowlist:            r.Project.Settings.ShellAllowlist,
+		Confirm:              r.Confirm,
+		Approve:              r.Approve,
+		Git:                  r.Git,
+		GitHub:               r.GitHub,
+		Jira:                 r.Jira,
+		JiraKey:              jiraKey,
+		BaseBranch:           r.Project.Settings.BaseBranch,
 	})
 	if err != nil {
 		return nil, err
@@ -607,25 +653,23 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 func (r *Runner) newIntegrateAgent(devs []devEnv) (agent.Agent, error) {
 	return agent.New(agent.Config{
 		Name:        "integrate_branches",
-		Description: "Integra as branches dos desenvolvedores sem trocar o checkout do usuário.",
+		Description: "Consolida os arquivos das worktrees dos desenvolvedores na worktree de entrega sem criar commits de dev.",
 		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 			return func(yield func(*session.Event, error) bool) {
-				var branches []string
+				var devRoots []string
 				for _, dev := range devs {
-					if dev.Root == "" || dev.Branch == "" {
-						continue
+					if dev.Root != "" && dev.Root != r.deliveryRoot {
+						devRoots = append(devRoots, dev.Root)
 					}
-					_, _ = r.Git.CommitAll(ctx, dev.Root, names.CommitMessage(r.issueKey, r.objectiveText))
-					branches = append(branches, dev.Branch)
 				}
-				merged, _, err := r.Git.Integrate(ctx, r.Workspace, branches)
-				text := "Nada novo para integrar."
+				synced, err := gitx.SyncUncommittedToDelivery(ctx, r.Git, devRoots, r.deliveryRoot)
+				text := "Nada novo para consolidar."
 				delta := map[string]any{"integrate_status": ""}
 				if err != nil {
-					text = "Falha ao integrar: " + err.Error()
+					text = "Falha ao consolidar worktrees: " + err.Error()
 					delta["integrate_status"] = text
-				} else if len(merged) > 0 {
-					text = "Integrado: " + strings.Join(merged, ", ")
+				} else if len(synced) > 0 {
+					text = "Consolidado na worktree de entrega: " + strings.Join(synced, ", ")
 					delta["integrate_status"] = text
 				}
 				yield(&session.Event{
@@ -670,6 +714,17 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 					r.devSlices = strings.Split(raw, "\n|||\n")
 				}
 			}
+			if prevPR, err := got.Session.State().Get("pr_number"); err == nil && prevPR != nil {
+				r.prNumber, _ = strconv.Atoi(strings.TrimSpace(fmt.Sprint(prevPR)))
+			}
+			if prevBranch, err := got.Session.State().Get("pr_branch"); err == nil && prevBranch != nil {
+				r.prBranch = strings.TrimSpace(fmt.Sprint(prevBranch))
+			}
+			if prevRevs, err := got.Session.State().Get("pr_reviewers"); err == nil && prevRevs != nil {
+				if raw := strings.TrimSpace(fmt.Sprint(prevRevs)); raw != "" {
+					r.prReviewers = strings.Split(raw, ",")
+				}
+			}
 		}
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
@@ -681,6 +736,9 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 			"integrate_status":      "",
 			"plan_pending_approval": "",
 			"dev_slices_joined":     "",
+			"pr_number":             "",
+			"pr_branch":             "",
+			"pr_reviewers":          "",
 		}
 		if !(consumePendingPlan && isPendingPlan && r.chiefPlan != "") {
 			resetMap["chief_plan"] = ""
@@ -700,6 +758,9 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 			"integrate_status":      "",
 			"chief_plan":            "",
 			"dev_slices_joined":     "",
+			"pr_number":             "",
+			"pr_branch":             "",
+			"pr_reviewers":          "",
 			"plan_pending_approval": "",
 		},
 	})
@@ -713,47 +774,83 @@ func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key,
 	if r.integration != "" {
 		result.IntegrationBranch = gitx.IntegrationBranch
 	}
-	base := r.Project.Settings.BaseBranch
+	base := strings.TrimSpace(r.Project.Settings.BaseBranch)
 	if base == "" {
 		base = "main"
 	}
-	var notes []string
-	for _, dev := range devs {
-		result.Branches = append(result.Branches, dev.Branch)
-		if !r.Project.Settings.AutoCommit && !r.Project.Settings.AutoPR {
-			continue
-		}
-		if r.Project.Settings.AutoCommit || r.Project.Settings.AutoPR {
-			if _, err := r.Git.CommitAll(ctx, dev.Root, names.CommitMessage(key, objective)); err != nil {
-				return fmt.Errorf("commit em %s: %w", dev.Branch, err)
+
+	commitRoot := r.deliveryRoot
+	if commitRoot == "" {
+		commitRoot = r.Workspace
+	}
+	commitBranch := strings.TrimSpace(r.deliveryBranch)
+	if commitBranch == "" && r.Git.IsRepo(ctx, commitRoot) {
+		commitBranch, _ = r.Git.CurrentBranch(ctx, commitRoot)
+	}
+	if commitBranch != "" {
+		result.Branches = append(result.Branches, commitBranch)
+	} else {
+		for _, dev := range devs {
+			if dev.Branch != "" {
+				result.Branches = append(result.Branches, dev.Branch)
 			}
 		}
-		if !r.Project.Settings.AutoPR {
-			continue
-		}
-		if !r.GitHub.Enabled() {
-			return fmt.Errorf("auto_pr está ligado, mas o GitHub não está configurado")
-		}
-		if err := r.Git.Push(ctx, dev.Root, "origin", dev.Branch); err != nil {
-			return fmt.Errorf("push de %s: %w", dev.Branch, err)
-		}
-		body := fmt.Sprintf("Aberta pelo HiveMind.\n\nSessão: %s\n", result.SessionID)
-		if key != "" {
-			body += "Issue: " + key + "\n"
-		}
-		pr, err := r.GitHub.CreatePullRequest(ctx, githubx.CreatePR{
-			Title: names.PRTitle(key, objective),
-			Head:  dev.Branch,
-			Base:  base,
-			Body:  body,
-		})
-		if err != nil {
-			return fmt.Errorf("pull request de %s: %w", dev.Branch, err)
-		}
-		result.PullRequests = append(result.PullRequests, pr)
-		notes = append(notes, pr.URL)
-		fmt.Fprintf(r.Out, "Pull request: %s\n", pr.URL)
 	}
+
+	var notes []string
+	if (r.Project.Settings.AutoCommit || r.Project.Settings.AutoPR || r.prNumber > 0) && r.Git.IsRepo(ctx, commitRoot) {
+		if _, err := r.Git.CommitAll(ctx, commitRoot, names.CommitMessage(key, objective)); err != nil {
+			return fmt.Errorf("commit do Chefe/Arquiteto em %s: %w", commitBranch, err)
+		}
+		gitx.UpdateIntegrationRef(ctx, r.Git, r.Workspace, commitRoot)
+	}
+
+	hasOrigin := false
+	if _, remErr := r.Git.RemoteURL(ctx, r.Workspace); remErr == nil {
+		hasOrigin = true
+	}
+
+	if r.prNumber > 0 && r.GitHub != nil && r.GitHub.Enabled() {
+		if hasOrigin && commitBranch != "" {
+			if err := r.Git.Push(ctx, commitRoot, "origin", commitBranch); err != nil {
+				return fmt.Errorf("push de revisão %s: %w", commitBranch, err)
+			}
+		}
+		if len(r.prReviewers) > 0 {
+			_ = r.GitHub.RequestReviewers(ctx, r.prNumber, r.prReviewers)
+		}
+	} else if r.Project.Settings.AutoPR && commitBranch != "" {
+		if !hasOrigin || r.GitHub == nil || !r.GitHub.Enabled() {
+			fmt.Fprintf(r.Err, "aviso: auto_pr está ativo, mas remote origin / GitHub não está configurado; alterações commitadas na worktree isolada (%s)\n", commitBranch)
+		} else {
+			if err := r.Git.Push(ctx, commitRoot, "origin", commitBranch); err != nil {
+				return fmt.Errorf("push de %s: %w", commitBranch, err)
+			}
+			var pr githubx.PullRequest
+			if existing, _ := r.GitHub.FindOpenPullRequestByHead(ctx, commitBranch); existing != nil {
+				pr = *existing
+			} else {
+				body := fmt.Sprintf("Aberta pelo Chefe/Arquiteto HiveMind a partir de worktree isolada.\n\nSessão: %s\n", result.SessionID)
+				if key != "" {
+					body += "Issue: " + key + "\n"
+				}
+				createdPR, err := r.GitHub.CreatePullRequest(ctx, githubx.CreatePR{
+					Title: names.PRTitle(key, objective),
+					Head:  commitBranch,
+					Base:  base,
+					Body:  body,
+				})
+				if err != nil {
+					return fmt.Errorf("pull request de %s: %w", commitBranch, err)
+				}
+				pr = createdPR
+			}
+			result.PullRequests = append(result.PullRequests, pr)
+			notes = append(notes, pr.URL)
+			fmt.Fprintf(r.Out, "Pull request: %s\n", pr.URL)
+		}
+	}
+
 	if key != "" && r.Jira != nil && r.Jira.Enabled() {
 		body := fmt.Sprintf("HiveMind concluiu a sessão %s.", result.SessionID)
 		if len(result.Branches) > 0 {
@@ -955,8 +1052,11 @@ func (r *Runner) primaryChief() team.Agent {
 }
 
 type delegateArgs struct {
-	Plan     string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
-	DevTasks []string `json:"dev_tasks" jsonschema:"Lista de subtarefas sem sobreposição de arquivos, uma por desenvolvedor do time na ordem dos devs."`
+	Plan      string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	DevTasks  []string `json:"dev_tasks" jsonschema:"Lista de subtarefas sem sobreposição de arquivos, uma por desenvolvedor do time na ordem dos devs."`
+	PRNumber  int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
+	PRBranch  string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
+	Reviewers []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
 }
 
 type delegateResult struct {
@@ -969,20 +1069,21 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if err != nil {
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}
-	// Read-only inspection tools + Jira/GitHub read so Triage Chief never edits files directly.
-	readChiefRole := team.RoleTechLead
-	if team.NormalizeRole(chief.Role) == team.RoleProjectManager {
-		readChiefRole = team.RoleProjectManager
-	}
-	baseTools, err := tools.ForRole(readChiefRole, tools.Deps{
-		Root:       r.Workspace,
-		Allowlist:  r.Project.Settings.ShellAllowlist,
-		Confirm:    r.Confirm,
-		Git:        r.Git,
-		GitHub:     r.GitHub,
-		Jira:       r.Jira,
-		JiraKey:    jiraKey,
-		BaseBranch: r.Project.Settings.BaseBranch,
+	// Triage Chief uses RoleProjectManager with DisableGitWrite=true so it never edits or commits on main workspace,
+	// while retaining full PR inspection, comment, review, request-review, and merge governance tools.
+	baseTools, err := tools.ForRole(team.RoleProjectManager, tools.Deps{
+		Root:                 r.Workspace,
+		Settings:             r.Project.Settings,
+		DisableGitWrite:      true,
+		ReviewRequestedInObj: r.reviewRequested,
+		Allowlist:            r.Project.Settings.ShellAllowlist,
+		Confirm:              r.Confirm,
+		Approve:              r.Approve,
+		Git:                  r.Git,
+		GitHub:               r.GitHub,
+		Jira:                 r.Jira,
+		JiraKey:              jiraKey,
+		BaseBranch:           r.Project.Settings.BaseBranch,
 	})
 	if err != nil {
 		return false, "", err
@@ -1001,11 +1102,14 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if runMode != "direct" {
 		delegateTool, err := functiontool.New(functiontool.Config{
 			Name:        "delegate_to_squad",
-			Description: "Registra o plano técnico e as subtarefas por desenvolvedor para acionar o pipeline Dev → QA → Chefe.",
+			Description: "Registra o plano técnico e as subtarefas por desenvolvedor para acionar o pipeline em worktree separada (Dev → QA → Chefe).",
 		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
 			delegated = true
 			r.chiefPlan = strings.TrimSpace(args.Plan)
 			r.devSlices = append([]string(nil), args.DevTasks...)
+			r.prNumber = args.PRNumber
+			r.prBranch = strings.TrimSpace(args.PRBranch)
+			r.prReviewers = append([]string(nil), args.Reviewers...)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
@@ -1020,6 +1124,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				var hb strings.Builder
 				if r.chiefPlan != "" {
 					hb.WriteString(r.chiefPlan)
+				}
+				if r.prNumber > 0 {
+					fmt.Fprintf(&hb, "\n- **PR Alvo**: #%d (%s)", r.prNumber, r.prBranch)
 				}
 				for i, slice := range r.devSlices {
 					dn := fmt.Sprintf("dev_%d", i+1)
@@ -1052,7 +1159,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			if runMode == "plan" {
 				return delegateResult{Status: "plano registrado; aguardando aprovação do usuário antes de acionar os desenvolvedores"}, nil
 			}
-			return delegateResult{Status: "delegado ao time de desenvolvimento e QA"}, nil
+			return delegateResult{Status: "delegado ao time de desenvolvimento e QA em worktree separada"}, nil
 		})
 		if err != nil {
 			return false, "", err
@@ -1060,30 +1167,39 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		allTools = append(baseTools, delegateTool)
 	}
 
+	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
+- Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
+- Só aprove ou comente um PR se houver pedido de revisão OU se estiver respondendo em um PR de nossa própria autoria.
+- Se um revisor pediu mudanças em um PR nosso: leia com github_get_pr e despache para a equipe com delegate_to_squad informando pr_number, pr_branch e reviewers (quem pediu mudança); ao terminar, o Chefe comita, comenta as mudanças e pede nova revisão.
+- Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.`
+
 	var triageInstr string
 	switch runMode {
 	case "direct":
 		triageInstr = fmt.Sprintf(`%s
 
 Você é o Chefe da equipe (%s) operando em MODO DIRETO (1 agente, sem delegar ao squad).
-Inspecione arquivos/git se necessário com read_file/list_dir/git_status e responda diretamente ao usuário com clareza, profundidade técnica e objetividade.`,
-			chief.Instructions, chief.Name)
+Inspecione arquivos/git/PRs se necessário e responda diretamente ao usuário com clareza, profundidade técnica e objetividade.
+%s`,
+			chief.Instructions, chief.Name, govRules)
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
 
 Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO (Human-in-the-Loop). Desenvolvedores disponíveis (%d): %s.
-1. Inspecione os arquivos relevantes do projeto com read_file/list_dir/git_status.
+1. Inspecione os arquivos/PRs relevantes do projeto com read_file/list_dir/git_status/github_get_pr.
 2. Elabore um plano arquitetural claro e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (uma subtarefa sem conflito de arquivos por desenvolvedor em [%s]).
-3. Apresente um resumo objetivo do plano ao usuário informando que a execução iniciará assim que ele aprovar.`,
-			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+3. Apresente um resumo objetivo do plano ao usuário informando que a execução iniciará em worktree separada assim que ele aprovar.
+%s`,
+			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "), govRules)
 	default:
 		triageInstr = fmt.Sprintf(`%s
 
 Você é o Chefe da equipe (%s). Desenvolvedores disponíveis (%d): %s.
 REGRA DE TRIAGEM:
-1. Se o usuário fez uma pergunta, pediu análise/diagnóstico (incluindo análise de prints/imagens anexadas), revisão ou sugestão SEM pedir para implementar/alterar arquivos agora: inspecione o que precisar com read_file/list_dir/git_status, responda diretamente de forma clara e completa e NÃO chame delegate_to_squad.
-2. Se o usuário pediu para criar, editar, refatorar ou corrigir código/arquivos: monte um plano objetivo e chame delegate_to_squad passando "plan" e "dev_tasks" (uma subtarefa por desenvolvedor em [%s], dividindo arquivos distintos para não haver conflito de merge), e avise brevemente o usuário que acionou a equipe.`,
-			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+1. Se o usuário fez uma pergunta, pediu análise/diagnóstico, revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado pelo revisor (github_merge_pr) SEM precisar alterar código agora: execute as ferramentas de leitura/PR cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
+2. Se o usuário pediu para criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso: monte um plano objetivo e chame delegate_to_squad passando "plan", "dev_tasks" (uma subtarefa por desenvolvedor em [%s]) e, se for revisão de PR existente, "pr_number", "pr_branch" e "reviewers".
+%s`,
+			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "), govRules)
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")

@@ -17,14 +17,14 @@ func newTeamCmd() *cobra.Command {
 		Use:   "team",
 		Short: "Cria e seleciona times do projeto",
 	}
-	cmd.AddCommand(newTeamCreate(), newTeamList(), newTeamUse(), newTeamShow())
+	cmd.AddCommand(newTeamCreate(), newTeamList(), newTeamUse(), newTeamShow(), newTeamPermission())
 	return cmd
 }
 
 func newTeamCreate() *cobra.Command {
-	var name, description, model, provider string
+	var name, description, model, provider, permissionMode string
 	var devs int
-	var jira, autoCommit, autoPR bool
+	var jira, autoCommit, autoPR, worktrees bool
 	var loops int
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -41,7 +41,7 @@ func newTeamCreate() *cobra.Command {
 					return loadErr
 				}
 				fresh = true
-				existing = team.File{}
+				existing = team.File{Settings: team.DefaultSettings()}
 			}
 			if !cmd.Flags().Changed("model") && !cmd.Flags().Changed("provider") {
 				provider, model = modelx.DefaultProviderModel()
@@ -102,6 +102,9 @@ func newTeamCreate() *cobra.Command {
 			}
 			team.UpsertTeam(&existing, created)
 			if fresh {
+				wt := worktrees
+				existing.Settings.Worktrees = &wt
+				existing.Settings.PermissionMode = team.NormalizePermissionMode(permissionMode)
 				existing.Settings.JiraEnabled = jira
 				existing.Settings.AutoCommit = autoCommit
 				existing.Settings.AutoPR = autoPR
@@ -119,11 +122,38 @@ func newTeamCreate() *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "", "Modelo. Vazio usa agy quando o CLI está no PATH e não há GOOGLE_API_KEY")
 	cmd.Flags().StringVar(&provider, "provider", "", "Provedor: agy, gemini, vertex, anthropic ou openai. Vazio segue o modelo")
 	cmd.Flags().IntVar(&devs, "devs", 1, "Quantidade de desenvolvedores")
+	cmd.Flags().BoolVar(&worktrees, "worktrees", true, "Trabalhar sempre em worktree separada")
+	cmd.Flags().StringVar(&permissionMode, "permission-mode", team.PermissionGoverned, "Modo de permissão: governed, auto_edit ou full_access")
 	cmd.Flags().BoolVar(&jira, "jira", true, "Habilitar ferramentas Jira neste projeto")
-	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "Commit automático ao final da execução")
-	cmd.Flags().BoolVar(&autoPR, "auto-pr", false, "Abrir pull request ao final da execução")
+	cmd.Flags().BoolVar(&autoCommit, "auto-commit", true, "Commit automático pelo Chefe/Arquiteto na worktree de entrega")
+	cmd.Flags().BoolVar(&autoPR, "auto-pr", true, "Abrir pull request automaticamente a partir da worktree de entrega")
 	cmd.Flags().IntVar(&loops, "max-qa-loops", 3, "Máximo de voltas do QA")
 	return cmd
+}
+
+func newTeamPermission() *cobra.Command {
+	return &cobra.Command{
+		Use:   "permission [governed|auto_edit|full_access]",
+		Short: "Exibe ou altera o nível de autonomia e permissão do projeto",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, f, err := loadProject(cmd)
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "Modo de permissão atual: %s\n", f.Settings.EffectivePermissionMode())
+				return nil
+			}
+			mode := team.NormalizePermissionMode(args[0])
+			f.Settings.PermissionMode = mode
+			if err := team.Save(dir, f); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Modo de permissão atualizado para: %s\n", mode)
+			return nil
+		},
+	}
 }
 
 func newTeamList() *cobra.Command {
@@ -188,8 +218,9 @@ func newTeamShow() *cobra.Command {
 			if t.Description != "" {
 				fmt.Fprintf(out, "Descrição: %s\n", t.Description)
 			}
-			fmt.Fprintf(out, "Jira: %s | auto-commit: %s | auto-pr: %s | voltas do QA: %d | base: %s\n",
-				simNao(f.Settings.JiraEnabled), simNao(f.Settings.AutoCommit), simNao(f.Settings.AutoPR), f.Settings.MaxQALoops, f.Settings.BaseBranch)
+			wtOn := f.Settings.Worktrees == nil || *f.Settings.Worktrees
+			fmt.Fprintf(out, "Permissão: %s | worktrees: %s | Jira: %s | auto-commit: %s | auto-pr: %s | voltas do QA: %d | base: %s | homolog: %s\n",
+				f.Settings.EffectivePermissionMode(), simNao(wtOn), simNao(f.Settings.JiraEnabled), simNao(f.Settings.AutoCommit), simNao(f.Settings.AutoPR), f.Settings.MaxQALoops, f.Settings.BaseBranch, f.Settings.HomologBranch)
 			for _, a := range t.Agents {
 				fmt.Fprintf(out, "- %s  papel=%s  provedor=%s  modelo=%s\n", a.Name, a.Role, a.Provider, a.Model)
 			}

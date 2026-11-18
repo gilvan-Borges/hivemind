@@ -31,12 +31,18 @@ export interface TeamSpec {
   agents: TeamAgent[];
 }
 
+export type PermissionMode = "governed" | "auto_edit" | "full_access";
+
 export interface TeamSettings {
+  permission_mode?: PermissionMode;
   jira_enabled: boolean;
   jira_project?: string;
   worktrees?: boolean;
   auto_commit: boolean;
   auto_pr: boolean;
+  homolog_branch?: string;
+  protected_branches?: string[];
+  require_main_merge_approval?: boolean;
   base_branch: string;
   max_tokens?: number;
 }
@@ -96,11 +102,12 @@ export type RunMode = "auto" | "direct" | "plan" | "squad";
 
 export interface ChatMessage {
   id: string;
-  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff" | "plan";
+  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff" | "plan" | "approval";
   label: string;
   text: string;
   active?: boolean;
   approved?: boolean;
+  resolved?: "approved" | "denied";
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
@@ -261,12 +268,14 @@ export interface WizardInputPayload {
   devCount: number;
   defaultModel: string;
   agentModels?: Record<string, string>;
+  permissionMode?: PermissionMode;
   worktrees: boolean;
   autoCommit: boolean;
   autoPR: boolean;
   jiraEnabled: boolean;
   jiraProject: string;
   baseBranch?: string;
+  homologBranch?: string;
   maxTokens: number;
 }
 
@@ -288,6 +297,8 @@ export interface WailsBackendApp {
   SaveTeamWizard(workspace: string, input: WizardInputPayload): Promise<TeamFile>;
   SetActiveTeam(workspace: string, teamName: string): Promise<TeamFile>;
   UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
+  UpdatePermissionMode(workspace: string, permissionMode: string): Promise<TeamFile>;
+  RespondApproval(laneID: string, approved: boolean): Promise<boolean>;
   EnsureTeamMemory(workspace: string): Promise<string>;
   GetDiff(workspace: string): Promise<FileDiff[]>;
   CommitChanges(workspace: string, message: string, push: boolean): Promise<string>;

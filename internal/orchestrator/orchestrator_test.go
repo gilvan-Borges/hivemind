@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
@@ -157,14 +159,26 @@ func TestPipelineWithMocks(t *testing.T) {
 			t.Fatalf("%s = %q %v\nsaída:\n%s", path, data, err, out.String())
 		}
 	}
-	logA, err := g.Run(ctx, filepath.Join(repo, ".hivemind", "worktrees", "dev_1"), "log", "-1", "--pretty=%s")
-	if err != nil || !strings.Contains(logA, "PROJ-1") {
-		t.Fatalf("commit = %q %v", logA, err)
+	deliveryWT := filepath.Join(repo, ".hivemind", "worktrees", "_integracao")
+	for _, rel := range []string{"a.txt", "b.txt"} {
+		data, err := os.ReadFile(filepath.Join(deliveryWT, rel))
+		if err != nil || string(data) != "olá\n" {
+			t.Fatalf("consolidated %s = %q %v", rel, data, err)
+		}
+	}
+	// Developers must NOT create commits in their draft worktrees; only Chief/Architect commits on deliveryWT.
+	devLog, err := g.Run(ctx, filepath.Join(repo, ".hivemind", "worktrees", "dev_1"), "log", "-1", "--pretty=%s")
+	if err != nil || strings.Contains(devLog, "PROJ-1") {
+		t.Fatalf("dev worktree should not have committed PROJ-1: %q %v", devLog, err)
+	}
+	logDelivery, err := g.Run(ctx, deliveryWT, "log", "-1", "--pretty=%s")
+	if err != nil || !strings.Contains(logDelivery, "PROJ-1") {
+		t.Fatalf("expected Chief/Architect commit on deliveryWT, got %q %v", logDelivery, err)
 	}
 	if len(jira.subs) != 1 || jira.subs[0] != "Implementar healthcheck" {
 		t.Fatalf("subtarefas = %#v", jira.subs)
 	}
-	if len(jira.comments) != 1 || !strings.Contains(jira.comments[0], result.SessionID) || !strings.Contains(jira.comments[0], "hivemind/proj-1/dev_1") {
+	if len(jira.comments) != 1 || !strings.Contains(jira.comments[0], result.SessionID) || !strings.Contains(jira.comments[0], "hivemind/proj-1/entrega") {
 		t.Fatalf("comentário = %#v", jira.comments)
 	}
 	if !strings.Contains(out.String(), "Gerente de projeto") || !strings.Contains(out.String(), "ferramenta write_file") {
@@ -621,5 +635,348 @@ func TestWorktreesSettingDisabledWritesDirectlyToWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, "direto.txt")); err != nil {
 		t.Fatalf("expected direto.txt written directly in workspace when worktrees=false: %v", err)
+	}
+}
+
+type fakeGitHub struct {
+	mu                 sync.Mutex
+	me                 string
+	prs                map[int]*githubx.PullRequestDetail
+	comments           map[int][]string
+	requestedReviewers map[int][]string
+	merged             map[int]bool
+}
+
+func (f *fakeGitHub) Enabled() bool                               { return true }
+func (f *fakeGitHub) CurrentUser(context.Context) (string, error) { return f.me, nil }
+func (f *fakeGitHub) CreatePullRequest(_ context.Context, req githubx.CreatePR) (githubx.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	num := len(f.prs) + 1
+	if f.prs == nil {
+		f.prs = map[int]*githubx.PullRequestDetail{}
+	}
+	f.prs[num] = &githubx.PullRequestDetail{
+		Number:  num,
+		Title:   req.Title,
+		Body:    req.Body,
+		URL:     fmt.Sprintf("https://github.com/acme/app/pull/%d", num),
+		State:   "open",
+		Author:  f.me,
+		HeadRef: req.Head,
+		BaseRef: req.Base,
+	}
+	return githubx.PullRequest{Number: num, Title: req.Title, URL: f.prs[num].URL}, nil
+}
+func (f *fakeGitHub) FindOpenPullRequestByHead(_ context.Context, head string) (*githubx.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, pr := range f.prs {
+		if pr.State == "open" && pr.HeadRef == head {
+			return &githubx.PullRequest{Number: pr.Number, Title: pr.Title, URL: pr.URL}, nil
+		}
+	}
+	return nil, nil
+}
+func (f *fakeGitHub) GetPullRequest(_ context.Context, number int) (githubx.PullRequestDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pr, ok := f.prs[number]
+	if !ok {
+		return githubx.PullRequestDetail{}, fmt.Errorf("PR #%d não encontrado", number)
+	}
+	cp := *pr
+	cp.RequestedReviewers = append([]string(nil), pr.RequestedReviewers...)
+	cp.Reviews = append([]githubx.PRReview(nil), pr.Reviews...)
+	return cp, nil
+}
+func (f *fakeGitHub) RequestReviewers(_ context.Context, number int, reviewers []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.requestedReviewers == nil {
+		f.requestedReviewers = map[int][]string{}
+	}
+	f.requestedReviewers[number] = append(f.requestedReviewers[number], reviewers...)
+	if pr, ok := f.prs[number]; ok {
+		pr.RequestedReviewers = append([]string(nil), reviewers...)
+	}
+	return nil
+}
+func (f *fakeGitHub) SubmitReview(_ context.Context, number int, event, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pr, ok := f.prs[number]; ok {
+		pr.Reviews = append(pr.Reviews, githubx.PRReview{Author: f.me, State: event, Body: body})
+	}
+	return nil
+}
+func (f *fakeGitHub) MergePullRequest(_ context.Context, number int, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.merged == nil {
+		f.merged = map[int]bool{}
+	}
+	f.merged[number] = true
+	if pr, ok := f.prs[number]; ok {
+		pr.Merged = true
+		pr.State = "closed"
+	}
+	return nil
+}
+func (f *fakeGitHub) CommentOnIssue(_ context.Context, number int, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.comments == nil {
+		f.comments = map[int][]string{}
+	}
+	f.comments[number] = append(f.comments[number], body)
+	return nil
+}
+func (f *fakeGitHub) ListIssueComments(context.Context, int) ([]githubx.Comment, error) {
+	return nil, nil
+}
+func (f *fakeGitHub) CIStatus(context.Context, string) (string, error) { return "success", nil }
+
+func TestPRReviewCycleHomologAutoMergeAndMainApprovalGate(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não está instalado")
+	}
+	ctx := context.Background()
+	g := gitx.Local{}
+
+	// Create bare origin + local clone so git push works end-to-end.
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, g, ctx, origin, "init", "--bare")
+
+	repo := t.TempDir()
+	mustGit(t, g, ctx, repo, "init")
+	mustGit(t, g, ctx, repo, "config", "user.email", "hivemind@example.com")
+	mustGit(t, g, ctx, repo, "config", "user.name", "HiveMind Test")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	mustGit(t, g, ctx, repo, "remote", "add", "origin", origin)
+	_ = os.WriteFile(filepath.Join(repo, "auth.go"), []byte("package auth\n"), 0o644)
+	mustGit(t, g, ctx, repo, "add", "auth.go")
+	mustGit(t, g, ctx, repo, "commit", "-m", "init")
+	mustGit(t, g, ctx, repo, "branch", "hivemind/pr-1/entrega", "HEAD")
+
+	gh := &fakeGitHub{
+		me: "gilvan",
+		prs: map[int]*githubx.PullRequestDetail{
+			1: {
+				Number:  1,
+				Title:   "feat: login",
+				URL:     "https://github.com/acme/app/pull/1",
+				State:   "open",
+				Author:  "gilvan",
+				HeadRef: "hivemind/pr-1/entrega",
+				BaseRef: "homolog",
+				Reviews: []githubx.PRReview{
+					{Author: "fulano", State: "CHANGES_REQUESTED", Body: "validar expiração do token"},
+				},
+			},
+			2: {
+				Number:  2,
+				Title:   "release: main",
+				URL:     "https://github.com/acme/app/pull/2",
+				State:   "open",
+				Author:  "gilvan",
+				HeadRef: "hivemind/pr-2/entrega",
+				BaseRef: "main",
+				Reviews: []githubx.PRReview{
+					{Author: "fulano", State: "APPROVED", Body: "LGTM"},
+				},
+			},
+		},
+	}
+
+	squad := team.DefaultTeam("gov", "", "scripted", "gemini", 1)
+	project := team.File{
+		Active:   squad.Name,
+		Settings: team.DefaultSettings(),
+		Teams:    []team.Team{squad},
+	}
+	project.Normalize()
+
+	// Step 1: PR #1 has CHANGES_REQUESTED from fulano -> Chief reads PR #1, dispatches Squad ->
+	// Dev tries git commit via shell (blocked!), writes fix -> QA approves -> Closing Chief commits, pushes, comments, and re-requests fulano!
+	var devCommitBlocked bool
+	pmStep := 0
+	r1 := &Runner{
+		Workspace:          repo,
+		Project:            project,
+		Team:               squad,
+		Git:                g,
+		GitHub:             gh,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, _ int) *model.LLMResponse {
+				pmStep++
+				switch pmStep {
+				case 1:
+					return modelx.FunctionCall("github_get_pr", "gp1", map[string]any{"number": 1})
+				case 2:
+					return modelx.FunctionCall("delegate_to_squad", "del1", map[string]any{
+						"plan":      "Validar expiração do token em auth.go",
+						"dev_tasks": []any{"atualizar auth.go"},
+						"pr_number": 1,
+						"pr_branch": "hivemind/pr-1/entrega",
+						"reviewers": []any{"fulano"},
+					})
+				case 3:
+					return modelx.Text("Despachado para a equipe.")
+				case 4:
+					return modelx.FunctionCall("git_commit", "gc1", map[string]any{"message": "fix: validar expiração conforme revisão"})
+				case 5:
+					return modelx.FunctionCall("git_push", "gpush1", map[string]any{})
+				case 6:
+					return modelx.FunctionCall("github_comment_pr", "gcom1", map[string]any{"number": 1, "body": "Ajustada a validação de expiração; solicitando nova revisão."})
+				case 7:
+					return modelx.FunctionCall("github_request_review", "greq1", map[string]any{"number": 1, "reviewers": []any{"fulano"}})
+				default:
+					return modelx.Text("Mudanças commitadas, comentadas no PR #1 e revisão solicitada novamente ao fulano.")
+				}
+			}},
+			"tech_lead": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse { return modelx.Text("ok") }},
+			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
+				switch call {
+				case 1:
+					return modelx.FunctionCall("run_shell", "sh1", map[string]any{"command": `git commit -m "tentativa indevida"`})
+				case 2:
+					for _, c := range req.Contents {
+						for _, p := range c.Parts {
+							if p.FunctionResponse != nil && strings.Contains(fmt.Sprint(p.FunctionResponse.Response), "apenas o Chefe ou o Arquiteto") {
+								devCommitBlocked = true
+							}
+						}
+					}
+					return modelx.FunctionCall("write_file", "wf1", map[string]any{"path": "auth.go", "content": "package auth\nfunc Valid() bool { return true }\n"})
+				default:
+					return modelx.Text("auth.go ajustado")
+				}
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "testes ok"})
+				}
+				return modelx.Text("aprovado")
+			}},
+		},
+	}
+
+	if _, err := r1.Run(ctx, Request{Objective: "verifique o PR 1 que fulano revisou e pediu mudança"}); err != nil {
+		t.Fatalf("PR review fix cycle failed: %v", err)
+	}
+	if !devCommitBlocked {
+		t.Fatal("expected developer git commit via run_shell to be blocked by governance")
+	}
+	if len(gh.comments[1]) == 0 || len(gh.requestedReviewers[1]) == 0 {
+		t.Fatalf("expected PR #1 comment and re-requested reviewer fulano: comments=%v reviewers=%v", gh.comments[1], gh.requestedReviewers[1])
+	}
+
+	// Step 2: Fulano now approves PR #1 (target = homolog) -> Chief merges automatically WITHOUT asking user permission!
+	gh.prs[1].RequestedReviewers = nil
+	gh.prs[1].Reviews = append(gh.prs[1].Reviews, githubx.PRReview{Author: "fulano", State: "APPROVED", Body: "Perfeito!"})
+	askedUserForHomolog := false
+	rHomolog := &Runner{
+		Workspace:    repo,
+		Project:      project,
+		Team:         squad,
+		Git:          g,
+		GitHub:       gh,
+		EnableTriage: true,
+		Approve: func(string) bool {
+			askedUserForHomolog = true
+			return false
+		},
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("github_merge_pr", "m1", map[string]any{"number": 1})
+				}
+				return modelx.Text("PR #1 mesclado em homolog.")
+			}},
+		},
+	}
+	if _, err := rHomolog.Run(ctx, Request{Objective: "fulano aprovou o PR 1, mescle"}); err != nil {
+		t.Fatalf("homolog merge failed: %v", err)
+	}
+	if askedUserForHomolog || !gh.merged[1] {
+		t.Fatalf("expected homolog merge without user prompt: asked=%v merged=%v", askedUserForHomolog, gh.merged[1])
+	}
+
+	// Step 3A: PR #2 targets main -> must ask user permission; when denied, merge MUST NOT happen!
+	askedUserForMain := false
+	rMainDenied := &Runner{
+		Workspace:    repo,
+		Project:      project,
+		Team:         squad,
+		Git:          g,
+		GitHub:       gh,
+		EnableTriage: true,
+		Approve: func(string) bool {
+			askedUserForMain = true
+			return false
+		},
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("github_merge_pr", "m2", map[string]any{"number": 2})
+				}
+				return modelx.Text("Aguardando sua permissão para mesclar na main.")
+			}},
+		},
+	}
+	if _, err := rMainDenied.Run(ctx, Request{Objective: "mesclar PR 2 na main"}); err != nil {
+		t.Fatal(err)
+	}
+	if !askedUserForMain || gh.merged[2] {
+		t.Fatalf("expected main merge blocked until user approves: asked=%v merged=%v", askedUserForMain, gh.merged[2])
+	}
+
+	// Step 3B: With full_access permission mode in Settings, main merge proceeds without prompting!
+	fullProject := project
+	fullProject.Settings.PermissionMode = team.PermissionFullAccess
+	promptedInFullAccess := false
+	rMainFull := &Runner{
+		Workspace:    repo,
+		Project:      fullProject,
+		Team:         squad,
+		Git:          g,
+		GitHub:       gh,
+		EnableTriage: true,
+		Approve: func(string) bool {
+			promptedInFullAccess = true
+			return false
+		},
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("github_merge_pr", "m3", map[string]any{"number": 2})
+				}
+				return modelx.Text("PR #2 mesclado na main com full_access.")
+			}},
+		},
+	}
+	if _, err := rMainFull.Run(ctx, Request{Objective: "mesclar PR 2 na main"}); err != nil {
+		t.Fatal(err)
+	}
+	if promptedInFullAccess || !gh.merged[2] {
+		t.Fatalf("expected full_access to merge main without prompt: prompted=%v merged=%v", promptedInFullAccess, gh.merged[2])
 	}
 }
