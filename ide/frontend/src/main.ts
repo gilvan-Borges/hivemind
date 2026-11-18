@@ -1,3 +1,4 @@
+import "@fontsource-variable/material-symbols-outlined";
 import "./styles.css";
 import { highlightCode } from "./highlighter";
 import { fileBadge, icons } from "./icons";
