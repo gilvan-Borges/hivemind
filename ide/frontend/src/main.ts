@@ -61,6 +61,7 @@ const state = {
   recent: [] as string[],
   models: [] as AgyModel[],
   agyStatus: null as AgyStatus | null,
+  openCodeGoModels: [] as AgyModel[],
   openCodeModels: [] as AgyModel[],
   openCodeStatus: null as OpenCodeStatus | null,
   ghStatus: null as GitHubStatus | null,
@@ -596,6 +597,9 @@ async function openOpenCodeModal() {
   try {
     const res = await backend.BootstrapOpenCode(true);
     state.openCodeStatus = res.status;
+    if (res.goModels && res.goModels.length > 0) {
+      state.openCodeGoModels = res.goModels;
+    }
     if (res.models && res.models.length > 0) {
       state.openCodeModels = res.models;
     }
@@ -1111,11 +1115,11 @@ function updateStatusBar() {
       ocEl.textContent = "opencode: …";
       ocEl.style.color = "";
     } else if (oc.configured) {
-      ocEl.textContent = `opencode: token ok (${state.openCodeModels.length})`;
+      ocEl.textContent = `opencode: Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length}`;
       ocEl.style.color = "var(--green)";
       ocEl.title = oc.detail;
     } else {
-      ocEl.textContent = `opencode: configurar token (${state.openCodeModels.length})`;
+      ocEl.textContent = `opencode: configurar token (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
       ocEl.style.color = "var(--text-dim)";
       ocEl.title = oc.detail || "Clique para configurar OPENCODE_API_KEY";
     }
@@ -1332,6 +1336,7 @@ async function boot() {
     state.recent = init.recentProjects || [];
     state.models = init.models || [];
     if (init.agyStatus?.Found) state.agyStatus = init.agyStatus;
+    if (init.openCodeGoModels && init.openCodeGoModels.length > 0) state.openCodeGoModels = init.openCodeGoModels;
     if (init.openCodeModels && init.openCodeModels.length > 0) state.openCodeModels = init.openCodeModels;
     if (init.openCodeStatus && (init.openCodeStatus.configured || init.openCodeStatus.modelCount > 0)) {
       state.openCodeStatus = init.openCodeStatus;
@@ -1366,6 +1371,9 @@ function bootstrapAsync(rootDir?: string) {
 
   backend.BootstrapOpenCode?.(false).then((res) => {
     state.openCodeStatus = res.status;
+    if (res.goModels && res.goModels.length > 0) {
+      state.openCodeGoModels = res.goModels;
+    }
     if (res.models && res.models.length > 0) {
       state.openCodeModels = res.models;
     }
@@ -1946,24 +1954,55 @@ function buildModelSelectOptions(currentModel: string, includeDefaultBlank = fal
   const blank = includeDefaultBlank ? `<option value="" ${!cur ? "selected" : ""}>(usar padrão)</option>` : "";
 
   const inAgy = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
-  const inOpenCode = state.openCodeModels.some(
+  const inOpenCodeGo = state.openCodeGoModels.some(
+    (m) => `opencode-go:${m.slug}` === cur || `opencode-go/${m.slug}` === cur
+  );
+  const inOpenCodeZen = state.openCodeModels.some(
     (m) => `opencode:${m.slug}` === cur || `opencode/${m.slug}` === cur
   );
-  const effectiveCur = cur || (!includeDefaultBlank ? (state.openCodeStatus?.configured && state.openCodeModels.length > 0 ? `opencode:${state.openCodeModels[0].slug}` : "agy") : "");
+  const effectiveCur =
+    cur ||
+    (!includeDefaultBlank
+      ? state.openCodeStatus?.configured && state.openCodeGoModels.length > 0
+        ? `opencode-go:${state.openCodeGoModels[0].slug}`
+        : state.openCodeStatus?.configured && state.openCodeModels.length > 0
+          ? `opencode:${state.openCodeModels[0].slug}`
+          : "agy"
+      : "");
+  const effectiveInList =
+    inAgy ||
+    inOpenCodeGo ||
+    inOpenCodeZen ||
+    (!cur &&
+      state.openCodeStatus?.configured &&
+      (state.openCodeGoModels.length > 0 || state.openCodeModels.length > 0));
   const head =
-    effectiveCur && !inAgy && !inOpenCode
+    effectiveCur && !effectiveInList
       ? `<option value="${escapeHtml(effectiveCur)}" selected>${escapeHtml(effectiveCur)}</option>`
       : "";
 
   const groups: string[] = [];
+  if (state.openCodeGoModels.length > 0) {
+    const goLabel = state.openCodeStatus?.configured
+      ? `OpenCode Go — Assinatura (${state.openCodeGoModels.length})`
+      : `OpenCode Go — Configure o token (${state.openCodeGoModels.length})`;
+    const opts = state.openCodeGoModels
+      .map((m) => {
+        const val = `opencode-go:${m.slug}`;
+        const sel = effectiveCur === val || cur === `opencode-go/${m.slug}` ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${sel}>opencode-go:${escapeHtml(m.slug)}</option>`;
+      })
+      .join("");
+    groups.push(`<optgroup label="${escapeHtml(goLabel)}">${opts}</optgroup>`);
+  }
   if (state.openCodeModels.length > 0) {
     const ocLabel = state.openCodeStatus?.configured
-      ? `OpenCode Zen — Token OK (${state.openCodeModels.length})`
+      ? `OpenCode Zen — Pay-as-you-go / Free (${state.openCodeModels.length})`
       : `OpenCode Zen — Sem token (modelos -free / configure o token)`;
     const opts = state.openCodeModels
       .map((m) => {
         const val = `opencode:${m.slug}`;
-        const sel = cur === val || cur === `opencode/${m.slug}` ? "selected" : "";
+        const sel = effectiveCur === val || cur === `opencode/${m.slug}` ? "selected" : "";
         return `<option value="${escapeHtml(val)}" ${sel}>opencode:${escapeHtml(m.slug)}</option>`;
       })
       .join("");
@@ -1973,7 +2012,7 @@ function buildModelSelectOptions(currentModel: string, includeDefaultBlank = fal
     const opts = state.models
       .map((m) => {
         const val = `agy:${m.slug}`;
-        const sel = cur === val || cur === m.slug ? "selected" : "";
+        const sel = effectiveCur === val || cur === m.slug ? "selected" : "";
         return `<option value="${escapeHtml(val)}" ${sel}>agy:${escapeHtml(m.slug)}</option>`;
       })
       .join("");
@@ -4714,12 +4753,21 @@ function renderModalLayer() {
           </div>
           <div style="margin-top:10px">
             <div class="dim" style="font-size:11.5px;margin-bottom:4px">
-              Modelos disponíveis no catálogo (${state.openCodeModels.length}) — selecione <code>opencode:&lt;modelo&gt;</code> no Quadro ou Equipe:
+              Catálogo OpenCode Go (${state.openCodeGoModels.length}) + OpenCode Zen (${state.openCodeModels.length}) — use <code>opencode-go:&lt;id&gt;</code> ou <code>opencode:&lt;id&gt;</code>:
             </div>
-            <div style="max-height:150px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
-              ${state.openCodeModels.length === 0
-                ? `<span class="dim">Carregando catálogo de https://opencode.ai/zen/v1/models…</span>`
-                : state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`).join("")
+            <div style="max-height:170px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
+              ${state.openCodeGoModels.length === 0 && state.openCodeModels.length === 0
+                ? `<span class="dim">Carregando catálogos OpenCode Go e Zen…</span>`
+                : [
+                    ...(state.openCodeGoModels.length > 0
+                      ? [`<div style="color:var(--accent-soft);font-weight:600;margin-bottom:3px">— OpenCode Go (Assinatura: ${state.openCodeGoModels.length}) —</div>`]
+                          .concat(state.openCodeGoModels.map((m) => `<div>opencode-go:${escapeHtml(m.slug)}</div>`))
+                      : []),
+                    ...(state.openCodeModels.length > 0
+                      ? [`<div style="color:var(--accent-soft);font-weight:600;margin:6px 0 3px 0">— OpenCode Zen (${state.openCodeModels.length}) —</div>`]
+                          .concat(state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`))
+                      : []),
+                  ].join("")
               }
             </div>
           </div>
@@ -4748,6 +4796,7 @@ function renderModalLayer() {
       try {
         const res = await backend.SaveOpenCodeConfig("", "");
         state.openCodeStatus = res.status;
+        if (res.goModels) state.openCodeGoModels = res.goModels;
         if (res.models) state.openCodeModels = res.models;
         updateStatusBar();
         updateMissionBoardIfOpen();
@@ -4770,23 +4819,24 @@ function renderModalLayer() {
       if (!keyIn && !state.openCodeStatus?.configured) {
         const errEl = document.getElementById("oc-modal-err");
         if (errEl) {
-          errEl.textContent = "Cole seu token do OpenCode Zen antes de salvar.";
+          errEl.textContent = "Cole seu token do OpenCode antes de salvar.";
           errEl.style.display = "block";
         }
         return;
       }
       try {
-        setStatus("Salvando e validando token OpenCode Zen…");
+        setStatus("Salvando e validando token OpenCode (Go + Zen)…");
         const res = keyIn
           ? await backend.SaveOpenCodeConfig(keyIn, urlIn)
           : await backend.BootstrapOpenCode(true);
         state.openCodeStatus = res.status;
+        if (res.goModels && res.goModels.length > 0) state.openCodeGoModels = res.goModels;
         if (res.models && res.models.length > 0) state.openCodeModels = res.models;
         updateStatusBar();
         updateMissionBoardIfOpen();
         if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
         renderModalLayer();
-        setStatus(`OpenCode Zen pronto: ${res.status.detail}`);
+        setStatus(`OpenCode pronto: ${res.status.detail}`);
       } catch (err: any) {
         const errEl = document.getElementById("oc-modal-err");
         if (errEl) {

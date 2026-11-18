@@ -8,74 +8,111 @@ import (
 	"testing"
 )
 
-func TestOpenCodeProtocolRouting(t *testing.T) {
-	cases := map[string]string{
-		"claude-sonnet-5-5":        "anthropic",
-		"claude-opus-4-6":          "anthropic",
-		"gemini-4-argon":           "gemini",
-		"gemini-3.5-flash":         "gemini",
-		"gpt-5.4":                  "openai-responses",
-		"gpt-6-astra":              "openai-responses",
-		"o3-mini":                  "openai-responses",
-		"deepseek-v4.1-flash-free": "openai-chat",
-		"big-pickle":               "openai-chat",
-		"kimi-k2.7-code":           "openai-chat",
-		"qwen3.6-plus":             "openai-chat",
+func TestParseOpenCodeSpec(t *testing.T) {
+	tier, id := ParseOpenCodeSpec("opencode-go:glm-5.3")
+	if tier != "go" || id != "glm-5.3" {
+		t.Fatalf("got (%q, %q)", tier, id)
 	}
-	for id, want := range cases {
-		if got := openCodeProtocol(id); got != want {
-			t.Errorf("openCodeProtocol(%q) = %q, want %q", id, got, want)
-		}
+	tier, id = ParseOpenCodeSpec("opencode-go/minimax-m3")
+	if tier != "go" || id != "minimax-m3" {
+		t.Fatalf("got (%q, %q)", tier, id)
+	}
+	tier, id = ParseOpenCodeSpec("opencode:claude-sonnet-5-5")
+	if tier != "zen" || id != "claude-sonnet-5-5" {
+		t.Fatalf("got (%q, %q)", tier, id)
+	}
+	tier, id = ParseOpenCodeSpec("zen:big-pickle")
+	if tier != "zen" || id != "big-pickle" {
+		t.Fatalf("got (%q, %q)", tier, id)
 	}
 }
 
-func TestStripOpenCodePrefix(t *testing.T) {
-	if got := StripOpenCodePrefix("opencode:claude-sonnet-5-5"); got != "claude-sonnet-5-5" {
-		t.Fatalf("got %q", got)
-	}
-	if got := StripOpenCodePrefix("opencode/gpt-5.4"); got != "gpt-5.4" {
-		t.Fatalf("got %q", got)
-	}
-	if got := StripOpenCodePrefix("zen:big-pickle"); got != "big-pickle" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestProbeAndListOpenCodeHTTP(t *testing.T) {
-	var seenAuth string
+func TestProbeAndListOpenCodeGoAndZenHTTP(t *testing.T) {
+	var seenGoAuth, seenZenAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			http.NotFound(w, r)
-			return
-		}
-		seenAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{
-				{"id": "gpt-6-astra", "owned_by": "opencode"},
-				{"id": "claude-sonnet-5-5", "owned_by": "opencode"},
-				{"id": "deepseek-v4.1-flash-free", "owned_by": "opencode"},
-			},
-		})
+		switch r.URL.Path {
+		case "/zen/go/v1/models":
+			seenGoAuth = r.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{
+						"id":   "minimax-m3",
+						"name": "MiniMax M3",
+						"api": map[string]any{
+							"messages": map[string]any{"base_url": "https://opencode.ai/inference/go/anthropic/v1"},
+						},
+					},
+					{
+						"id":   "glm-5.3",
+						"name": "GLM-5.3",
+						"api": map[string]any{
+							"chat-completions": map[string]any{"base_url": "https://opencode.ai/inference/go/openai/v1"},
+						},
+					},
+					{
+						"id":   "gemini-4-argon",
+						"name": "Gemini 4 Argon",
+						"api": map[string]any{
+							"generate-content": map[string]any{"base_url": "https://opencode.ai/inference/go/google/v1beta"},
+						},
+					},
+				},
+			})
+		case "/zen/v1/models":
+			seenZenAuth = r.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{
+						"id":   "gpt-6-astra",
+						"name": "GPT-6 Astra",
+						"api": map[string]any{
+							"responses": map[string]any{"base_url": "https://opencode.ai/inference/openai/v1"},
+						},
+					},
+					{
+						"id":   "claude-sonnet-5-5",
+						"name": "Claude Sonnet 5.5",
+						"api": map[string]any{
+							"messages": map[string]any{"base_url": "https://opencode.ai/inference/anthropic/v1"},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 
 	t.Setenv("OPENCODE_API_KEY", "zen_test_token_123456")
-	t.Setenv("OPENCODE_BASE_URL", srv.URL+"/v1")
+	t.Setenv("OPENCODE_BASE_URL", srv.URL+"/zen/v1")
 
-	st, models := ProbeAndListOpenCode(context.Background())
-	if !st.Configured || st.Source != "env" || st.ModelCount != 3 {
+	st, goModels, zenModels := ProbeAndListOpenCode(context.Background())
+	if !st.Configured || st.Source != "env" || st.GoCount != 3 || st.ZenCount != 2 || st.ModelCount != 5 {
 		t.Fatalf("unexpected status: %+v", st)
 	}
-	if seenAuth != "Bearer zen_test_token_123456" {
-		t.Fatalf("expected Bearer token header, got %q", seenAuth)
+	if seenGoAuth != "Bearer zen_test_token_123456" || seenZenAuth != "Bearer zen_test_token_123456" {
+		t.Fatalf("expected Bearer auth on both Go & Zen: go=%q zen=%q", seenGoAuth, seenZenAuth)
 	}
-	if len(models) != 3 || models[0].Slug != "claude-sonnet-5-5" {
-		t.Fatalf("unexpected models: %+v", models)
+	if len(goModels) != 3 || len(zenModels) != 2 {
+		t.Fatalf("unexpected models count: go=%d zen=%d", len(goModels), len(zenModels))
 	}
 
-	// Verify factory builds models for all 4 OpenCode protocol families with token set.
-	for _, spec := range []string{"opencode:claude-sonnet-5-5", "opencode:gemini-4-argon", "opencode:gpt-6-astra", "opencode:deepseek-v4.1-flash-free"} {
+	// Verify exact cached routing for Go MiniMax (Anthropic messages!) and Go Gemini (v1beta).
+	rt := lookupOpenCodeRoute(context.Background(), "go", "minimax-m3", "zen_test_token_123456", srv.URL+"/zen/v1")
+	if rt.Protocol != "messages" || rt.BaseURL != "https://opencode.ai/inference/go/anthropic/v1" {
+		t.Fatalf("expected Go minimax-m3 -> messages @ go/anthropic/v1, got %+v", rt)
+	}
+
+	// Verify factory constructs all Go and Zen model families cleanly.
+	for _, spec := range []string{
+		"opencode-go:minimax-m3",
+		"opencode-go:glm-5.3",
+		"opencode-go:gemini-4-argon",
+		"opencode:claude-sonnet-5-5",
+		"opencode:gpt-6-astra",
+	} {
 		m, err := New(context.Background(), "opencode", spec)
 		if err != nil || m == nil {
 			t.Fatalf("New(opencode, %q) failed: %v", spec, err)
