@@ -2266,7 +2266,7 @@ button.lane-pill { text-align: left; }
   white-space: nowrap;
   direction: ltr;
   vertical-align: middle;
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
   -webkit-font-feature-settings: "liga";
   font-feature-settings: "liga";
   -webkit-font-smoothing: antialiased;
