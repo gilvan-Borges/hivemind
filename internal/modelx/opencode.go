@@ -2,6 +2,8 @@ package modelx
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +21,74 @@ import (
 	"google.golang.org/adk/v2/model/openaimodel"
 	"google.golang.org/genai"
 )
+
+type sessionIDCtxKey struct{}
+
+// WithSessionID attaches a stable conversation session ID to ctx so OpenCode Go/Zen
+// receives a consistent x-opencode-session header for routing and prompt-cache locality.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionIDCtxKey{}, id)
+}
+
+func sessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(sessionIDCtxKey{}).(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func newFallbackSessionID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "hivemind-" + hex.EncodeToString(b[:])
+}
+
+// openCodeTransport injects the x-opencode-session (required by OpenCode Go) and
+// x-opencode-client headers on every outgoing HTTP request.
+type openCodeTransport struct {
+	base      http.RoundTripper
+	fallback  string
+	authToken string
+}
+
+func newOpenCodeHTTPClient(fallbackSessionID, authToken string) *http.Client {
+	if strings.TrimSpace(fallbackSessionID) == "" {
+		fallbackSessionID = newFallbackSessionID()
+	}
+	return &http.Client{
+		Transport: &openCodeTransport{
+			base:      http.DefaultTransport,
+			fallback:  fallbackSessionID,
+			authToken: authToken,
+		},
+	}
+}
+
+func (t *openCodeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	sid := sessionIDFromContext(req.Context())
+	if sid == "" {
+		sid = t.fallback
+	}
+	if clone.Header.Get("x-opencode-session") == "" {
+		clone.Header.Set("x-opencode-session", sid)
+	}
+	if clone.Header.Get("x-opencode-client") == "" {
+		clone.Header.Set("x-opencode-client", "hivemind-ide/1.0")
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
 
 const (
 	// OpenCodeDefaultBaseURL is the OpenCode Zen pay-as-you-go / free gateway URL.
@@ -266,16 +336,18 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 
 	rt := lookupOpenCodeRoute(ctx, tier, modelID, apiKey, zenBaseURL)
 	cleanBase := strings.TrimRight(rt.BaseURL, "/")
+	httpClient := newOpenCodeHTTPClient(sessionIDFromContext(ctx), apiKey)
 
 	switch rt.Protocol {
 	case "messages":
 		// Anthropic SDK appends "/v1/messages" to BaseURL.
 		anthBase := strings.TrimSuffix(cleanBase, "/v1")
 		return anthropicmodel.NewModel(ctx, modelID, anthropicmodel.ClientConfig{
-			Backend:   anthropicmodel.BackendAnthropic,
-			BaseURL:   anthBase,
-			APIKey:    apiKey,
-			AuthToken: apiKey,
+			Backend:    anthropicmodel.BackendAnthropic,
+			BaseURL:    anthBase,
+			APIKey:     apiKey,
+			AuthToken:  apiKey,
+			HTTPClient: httpClient,
 		})
 	case "generate-content":
 		// Split version suffix ("/v1beta" or "/v1") for genai.HTTPOptions.
@@ -291,8 +363,9 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 		headers := http.Header{}
 		headers.Set("Authorization", "Bearer "+apiKey)
 		return gemini.NewModel(ctx, modelID, &genai.ClientConfig{
-			APIKey:  apiKey,
-			Backend: genai.BackendGeminiAPI,
+			APIKey:     apiKey,
+			Backend:    genai.BackendGeminiAPI,
+			HTTPClient: httpClient,
 			HTTPOptions: genai.HTTPOptions{
 				BaseURL:    gemBase + "/",
 				APIVersion: apiVersion,
@@ -301,15 +374,17 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 		})
 	case "responses":
 		return openaimodel.NewModel(ctx, modelID, &openaimodel.ClientConfig{
-			APIKey:  apiKey,
-			BaseURL: cleanBase,
-			API:     openaimodel.APIResponses,
+			APIKey:     apiKey,
+			BaseURL:    cleanBase,
+			API:        openaimodel.APIResponses,
+			HTTPClient: httpClient,
 		})
 	default:
 		return openaimodel.NewModel(ctx, modelID, &openaimodel.ClientConfig{
-			APIKey:  apiKey,
-			BaseURL: cleanBase,
-			API:     openaimodel.APIChatCompletions,
+			APIKey:     apiKey,
+			BaseURL:    cleanBase,
+			API:        openaimodel.APIChatCompletions,
+			HTTPClient: httpClient,
 		})
 	}
 }

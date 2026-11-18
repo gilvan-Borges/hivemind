@@ -209,6 +209,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		return result, err
 	}
 	result.SessionID = sess.ID()
+	ctx = modelx.WithSessionID(ctx, sess.ID())
 
 	mode := r.Streaming
 	if mode == "" {

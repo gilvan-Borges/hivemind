@@ -119,3 +119,40 @@ func TestProbeAndListOpenCodeGoAndZenHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenCodeTransportInjectsSessionHeader(t *testing.T) {
+	var seenSession, seenClient string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenSession = r.Header.Get("x-opencode-session")
+		seenClient = r.Header.Get("x-opencode-client")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := newOpenCodeHTTPClient("fallback-sess", "tok")
+	ctx := WithSessionID(context.Background(), "hm-conv-42")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if seenSession != "hm-conv-42" || seenClient == "" {
+		t.Fatalf("expected x-opencode-session=hm-conv-42 and x-opencode-client set, got session=%q client=%q", seenSession, seenClient)
+	}
+
+	// Without context session ID, fallback must be sent.
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp2.Body.Close()
+	if seenSession != "fallback-sess" {
+		t.Fatalf("expected fallback session header, got %q", seenSession)
+	}
+}
