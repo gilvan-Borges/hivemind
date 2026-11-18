@@ -97,12 +97,15 @@ interface DiffSummaryItem {
   removed: number;
 }
 
+type RunMode = "auto" | "direct" | "plan" | "squad";
+
 interface ChatMessage {
   id: string;
-  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff";
+  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff" | "plan";
   label: string;
   text: string;
   active?: boolean;
+  approved?: boolean;
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
@@ -148,7 +151,7 @@ interface TerminalEntry {
 }
 
 interface EditorTab {
-  kind: "file" | "diff";
+  kind: "file" | "diff" | "mission";
   relPath: string;
   name: string;
   content: string;
@@ -221,6 +224,13 @@ interface ProjectIssue {
   status?: string;
 }
 
+interface CommandAction {
+  id: string;
+  label: string;
+  shortcut?: string;
+  run: () => void;
+}
+
 type SidebarView = "explorer" | "search" | "team" | "git" | "sessions";
 
 declare global {
@@ -242,6 +252,8 @@ declare global {
           DoctorAgy(): Promise<AgyStatus>;
           SaveTeamWizard(workspace: string, input: any): Promise<TeamFile>;
           SetActiveTeam(workspace: string, teamName: string): Promise<TeamFile>;
+          UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
+          EnsureTeamMemory(workspace: string): Promise<string>;
           GetDiff(workspace: string): Promise<FileDiff[]>;
           CommitChanges(workspace: string, message: string, push: boolean): Promise<string>;
           OpenPR(workspace: string, title: string, body: string, baseBranch: string): Promise<string>;
@@ -254,6 +266,7 @@ declare global {
           WindowClose(): Promise<void>;
           StartRun(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string): Promise<any>;
           StartRunWithImages(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<any>;
+          StartRunWithOptions(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, runMode: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<any>;
           CancelRun(laneID: string): Promise<boolean>;
           RunCommand(workspace: string, command: string): Promise<{ command: string; output: string; exitCode: number; durationMs: number }>;
           ListSessions(workspace: string): Promise<WorkspaceSessionsSummary>;
@@ -277,6 +290,7 @@ declare global {
 }
 
 const api = () => window.go?.main?.App;
+const MISSION_TAB_KEY = "mission:swarm";
 
 const state = {
   project: null as ProjectInfo | null,
@@ -290,8 +304,8 @@ const state = {
   sidebarView: "explorer" as SidebarView,
   showLeftSidebar: true,
   showRightAI: true,
-  leftWidth: 270,
-  rightWidth: 430,
+  leftWidth: 268,
+  rightWidth: 435,
   expandedDirs: new Set<string>(),
   dirCache: new Map<string, FileNode[]>(),
   explorerFilter: "",
@@ -299,6 +313,7 @@ const state = {
   activeEditorPath: "",
   lanes: [] as TeamLane[],
   activeLaneId: "",
+  runMode: "auto" as RunMode,
   diffs: [] as FileDiff[],
   showFileMenu: false,
   showWizard: false,
@@ -310,6 +325,7 @@ const state = {
   },
   quickOpen: {
     open: false,
+    mode: "files" as "files" | "commands",
     query: "",
     results: [] as string[],
     selected: 0,
@@ -332,6 +348,7 @@ const state = {
   },
   branchPopover: {
     open: false,
+    anchorTop: false,
     branches: [] as string[],
     newBranch: "",
   },
@@ -387,6 +404,15 @@ function roleLabelPt(role: string): string {
   }
 }
 
+function runModeLabel(mode: RunMode): string {
+  switch (mode) {
+    case "direct": return "Direto (1 Agente)";
+    case "plan": return "Planejar (Aprovação)";
+    case "squad": return "Squad Completo";
+    default: return "Auto (Triagem)";
+  }
+}
+
 function buildAgentRuntimes(teamName: string): AgentRuntime[] {
   const teams = state.project?.teamConfig?.teams || [];
   const t = teams.find((x) => x.name === teamName) ?? teams[0];
@@ -425,7 +451,7 @@ function createLane(teamName: string): TeamLane {
         id: `sys-${Date.now()}`,
         kind: "system",
         label: "Sistema",
-        text: `Fluxo inteligente: **Chefe (Triagem) → Dev → QA → Chefe (Fecho)**. Stack: \`${state.project?.stack.summary ?? "detectando..."}\`. Cole prints com \`Ctrl+V\`, envie seleção do editor com \`Ctrl+L\` ou mencione \`@arquivo\`.`,
+        text: `Arquitetura **Chefe → Devs Paralelos → QA → Fecho** pronta (\`${state.project?.stack.summary ?? "detectando..."}\`). Escolha o modo acima (**Auto**, **Direto**, **Planejar** ou **Squad**), cole prints com \`Ctrl+V\` ou envie seleção com \`Ctrl+L\`.`,
       },
     ],
   };
@@ -447,20 +473,31 @@ function mountShell() {
   rootEl.innerHTML = `
     <div class="ide-shell">
       <header class="titlebar" id="titlebar">
-        <span class="brand-logo">${icons.brand}<span>HIVEMIND</span></span>
+        <span class="brand-logo">${icons.brand}<span>HiveMind</span></span>
         <div class="dropdown">
           <button class="ghost titlebar-interactive" id="btn-file-menu">Arquivo</button>
           <div class="dropdown-menu" id="file-menu-dropdown" style="display:none"></div>
         </div>
-        <button class="ghost titlebar-interactive" id="btn-new-team">Nova Equipe</button>
-        <button class="ghost titlebar-interactive" id="btn-doctor">Doctor (agy)</button>
+        <button class="jb-vcs-pill titlebar-interactive" id="btn-header-vcs" title="Branch Git (clique para trocar ou criar)">
+          ${icons.gitSmall}
+          <span id="header-vcs-label">sem git</span>
+        </button>
         <div class="spacer"></div>
-        <button class="title-center-cmd titlebar-interactive" id="btn-quick-open" title="Abrir arquivo rápido (Ctrl+P)">
+        <button class="title-center-cmd titlebar-interactive" id="btn-quick-open" title="Buscar arquivos (Ctrl+P) ou Comandos (Ctrl+K)">
           ${icons.search}
-          <span class="cmd-proj" id="title-cmd-proj">Abrir arquivo (Ctrl+P)</span>
+          <span class="cmd-proj" id="title-cmd-proj">Buscar arquivo (Ctrl+P)</span>
           <span class="stack-tag" id="title-stack-tag" style="display:none"></span>
         </button>
         <div class="spacer"></div>
+        <button class="jb-swarm-btn titlebar-interactive" id="btn-header-swarm" title="Abrir Quadro Multiagente (Ctrl+Shift+A)">
+          ${icons.swarm}
+          <span>Quadro</span>
+        </button>
+        <button class="jb-run-btn titlebar-interactive" id="btn-header-run" title="Rodar comando de teste/build da stack no Terminal">
+          ${icons.play}
+          <span id="header-run-label">Testar</span>
+        </button>
+        <button class="icon-btn titlebar-interactive" id="btn-cmd-palette" title="Paleta de Comandos (Ctrl+K)">${icons.command}</button>
         <button class="icon-btn titlebar-interactive" id="btn-toggle-term" title="Alternar Terminal (Ctrl+J)">${icons.terminal}</button>
         <button class="icon-btn titlebar-interactive" id="btn-toggle-left" title="Alternar barra lateral">${icons.sidebarLeft}</button>
         <button class="icon-btn titlebar-interactive" id="btn-toggle-right" title="Alternar painel AI">${icons.sidebarRight}</button>
@@ -475,14 +512,15 @@ function mountShell() {
         <nav class="activity-bar" id="activity-bar">
           <button class="act-btn active" data-act="explorer" title="Explorador de Arquivos">${icons.explorer}</button>
           <button class="act-btn" data-act="search" title="Busca Global no Projeto (Ctrl+Shift+F)">${icons.searchLarge}</button>
-          <button class="act-btn" data-act="team" title="Equipe & Agentes">${icons.team}</button>
+          <button class="act-btn" data-act="team" title="Equipe & Modelos">${icons.team}</button>
           <button class="act-btn" data-act="git" title="Git / Diffs / PR / Issues">
             ${icons.gitBranch}
             <span class="act-badge" id="git-badge" style="display:none">0</span>
           </button>
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
           <div class="spacer"></div>
-          <button class="act-btn" id="act-wizard" title="Configurar Equipe">${icons.settings}</button>
+          <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
+          <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
         </nav>
 
         <aside class="left-sidebar" id="left-sidebar" style="width:${state.leftWidth}px"></aside>
@@ -503,7 +541,7 @@ function mountShell() {
         <span id="status-stack"></span>
         <span id="status-team">Equipe: -</span>
         <span class="status-chip" id="status-tokens" style="cursor:pointer" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</span>
-        <span id="status-agy" class="dim">agy: verificando…</span>
+        <span id="status-agy" class="dim" style="cursor:pointer" title="Clique para abrir Doctor (agy)">agy: verificando…</span>
         <button class="ghost mini" id="status-term-btn" style="height:20px;padding:0 6px" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
@@ -524,6 +562,73 @@ function openSidebarView(view: SidebarView) {
   syncActivityButtons();
   syncLayoutVisibility();
   renderLeftSidebar();
+}
+
+function openMissionControlTab() {
+  const existing = state.editorTabs.find((t) => t.relPath === MISSION_TAB_KEY);
+  if (!existing) {
+    state.editorTabs.unshift({
+      kind: "mission",
+      relPath: MISSION_TAB_KEY,
+      name: "Quadro Multiagente",
+      content: "",
+      dirty: false,
+    });
+  }
+  state.activeEditorPath = MISSION_TAB_KEY;
+  renderEditorTabs();
+  renderEditorBody();
+}
+
+async function openTeamMemoryFile() {
+  const backend = api();
+  if (!backend || !state.project) return;
+  try {
+    const rel = await backend.EnsureTeamMemory(state.project.root);
+    await refreshExplorerTree();
+    await openFileInEditor(rel, "MEMORY.md");
+    setStatus("Memória compartilhada (.hivemind/MEMORY.md) aberta no editor.");
+  } catch (err: any) {
+    setStatus(`Erro ao abrir MEMORY.md: ${err?.message || err}`);
+  }
+}
+
+async function toggleBranchPopover(anchorTop: boolean) {
+  if (!state.project) return;
+  if (!state.project.branch) {
+    openSidebarView("git");
+    return;
+  }
+  if (state.branchPopover.open && state.branchPopover.anchorTop === anchorTop) {
+    state.branchPopover.open = false;
+    renderBranchPopover();
+    return;
+  }
+  try {
+    const branches = (await api()?.ListBranches(state.project.root)) || [];
+    state.branchPopover.branches = branches;
+    state.branchPopover.newBranch = "";
+    state.branchPopover.anchorTop = anchorTop;
+    state.branchPopover.open = true;
+    renderBranchPopover();
+  } catch (err: any) {
+    setStatus(`Erro ao listar branches: ${err?.message || err}`);
+  }
+}
+
+async function openDoctorModal() {
+  const backend = api();
+  if (!backend) return;
+  setStatus("Verificando agy…");
+  const status = await backend.DoctorAgy();
+  state.agyStatus = status;
+  if (status.LoggedIn) {
+    state.models = (await backend.ListModels()) || state.models;
+  }
+  state.doctorModal = status;
+  updateStatusBar();
+  renderModalLayer();
+  setStatus("Pronto");
 }
 
 function bindStaticShellEvents() {
@@ -551,32 +656,33 @@ function bindStaticShellEvents() {
     syncLayoutVisibility();
   });
 
+  document.getElementById("btn-header-swarm")?.addEventListener("click", () => openMissionControlTab());
+  document.getElementById("act-mission")?.addEventListener("click", () => openMissionControlTab());
+
+  document.getElementById("btn-header-run")?.addEventListener("click", () => {
+    const cmd = state.project?.stack?.testHint || "git status";
+    if (!state.terminal.open) {
+      state.terminal.open = true;
+      renderTerminalDrawer();
+    }
+    runTerminalCommand(cmd);
+  });
+
+  document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
+  document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
+
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
     refreshSessions();
   });
 
-  document.getElementById("status-branch")?.addEventListener("click", async (e) => {
+  document.getElementById("status-branch")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!state.project) return;
-    if (!state.project.branch) {
-      openSidebarView("git");
-      return;
-    }
-    if (state.branchPopover.open) {
-      state.branchPopover.open = false;
-      renderBranchPopover();
-      return;
-    }
-    try {
-      const branches = (await api()?.ListBranches(state.project.root)) || [];
-      state.branchPopover.branches = branches;
-      state.branchPopover.newBranch = "";
-      state.branchPopover.open = true;
-      renderBranchPopover();
-    } catch (err: any) {
-      setStatus(`Erro ao listar branches: ${err?.message || err}`);
-    }
+    toggleBranchPopover(false);
+  });
+  document.getElementById("btn-header-vcs")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleBranchPopover(true);
   });
 
   document.getElementById("btn-file-menu")?.addEventListener("click", (e) => {
@@ -591,34 +697,16 @@ function bindStaticShellEvents() {
     }
     if (state.branchPopover.open) {
       const target = e.target as HTMLElement;
-      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch")) {
+      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-header-vcs")) {
         state.branchPopover.open = false;
         renderBranchPopover();
       }
     }
   });
 
-  document.getElementById("btn-new-team")?.addEventListener("click", () => {
-    state.showWizard = true;
-    renderModalLayer();
-  });
   document.getElementById("act-wizard")?.addEventListener("click", () => {
     state.showWizard = true;
     renderModalLayer();
-  });
-  document.getElementById("btn-doctor")?.addEventListener("click", async () => {
-    const backend = api();
-    if (!backend) return;
-    setStatus("Verificando agy…");
-    const status = await backend.DoctorAgy();
-    state.agyStatus = status;
-    if (status.LoggedIn) {
-      state.models = (await backend.ListModels()) || state.models;
-    }
-    state.doctorModal = status;
-    updateStatusBar();
-    renderModalLayer();
-    setStatus("Pronto");
   });
 
   document.getElementById("btn-quick-open")?.addEventListener("click", () => openQuickOpen());
@@ -650,7 +738,7 @@ function bindStaticShellEvents() {
     if (el) el.style.width = `${state.leftWidth}px`;
   });
   setupResizer("resizer-right", (dx) => {
-    state.rightWidth = Math.max(300, Math.min(680, state.rightWidth - dx));
+    state.rightWidth = Math.max(310, Math.min(680, state.rightWidth - dx));
     const el = document.getElementById("right-pane");
     if (el) el.style.width = `${state.rightWidth}px`;
   });
@@ -660,6 +748,21 @@ function bindStaticShellEvents() {
       e.preventDefault();
       openSidebarView("search");
       (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      openMissionControlTab();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      openCommandPalette();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      openCommandPalette();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "l") {
@@ -722,9 +825,13 @@ function renderBranchPopover() {
     return;
   }
   const cur = state.project.branch;
+  const posStyle = state.branchPopover.anchorTop
+    ? "top:44px;bottom:auto;left:110px"
+    : "bottom:30px;left:12px";
+
   layer.innerHTML = `
-    <div class="branch-popover">
-      <div class="eyebrow">BRANCHES GIT</div>
+    <div class="branch-popover" style="${posStyle}">
+      <div class="eyebrow">${icons.gitSmall}<span>Branches Git</span></div>
       <div style="max-height:170px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
         ${state.branchPopover.branches.length === 0
           ? `<div class="dim" style="padding:4px">Sem commits ainda (${escapeHtml(cur)})</div>`
@@ -842,7 +949,10 @@ function renderFileMenu() {
   menu.style.display = "block";
   menu.innerHTML = `
     <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Abrir Pasta…</span></button>
-    <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Recentes</div>
+    <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
+    <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
+    <button class="dropdown-item" id="menu-doctor">${icons.bolt}<span>Doctor — Antigravity CLI (agy)</span></button>
+    <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes</div>
     ${state.recent.length === 0
       ? `<div class="dim" style="padding:6px 10px">Nenhum projeto recente</div>`
       : state.recent.map((r) => `<button class="dropdown-item" data-recent="${escapeHtml(r)}" title="${escapeHtml(r)}">${escapeHtml(r)}</button>`).join("")
@@ -853,6 +963,22 @@ function renderFileMenu() {
     renderFileMenu();
     openFolderDialog();
   });
+  menu.querySelector("#menu-open-memory")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    openTeamMemoryFile();
+  });
+  menu.querySelector("#menu-new-team")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    state.showWizard = true;
+    renderModalLayer();
+  });
+  menu.querySelector("#menu-doctor")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    openDoctorModal();
+  });
   menu.querySelectorAll("[data-recent]").forEach((el) => {
     el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!));
   });
@@ -862,8 +988,11 @@ function updateHeaderAndStatusBar() {
   const proj = state.project;
   const cmdProj = document.getElementById("title-cmd-proj");
   const stackTag = document.getElementById("title-stack-tag");
+  const headerVcs = document.getElementById("header-vcs-label");
+  const headerRun = document.getElementById("header-run-label");
+
   if (cmdProj) {
-    cmdProj.textContent = proj ? `${proj.name} — Buscar arquivo (Ctrl+P)` : "Abrir arquivo (Ctrl+P)";
+    cmdProj.textContent = proj ? `${proj.name} — Arquivos (Ctrl+P) · Comandos (Ctrl+K)` : "Buscar arquivo (Ctrl+P)";
   }
   if (stackTag) {
     if (proj?.stack?.summary) {
@@ -872,6 +1001,13 @@ function updateHeaderAndStatusBar() {
     } else {
       stackTag.style.display = "none";
     }
+  }
+  if (headerVcs) {
+    headerVcs.textContent = proj?.branch || "sem git";
+  }
+  if (headerRun) {
+    const hint = proj?.stack?.testHint || "Testar";
+    headerRun.textContent = hint.length > 18 ? "Testar Stack" : hint;
   }
   updateStatusBar();
 }
@@ -890,12 +1026,12 @@ function updateStatusBar() {
     branchEl.innerHTML = `${icons.gitSmall} <span>${escapeHtml(proj?.branch || "sem git")}</span>`;
   }
   if (stackEl) stackEl.textContent = proj?.stack?.summary || "";
-  if (teamEl) teamEl.textContent = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0})`;
+  if (teamEl) teamEl.textContent = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
   if (tokEl) {
     const sessTok = lane?.sessionTotalTokens || 0;
     const projTok = Math.max(state.sessionsSummary.projectTotalTokens, sessTok);
     tokEl.innerHTML = `${icons.tokens} <span>Sessão: ${formatTokens(sessTok)} · Total: ${formatTokens(projTok)} tok</span>`;
-    tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (↑${exactTokens(lane?.sessionInTokens)} / ↓${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico de sessões`;
+    tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
   }
   if (agyEl) {
     if (!state.agyStatus) {
@@ -978,6 +1114,14 @@ async function boot() {
         ag.calls += 1;
       }
       updateStatusBar();
+    } else if (ev.kind === "plan_ready") {
+      markToolsDone(lane);
+      lane.messages.push({
+        id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "plan",
+        label: ev.label || "Plano pronto para aprovação",
+        text: ev.text || "",
+      });
     } else if (ev.kind === "handoff") {
       markToolsDone(lane);
       lane.messages.push({
@@ -1047,7 +1191,7 @@ async function boot() {
         a.tool = "";
       });
       const tokSuffix = lane.turnTotalTokens > 0
-        ? ` · ⚡ ${exactTokens(lane.turnTotalTokens)} tokens neste turno (↑${exactTokens(lane.turnInTokens)} / ↓${exactTokens(lane.turnOutTokens)})`
+        ? ` · ${exactTokens(lane.turnTotalTokens)} tokens no turno (Entrada: ${exactTokens(lane.turnInTokens)} / Saída: ${exactTokens(lane.turnOutTokens)})`
         : "";
       lane.messages.push({
         id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1061,6 +1205,7 @@ async function boot() {
 
     if (lane.id === activeLane()?.id) {
       scheduleChatFlush();
+      updateMissionBoardIfOpen();
     } else {
       renderLaneBarOnly();
     }
@@ -1097,6 +1242,8 @@ function bootstrapAsync(rootDir?: string) {
       state.models = res.models;
     }
     updateStatusBar();
+    updateMissionBoardIfOpen();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     if (state.showWizard || state.doctorModal) renderModalLayer();
   }).catch(() => {});
 
@@ -1124,6 +1271,7 @@ async function refreshSessions() {
       projectTotalTokens: Number(sum?.projectTotalTokens || 0),
     };
     updateStatusBar();
+    updateMissionBoardIfOpen();
     if (state.sidebarView === "sessions" && state.showLeftSidebar) {
       renderLeftSidebar();
     }
@@ -1439,6 +1587,43 @@ function highlightActiveTreeRow() {
   });
 }
 
+function buildModelSelectOptions(currentModel: string): string {
+  const cur = currentModel || "agy";
+  const hasCurInList = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
+  const head = !hasCurInList ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : "";
+  if (state.models.length === 0) {
+    return head || `<option value="agy" selected>agy (padrão)</option>`;
+  }
+  return (
+    head +
+    state.models
+      .map((m) => {
+        const val = `agy:${m.slug}`;
+        const sel = val === cur || m.slug === cur ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${sel}>${escapeHtml(m.slug)}</option>`;
+      })
+      .join("")
+  );
+}
+
+async function handleInlineModelChange(agentName: string, newModel: string) {
+  const backend = api();
+  const lane = activeLane();
+  if (!backend || !state.project || !lane || !newModel) return;
+  try {
+    const cfg = await backend.UpdateAgentModel(state.project.root, lane.teamName, agentName, newModel);
+    state.project.teamConfig = cfg;
+    for (const ag of lane.agents) {
+      if (ag.name === agentName) ag.model = newModel;
+    }
+    if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
+    updateMissionBoardIfOpen();
+    setStatus(`Modelo de ${agentName} atualizado para ${newModel}.`);
+  } catch (err: any) {
+    setStatus(`Erro ao trocar modelo: ${err?.message || err}`);
+  }
+}
+
 function renderLeftSidebar() {
   const sidebar = document.getElementById("left-sidebar");
   if (!sidebar) return;
@@ -1450,7 +1635,7 @@ function renderLeftSidebar() {
   if (state.sidebarView === "search") {
     sidebar.innerHTML = `
       <div class="sidebar-header">
-        <span class="eyebrow">BUSCA GLOBAL</span>
+        <span class="eyebrow">Busca no Código</span>
         <div class="spacer"></div>
         <span class="dim" style="font-size:10.5px">Ctrl+Shift+F</span>
       </div>
@@ -1471,32 +1656,34 @@ function renderLeftSidebar() {
     const projTotal = Math.max(sum.projectTotalTokens, lane?.sessionTotalTokens || 0);
     sidebar.innerHTML = `
       <div class="sidebar-header">
-        <span class="eyebrow">SESSÕES & TOKENS (${sum.sessions.length})</span>
+        <span class="eyebrow">Sessões & Tokens (${sum.sessions.length})</span>
         <div class="spacer"></div>
         <button class="icon-btn" id="btn-refresh-sessions" title="Atualizar sessões">${icons.refresh}</button>
       </div>
       <div class="sidebar-body">
         <div class="gh-card" style="margin-bottom:10px">
-          <div class="eyebrow" style="color:var(--accent)">CONSUMO ACUMULADO DO PROJETO</div>
-          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--text)">
-            ⚡ ${exactTokens(projTotal)} <span class="dim" style="font-size:11px;font-weight:400">tokens</span>
+          <div class="dim" style="color:var(--accent);font-weight:600">Consumo acumulado do projeto</div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:18px;font-weight:700;font-family:var(--mono);color:var(--text)">
+            ${icons.bolt}
+            <span>${exactTokens(projTotal)}</span>
+            <span class="dim" style="font-size:11px;font-weight:400">tokens</span>
           </div>
           <div class="dim" style="font-family:var(--mono);font-size:11px">
-            ↑ Entrada: ${exactTokens(sum.projectInputTokens)} · ↓ Saída: ${exactTokens(sum.projectOutputTokens)}
+            Entrada: ${exactTokens(sum.projectInputTokens)} · Saída: ${exactTokens(sum.projectOutputTokens)}
           </div>
         </div>
-        <div class="eyebrow" style="margin-bottom:6px">HISTÓRICO DE SESSÕES (.hivemind/sessions)</div>
+        <div class="dim" style="font-weight:600;margin-bottom:6px">Histórico salvo (.hivemind/sessions)</div>
         ${sum.sessions.length === 0
-          ? `<div class="dim">Nenhuma sessão salva neste projeto ainda. Envie uma mensagem ao Chefe para iniciar!</div>`
+          ? `<div class="dim">Nenhuma sessão salva neste projeto ainda. Envie uma mensagem ao Chefe para iniciar.</div>`
           : sum.sessions.map((s) => `
             <div class="session-card ${lane?.sessionId === s.id ? "active" : ""}">
               <div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
               <div class="session-meta">
                 <span>${escapeHtml(s.updatedAt)}${s.jiraKey ? ` · <strong>${escapeHtml(s.jiraKey)}</strong>` : ""}</span>
-                <span class="tok-pill" title="Entrada: ${exactTokens(s.inputTokens)} | Saída: ${exactTokens(s.outputTokens)}">⚡ ${exactTokens(s.totalTokens)} tok</span>
+                <span class="tok-pill" title="Entrada: ${exactTokens(s.inputTokens)} | Saída: ${exactTokens(s.outputTokens)}">${icons.bolt}<span>${exactTokens(s.totalTokens)} tok</span></span>
               </div>
               <div class="dim" style="font-family:var(--mono);font-size:10.5px">
-                ↑ ${exactTokens(s.inputTokens)} · ↓ ${exactTokens(s.outputTokens)}
+                Entrada: ${exactTokens(s.inputTokens)} · Saída: ${exactTokens(s.outputTokens)}
               </div>
               <div style="display:flex;gap:6px;margin-top:2px">
                 <button class="mini primary" style="flex:1" data-resume-session="${escapeHtml(s.id)}">Retomar Sessão</button>
@@ -1515,8 +1702,9 @@ function renderLeftSidebar() {
     const maxTok = proj?.teamConfig?.settings?.max_tokens || 0;
     sidebar.innerHTML = `
       <div class="sidebar-header">
-        <span class="eyebrow">EQUIPE (${lane?.agents.length || 0})</span>
+        <span class="eyebrow">Equipe (${lane?.agents.length || 0})</span>
         <div class="spacer"></div>
+        <button class="mini" id="btn-open-mission-sb" title="Abrir Quadro Multiagente">${icons.swarm}<span>Quadro</span></button>
         <button class="mini" id="btn-config-team">Wizard</button>
       </div>
       <div class="sidebar-body">
@@ -1526,6 +1714,10 @@ function renderLeftSidebar() {
           </select>
           <button class="mini" id="btn-new-team-sb">${icons.plus}<span>Novo</span></button>
         </div>
+        <button class="mini" id="btn-team-memory" style="width:100%;margin-bottom:8px;justify-content:flex-start">
+          ${icons.memory}
+          <span>Memória do Time (.hivemind/MEMORY.md)</span>
+        </button>
         <div class="dim" style="margin-bottom:8px">
           Fluxo: Chefe → Dev → QA → Fecho${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
         </div>
@@ -1542,7 +1734,7 @@ function renderLeftSidebar() {
     const gh = state.ghStatus;
     sidebar.innerHTML = `
       <div class="sidebar-header">
-        <span class="eyebrow">GIT & ISSUES (${state.diffs.length})</span>
+        <span class="eyebrow">Git & Issues (${state.diffs.length})</span>
         <div class="spacer"></div>
         <button class="icon-btn" id="btn-refresh-diff" title="Atualizar diffs">${icons.refresh}</button>
       </div>
@@ -1557,7 +1749,7 @@ function renderLeftSidebar() {
             <div class="dim">Esta pasta ainda não é um repositório Git.</div>
             <button class="primary mini" id="btn-init-git">Inicializar Git (git init)</button>
           ` : `
-            <div class="dim">Branch atual: <strong>${escapeHtml(proj.branch)}</strong> <span class="dim">(clique no rodapé p/ trocar)</span></div>
+            <div class="dim">Branch ativa: <strong>${escapeHtml(proj.branch)}</strong></div>
           `}
         </div>
         <input id="commit-msg-input" placeholder="Mensagem de commit…" value="${escapeHtml(state.commitMsgInput)}" />
@@ -1569,7 +1761,7 @@ function renderLeftSidebar() {
         </div>
         <button class="danger mini" id="btn-discard">${icons.trash}<span>Descartar Alterações</span></button>
 
-        <div class="eyebrow" style="margin-top:4px">ARQUIVOS ALTERADOS</div>
+        <div class="dim" style="font-weight:600;margin-top:4px">Arquivos alterados</div>
         <div id="git-diff-files">
           ${state.diffs.length === 0
             ? `<div class="dim">Sem alterações pendentes</div>`
@@ -1583,7 +1775,7 @@ function renderLeftSidebar() {
         </div>
 
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
-          <span class="eyebrow">ISSUES (JIRA / GITHUB)</span>
+          <span class="dim" style="font-weight:600">Issues abertas (Jira / GitHub)</span>
           <button class="mini" id="btn-load-issues" ${state.issues.loading ? "disabled" : ""}>
             ${state.issues.loading ? icons.spinner : icons.refresh}
             <span>Carregar</span>
@@ -1614,7 +1806,7 @@ function renderLeftSidebar() {
 
   sidebar.innerHTML = `
     <div class="sidebar-header">
-      <span class="eyebrow">EXPLORADOR</span>
+      <span class="eyebrow">Explorador</span>
       <div class="spacer"></div>
       <button class="icon-btn" id="btn-new-file" title="Novo arquivo">${icons.newFile}</button>
       <button class="icon-btn" id="btn-new-folder" title="Nova pasta">${icons.newFolder}</button>
@@ -1749,7 +1941,7 @@ function bindSessionsSidebarEvents() {
             id: `sys-res-${Date.now()}`,
             kind: "system",
             label: "Sessão Retomada",
-            text: `Sessão \`${detail.id}\` restaurada — **⚡ ${exactTokens(detail.totalTokens)} tokens** acumulados (↑${exactTokens(detail.inputTokens)} / ↓${exactTokens(detail.outputTokens)}).`,
+            text: `Sessão \`${detail.id}\` restaurada — **${exactTokens(detail.totalTokens)} tokens** acumulados (Entrada: ${exactTokens(detail.inputTokens)} / Saída: ${exactTokens(detail.outputTokens)}).`,
           },
           ...(detail.messages || []).map((m): ChatMessage => ({
             id: m.id || `msg-${Math.random().toString(36).slice(2, 8)}`,
@@ -1764,6 +1956,7 @@ function bindSessionsSidebarEvents() {
         rebuildChatMessagesFull();
         renderTokenBar();
         updateStatusBar();
+        updateMissionBoardIfOpen();
         renderLeftSidebar();
         setStatus(`Sessão ${detail.id} retomada.`);
       } catch (err: any) {
@@ -1800,19 +1993,33 @@ function renderExplorerTreeHtml(): string {
 }
 
 function renderAgentCardsHtml(agents: AgentRuntime[]): string {
+  const lane = activeLane();
   return agents.map((a) => `
     <div class="agent-card" data-agent-card="${escapeHtml(a.name)}">
-      <div style="min-width:0">
+      <div class="agent-card-top">
         <div class="agent-name">${escapeHtml(a.name)} · <span class="dim">${escapeHtml(roleLabelPt(a.role))}</span></div>
-        <div class="agent-meta">${escapeHtml(a.model)}${a.tool ? ` · ${escapeHtml(a.tool)}` : ""}</div>
-        ${a.tokens > 0
-          ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">⚡ ${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`
-          : ""
-        }
+        <span class="status-pill ${a.status}">${a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro"}</span>
       </div>
-      <span class="status-pill ${a.status}">${a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro"}</span>
+      <select data-sb-agent-model="${escapeHtml(a.name)}" style="width:100%;padding:3px 6px;font-size:11px;font-family:var(--mono)" ${lane?.running ? "disabled" : ""}>
+        ${buildModelSelectOptions(a.model)}
+      </select>
+      ${a.tool ? `<div class="agent-meta" style="color:var(--green)">Ferramenta: ${escapeHtml(a.tool)}</div>` : ""}
+      ${a.tokens > 0
+        ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`
+        : ""
+      }
     </div>
   `).join("");
+}
+
+function bindAgentModelSelects(container: ParentNode | null, attrName: string) {
+  if (!container) return;
+  container.querySelectorAll<HTMLSelectElement>(`[${attrName}]`).forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const agName = sel.getAttribute(attrName) || "";
+      if (agName) handleInlineModelChange(agName, sel.value);
+    });
+  });
 }
 
 function updateTeamStatusPills() {
@@ -1820,6 +2027,7 @@ function updateTeamStatusPills() {
   const lane = activeLane();
   if (!list || !lane) return;
   list.innerHTML = renderAgentCardsHtml(lane.agents);
+  bindAgentModelSelects(list, "data-sb-agent-model");
 }
 
 function bindExplorerEvents() {
@@ -1909,6 +2117,8 @@ function bindTreeRowClicks() {
 
 function bindTeamSidebarEvents() {
   const lane = activeLane();
+  document.getElementById("btn-open-mission-sb")?.addEventListener("click", () => openMissionControlTab());
+  document.getElementById("btn-team-memory")?.addEventListener("click", () => openTeamMemoryFile());
   document.getElementById("btn-config-team")?.addEventListener("click", () => {
     state.showWizard = true;
     renderModalLayer();
@@ -1924,9 +2134,11 @@ function bindTeamSidebarEvents() {
     lane.agents = buildAgentRuntimes(lane.teamName);
     await api()?.SetActiveTeam(state.project.root, lane.teamName);
     updateTeamStatusPills();
+    updateMissionBoardIfOpen();
     renderLaneBarOnly();
     updateStatusBar();
   });
+  bindAgentModelSelects(document.getElementById("team-agents-list"), "data-sb-agent-model");
 }
 
 function bindGitSidebarEvents() {
@@ -2056,14 +2268,17 @@ function bindGitSidebarEvents() {
 function renderEditorTabs() {
   const tabsEl = document.getElementById("editor-tabs");
   if (!tabsEl) return;
-  tabsEl.innerHTML = state.editorTabs.map((t) => `
-    <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
-      ${t.kind === "diff" ? icons.gitSmall : fileBadge(t.name)}
-      <span>${escapeHtml(t.name)}</span>
-      <span class="dirty-dot" data-dirty-for="${escapeHtml(t.relPath)}" style="display:${t.dirty ? "inline" : "none"}">●</span>
-      <span class="close-x" data-close-tab="${escapeHtml(t.relPath)}">${icons.closeSmall}</span>
-    </div>
-  `).join("");
+  tabsEl.innerHTML = state.editorTabs.map((t) => {
+    const tabIcon = t.kind === "mission" ? icons.swarm : t.kind === "diff" ? icons.gitSmall : fileBadge(t.name);
+    return `
+      <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
+        ${tabIcon}
+        <span>${escapeHtml(t.name)}</span>
+        <span class="dirty-dot" data-dirty-for="${escapeHtml(t.relPath)}" style="display:${t.dirty ? "inline-flex" : "none"}">${icons.dot}</span>
+        <span class="close-x" data-close-tab="${escapeHtml(t.relPath)}">${icons.closeSmall}</span>
+      </div>
+    `;
+  }).join("");
 
   tabsEl.querySelectorAll("[data-tab]").forEach((el) => {
     el.addEventListener("click", () => {
@@ -2093,7 +2308,7 @@ function syncActiveTabDirtyUI(tab: EditorTab) {
   if (saveBtn) saveBtn.disabled = !tab.dirty;
   document.querySelectorAll<HTMLElement>("[data-dirty-for]").forEach((dot) => {
     if (dot.dataset.dirtyFor === tab.relPath) {
-      dot.style.display = tab.dirty ? "inline" : "none";
+      dot.style.display = tab.dirty ? "inline-flex" : "none";
     }
   });
 }
@@ -2105,6 +2320,94 @@ function renderLineNumbers(text: string): string {
   return lines.join("\n");
 }
 
+function renderMissionBoardHtml(): string {
+  const lane = activeLane();
+  const agents = lane?.agents || [];
+  const sessTotal = Math.max(1, lane?.sessionTotalTokens || 0);
+  const projTotal = Math.max(state.sessionsSummary.projectTotalTokens, lane?.sessionTotalTokens || 0);
+
+  return `
+    <div class="mission-board" id="mission-board-root">
+      <div class="mission-top-card">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:var(--text)">
+            ${icons.swarm}
+            <span>Quadro de Controle Multiagente — ${escapeHtml(lane?.teamName || "principal")}</span>
+          </div>
+          <div class="dim" style="margin-top:4px">
+            Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(lane?.sessionTotalTokens)} tok</strong> · Projeto: <strong>${exactTokens(projTotal)} tok</strong>
+          </div>
+        </div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap">
+          <button class="mini" id="mc-open-memory">${icons.memory}<span>Memória (.hivemind/MEMORY.md)</span></button>
+          <button class="mini" id="mc-open-sessions">${icons.sessions}<span>Histórico de Sessões</span></button>
+          <button class="mini primary" id="mc-open-wizard">${icons.settings}<span>Configurar Equipe</span></button>
+        </div>
+      </div>
+
+      <div class="mission-grid">
+        ${agents.map((a) => {
+          const pct = lane?.sessionTotalTokens ? Math.min(100, Math.round((a.tokens / sessTotal) * 100)) : 0;
+          return `
+            <div class="mc-agent-card ${a.status}">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div>
+                  <div style="font-size:13px;font-weight:700;color:var(--text)">${escapeHtml(a.name)}</div>
+                  <div class="dim">${escapeHtml(roleLabelPt(a.role))}</div>
+                </div>
+                <span class="status-pill ${a.status}">
+                  ${a.status === "running" ? `${icons.spinner} rodando` : a.status === "done" ? "concluído" : a.status === "error" ? "erro" : "pronto"}
+                </span>
+              </div>
+
+              <div>
+                <div class="dim" style="font-size:10.5px;margin-bottom:3px">Modelo LLM (troca imediata):</div>
+                <select data-mc-agent-model="${escapeHtml(a.name)}" style="width:100%;font-family:var(--mono);font-size:11.5px;padding:5px 7px" ${lane?.running ? "disabled" : ""}>
+                  ${buildModelSelectOptions(a.model)}
+                </select>
+              </div>
+
+              <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-family:var(--mono)">
+                <span class="dim">${a.tool ? `Ativo: ${escapeHtml(a.tool)}` : `${a.calls} chamada(s)`}</span>
+                <span style="color:var(--accent)">${exactTokens(a.tokens)} tok (${pct}%)</span>
+              </div>
+              <div class="mc-tok-track">
+                <div class="mc-tok-fill" style="width:${pct}%"></div>
+              </div>
+              <div class="dim" style="font-size:10.5px;font-family:var(--mono)">
+                Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function bindMissionBoardEvents() {
+  const root = document.getElementById("mission-board-root");
+  if (!root) return;
+  document.getElementById("mc-open-memory")?.addEventListener("click", () => openTeamMemoryFile());
+  document.getElementById("mc-open-sessions")?.addEventListener("click", () => {
+    openSidebarView("sessions");
+    refreshSessions();
+  });
+  document.getElementById("mc-open-wizard")?.addEventListener("click", () => {
+    state.showWizard = true;
+    renderModalLayer();
+  });
+  bindAgentModelSelects(root, "data-mc-agent-model");
+}
+
+function updateMissionBoardIfOpen() {
+  if (state.activeEditorPath !== MISSION_TAB_KEY) return;
+  const body = document.getElementById("editor-body");
+  if (!body) return;
+  body.innerHTML = renderMissionBoardHtml();
+  bindMissionBoardEvents();
+}
+
 function renderEditorBody() {
   const body = document.getElementById("editor-body");
   if (!body) return;
@@ -2114,37 +2417,35 @@ function renderEditorBody() {
     const proj = state.project;
     body.innerHTML = `
       <div class="empty-welcome">
-        <div style="font-size:20px;color:var(--accent);font-weight:700">HiveMind IDE</div>
-        <div class="dim">${proj ? `${escapeHtml(proj.name)} · ${escapeHtml(proj.stack.summary)}` : "Abra uma pasta para começar"}</div>
+        <div class="welcome-hero-badge">${icons.brand}<span>Multi-Agent Dark Islands IDE</span></div>
+        <div style="font-size:22px;color:var(--text);font-weight:700;letter-spacing:-0.3px">HiveMind IDE</div>
+        <div class="dim">${proj ? `${escapeHtml(proj.name)} · ${escapeHtml(proj.stack.summary)}` : "Abra uma pasta para iniciar"}</div>
         <div class="welcome-actions">
+          <button class="primary" id="welcome-mission">${icons.swarm}<span>Quadro Multiagente</span></button>
           <button id="welcome-quick-open">${icons.search}<span>Buscar Arquivo (Ctrl+P)</span></button>
-          <button id="welcome-global-search">${icons.searchLarge}<span>Busca no Código (Ctrl+Shift+F)</span></button>
-          <button id="welcome-sessions">${icons.sessions}<span>Sessões & Tokens</span></button>
-          <button id="welcome-wizard">${icons.settings}<span>Configurar Equipe</span></button>
+          <button id="welcome-cmd-palette">${icons.command}<span>Comandos (Ctrl+K)</span></button>
+          <button id="welcome-memory">${icons.memory}<span>Memória do Time</span></button>
         </div>
         <div class="shortcut-grid">
-          <span class="dim">Fluxo do Time</span><span>Chefe → Dev → QA → Fecho</span>
+          <span class="dim">Paleta de comandos</span><span class="kbd">Ctrl + K</span>
+          <span class="dim">Quadro Multiagente</span><span class="kbd">Ctrl + Shift + A</span>
           <span class="dim">Busca rápida de arquivo</span><span class="kbd">Ctrl + P</span>
           <span class="dim">Busca global no código</span><span class="kbd">Ctrl + Shift + F</span>
-          <span class="dim">Enviar seleção p/ Chefe</span><span class="kbd">Ctrl + L</span>
+          <span class="dim">Enviar seleção ao Chefe</span><span class="kbd">Ctrl + L</span>
           <span class="dim">Terminal integrado</span><span class="kbd">Ctrl + J</span>
-          <span class="dim">Salvar alterações</span><span class="kbd">Ctrl + S</span>
         </div>
       </div>
     `;
+    document.getElementById("welcome-mission")?.addEventListener("click", () => openMissionControlTab());
     document.getElementById("welcome-quick-open")?.addEventListener("click", () => openQuickOpen());
-    document.getElementById("welcome-global-search")?.addEventListener("click", () => {
-      openSidebarView("search");
-      (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus();
-    });
-    document.getElementById("welcome-sessions")?.addEventListener("click", () => {
-      openSidebarView("sessions");
-      refreshSessions();
-    });
-    document.getElementById("welcome-wizard")?.addEventListener("click", () => {
-      state.showWizard = true;
-      renderModalLayer();
-    });
+    document.getElementById("welcome-cmd-palette")?.addEventListener("click", () => openCommandPalette());
+    document.getElementById("welcome-memory")?.addEventListener("click", () => openTeamMemoryFile());
+    return;
+  }
+
+  if (activeTab.kind === "mission") {
+    body.innerHTML = renderMissionBoardHtml();
+    bindMissionBoardEvents();
     return;
   }
 
@@ -2225,7 +2526,7 @@ function renderRightPane() {
 
   right.innerHTML = `
     <div class="sidebar-header">
-      <span class="eyebrow">CHEFE · AI</span>
+      <span class="eyebrow">${icons.sparkle}<span>Orquestrador · AI</span></span>
       <div class="spacer"></div>
       <button class="mini" id="btn-new-session">Nova Sessão</button>
       <button class="mini" id="btn-add-lane">${icons.plus}<span>Equipe Paralela</span></button>
@@ -2237,15 +2538,16 @@ function renderRightPane() {
     <div class="composer-wrap">
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
+        <div class="composer-mode-bar" id="composer-mode-bar"></div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
-        <textarea id="chat-input" rows="3" placeholder="Converse com o Chefe… (Ctrl+V cola foto/print, Ctrl+L envia seleção, @arquivo, /ajuda)"></textarea>
+        <textarea id="chat-input" rows="3" placeholder="Descreva a tarefa para a equipe… (Ctrl+V cola print, Ctrl+L envia seleção, @arquivo, /ajuda)"></textarea>
         <div class="composer-footer">
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
           <button class="mini" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)">${icons.image}<span>Foto</span></button>
-          <input id="jira-key-input" style="width:96px" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" />
+          <input id="jira-key-input" style="width:94px" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" />
           <span class="dim" id="composer-team-label"></span>
           <div class="spacer"></div>
-          <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Cancelar</span></button>
+          <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
           <button class="primary mini" id="btn-send-run" ${lane?.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
         </div>
       </div>
@@ -2255,12 +2557,46 @@ function renderRightPane() {
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
   if (chatInput) chatInput.value = state.draftObjective;
 
+  renderComposerModeBar();
   renderLaneBarOnly();
   renderPipelineBar();
   renderTokenBar();
   renderComposerImages();
   rebuildChatMessagesFull();
   bindRightStaticEvents();
+}
+
+function renderComposerModeBar() {
+  const bar = document.getElementById("composer-mode-bar");
+  if (!bar) return;
+  const modes: Array<{ id: RunMode; label: string; icon: string; tip: string }> = [
+    { id: "auto", label: "Auto", icon: icons.sparkle, tip: "Triagem inteligente: responde direto ou aciona o Squad" },
+    { id: "direct", label: "Direto", icon: icons.bolt, tip: "1 Agente (Chefe) sem delegar — rápido e econômico em tokens" },
+    { id: "plan", label: "Planejar", icon: icons.plan, tip: "Gera plano + divisão de arquivos e pausa para aprovação" },
+    { id: "squad", label: "Squad", icon: icons.swarm, tip: "Força pipeline completo: Chefe → Devs Paralelos → QA → Fecho" },
+  ];
+  bar.innerHTML = `
+    ${modes.map((m) => `
+      <button class="mode-chip ${state.runMode === m.id ? "active" : ""}" data-run-mode="${m.id}" title="${escapeHtml(m.tip)}">
+        ${m.icon}
+        <span>${m.label}</span>
+      </button>
+    `).join("")}
+    <div class="spacer"></div>
+    <button class="mode-chip" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)">
+      ${icons.memory}
+      <span>Memória</span>
+    </button>
+  `;
+  bar.querySelectorAll("[data-run-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.runMode = (btn as HTMLElement).dataset.runMode as RunMode;
+      renderComposerModeBar();
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+    });
+  });
+  bar.querySelector("#btn-composer-memory")?.addEventListener("click", () => openTeamMemoryFile());
 }
 
 function renderTokenBar() {
@@ -2272,10 +2608,12 @@ function renderTokenBar() {
 
   bar.innerHTML = `
     <span class="tok-pill" title="Turno atual — Entrada: ${exactTokens(lane.turnInTokens)} | Saída: ${exactTokens(lane.turnOutTokens)}">
-      Turno: ${formatTokens(lane.turnTotalTokens)} tok <span class="dim">(↑${formatTokens(lane.turnInTokens)} ↓${formatTokens(lane.turnOutTokens)})</span>
+      ${icons.bolt}
+      <span>Turno: ${formatTokens(lane.turnTotalTokens)}</span>
+      <span class="dim">(↑${formatTokens(lane.turnInTokens)} ↓${formatTokens(lane.turnOutTokens)})</span>
     </span>
     <span class="tok-pill" title="Total desta sessão (${escapeHtml(lane.sessionId || "nova")}) — Entrada: ${exactTokens(lane.sessionInTokens)} | Saída: ${exactTokens(lane.sessionOutTokens)}">
-      Sessão: ${formatTokens(lane.sessionTotalTokens)} tok
+      <span>Sessão: ${formatTokens(lane.sessionTotalTokens)} tok</span>
     </span>
     ${maxTok > 0 ? `<span class="tok-pill ${warnBudget ? "warn" : ""}" title="Limite configurado em .hivemind/team.yaml">Limite: ${formatTokens(lane.turnTotalTokens)}/${formatTokens(maxTok)}</span>` : ""}
     <div class="spacer"></div>
@@ -2307,6 +2645,7 @@ function renderLaneBarOnly() {
         rebuildChatMessagesFull();
         syncComposerButtons();
         updateStatusBar();
+        updateMissionBoardIfOpen();
         if ((state.sidebarView === "team" || state.sidebarView === "sessions") && state.showLeftSidebar) {
           renderLeftSidebar();
         }
@@ -2353,7 +2692,7 @@ function renderComposerImages() {
     .map((img) => `
       <div class="img-thumb-wrap" title="${escapeHtml(img.name)}">
         <img src="${escapeHtml(img.dataBase64)}" data-preview-img="${escapeHtml(img.dataBase64)}" alt="${escapeHtml(img.name)}" />
-        <button class="img-thumb-remove" data-remove-img="${escapeHtml(img.id)}" title="Remover imagem">✕</button>
+        <button class="img-thumb-remove" data-remove-img="${escapeHtml(img.id)}" title="Remover imagem">${icons.closeSmall}</button>
       </div>
     `)
     .join("");
@@ -2394,7 +2733,7 @@ function attachImageFiles(files: FileList | File[]) {
 }
 
 function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.label}|${m.tokens || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.label}|${m.tokens || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function createMessageElement(m: ChatMessage): HTMLElement {
@@ -2415,6 +2754,27 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
       <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
       <span class="msg-body">${escapeHtml(m.text)}</span>
     `;
+    return;
+  }
+
+  if (m.kind === "plan") {
+    el.className = "msg-card role-plan";
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span class="msg-badge badge-chief" style="margin-bottom:0">${icons.plan}<span>${escapeHtml(m.label)}</span></span>
+        <button class="mini primary" data-approve-plan="${escapeHtml(m.id)}" ${m.approved ? "disabled" : ""}>
+          ${m.approved ? icons.check : icons.play}
+          <span>${m.approved ? "Squad Acionado" : "Aprovar & Executar Squad"}</span>
+        </button>
+      </div>
+      <div class="msg-body">${renderMarkdownLite(m.text)}</div>
+    `;
+    el.querySelector("[data-approve-plan]")?.addEventListener("click", () => {
+      if (m.approved) return;
+      m.approved = true;
+      updateMessageElement(el, m);
+      executeApprovedPlan();
+    });
     return;
   }
 
@@ -2484,7 +2844,7 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     ? `<div class="msg-images">${m.images.map((src) => `<img src="${escapeHtml(src)}" data-preview-img="${escapeHtml(src)}" alt="anexo" />`).join("")}</div>`
     : "";
   const tokHtml = m.kind === "chief" && m.tokens && m.tokens > 0
-    ? `<div class="msg-tok-footer">⚡ ${exactTokens(m.tokens)} tokens</div>`
+    ? `<div class="msg-tok-footer">${icons.bolt}<span>${exactTokens(m.tokens)} tokens</span></div>`
     : "";
   el.innerHTML = `
     <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>
@@ -2599,6 +2959,7 @@ function bindRightStaticEvents() {
     rebuildChatMessagesFull();
     syncComposerButtons();
     updateStatusBar();
+    updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
   });
 
@@ -2617,12 +2978,13 @@ function bindRightStaticEvents() {
       id: `sys-${Date.now()}`,
       kind: "system",
       label: "Sistema",
-      text: "Nova sessão iniciada com o Chefe (contador de tokens zerado).",
+      text: "Nova sessão iniciada com o Chefe (contador de tokens da sessão zerado).",
     }];
     rebuildChatMessagesFull();
     renderTokenBar();
     renderLaneBarOnly();
     updateStatusBar();
+    updateMissionBoardIfOpen();
     if ((state.sidebarView === "team" || state.sidebarView === "sessions") && state.showLeftSidebar) {
       renderLeftSidebar();
     }
@@ -2705,26 +3067,34 @@ function bindRightStaticEvents() {
     state.jiraKeyInput = jiraInput.value;
   });
 
-  document.getElementById("btn-send-run")?.addEventListener("click", sendToChief);
+  document.getElementById("btn-send-run")?.addEventListener("click", () => sendToChief());
   document.getElementById("btn-cancel-run")?.addEventListener("click", cancelActiveLane);
 }
 
-async function sendToChief() {
+async function executeApprovedPlan() {
+  const lane = activeLane();
+  if (!lane || lane.running) return;
+  await sendToChief("Plano aprovado. Prossigam com a implementação paralela e validação de QA conforme o plano registrado.", "squad");
+}
+
+async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
   const lane = activeLane();
   const backend = api();
   if (!lane || !backend || !state.project || lane.running) return;
-  const text = state.draftObjective.trim();
-  const attached = [...state.draftImages];
+  const isOverride = typeof overrideText === "string";
+  const text = (isOverride ? overrideText : state.draftObjective).trim();
+  const attached = isOverride ? [] : [...state.draftImages];
+  const effectiveMode = overrideMode || state.runMode;
   if (!text && attached.length === 0) return;
 
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
 
-  if (text === "/ajuda" && attached.length === 0) {
+  if (!isOverride && text === "/ajuda" && attached.length === 0) {
     lane.messages.push({
       id: `sys-${Date.now()}`,
       kind: "system",
       label: "Sistema",
-      text: "Atalhos e recursos:\n- `Ctrl+V` ou botão **Foto** — anexa prints/imagens para leitura visual\n- `Ctrl+L` — envia as linhas selecionadas do editor para o Chefe\n- `Ctrl+Shift+F` — busca global no código do projeto\n- `Ctrl+J` — abre o Terminal integrado\n- `@arquivo` — anexa caminho do arquivo\n- Barra **Sessões & Tokens** — veja o consumo por turno, sessão e total do projeto",
+      text: "Modos & Atalhos:\n- **Auto / Direto / Planejar / Squad** — controle se responde em 1 agente, pede aprovação do plano ou roda todos os Devs em paralelo\n- **Quadro (`Ctrl+Shift+A`)** — painel em tempo real dos agentes + troca rápida de modelo LLM\n- **Memória (`.hivemind/MEMORY.md`)** — contexto persistente compartilhado por todo o time\n- `Ctrl+K` — Paleta de Comandos | `Ctrl+P` — Buscar Arquivo | `Ctrl+Shift+F` — Busca no Código | `Ctrl+L` — Enviar seleção",
     });
     state.draftObjective = "";
     if (chatInput) chatInput.value = "";
@@ -2735,19 +3105,22 @@ async function sendToChief() {
   lane.messages.push({
     id: `usr-${Date.now()}`,
     kind: "user",
-    label: "Usuário",
+    label: `Usuário · ${runModeLabel(effectiveMode)}`,
     text: text || "(imagem anexada)",
     images: attached.map((x) => x.dataBase64),
   });
-  state.draftObjective = "";
-  state.draftImages = [];
-  state.mentionResults = [];
-  if (chatInput) chatInput.value = "";
-  renderComposerImages();
-  renderMentionPopup();
+
+  if (!isOverride) {
+    state.draftObjective = "";
+    state.draftImages = [];
+    state.mentionResults = [];
+    if (chatInput) chatInput.value = "";
+    renderComposerImages();
+    renderMentionPopup();
+  }
 
   lane.running = true;
-  lane.stage = "chief";
+  lane.stage = effectiveMode === "squad" ? "dev" : "chief";
   lane.doneStages = [];
   lane.turnInTokens = 0;
   lane.turnOutTokens = 0;
@@ -2756,20 +3129,33 @@ async function sendToChief() {
     a.status = "idle";
     a.tool = "";
   });
-  setStatus(`Executando equipe "${lane.teamName}"…`);
+  setStatus(`Executando "${lane.teamName}" em modo ${runModeLabel(effectiveMode)}…`);
   flushChatUpdates();
+  updateMissionBoardIfOpen();
   if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
 
   try {
-    const res = await backend.StartRunWithImages(
-      lane.id,
-      state.project.root,
-      lane.teamName,
-      text,
-      state.jiraKeyInput.trim(),
-      lane.sessionId,
-      attached.map((x) => ({ name: x.name, mimeType: x.mimeType, dataBase64: x.dataBase64 }))
-    );
+    const payloadImgs = attached.map((x) => ({ name: x.name, mimeType: x.mimeType, dataBase64: x.dataBase64 }));
+    const res = backend.StartRunWithOptions
+      ? await backend.StartRunWithOptions(
+          lane.id,
+          state.project.root,
+          lane.teamName,
+          text,
+          state.jiraKeyInput.trim(),
+          lane.sessionId,
+          effectiveMode,
+          payloadImgs
+        )
+      : await backend.StartRunWithImages(
+          lane.id,
+          state.project.root,
+          lane.teamName,
+          text,
+          state.jiraKeyInput.trim(),
+          lane.sessionId,
+          payloadImgs
+        );
     const sid = res?.SessionID || res?.sessionID;
     if (sid) lane.sessionId = sid;
     setStatus(`Equipe "${lane.teamName}" concluída.`);
@@ -2788,6 +3174,7 @@ async function sendToChief() {
     await refreshDiffsAndSummarize(lane);
     await refreshSessions();
     flushChatUpdates();
+    updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
   }
 }
@@ -2802,14 +3189,33 @@ async function cancelActiveLane() {
     id: `sys-${Date.now()}`,
     kind: "system",
     label: "Sistema",
-    text: "Execução cancelada pelo usuário.",
+    text: "Execução interrompida pelo usuário.",
   });
-  setStatus("Execução cancelada.");
+  setStatus("Execução interrompida.");
   flushChatUpdates();
+}
+
+function getCommandActions(): CommandAction[] {
+  return [
+    { id: "mission", label: "Abrir Quadro de Controle Multiagente", shortcut: "Ctrl+Shift+A", run: () => openMissionControlTab() },
+    { id: "mode-auto", label: "Modo de Execução: Auto (Triagem Inteligente)", run: () => { state.runMode = "auto"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-direct", label: "Modo de Execução: Direto (1 Agente · Rápido)", run: () => { state.runMode = "direct"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-plan", label: "Modo de Execução: Planejar (Aprovação Humana)", run: () => { state.runMode = "plan"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-squad", label: "Modo de Execução: Squad Completo (Paralelo + QA)", run: () => { state.runMode = "squad"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "memory", label: "Abrir Memória Compartilhada (.hivemind/MEMORY.md)", run: () => openTeamMemoryFile() },
+    { id: "sessions", label: "Ver Sessões Salvas & Consumo de Tokens", run: () => { openSidebarView("sessions"); refreshSessions(); } },
+    { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
+    { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
+    { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
+    { id: "wizard", label: "Configurar Equipe (.hivemind/team.yaml)", run: () => { state.showWizard = true; renderModalLayer(); } },
+    { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
+    { id: "open-folder", label: "Abrir Outra Pasta de Projeto…", run: () => openFolderDialog() },
+  ];
 }
 
 function openQuickOpen() {
   state.quickOpen.open = true;
+  state.quickOpen.mode = "files";
   state.quickOpen.query = "";
   state.quickOpen.selected = 0;
   renderQuickOpenModal();
@@ -2821,10 +3227,25 @@ function openQuickOpen() {
   }
 }
 
+function openCommandPalette() {
+  state.quickOpen.open = true;
+  state.quickOpen.mode = "commands";
+  state.quickOpen.query = "";
+  state.quickOpen.selected = 0;
+  renderQuickOpenModal();
+}
+
 function closeQuickOpen() {
   state.quickOpen.open = false;
   const layer = document.getElementById("quick-open-layer");
   if (layer) layer.innerHTML = "";
+}
+
+function filteredCommands(): CommandAction[] {
+  const q = state.quickOpen.query.trim().toLowerCase();
+  const all = getCommandActions();
+  if (!q) return all;
+  return all.filter((c) => c.label.toLowerCase().includes(q));
 }
 
 function renderQuickOpenModal() {
@@ -2834,10 +3255,11 @@ function renderQuickOpenModal() {
     layer.innerHTML = "";
     return;
   }
+  const isCmd = state.quickOpen.mode === "commands";
   layer.innerHTML = `
     <div class="quick-open-backdrop" id="qo-backdrop">
       <div class="quick-open-modal">
-        <input id="qo-input" placeholder="Buscar arquivo no projeto (Ctrl+P)…" value="${escapeHtml(state.quickOpen.query)}" />
+        <input id="qo-input" placeholder="${isCmd ? "Digite um comando (Ctrl+K)…" : "Buscar arquivo no projeto (Ctrl+P) ou comece com > para comandos…"}" value="${escapeHtml(state.quickOpen.query)}" />
         <div class="quick-open-list" id="qo-list"></div>
       </div>
     </div>
@@ -2848,18 +3270,31 @@ function renderQuickOpenModal() {
     if ((e.target as HTMLElement).id === "qo-backdrop") closeQuickOpen();
   });
   input?.addEventListener("input", () => {
-    state.quickOpen.query = input.value;
+    const val = input.value;
+    if (!isCmd && val.startsWith(">")) {
+      state.quickOpen.mode = "commands";
+      state.quickOpen.query = val.slice(1);
+      state.quickOpen.selected = 0;
+      renderQuickOpenModal();
+      return;
+    }
+    state.quickOpen.query = val;
     state.quickOpen.selected = 0;
+    if (state.quickOpen.mode === "commands") {
+      renderQuickOpenList();
+      return;
+    }
     if (quickOpenTimer) window.clearTimeout(quickOpenTimer);
     quickOpenTimer = window.setTimeout(async () => {
       if (!state.project) return;
       const res = await api()?.SearchFiles(state.project.root, state.quickOpen.query);
       state.quickOpen.results = res || [];
       renderQuickOpenList();
-    }, 50);
+    }, 45);
   });
   input?.addEventListener("keydown", (e) => {
-    const total = state.quickOpen.results.length;
+    const items = state.quickOpen.mode === "commands" ? filteredCommands() : state.quickOpen.results;
+    const total = items.length;
     if (e.key === "ArrowDown" && total > 0) {
       e.preventDefault();
       state.quickOpen.selected = (state.quickOpen.selected + 1) % total;
@@ -2870,10 +3305,16 @@ function renderQuickOpenModal() {
       renderQuickOpenList();
     } else if (e.key === "Enter" && total > 0) {
       e.preventDefault();
-      const chosen = state.quickOpen.results[state.quickOpen.selected];
-      if (chosen) {
+      if (state.quickOpen.mode === "commands") {
+        const cmd = filteredCommands()[state.quickOpen.selected];
         closeQuickOpen();
-        openFileInEditor(chosen, chosen.split("/").pop() || chosen);
+        cmd?.run();
+      } else {
+        const chosen = state.quickOpen.results[state.quickOpen.selected];
+        if (chosen) {
+          closeQuickOpen();
+          openFileInEditor(chosen, chosen.split("/").pop() || chosen);
+        }
       }
     }
   });
@@ -2883,6 +3324,31 @@ function renderQuickOpenModal() {
 function renderQuickOpenList() {
   const list = document.getElementById("qo-list");
   if (!list) return;
+  if (state.quickOpen.mode === "commands") {
+    const cmds = filteredCommands();
+    if (cmds.length === 0) {
+      list.innerHTML = `<div class="dim" style="padding:8px">Nenhum comando correspondente</div>`;
+      return;
+    }
+    list.innerHTML = cmds
+      .map((c, idx) => `
+        <button class="dropdown-item ${idx === state.quickOpen.selected ? "selected" : ""}" data-qo-cmd="${idx}" style="justify-content:space-between">
+          <span style="display:inline-flex;align-items:center;gap:8px">${icons.command}<span>${escapeHtml(c.label)}</span></span>
+          ${c.shortcut ? `<span class="kbd">${escapeHtml(c.shortcut)}</span>` : ""}
+        </button>
+      `)
+      .join("");
+    list.querySelectorAll("[data-qo-cmd]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const idx = parseInt((el as HTMLElement).dataset.qoCmd || "0", 10);
+        const cmd = cmds[idx];
+        closeQuickOpen();
+        cmd?.run();
+      });
+    });
+    return;
+  }
+
   if (state.quickOpen.results.length === 0) {
     list.innerHTML = `<div class="dim" style="padding:8px">Nenhum arquivo encontrado</div>`;
     return;
@@ -2924,8 +3390,8 @@ function renderTerminalDrawer() {
   const hint = state.project?.stack?.testHint || "";
   drawer.innerHTML = `
     <div class="terminal-header">
-      <span class="eyebrow">${icons.terminal} TERMINAL</span>
-      ${hint ? `<button class="mini" id="term-run-hint" ${state.terminal.running ? "disabled" : ""}>▶ ${escapeHtml(hint)}</button>` : ""}
+      <span class="eyebrow">${icons.terminal}<span>Terminal</span></span>
+      ${hint ? `<button class="mini success" id="term-run-hint" ${state.terminal.running ? "disabled" : ""}>${icons.play}<span>${escapeHtml(hint)}</span></button>` : ""}
       <button class="mini" id="term-run-status" ${state.terminal.running ? "disabled" : ""}>git status</button>
       <div class="spacer"></div>
       <button class="mini ghost" id="term-clear">Limpar</button>
@@ -3288,6 +3754,7 @@ function renderModalLayer() {
         renderLaneBarOnly();
         renderTokenBar();
         updateStatusBar();
+        updateMissionBoardIfOpen();
         if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
         setStatus(`Equipe "${cfg.active}" salva em .hivemind/team.yaml.`);
       } catch (err: any) {

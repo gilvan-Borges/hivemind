@@ -45,12 +45,12 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:            "HiveMind IDE",
-		Width:            1320,
-		Height:           820,
-		MinWidth:         960,
-		MinHeight:        600,
+		Width:            1400,
+		Height:           860,
+		MinWidth:         980,
+		MinHeight:        620,
 		Frameless:        true,
-		BackgroundColour: &options.RGBA{R: 18, G: 18, B: 26, A: 255},
+		BackgroundColour: &options.RGBA{R: 7, G: 8, B: 12, A: 255},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

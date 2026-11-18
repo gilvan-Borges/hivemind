@@ -416,3 +416,38 @@ func TestExplorerCRUDAndGlobalTextSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUpdateTeamAgentModelAndWorkspaceMemory(t *testing.T) {
+	dir := t.TempDir()
+	_, err := BuildTeamFromWizard(dir, WizardInput{
+		TeamName:     "squad",
+		ChiefRole:    "architect",
+		DevCount:     1,
+		DefaultModel: "agy:gemini-3.8-flash-high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := UpdateTeamAgentModel(dir, "squad", "qa", "agy:gemini-4-hydrogen-high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var qaModel string
+	for _, ag := range updated.Teams[0].Agents {
+		if ag.Name == "qa" {
+			qaModel = ag.Model
+		}
+	}
+	if qaModel != "agy:gemini-4-hydrogen-high" {
+		t.Fatalf("expected updated qa model, got %q", qaModel)
+	}
+
+	rel, err := EnsureWorkspaceMemory(dir)
+	if err != nil || rel != ".hivemind/MEMORY.md" {
+		t.Fatalf("EnsureWorkspaceMemory failed: rel=%q err=%v", rel, err)
+	}
+	snippet := loadWorkspaceMemorySnippet(dir)
+	if !strings.Contains(snippet, "Memória Compartilhada do Time") {
+		t.Fatalf("expected memory snippet, got %q", snippet)
+	}
+}

@@ -343,11 +343,29 @@ func (a *App) StartRunWithImages(
 	laneID, workspace, teamName, objective, jiraKey, sessionID string,
 	images []idecore.ImageInput,
 ) (orchestrator.Result, error) {
+	return a.StartRunWithOptions(laneID, workspace, teamName, objective, jiraKey, sessionID, "auto", images)
+}
+
+// StartRunWithOptions runs one objective using an explicit multi-agent execution mode ("auto", "direct", "plan", "squad").
+func (a *App) StartRunWithOptions(
+	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
+	images []idecore.ImageInput,
+) (orchestrator.Result, error) {
 	baseCtx := a.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	return a.sessions.RunTurnWithImages(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, images)
+	return a.sessions.RunTurnWithOptions(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+}
+
+// UpdateAgentModel switches the LLM model of a single agent inside .hivemind/team.yaml.
+func (a *App) UpdateAgentModel(workspace, teamName, agentName, modelSpec string) (team.File, error) {
+	return idecore.UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec)
+}
+
+// EnsureTeamMemory creates .hivemind/MEMORY.md if absent and returns its relative path for the editor.
+func (a *App) EnsureTeamMemory(workspace string) (string, error) {
+	return idecore.EnsureWorkspaceMemory(workspace)
 }
 
 // CancelRun cancels an active run on laneID.

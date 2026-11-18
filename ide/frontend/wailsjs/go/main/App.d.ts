@@ -30,6 +30,8 @@ export function DiscardChanges(arg1:string):Promise<void>;
 
 export function DoctorAgy():Promise<modelx.AgyStatus>;
 
+export function EnsureTeamMemory(arg1:string):Promise<string>;
+
 export function GetDiff(arg1:string):Promise<Array<idecore.FileDiff>>;
 
 export function GetInitialState():Promise<main.InitialState>;
@@ -77,6 +79,10 @@ export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 export function StartRun(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<orchestrator.Result>;
 
 export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
+
+export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
+
+export function UpdateAgentModel(arg1:string,arg2:string,arg3:string,arg4:string):Promise<team.File>;
 
 export function WindowClose():Promise<void>;
 

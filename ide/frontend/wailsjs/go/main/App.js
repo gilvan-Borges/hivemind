@@ -50,6 +50,10 @@ export function DoctorAgy() {
   return window['go']['main']['App']['DoctorAgy']();
 }
 
+export function EnsureTeamMemory(arg1) {
+  return window['go']['main']['App']['EnsureTeamMemory'](arg1);
+}
+
 export function GetDiff(arg1) {
   return window['go']['main']['App']['GetDiff'](arg1);
 }
@@ -144,6 +148,14 @@ export function StartRun(arg1, arg2, arg3, arg4, arg5, arg6) {
 
 export function StartRunWithImages(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['StartRunWithImages'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
+export function StartRunWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
+  return window['go']['main']['App']['StartRunWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+
+export function UpdateAgentModel(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UpdateAgentModel'](arg1, arg2, arg3, arg4);
 }
 
 export function WindowClose() {

@@ -89,6 +89,7 @@ type Request struct {
 	Objective   string
 	JiraKey     string
 	SessionID   string
+	RunMode     string // "", "auto", "direct", "plan", "squad"
 	Attachments []Attachment
 }
 
@@ -189,9 +190,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		mode = agent.StreamingModeSSE
 	}
 	msg := buildUserContent(objective, req.Attachments)
+	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
 
-	if r.EnableTriage {
-		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode)
+	if runMode == "squad" {
+		if prevPlan, err := sess.State().Get("chief_plan"); err == nil && prevPlan != nil {
+			r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
+		}
+		if prevSlices, err := sess.State().Get("dev_slices_joined"); err == nil && prevSlices != nil {
+			if raw := strings.TrimSpace(fmt.Sprint(prevSlices)); raw != "" {
+				r.devSlices = strings.Split(raw, "\n|||\n")
+			}
+		}
+	}
+
+	useTriage := (runMode == "" && r.EnableTriage) || runMode == "auto" || runMode == "direct" || runMode == "plan"
+	if useTriage {
+		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode, runMode)
 		result.InputTokens = r.turnInputTokens
 		result.OutputTokens = r.turnOutputTokens
 		result.TotalTokens = r.turnTotalTokens
@@ -201,7 +215,26 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			return result, err
 		}
-		if !delegated {
+		if runMode == "plan" {
+			result.Summary = summary
+			planBody := strings.TrimSpace(r.chiefPlan)
+			if planBody == "" {
+				planBody = summary
+				_ = sess.State().Set("chief_plan", planBody)
+			}
+			if r.OnEvent != nil {
+				r.OnEvent(Event{
+					Kind:         "finish",
+					Stage:        "chief",
+					Text:         fmt.Sprintf("Plano pronto na sessão %s — revise e aprove para iniciar o Squad.", result.SessionID),
+					InputTokens:  int32(r.turnInputTokens),
+					OutputTokens: int32(r.turnOutputTokens),
+					Tokens:       int32(r.turnTotalTokens),
+				})
+			}
+			return result, nil
+		}
+		if !delegated || runMode == "direct" {
 			result.Summary = summary
 			fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
 			if r.OnEvent != nil {
@@ -379,7 +412,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return nil
 	}
-	if !r.EnableTriage {
+	if !r.EnableTriage && r.chiefPlan == "" {
 		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
 			return nil, nil, err
 		}
@@ -389,9 +422,19 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
 			return nil, nil, err
 		}
-	} else {
-		// In triage mode, the Chief already planned and sliced tasks; Tech Lead refines technical guardrails if needed.
+	} else if r.chiefPlan != "" {
+		// Chief already planned and sliced tasks (via auto triage or plan checkpoint); Tech Lead refines technical guardrails if needed.
 		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe."); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
+			return nil, nil, err
+		}
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, ""); err != nil {
+			return nil, nil, err
+		}
+		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -898,7 +941,7 @@ type delegateResult struct {
 	Status string `json:"status"`
 }
 
-func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode) (bool, string, error) {
+func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode, runMode string) (bool, string, error) {
 	chief := r.primaryChief()
 	llm, err := r.modelFor(ctx, chief)
 	if err != nil {
@@ -930,56 +973,96 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	}
 
 	var delegated bool
-	delegateTool, err := functiontool.New(functiontool.Config{
-		Name:        "delegate_to_squad",
-		Description: "Aciona o pipeline Dev → QA → Chefe para implementar mudanças de código. Chame SOMENTE quando o pedido exigir criar/alterar arquivos ou corrigir código.",
-	}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
-		delegated = true
-		r.chiefPlan = strings.TrimSpace(args.Plan)
-		r.devSlices = append([]string(nil), args.DevTasks...)
-		_ = tctx.State().Set("chief_plan", r.chiefPlan)
-		if actions := tctx.Actions(); actions != nil {
-			if actions.StateDelta == nil {
-				actions.StateDelta = map[string]any{}
-			}
-			actions.StateDelta["chief_plan"] = r.chiefPlan
-		}
-		if r.OnEvent != nil {
-			var hb strings.Builder
-			if r.chiefPlan != "" {
-				hb.WriteString(r.chiefPlan)
-			}
-			for i, slice := range r.devSlices {
-				dn := fmt.Sprintf("dev_%d", i+1)
-				if i < len(devNames) {
-					dn = devNames[i]
-				}
-				if strings.TrimSpace(slice) != "" {
-					fmt.Fprintf(&hb, "\n- **%s**: %s", dn, strings.TrimSpace(slice))
-				}
-			}
-			r.OnEvent(Event{
-				Kind:   "handoff",
-				Stage:  "dev",
-				Author: chief.Name,
-				Label:  "Chefe delegou → Desenvolvedores",
-				Text:   strings.TrimSpace(hb.String()),
-			})
-		}
-		return delegateResult{Status: "delegado ao time de desenvolvimento e QA"}, nil
-	})
-	if err != nil {
-		return false, "", err
-	}
-	allTools := append(baseTools, delegateTool)
+	var planCardEmitted bool
+	allTools := baseTools
 
-	triageInstr := fmt.Sprintf(`%s
+	if runMode != "direct" {
+		delegateTool, err := functiontool.New(functiontool.Config{
+			Name:        "delegate_to_squad",
+			Description: "Registra o plano técnico e as subtarefas por desenvolvedor para acionar o pipeline Dev → QA → Chefe.",
+		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
+			delegated = true
+			r.chiefPlan = strings.TrimSpace(args.Plan)
+			r.devSlices = append([]string(nil), args.DevTasks...)
+			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
+			_ = tctx.State().Set("chief_plan", r.chiefPlan)
+			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
+			if actions := tctx.Actions(); actions != nil {
+				if actions.StateDelta == nil {
+					actions.StateDelta = map[string]any{}
+				}
+				actions.StateDelta["chief_plan"] = r.chiefPlan
+				actions.StateDelta["dev_slices_joined"] = joinedSlices
+			}
+			if r.OnEvent != nil {
+				var hb strings.Builder
+				if r.chiefPlan != "" {
+					hb.WriteString(r.chiefPlan)
+				}
+				for i, slice := range r.devSlices {
+					dn := fmt.Sprintf("dev_%d", i+1)
+					if i < len(devNames) {
+						dn = devNames[i]
+					}
+					if strings.TrimSpace(slice) != "" {
+						fmt.Fprintf(&hb, "\n- **%s**: %s", dn, strings.TrimSpace(slice))
+					}
+				}
+				if runMode == "plan" {
+					planCardEmitted = true
+					r.OnEvent(Event{
+						Kind:   "plan_ready",
+						Stage:  "chief",
+						Author: chief.Name,
+						Label:  "Plano pronto para aprovação",
+						Text:   strings.TrimSpace(hb.String()),
+					})
+				} else {
+					r.OnEvent(Event{
+						Kind:   "handoff",
+						Stage:  "dev",
+						Author: chief.Name,
+						Label:  "Chefe delegou → Desenvolvedores",
+						Text:   strings.TrimSpace(hb.String()),
+					})
+				}
+			}
+			if runMode == "plan" {
+				return delegateResult{Status: "plano registrado; aguardando aprovação do usuário antes de acionar os desenvolvedores"}, nil
+			}
+			return delegateResult{Status: "delegado ao time de desenvolvimento e QA"}, nil
+		})
+		if err != nil {
+			return false, "", err
+		}
+		allTools = append(baseTools, delegateTool)
+	}
+
+	var triageInstr string
+	switch runMode {
+	case "direct":
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) operando em MODO DIRETO (1 agente, sem delegar ao squad).
+Inspecione arquivos/git se necessário com read_file/list_dir/git_status e responda diretamente ao usuário com clareza, profundidade técnica e objetividade.`,
+			chief.Instructions, chief.Name)
+	case "plan":
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO (Human-in-the-Loop). Desenvolvedores disponíveis (%d): %s.
+1. Inspecione os arquivos relevantes do projeto com read_file/list_dir/git_status.
+2. Elabore um plano arquitetural claro e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (uma subtarefa sem conflito de arquivos por desenvolvedor em [%s]).
+3. Apresente um resumo objetivo do plano ao usuário informando que a execução iniciará assim que ele aprovar.`,
+			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+	default:
+		triageInstr = fmt.Sprintf(`%s
 
 Você é o Chefe da equipe (%s). Desenvolvedores disponíveis (%d): %s.
 REGRA DE TRIAGEM:
 1. Se o usuário fez uma pergunta, pediu análise/diagnóstico (incluindo análise de prints/imagens anexadas), revisão ou sugestão SEM pedir para implementar/alterar arquivos agora: inspecione o que precisar com read_file/list_dir/git_status, responda diretamente de forma clara e completa e NÃO chame delegate_to_squad.
 2. Se o usuário pediu para criar, editar, refatorar ou corrigir código/arquivos: monte um plano objetivo e chame delegate_to_squad passando "plan" e "dev_tasks" (uma subtarefa por desenvolvedor em [%s], dividindo arquivos distintos para não haver conflito de merge), e avise brevemente o usuário que acionou a equipe.`,
-		chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+			chief.Instructions, chief.Name, len(devs), strings.Join(devNames, ", "), strings.Join(devNames, ", "))
+	}
 
 	adkName := names.ADK(chief.Name + "_triage")
 	triageAgent, err := llmagent.New(llmagent.Config{
@@ -1041,6 +1124,15 @@ REGRA DE TRIAGEM:
 	}
 	if delegated && r.chiefPlan != "" {
 		_ = sess.State().Set("chief_plan", r.chiefPlan)
+	}
+	if runMode == "plan" && !planCardEmitted && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
+		r.OnEvent(Event{
+			Kind:   "plan_ready",
+			Stage:  "chief",
+			Author: chief.Name,
+			Label:  "Plano pronto para aprovação",
+			Text:   strings.TrimSpace(summary),
+		})
 	}
 	return delegated, summary, nil
 }

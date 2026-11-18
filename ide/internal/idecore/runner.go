@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -214,19 +216,102 @@ func DecodeImageInputs(inputs []ImageInput) ([]orchestrator.Attachment, error) {
 	return out, nil
 }
 
+// UpdateTeamAgentModel updates the model of a specific agent inside teamName in .hivemind/team.yaml.
+func UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec string) (team.File, error) {
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return team.File{}, err
+	}
+	spec := strings.TrimSpace(modelSpec)
+	if spec == "" {
+		return team.File{}, fmt.Errorf("informe o modelo")
+	}
+	updated := false
+	for ti := range cfg.Teams {
+		if teamName != "" && !strings.EqualFold(cfg.Teams[ti].Name, teamName) {
+			continue
+		}
+		for ai := range cfg.Teams[ti].Agents {
+			if strings.EqualFold(cfg.Teams[ti].Agents[ai].Name, agentName) {
+				cfg.Teams[ti].Agents[ai].Model = spec
+				cfg.Teams[ti].Agents[ai].Provider = team.NormalizeProvider("", spec)
+				updated = true
+			}
+		}
+	}
+	if !updated {
+		return team.File{}, fmt.Errorf("agente %s não encontrado na equipe %s", agentName, teamName)
+	}
+	if err := team.Save(workspace, cfg); err != nil {
+		return team.File{}, err
+	}
+	return cfg, nil
+}
+
+// EnsureWorkspaceMemory creates .hivemind/MEMORY.md with starter guidance if missing and returns its relative path.
+func EnsureWorkspaceMemory(workspace string) (string, error) {
+	rel := ".hivemind/MEMORY.md"
+	target, err := ResolveSafe(workspace, rel)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		starter := "# Memória Compartilhada do Time (HiveMind)\n\n" +
+			"Anote aqui decisões arquiteturais, convenções de código, comandos específicos e restrições do projeto.\n" +
+			"Todos os agentes da equipe recebem este contexto automaticamente sem precisar repetir no chat.\n\n" +
+			"## Convenções & Arquitetura\n- \n\n" +
+			"## Comandos & Ambiente\n- \n"
+		if err := os.WriteFile(target, []byte(starter), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return rel, nil
+}
+
+func loadWorkspaceMemorySnippet(workspace string) string {
+	target, err := ResolveSafe(workspace, ".hivemind/MEMORY.md")
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return ""
+	}
+	txt := strings.TrimSpace(string(data))
+	if txt == "" {
+		return ""
+	}
+	if len(txt) > 4096 {
+		txt = txt[:4096] + "\n…"
+	}
+	return "\n[Memória Compartilhada do Time (.hivemind/MEMORY.md)]\n" + txt + "\n"
+}
+
 // RunTurn executes one user objective on a specific lane (team) with stack context injected.
 func (m *SessionManager) RunTurn(
 	parentCtx context.Context,
 	laneID, workspace, teamName, objective, jiraKey, sessionID string,
 ) (orchestrator.Result, error) {
-	return m.RunTurnWithImages(parentCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, nil)
+	return m.RunTurnWithOptions(parentCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, "auto", nil)
 }
 
-// RunTurnWithImages executes one user objective (and optional attached images) on a specific lane
-// with Chief triage, per-Dev task slicing, and Closing Chief enabled.
+// RunTurnWithImages executes one user objective (and optional attached images) on a specific lane.
 func (m *SessionManager) RunTurnWithImages(
 	parentCtx context.Context,
 	laneID, workspace, teamName, objective, jiraKey, sessionID string,
+	images []ImageInput,
+) (orchestrator.Result, error) {
+	return m.RunTurnWithOptions(parentCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, "auto", images)
+}
+
+// RunTurnWithOptions executes one user objective using an explicit RunMode ("auto", "direct", "plan", "squad")
+// and automatically injects stack metadata + .hivemind/MEMORY.md shared team memory.
+func (m *SessionManager) RunTurnWithOptions(
+	parentCtx context.Context,
+	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
 	images []ImageInput,
 ) (orchestrator.Result, error) {
 	cfg, err := team.Load(workspace)
@@ -248,7 +333,8 @@ func (m *SessionManager) RunTurnWithImages(
 		userText = "Analise a(s) imagem(ns) anexada(s)."
 	}
 	stack := DetectStack(workspace)
-	fullObjective := stack.FormatForChief() + "\n[Objetivo do Usuário]\n" + userText
+	memBlock := loadWorkspaceMemorySnippet(workspace)
+	fullObjective := stack.FormatForChief() + memBlock + "\n[Objetivo do Usuário]\n" + userText
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.mu.Lock()
@@ -283,6 +369,11 @@ func (m *SessionManager) RunTurnWithImages(
 		jira = jirax.FromEnv()
 	}
 
+	normMode := strings.ToLower(strings.TrimSpace(runMode))
+	if normMode == "" {
+		normMode = "auto"
+	}
+
 	runner := &orchestrator.Runner{
 		Workspace:          workspace,
 		Project:            cfg,
@@ -293,7 +384,7 @@ func (m *SessionManager) RunTurnWithImages(
 		Sessions:           store,
 		Out:                io.Discard,
 		Err:                io.Discard,
-		EnableTriage:       true,
+		EnableTriage:       normMode != "squad",
 		EnableClosingChief: true,
 		OnEvent: func(ev orchestrator.Event) {
 			if m.Emit != nil {
@@ -305,6 +396,7 @@ func (m *SessionManager) RunTurnWithImages(
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
 		SessionID:   sessionID,
+		RunMode:     normMode,
 		Attachments: attachments,
 	})
 }
