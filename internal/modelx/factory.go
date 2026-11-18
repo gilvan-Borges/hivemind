@@ -25,7 +25,7 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	switch provider {
 	case "agy", "antigravity":
 		return NewAgy("", modelName)
-	case "opencode", "opencode-zen", "zen":
+	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
 		return NewOpenCode(ctx, modelName)
 	case "gemini", "vertex":
 		return newGemini(ctx, provider, modelName)

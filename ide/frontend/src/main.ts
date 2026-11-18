@@ -61,6 +61,7 @@ const state = {
   recent: [] as string[],
   models: [] as AgyModel[],
   agyStatus: null as AgyStatus | null,
+  openCodeGoModels: [] as AgyModel[],
   openCodeModels: [] as AgyModel[],
   openCodeStatus: null as OpenCodeStatus | null,
   ghStatus: null as GitHubStatus | null,
@@ -421,6 +422,52 @@ function setStatus(msg: string) {
   if (el) el.textContent = msg;
 }
 
+type ToastKind = "info" | "success" | "error";
+
+function toast(text: string, kind: ToastKind = "info", opts?: { timeoutMs?: number; retry?: () => void }): void {
+  let layer = document.getElementById("toast-layer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "toast-layer";
+    layer.className = "toast-layer";
+    document.body.appendChild(layer);
+  }
+  const box = document.createElement("div");
+  box.className = `toast ${kind}`;
+  box.setAttribute("role", kind === "error" ? "alert" : "status");
+  const msg = document.createElement("span");
+  msg.className = "toast-msg";
+  msg.textContent = text;
+  box.appendChild(msg);
+  if (opts?.retry) {
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "mini toast-retry";
+    retryBtn.textContent = "Tentar novamente";
+    retryBtn.addEventListener("click", () => {
+      box.remove();
+      opts.retry!();
+    });
+    box.appendChild(retryBtn);
+  }
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "toast-close";
+  closeBtn.setAttribute("aria-label", "Fechar aviso");
+  closeBtn.innerHTML = icons.closeSmall;
+  closeBtn.addEventListener("click", () => box.remove());
+  box.appendChild(closeBtn);
+  layer.appendChild(box);
+  // Com caminho de recuperação disponível, o aviso fica até a pessoa decidir.
+  if (!opts?.retry) {
+    window.setTimeout(() => box.remove(), opts?.timeoutMs ?? (kind === "error" ? 8000 : 5000));
+  }
+}
+
+function toastError(what: string, err: any, retry?: () => void): void {
+  const reason = err instanceof Error ? err.message : typeof err === "string" ? err : err?.message || "";
+  const clean = String(reason || "").trim();
+  toast(`Não foi possível ${what}${clean ? `: ${clean}` : "."}`, "error", retry ? { retry } : undefined);
+}
+
 function mountShell() {
   const rootEl = document.getElementById("app");
   if (!rootEl) return;
@@ -493,13 +540,13 @@ function mountShell() {
       </div>
 
       <footer class="status-bar">
-        <span class="status-chip" id="status-branch" style="cursor:pointer" title="Clique para trocar ou criar branch Git">${icons.gitSmall} sem git</span>
+        <button type="button" class="status-chip" id="status-branch" title="Clique para trocar ou criar branch Git">${icons.gitSmall} sem git</button>
         <span id="status-stack"></span>
         <span id="status-team">Equipe: -</span>
-        <span class="status-chip" id="status-tokens" style="cursor:pointer" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</span>
-        <span id="status-agy" class="dim" style="cursor:pointer" title="Clique para abrir Doctor (agy)">agy: verificando…</span>
-        <span id="status-opencode" class="dim" style="cursor:pointer" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</span>
-        <button class="ghost mini" id="status-term-btn" style="height:20px;padding:0 6px" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
+        <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
+        <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
+        <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
+        <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
         <span id="status-env"></span>
@@ -546,7 +593,7 @@ async function openTeamMemoryFile() {
     await openFileInEditor(rel, "MEMORY.md");
     setStatus("Memória compartilhada (.hivemind/MEMORY.md) aberta no editor.");
   } catch (err: any) {
-    setStatus(`Erro ao abrir MEMORY.md: ${err?.message || err}`);
+    toastError("abrir a memória da equipe (.hivemind/MEMORY.md)", err);
   }
 }
 
@@ -569,7 +616,7 @@ async function toggleBranchPopover(anchorTop: boolean) {
     state.branchPopover.open = true;
     renderBranchPopover();
   } catch (err: any) {
-    setStatus(`Erro ao listar branches: ${err?.message || err}`);
+    toastError("listar as branches do Git", err);
   }
 }
 
@@ -596,6 +643,9 @@ async function openOpenCodeModal() {
   try {
     const res = await backend.BootstrapOpenCode(true);
     state.openCodeStatus = res.status;
+    if (res.goModels && res.goModels.length > 0) {
+      state.openCodeGoModels = res.goModels;
+    }
     if (res.models && res.models.length > 0) {
       state.openCodeModels = res.models;
     }
@@ -874,6 +924,7 @@ function renderBranchPopover() {
         <input id="new-branch-input" placeholder="Nova branch (ex: feat/login)" value="${escapeHtml(state.branchPopover.newBranch)}" style="flex:1;padding:4px 7px;font-size:11.5px" />
         <button class="primary mini" id="btn-create-branch">Criar</button>
       </div>
+      <div id="branch-popover-err" style="color:var(--red);font-size:11px;margin-top:4px;display:none"></div>
     </div>
   `;
 
@@ -899,7 +950,7 @@ function renderBranchPopover() {
           await reloadCleanOpenTabs();
           setStatus(`Branch alterada para ${targetBranch}.`);
         } catch (err: any) {
-          setStatus(`Erro ao trocar branch: ${err?.message || err}`);
+          toastError(`trocar para a branch "${targetBranch}"`, err, () => { void performSwitch(); });
         }
       };
       if (hasDirtyTabs()) {
@@ -921,7 +972,17 @@ function renderBranchPopover() {
   const nbInput = document.getElementById("new-branch-input") as HTMLInputElement | null;
   const doCreate = async () => {
     const name = (nbInput?.value || "").trim();
+    const branchErr = document.getElementById("branch-popover-err");
     if (!name || !state.project) return;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._\-/]*$/.test(name)) {
+      if (branchErr) {
+        branchErr.textContent = "Nome inválido: use letras, números, ponto, hífen ou barra (ex: feat/login).";
+        branchErr.style.display = "block";
+      }
+      nbInput?.focus();
+      return;
+    }
+    if (branchErr) branchErr.style.display = "none";
     try {
       await api()?.CheckoutBranch(state.project.root, name, true);
       state.project.branch = name;
@@ -932,7 +993,7 @@ function renderBranchPopover() {
       refreshDiffs();
       setStatus(`Branch "${name}" criada e ativada.`);
     } catch (err: any) {
-      setStatus(`Erro ao criar branch: ${err?.message || err}`);
+      toastError(`criar a branch "${name}"`, err, () => { void doCreate(); });
     }
   };
   nbInput?.addEventListener("keydown", (e) => {
@@ -1111,11 +1172,11 @@ function updateStatusBar() {
       ocEl.textContent = "opencode: …";
       ocEl.style.color = "";
     } else if (oc.configured) {
-      ocEl.textContent = `opencode: token ok (${state.openCodeModels.length})`;
+      ocEl.textContent = `opencode: Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length}`;
       ocEl.style.color = "var(--green)";
       ocEl.title = oc.detail;
     } else {
-      ocEl.textContent = `opencode: configurar token (${state.openCodeModels.length})`;
+      ocEl.textContent = `opencode: configurar token (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
       ocEl.style.color = "var(--text-dim)";
       ocEl.title = oc.detail || "Clique para configurar OPENCODE_API_KEY";
     }
@@ -1332,6 +1393,7 @@ async function boot() {
     state.recent = init.recentProjects || [];
     state.models = init.models || [];
     if (init.agyStatus?.Found) state.agyStatus = init.agyStatus;
+    if (init.openCodeGoModels && init.openCodeGoModels.length > 0) state.openCodeGoModels = init.openCodeGoModels;
     if (init.openCodeModels && init.openCodeModels.length > 0) state.openCodeModels = init.openCodeModels;
     if (init.openCodeStatus && (init.openCodeStatus.configured || init.openCodeStatus.modelCount > 0)) {
       state.openCodeStatus = init.openCodeStatus;
@@ -1345,7 +1407,7 @@ async function boot() {
     }
     bootstrapAsync(init.initialProject?.root);
   } catch (err: any) {
-    setStatus(`Erro ao iniciar: ${err?.message || err}`);
+    toastError("iniciar a conexão com o backend (reinicie o app se o problema persistir)", err);
   }
 }
 
@@ -1366,6 +1428,9 @@ function bootstrapAsync(rootDir?: string) {
 
   backend.BootstrapOpenCode?.(false).then((res) => {
     state.openCodeStatus = res.status;
+    if (res.goModels && res.goModels.length > 0) {
+      state.openCodeGoModels = res.goModels;
+    }
     if (res.models && res.models.length > 0) {
       state.openCodeModels = res.models;
     }
@@ -1593,7 +1658,7 @@ async function openProjectPath(dir: string, inNewTab = true) {
         renderModalLayer();
       }
     } catch (err: any) {
-      setStatus(`Erro ao abrir pasta: ${err?.message || err}`);
+      toastError("abrir a pasta do projeto", err);
     }
   };
   if (!inNewTab && hasDirtyTabs()) {
@@ -1646,7 +1711,7 @@ function promptDiscardChanges() {
         await reloadCleanOpenTabs();
         await refreshDiffs();
       } catch (err: any) {
-        setStatus(`Erro ao descartar: ${err?.message || err}`);
+        toastError("descartar as alterações", err);
       }
     },
   });
@@ -1701,7 +1766,7 @@ async function openFileInEditor(relPath: string, name: string, targetLine?: numb
     highlightActiveTreeRow();
     jumpEditorToLine(targetLine);
   } catch (err: any) {
-    setStatus(`Erro ao ler ${relPath}: ${err?.message || err}`);
+    toastError(`abrir o arquivo ${relPath}`, err);
   }
 }
 
@@ -1772,7 +1837,7 @@ async function saveActiveEditor() {
     setStatus(`Salvo: ${tab.relPath}`);
     refreshDiffs();
   } catch (err: any) {
-    setStatus(`Erro ao salvar: ${err?.message || err}`);
+    toastError("salvar o arquivo", err, () => { void saveActiveEditor(); });
   }
 }
 
@@ -1946,24 +2011,55 @@ function buildModelSelectOptions(currentModel: string, includeDefaultBlank = fal
   const blank = includeDefaultBlank ? `<option value="" ${!cur ? "selected" : ""}>(usar padrão)</option>` : "";
 
   const inAgy = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
-  const inOpenCode = state.openCodeModels.some(
+  const inOpenCodeGo = state.openCodeGoModels.some(
+    (m) => `opencode-go:${m.slug}` === cur || `opencode-go/${m.slug}` === cur
+  );
+  const inOpenCodeZen = state.openCodeModels.some(
     (m) => `opencode:${m.slug}` === cur || `opencode/${m.slug}` === cur
   );
-  const effectiveCur = cur || (!includeDefaultBlank ? (state.openCodeStatus?.configured && state.openCodeModels.length > 0 ? `opencode:${state.openCodeModels[0].slug}` : "agy") : "");
+  const effectiveCur =
+    cur ||
+    (!includeDefaultBlank
+      ? state.openCodeStatus?.configured && state.openCodeGoModels.length > 0
+        ? `opencode-go:${state.openCodeGoModels[0].slug}`
+        : state.openCodeStatus?.configured && state.openCodeModels.length > 0
+          ? `opencode:${state.openCodeModels[0].slug}`
+          : "agy"
+      : "");
+  const effectiveInList =
+    inAgy ||
+    inOpenCodeGo ||
+    inOpenCodeZen ||
+    (!cur &&
+      state.openCodeStatus?.configured &&
+      (state.openCodeGoModels.length > 0 || state.openCodeModels.length > 0));
   const head =
-    effectiveCur && !inAgy && !inOpenCode
+    effectiveCur && !effectiveInList
       ? `<option value="${escapeHtml(effectiveCur)}" selected>${escapeHtml(effectiveCur)}</option>`
       : "";
 
   const groups: string[] = [];
+  if (state.openCodeGoModels.length > 0) {
+    const goLabel = state.openCodeStatus?.configured
+      ? `OpenCode Go — Assinatura (${state.openCodeGoModels.length})`
+      : `OpenCode Go — Configure o token (${state.openCodeGoModels.length})`;
+    const opts = state.openCodeGoModels
+      .map((m) => {
+        const val = `opencode-go:${m.slug}`;
+        const sel = effectiveCur === val || cur === `opencode-go/${m.slug}` ? "selected" : "";
+        return `<option value="${escapeHtml(val)}" ${sel}>opencode-go:${escapeHtml(m.slug)}</option>`;
+      })
+      .join("");
+    groups.push(`<optgroup label="${escapeHtml(goLabel)}">${opts}</optgroup>`);
+  }
   if (state.openCodeModels.length > 0) {
     const ocLabel = state.openCodeStatus?.configured
-      ? `OpenCode Zen — Token OK (${state.openCodeModels.length})`
+      ? `OpenCode Zen — Pay-as-you-go / Free (${state.openCodeModels.length})`
       : `OpenCode Zen — Sem token (modelos -free / configure o token)`;
     const opts = state.openCodeModels
       .map((m) => {
         const val = `opencode:${m.slug}`;
-        const sel = cur === val || cur === `opencode/${m.slug}` ? "selected" : "";
+        const sel = effectiveCur === val || cur === `opencode/${m.slug}` ? "selected" : "";
         return `<option value="${escapeHtml(val)}" ${sel}>opencode:${escapeHtml(m.slug)}</option>`;
       })
       .join("");
@@ -1973,7 +2069,7 @@ function buildModelSelectOptions(currentModel: string, includeDefaultBlank = fal
     const opts = state.models
       .map((m) => {
         const val = `agy:${m.slug}`;
-        const sel = cur === val || cur === m.slug ? "selected" : "";
+        const sel = effectiveCur === val || cur === m.slug ? "selected" : "";
         return `<option value="${escapeHtml(val)}" ${sel}>agy:${escapeHtml(m.slug)}</option>`;
       })
       .join("");
@@ -2000,7 +2096,7 @@ async function handleInlineModelChange(agentName: string, newModel: string) {
     updateMissionBoardIfOpen();
     setStatus(`Modelo de ${agentName} atualizado para ${newModel}.`);
   } catch (err: any) {
-    setStatus(`Erro ao trocar modelo: ${err?.message || err}`);
+    toastError(`trocar o modelo do agente "${agentName}"`, err);
   }
 }
 
@@ -2349,7 +2445,7 @@ function bindSessionsSidebarEvents() {
         renderLeftSidebar();
         setStatus(`Sessão ${detail.id} retomada.`);
       } catch (err: any) {
-        setStatus(`Erro ao carregar sessão: ${err?.message || err}`);
+        toastError("carregar a sessão salva", err);
       }
     });
   });
@@ -2368,7 +2464,7 @@ function bindSessionsSidebarEvents() {
         await refreshSessions();
         setStatus(`Sessão ${sid} excluída.`);
       } catch (err: any) {
-        setStatus(`Erro ao excluir sessão: ${err?.message || err}`);
+        toastError("excluir a sessão", err);
       }
     });
   });
@@ -2591,7 +2687,7 @@ async function setProjectPermissionMode(mode: PermissionMode) {
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     setStatus(`Modo de permissão atualizado para: ${permissionModeLabel(mode)}.`);
   } catch (err: any) {
-    setStatus(`Erro ao atualizar permissão: ${err?.message || err}`);
+    toastError("atualizar o nível de permissão", err);
   }
 }
 
@@ -2609,7 +2705,7 @@ function bindGitSidebarEvents() {
       renderLeftSidebar();
       setStatus("Repositório Git inicializado (branch main).");
     } catch (err: any) {
-      setStatus(`Erro ao inicializar Git: ${err?.message || err}`);
+      toastError("inicializar o repositório Git", err);
     }
   });
   document.querySelectorAll("[data-open-diff]").forEach((el) => {
@@ -2644,7 +2740,7 @@ function bindGitSidebarEvents() {
       state.commitMsgInput = "";
       refreshDiffs();
     } catch (err: any) {
-      setStatus(`Erro no commit/push: ${err?.message || err}`);
+      toastError("publicar as alterações (commit e push)", err);
     }
   });
   document.getElementById("btn-open-pr")?.addEventListener("click", async () => {
@@ -2654,7 +2750,7 @@ function bindGitSidebarEvents() {
       const url = await backend.OpenPR(state.project.root, state.commitMsgInput, "", state.project.teamConfig?.settings?.base_branch || "main");
       setStatus(`PR aberto: ${url}`);
     } catch (err: any) {
-      setStatus(`Erro ao abrir PR: ${err?.message || err}`);
+      toastError("abrir o Pull Request", err);
     }
   });
   document.getElementById("btn-comment-jira")?.addEventListener("click", async () => {
@@ -2664,7 +2760,7 @@ function bindGitSidebarEvents() {
       await backend.CommentJira(state.project.root, state.jiraKeyInput, state.commitMsgInput || "Atualização pela HiveMind IDE.");
       setStatus(`Comentário enviado ao Jira ${state.jiraKeyInput}.`);
     } catch (err: any) {
-      setStatus(`Erro no Jira: ${err?.message || err}`);
+      toastError("criar a issue no Jira", err);
     }
   });
   document.getElementById("btn-discard")?.addEventListener("click", () => {
@@ -2680,7 +2776,7 @@ function bindGitSidebarEvents() {
       state.issues.list = (await backend.ListIssues(state.project.root)) || [];
       state.issues.loadedOnce = true;
     } catch (err: any) {
-      setStatus(`Erro ao buscar issues: ${err?.message || err}`);
+      toastError("buscar as issues do GitHub", err);
     } finally {
       state.issues.loading = false;
       renderLeftSidebar();
@@ -3306,7 +3402,7 @@ function renderEditorBody() {
             await reloadCleanOpenTabs();
             await refreshDiffs();
           } catch (err: any) {
-            setStatus(`Erro ao reverter arquivo: ${err?.message || err}`);
+            toastError(`reverter o arquivo ${diff.path}`, err);
           }
         },
       });
@@ -3328,7 +3424,7 @@ function renderEditorBody() {
           await reloadCleanOpenTabs();
           await refreshDiffs();
         } catch (err: any) {
-          setStatus(`Erro ao reverter bloco: ${err?.message || err}`);
+          toastError(`reverter o bloco em ${diff.path}`, err);
         }
       });
     });
@@ -3446,7 +3542,7 @@ function renderRightPane() {
           <span class="dim" id="composer-team-label"></span>
           <div class="spacer"></div>
           <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
-          <button class="primary mini" id="btn-send-run" ${lane?.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+          <button class="primary composer-send" id="btn-send-run" ${lane?.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
         </div>
       </div>
     </div>
@@ -3539,11 +3635,11 @@ function renderLaneBarOnly() {
   const lane = activeLane();
   if (bar) {
     bar.innerHTML = state.lanes.map((l) => `
-      <div class="lane-pill ${l.id === lane?.id ? "active" : ""}" data-lane="${l.id}">
+      <button type="button" class="lane-pill ${l.id === lane?.id ? "active" : ""}" data-lane="${l.id}">
         ${l.running ? `<span class="lane-dot"></span>` : ""}
         <span>${escapeHtml(l.teamName)}</span>
         ${l.sessionTotalTokens > 0 ? `<span class="dim" style="font-size:10px">${formatTokens(l.sessionTotalTokens)}</span>` : ""}
-      </div>
+      </button>
     `).join("");
     bar.querySelectorAll("[data-lane]").forEach((el) => {
       el.addEventListener("click", () => {
@@ -3797,7 +3893,7 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
         if (msg) setStatus(msg);
         refreshDiffs();
       } catch (err: any) {
-        setStatus(`Erro no commit: ${err?.message || err}`);
+        toastError("criar o commit das alterações", err);
       }
     });
     el.querySelector("[data-chat-discard]")?.addEventListener("click", () => {
@@ -4151,7 +4247,7 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
       label: "Erro",
       text: err?.message || String(err),
     });
-    setStatus(`Erro na execução: ${err?.message || err}`);
+    toastError("executar a tarefa com a equipe", err);
   } finally {
     lane.running = false;
     lane.stage = "";
@@ -4646,7 +4742,9 @@ function renderModalLayer() {
       } catch (err: any) {
         const errEl = document.getElementById("path-modal-err");
         if (errEl) {
-          errEl.textContent = err?.message || String(err);
+          const action = pm.mode === "newFile" ? "criar o arquivo" : pm.mode === "newDir" ? "criar a pasta" : pm.mode === "rename" ? "renomear o caminho" : "excluir";
+          const reason = err instanceof Error ? err.message : String(err);
+          errEl.textContent = `Não foi possível ${action}: ${reason}. Verifique o caminho e tente novamente.`;
           errEl.style.display = "block";
         }
       }
@@ -4714,12 +4812,21 @@ function renderModalLayer() {
           </div>
           <div style="margin-top:10px">
             <div class="dim" style="font-size:11.5px;margin-bottom:4px">
-              Modelos disponíveis no catálogo (${state.openCodeModels.length}) — selecione <code>opencode:&lt;modelo&gt;</code> no Quadro ou Equipe:
+              Catálogo OpenCode Go (${state.openCodeGoModels.length}) + OpenCode Zen (${state.openCodeModels.length}) — use <code>opencode-go:&lt;id&gt;</code> ou <code>opencode:&lt;id&gt;</code>:
             </div>
-            <div style="max-height:150px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
-              ${state.openCodeModels.length === 0
-                ? `<span class="dim">Carregando catálogo de https://opencode.ai/zen/v1/models…</span>`
-                : state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`).join("")
+            <div style="max-height:170px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
+              ${state.openCodeGoModels.length === 0 && state.openCodeModels.length === 0
+                ? `<span class="dim">Carregando catálogos OpenCode Go e Zen…</span>`
+                : [
+                    ...(state.openCodeGoModels.length > 0
+                      ? [`<div style="color:var(--accent);font-weight:600;margin-bottom:3px">— OpenCode Go (Assinatura: ${state.openCodeGoModels.length}) —</div>`]
+                          .concat(state.openCodeGoModels.map((m) => `<div>opencode-go:${escapeHtml(m.slug)}</div>`))
+                      : []),
+                    ...(state.openCodeModels.length > 0
+                      ? [`<div style="color:var(--accent);font-weight:600;margin:6px 0 3px 0">— OpenCode Zen (${state.openCodeModels.length}) —</div>`]
+                          .concat(state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`))
+                      : []),
+                  ].join("")
               }
             </div>
           </div>
@@ -4748,6 +4855,7 @@ function renderModalLayer() {
       try {
         const res = await backend.SaveOpenCodeConfig("", "");
         state.openCodeStatus = res.status;
+        if (res.goModels) state.openCodeGoModels = res.goModels;
         if (res.models) state.openCodeModels = res.models;
         updateStatusBar();
         updateMissionBoardIfOpen();
@@ -4757,7 +4865,8 @@ function renderModalLayer() {
       } catch (err: any) {
         const errEl = document.getElementById("oc-modal-err");
         if (errEl) {
-          errEl.textContent = err?.message || String(err);
+          const reason = err instanceof Error ? err.message : String(err);
+          errEl.textContent = `Não foi possível remover o token: ${reason}`;
           errEl.style.display = "block";
         }
       }
@@ -4770,27 +4879,29 @@ function renderModalLayer() {
       if (!keyIn && !state.openCodeStatus?.configured) {
         const errEl = document.getElementById("oc-modal-err");
         if (errEl) {
-          errEl.textContent = "Cole seu token do OpenCode Zen antes de salvar.";
+          errEl.textContent = "Cole seu token do OpenCode antes de salvar.";
           errEl.style.display = "block";
         }
         return;
       }
       try {
-        setStatus("Salvando e validando token OpenCode Zen…");
+        setStatus("Salvando e validando token OpenCode (Go + Zen)…");
         const res = keyIn
           ? await backend.SaveOpenCodeConfig(keyIn, urlIn)
           : await backend.BootstrapOpenCode(true);
         state.openCodeStatus = res.status;
+        if (res.goModels && res.goModels.length > 0) state.openCodeGoModels = res.goModels;
         if (res.models && res.models.length > 0) state.openCodeModels = res.models;
         updateStatusBar();
         updateMissionBoardIfOpen();
         if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
         renderModalLayer();
-        setStatus(`OpenCode Zen pronto: ${res.status.detail}`);
+        setStatus(`OpenCode pronto: ${res.status.detail}`);
       } catch (err: any) {
         const errEl = document.getElementById("oc-modal-err");
         if (errEl) {
-          errEl.textContent = err?.message || String(err);
+          const reason = err instanceof Error ? err.message : String(err);
+          errEl.textContent = `Não foi possível salvar e testar o token: ${reason}. Confira a chave e a Base URL e tente novamente.`;
           errEl.style.display = "block";
         }
       }
@@ -4811,8 +4922,8 @@ function renderModalLayer() {
     const curPerm = settings?.permission_mode || "governed";
     const curBase = settings?.base_branch || "main";
     const curHomolog = settings?.homolog_branch || "homolog";
-    const autoCommitChecked = settings ? settings.auto_commit !== false : true;
-    const autoPRChecked = settings ? settings.auto_pr !== false : true;
+    const autoCommitChecked = settings ? settings.auto_commit === true : false;
+    const autoPRChecked = settings ? settings.auto_pr === true : false;
     const buildOptWithSel = (selectedModel?: string, includeDefaultBlank = false) =>
       buildModelSelectOptions(selectedModel || "", includeDefaultBlank);
 
@@ -4837,46 +4948,59 @@ function renderModalLayer() {
               <option value="full_access" ${curPerm === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total (estilo Claude Code / GPT)</option>
             </select>
 
-            <label>Máx. Devs dinâmicos:</label>
-            <input id="wiz-max-devs" type="number" min="1" max="5" value="${curMaxDynDevs}" title="Padrão: 3 agentes (Chefe, Dev, QA). Para tarefas grandes, o Chefe/Arquiteto pode disparar até N devs paralelos sob demanda." />
-
             <label>Modelo padrão:</label>
             <select id="wiz-model">${buildOptWithSel(existingChief?.model || existingDev?.model)}</select>
-
-            <label>Modelo do Chefe:</label>
-            <select id="wiz-model-chief">${buildOptWithSel(existingChief?.model, true)}</select>
-
-            <label>Modelo do Dev:</label>
-            <select id="wiz-model-dev">${buildOptWithSel(existingDev?.model, true)}</select>
-
-            <label>Modelo do QA:</label>
-            <select id="wiz-model-qa">${buildOptWithSel(existingQA?.model, true)}</select>
-
-            <label>Branch Base / Homolog:</label>
-            <div style="display:flex;gap:8px">
-              <input id="wiz-base-branch" value="${escapeHtml(curBase)}" placeholder="Base (ex: main)" style="flex:1" title="Branch base principal (exige sua permissão para merge)" />
-              <input id="wiz-homolog-branch" value="${escapeHtml(curHomolog)}" placeholder="Homolog (ex: homolog)" style="flex:1" title="Branch de homologação (Chefe mescla automático após aprovação do revisor)" />
-            </div>
-
-            <label>Limite tokens/turno:</label>
-            <input id="wiz-maxtokens" type="number" min="0" step="1000" value="${existingMaxTok}" placeholder="0 = sem limite (ex: 50000)" />
-
-            <label>Worktree separada:</label>
-            <input id="wiz-worktrees" type="checkbox" ${settings?.worktrees !== false ? "checked" : ""} />
-
-            <label>Commit (Chefe/Arquiteto):</label>
-            <input id="wiz-autocommit" type="checkbox" ${autoCommitChecked ? "checked" : ""} />
-
-            <label>Criar PR automático:</label>
-            <input id="wiz-autopr" type="checkbox" ${autoPRChecked ? "checked" : ""} />
-
-            <label>Jira Cloud:</label>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input id="wiz-jira" type="checkbox" ${settings?.jira_enabled ? "checked" : ""} />
-              <input id="wiz-jira-key" placeholder="Projeto Jira (ex: PROJ)" value="${escapeHtml(settings?.jira_project || "")}" style="flex:1" />
-            </div>
           </div>
-          <div class="dim" style="margin-top:10px">Time base: <strong>3 agentes</strong> (Chefe/Arquiteto, Dev e QA). Em tarefas grandes, o Arquiteto dispara automaticamente de <strong>2 até ${curMaxDynDevs} devs paralelos</strong> em worktrees separadas.</div>
+          <div class="dim" style="margin-top:10px">Time base: <strong>3 agentes</strong> (Chefe/Arquiteto, Dev e QA). Em tarefas grandes, o Arquiteto dispara devs paralelos sob demanda.</div>
+          <details class="wiz-advanced" ${settings ? "open" : ""}>
+            <summary>${icons.settings}<span>Avançado — modelos por agente, branches, Git e integrações</span></summary>
+            <div class="wiz-advanced-body">
+              <label>Máx. Devs dinâmicos:</label>
+              <input id="wiz-max-devs" type="number" min="1" max="5" value="${curMaxDynDevs}" title="Padrão: 3 agentes (Chefe, Dev, QA). Para tarefas grandes, o Chefe/Arquiteto pode disparar até N devs paralelos sob demanda." />
+
+              <label>Modelo do Chefe:</label>
+              <select id="wiz-model-chief">${buildOptWithSel(existingChief?.model, true)}</select>
+
+              <label>Modelo do Dev:</label>
+              <select id="wiz-model-dev">${buildOptWithSel(existingDev?.model, true)}</select>
+
+              <label>Modelo do QA:</label>
+              <select id="wiz-model-qa">${buildOptWithSel(existingQA?.model, true)}</select>
+
+              <label>Branch Base / Homolog:</label>
+              <div style="display:flex;gap:8px">
+                <input id="wiz-base-branch" value="${escapeHtml(curBase)}" placeholder="Base (ex: main)" style="flex:1" title="Branch base principal (exige sua permissão para merge)" />
+                <input id="wiz-homolog-branch" value="${escapeHtml(curHomolog)}" placeholder="Homolog (ex: homolog)" style="flex:1" title="Branch de homologação (Chefe mescla automático após aprovação do revisor)" />
+              </div>
+
+              <label>Limite tokens/turno:</label>
+              <input id="wiz-maxtokens" type="number" min="0" step="1000" value="${existingMaxTok}" placeholder="0 = sem limite (ex: 50000)" />
+
+              <label>Worktree separada:</label>
+              <div>
+                <input id="wiz-worktrees" type="checkbox" ${settings?.worktrees !== false ? "checked" : ""} />
+                <span class="wiz-hint">Recomendado: cada execução acontece numa cópia isolada do projeto.</span>
+              </div>
+
+              <label>Commit automático:</label>
+              <div>
+                <input id="wiz-autocommit" type="checkbox" ${autoCommitChecked ? "checked" : ""} />
+                <span class="wiz-hint">Desligado por padrão: o Chefe pergunta antes de commitar.</span>
+              </div>
+
+              <label>Criar PR automático:</label>
+              <div>
+                <input id="wiz-autopr" type="checkbox" ${autoPRChecked ? "checked" : ""} />
+                <span class="wiz-hint">Desligado por padrão: o PR só abre quando você pedir.</span>
+              </div>
+
+              <label>Jira Cloud:</label>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input id="wiz-jira" type="checkbox" ${settings?.jira_enabled ? "checked" : ""} />
+                <input id="wiz-jira-key" placeholder="Projeto Jira (ex: PROJ)" value="${escapeHtml(settings?.jira_project || "")}" style="flex:1" />
+              </div>
+            </div>
+          </details>
           <div id="wiz-error" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
             <button class="mini" id="wiz-opencode-btn" title="Configurar token portátil do OpenCode Zen (OPENCODE_API_KEY)">${icons.bolt}<span>Token OpenCode…</span></button>
@@ -4942,11 +5066,10 @@ function renderModalLayer() {
         if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
         setStatus(`Equipe "${cfg.active}" salva em .hivemind/team.yaml.`);
       } catch (err: any) {
-        const msg = `Erro ao salvar equipe: ${err?.message || err}`;
-        setStatus(msg);
+        const reason = err instanceof Error ? err.message : err?.message || String(err);
         const errEl = document.getElementById("wiz-error");
         if (errEl) {
-          errEl.textContent = msg;
+          errEl.textContent = `Não foi possível salvar a equipe: ${reason}`;
           errEl.style.display = "block";
         }
       }

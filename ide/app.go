@@ -29,6 +29,7 @@ type App struct {
 	modelsCache      []modelx.AgyModel
 	agyCachedAt      time.Time
 	openCodeStatus   modelx.OpenCodeStatus
+	openCodeGoModels []modelx.AgyModel
 	openCodeModels   []modelx.AgyModel
 	openCodeCachedAt time.Time
 	termMu           sync.Mutex
@@ -41,10 +42,11 @@ type AgyBootstrap struct {
 	Models []modelx.AgyModel `json:"models"`
 }
 
-// OpenCodeBootstrap carries the OpenCode Zen token status and HTTP model catalog.
+// OpenCodeBootstrap carries the OpenCode Go & Zen token status and HTTP model catalogs.
 type OpenCodeBootstrap struct {
-	Status modelx.OpenCodeStatus `json:"status"`
-	Models []modelx.AgyModel     `json:"models"`
+	Status   modelx.OpenCodeStatus `json:"status"`
+	GoModels []modelx.AgyModel     `json:"goModels"`
+	Models   []modelx.AgyModel     `json:"models"`
 }
 
 // InitialState is returned when the IDE frontend boots.
@@ -55,6 +57,7 @@ type InitialState struct {
 	AgyStatus        modelx.AgyStatus      `json:"agyStatus"`
 	Models           []modelx.AgyModel     `json:"models"`
 	OpenCodeStatus   modelx.OpenCodeStatus `json:"openCodeStatus"`
+	OpenCodeGoModels []modelx.AgyModel     `json:"openCodeGoModels"`
 	OpenCodeModels   []modelx.AgyModel     `json:"openCodeModels"`
 	GoVersion        string                `json:"goVersion"`
 	OS               string                `json:"os"`
@@ -147,6 +150,7 @@ func (a *App) GetInitialState() InitialState {
 	agy := a.agyStatus
 	models := append([]modelx.AgyModel(nil), a.modelsCache...)
 	ocStatus := a.openCodeStatus
+	ocGoModels := append([]modelx.AgyModel(nil), a.openCodeGoModels...)
 	ocModels := append([]modelx.AgyModel(nil), a.openCodeModels...)
 	a.mu.Unlock()
 
@@ -157,20 +161,22 @@ func (a *App) GetInitialState() InitialState {
 		AgyStatus:        agy,
 		Models:           models,
 		OpenCodeStatus:   ocStatus,
+		OpenCodeGoModels: ocGoModels,
 		OpenCodeModels:   ocModels,
 		GoVersion:        runtime.Version(),
 		OS:               runtime.GOOS,
 	}
 }
 
-// BootstrapOpenCode probes the OpenCode Zen HTTP API using the configured token
-// (OPENCODE_API_KEY or user credentials.json) and fetches the live model catalog.
+// BootstrapOpenCode probes the OpenCode Go & Zen HTTP APIs using the configured token
+// (OPENCODE_API_KEY or user credentials.json) and fetches both live model catalogs.
 func (a *App) BootstrapOpenCode(force bool) OpenCodeBootstrap {
 	a.mu.Lock()
-	if !force && !a.openCodeCachedAt.IsZero() && time.Since(a.openCodeCachedAt) < 5*time.Minute && len(a.openCodeModels) > 0 {
+	if !force && !a.openCodeCachedAt.IsZero() && time.Since(a.openCodeCachedAt) < 5*time.Minute && (len(a.openCodeGoModels) > 0 || len(a.openCodeModels) > 0) {
 		out := OpenCodeBootstrap{
-			Status: a.openCodeStatus,
-			Models: append([]modelx.AgyModel(nil), a.openCodeModels...),
+			Status:   a.openCodeStatus,
+			GoModels: append([]modelx.AgyModel(nil), a.openCodeGoModels...),
+			Models:   append([]modelx.AgyModel(nil), a.openCodeModels...),
 		}
 		a.mu.Unlock()
 		return out
@@ -179,17 +185,19 @@ func (a *App) BootstrapOpenCode(force bool) OpenCodeBootstrap {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	status, models := modelx.ProbeAndListOpenCode(ctx)
+	status, goModels, zenModels := modelx.ProbeAndListOpenCode(ctx)
 
 	a.mu.Lock()
 	a.openCodeStatus = status
-	a.openCodeModels = models
+	a.openCodeGoModels = goModels
+	a.openCodeModels = zenModels
 	a.openCodeCachedAt = time.Now()
 	a.mu.Unlock()
 
 	return OpenCodeBootstrap{
-		Status: status,
-		Models: models,
+		Status:   status,
+		GoModels: goModels,
+		Models:   zenModels,
 	}
 }
 
