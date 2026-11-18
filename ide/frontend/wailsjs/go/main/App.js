@@ -6,6 +6,14 @@ export function BootstrapAgy(arg1) {
   return window['go']['main']['App']['BootstrapAgy'](arg1);
 }
 
+export function BootstrapOpenCode(arg1) {
+  return window['go']['main']['App']['BootstrapOpenCode'](arg1);
+}
+
+export function CancelCommand(arg1) {
+  return window['go']['main']['App']['CancelCommand'](arg1);
+}
+
 export function CancelRun(arg1) {
   return window['go']['main']['App']['CancelRun'](arg1);
 }
@@ -34,6 +42,10 @@ export function CreateFile(arg1, arg2) {
   return window['go']['main']['App']['CreateFile'](arg1, arg2);
 }
 
+export function DeleteNativeSkill(arg1) {
+  return window['go']['main']['App']['DeleteNativeSkill'](arg1);
+}
+
 export function DeletePath(arg1, arg2) {
   return window['go']['main']['App']['DeletePath'](arg1, arg2);
 }
@@ -42,8 +54,16 @@ export function DeleteSession(arg1, arg2) {
   return window['go']['main']['App']['DeleteSession'](arg1, arg2);
 }
 
+export function DeleteTeam(arg1, arg2) {
+  return window['go']['main']['App']['DeleteTeam'](arg1, arg2);
+}
+
 export function DiscardChanges(arg1) {
   return window['go']['main']['App']['DiscardChanges'](arg1);
+}
+
+export function DiscardFile(arg1, arg2) {
+  return window['go']['main']['App']['DiscardFile'](arg1, arg2);
 }
 
 export function DoctorAgy() {
@@ -52,6 +72,10 @@ export function DoctorAgy() {
 
 export function EnsureTeamMemory(arg1) {
   return window['go']['main']['App']['EnsureTeamMemory'](arg1);
+}
+
+export function GetCommitDetail(arg1, arg2) {
+  return window['go']['main']['App']['GetCommitDetail'](arg1, arg2);
 }
 
 export function GetDiff(arg1) {
@@ -74,6 +98,10 @@ export function InitGit(arg1) {
   return window['go']['main']['App']['InitGit'](arg1);
 }
 
+export function InstallSkillToProject(arg1, arg2) {
+  return window['go']['main']['App']['InstallSkillToProject'](arg1, arg2);
+}
+
 export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
@@ -86,6 +114,10 @@ export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }
 
+export function ListGitGraph(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListGitGraph'](arg1, arg2, arg3);
+}
+
 export function ListIssues(arg1) {
   return window['go']['main']['App']['ListIssues'](arg1);
 }
@@ -94,12 +126,24 @@ export function ListModels() {
   return window['go']['main']['App']['ListModels']();
 }
 
+export function ListPullRequests(arg1) {
+  return window['go']['main']['App']['ListPullRequests'](arg1);
+}
+
 export function ListSessions(arg1) {
   return window['go']['main']['App']['ListSessions'](arg1);
 }
 
+export function ListSkills(arg1) {
+  return window['go']['main']['App']['ListSkills'](arg1);
+}
+
 export function LoadSession(arg1, arg2) {
   return window['go']['main']['App']['LoadSession'](arg1, arg2);
+}
+
+export function OpenExternalURL(arg1) {
+  return window['go']['main']['App']['OpenExternalURL'](arg1);
 }
 
 export function OpenPR(arg1, arg2, arg3, arg4) {
@@ -114,16 +158,48 @@ export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
 }
 
+export function ReadNativeSkill(arg1) {
+  return window['go']['main']['App']['ReadNativeSkill'](arg1);
+}
+
+export function RemoveProjectSkill(arg1, arg2) {
+  return window['go']['main']['App']['RemoveProjectSkill'](arg1, arg2);
+}
+
 export function RenamePath(arg1, arg2, arg3) {
   return window['go']['main']['App']['RenamePath'](arg1, arg2, arg3);
+}
+
+export function RespondApproval(arg1, arg2) {
+  return window['go']['main']['App']['RespondApproval'](arg1, arg2);
+}
+
+export function RevertHunk(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RevertHunk'](arg1, arg2, arg3, arg4);
 }
 
 export function RunCommand(arg1, arg2) {
   return window['go']['main']['App']['RunCommand'](arg1, arg2);
 }
 
+export function RunGitAction(arg1, arg2) {
+  return window['go']['main']['App']['RunGitAction'](arg1, arg2);
+}
+
 export function SaveFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2, arg3);
+}
+
+export function SaveNativeSkill(arg1, arg2) {
+  return window['go']['main']['App']['SaveNativeSkill'](arg1, arg2);
+}
+
+export function SaveOpenCodeConfig(arg1, arg2) {
+  return window['go']['main']['App']['SaveOpenCodeConfig'](arg1, arg2);
+}
+
+export function SaveSkillAssignments(arg1, arg2) {
+  return window['go']['main']['App']['SaveSkillAssignments'](arg1, arg2);
 }
 
 export function SaveTeamWizard(arg1, arg2) {
@@ -142,6 +218,10 @@ export function SetActiveTeam(arg1, arg2) {
   return window['go']['main']['App']['SetActiveTeam'](arg1, arg2);
 }
 
+export function StageFile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StageFile'](arg1, arg2, arg3);
+}
+
 export function StartRun(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['StartRun'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -156,6 +236,10 @@ export function StartRunWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, ar
 
 export function UpdateAgentModel(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UpdateAgentModel'](arg1, arg2, arg3, arg4);
+}
+
+export function UpdatePermissionMode(arg1, arg2) {
+  return window['go']['main']['App']['UpdatePermissionMode'](arg1, arg2);
 }
 
 export function WindowClose() {

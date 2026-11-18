@@ -92,6 +92,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	applyWindowIcons()
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -367,6 +368,11 @@ func (a *App) SaveTeamWizard(workspace string, input idecore.WizardInput) (team.
 	return idecore.BuildTeamFromWizard(workspace, input)
 }
 
+// SaveSkillAssignments updates settings.skill_assignments in .hivemind/team.yaml.
+func (a *App) SaveSkillAssignments(workspace string, assignments []team.SkillAssignment) (team.File, error) {
+	return idecore.SaveSkillAssignments(workspace, assignments)
+}
+
 // SetActiveTeam switches the active team in .hivemind/team.yaml.
 func (a *App) SetActiveTeam(workspace, teamName string) (team.File, error) {
 	cfg, err := team.Load(workspace)
@@ -381,6 +387,11 @@ func (a *App) SetActiveTeam(workspace, teamName string) (team.File, error) {
 		return team.File{}, err
 	}
 	return cfg, nil
+}
+
+// DeleteTeam removes teamName from .hivemind/team.yaml.
+func (a *App) DeleteTeam(workspace, teamName string) (team.File, error) {
+	return idecore.DeleteTeam(workspace, teamName)
 }
 
 // GetDiff returns parsed unified diffs for the workspace.
@@ -427,6 +438,34 @@ func (a *App) DiscardFile(workspace, relPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return idecore.DiscardFileChanges(ctx, workspace, relPath)
+}
+
+// StageFile stages or unstages a single file in the Git index.
+func (a *App) StageFile(workspace, relPath string, stage bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.StageWorkspaceFile(ctx, workspace, relPath, stage)
+}
+
+// RunGitAction executes safe Source Control actions ("fetch", "pull", "push", "sync", "stash", "stash-pop").
+func (a *App) RunGitAction(workspace, action string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	return idecore.RunGitAction(ctx, workspace, action)
+}
+
+// ListGitGraph returns commits in topological order for the Source Control Graph.
+func (a *App) ListGitGraph(workspace string, limit int, allBranches bool) ([]idecore.GitGraphCommit, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.ListGitGraph(ctx, workspace, limit, allBranches)
+}
+
+// GetCommitDetail returns commit metadata and file diffs for a commit hash.
+func (a *App) GetCommitDetail(workspace, hash string) (idecore.CommitDetail, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.GetCommitDetail(ctx, workspace, hash)
 }
 
 // RevertHunk reverses a single unified diff hunk on relPath.
@@ -635,4 +674,24 @@ func (a *App) ListIssues(workspace string) ([]idecore.ProjectIssue, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return idecore.ListProjectIssues(ctx, workspace)
+}
+
+// ListPullRequests fetches open GitHub pull requests for workspace.
+func (a *App) ListPullRequests(workspace string) ([]idecore.ProjectPullRequest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.ListProjectPullRequests(ctx, workspace)
+}
+
+// OpenExternalURL opens an http/https URL in the system default browser.
+func (a *App) OpenExternalURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if !strings.HasPrefix(trimmed, "https://") && !strings.HasPrefix(trimmed, "http://") {
+		return fmt.Errorf("URL inválida: %s", rawURL)
+	}
+	if a.ctx == nil {
+		return fmt.Errorf("contexto da janela ainda não está pronto")
+	}
+	wailsrt.BrowserOpenURL(a.ctx, trimmed)
+	return nil
 }

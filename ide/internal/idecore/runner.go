@@ -36,9 +36,10 @@ type WizardInput struct {
 	AutoPR         bool              `json:"autoPR"`
 	JiraEnabled    bool              `json:"jiraEnabled"`
 	JiraProject    string            `json:"jiraProject"`
-	BaseBranch     string            `json:"baseBranch"`
-	HomologBranch  string            `json:"homologBranch,omitempty"`
-	MaxTokens      int64             `json:"maxTokens"`
+	BaseBranch       string                 `json:"baseBranch"`
+	HomologBranch    string                 `json:"homologBranch,omitempty"`
+	MaxTokens        int64                  `json:"maxTokens"`
+	SkillAssignments []team.SkillAssignment `json:"skillAssignments,omitempty"`
 }
 
 // BuildTeamFromWizard constructs a lean 3-agent team (Chefe + Dev + QA) by default
@@ -144,11 +145,42 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	if strings.TrimSpace(in.HomologBranch) != "" {
 		file.Settings.HomologBranch = strings.TrimSpace(in.HomologBranch)
 	}
+	if in.SkillAssignments != nil {
+		file.Settings.SkillAssignments = team.NormalizeSkillAssignments(in.SkillAssignments)
+	}
 	team.UpsertTeam(&file, newTeam)
 	if err := team.Save(workspace, file); err != nil {
 		return team.File{}, err
 	}
 	return file, nil
+}
+
+// SaveSkillAssignments persists per-role skill assignments into .hivemind/team.yaml.
+func SaveSkillAssignments(workspace string, assignments []team.SkillAssignment) (team.File, error) {
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return team.File{}, err
+	}
+	cfg.Settings.SkillAssignments = team.NormalizeSkillAssignments(assignments)
+	if err := team.Save(workspace, cfg); err != nil {
+		return team.File{}, err
+	}
+	return cfg, nil
+}
+
+// DeleteTeam removes teamName from .hivemind/team.yaml and saves the updated config.
+func DeleteTeam(workspace, teamName string) (team.File, error) {
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return team.File{}, err
+	}
+	if !team.RemoveTeam(&cfg, teamName) {
+		return team.File{}, fmt.Errorf("equipe %q não encontrada", teamName)
+	}
+	if err := team.Save(workspace, cfg); err != nil {
+		return team.File{}, err
+	}
+	return cfg, nil
 }
 
 // UpdateProjectPermissionMode updates settings.permission_mode ("governed", "auto_edit", "full_access") in .hivemind/team.yaml.
@@ -557,6 +589,7 @@ func (m *SessionManager) RunTurnWithOptions(
 
 // Cancel stops the active run on laneID (cancelling only child processes started by that lane).
 func (m *SessionManager) Cancel(laneID string) bool {
+	m.ResolveApproval(laneID, false)
 	m.mu.Lock()
 	cancel, ok := m.cancels[laneID]
 	m.mu.Unlock()

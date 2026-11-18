@@ -7,7 +7,37 @@ const svg = (d: string, size = 15, extra = "") =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 
 export const icons = {
-  brand: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="#c9ced6" stroke-width="1.9" fill="rgba(255,255,255,0.08)"/><path d="M12 7.5L16 9.8V14.2L12 16.5L8 14.2V9.8L12 7.5Z" fill="#c9ced6"/></svg>`,
+  brand: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="hm-hex" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#c4b5fd"/>
+        <stop offset="100%" stop-color="#7c5cff"/>
+      </linearGradient>
+    </defs>
+    <path d="M12 2.4L16.3 4.9V9.8L12 12.2L7.7 9.8V4.9L12 2.4Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
+    <path d="M7.7 9.8L12 12.2V17.1L7.7 19.6L3.4 17.1V12.2L7.7 9.8Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
+    <path d="M16.3 9.8L20.6 12.2V17.1L16.3 19.6L12 17.1V12.2L16.3 9.8Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
+    <line x1="12" y1="4.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
+    <line x1="5.6" y1="15.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
+    <line x1="18.4" y1="15.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
+    <circle cx="12" cy="12.2" r="2.3" fill="#4c8dff"/>
+    <circle cx="12" cy="2.9" r="1.2" fill="#e9d5ff"/>
+    <circle cx="3.9" cy="16.8" r="1.2" fill="#e9d5ff"/>
+    <circle cx="20.1" cy="16.8" r="1.2" fill="#e9d5ff"/>
+  </svg>`,
+  brandHero: `<svg width="44" height="44" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <rect x="1" y="1" width="22" height="22" rx="6" fill="#0d101a" stroke="rgba(167,139,250,0.35)" stroke-width="1"/>
+    <path d="M12 4.2L15.6 6.3V10.4L12 12.4L8.4 10.4V6.3L12 4.2Z" stroke="#a78bfa" stroke-width="1.35" stroke-linejoin="round"/>
+    <path d="M8.4 10.4L12 12.4V16.5L8.4 18.6L4.8 16.5V12.4L8.4 10.4Z" stroke="#8b5cf6" stroke-width="1.35" stroke-linejoin="round"/>
+    <path d="M15.6 10.4L19.2 12.4V16.5L15.6 18.6L12 16.5V12.4L15.6 10.4Z" stroke="#8b5cf6" stroke-width="1.35" stroke-linejoin="round"/>
+    <line x1="12" y1="6.3" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
+    <line x1="6.7" y1="15.5" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
+    <line x1="17.3" y1="15.5" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
+    <circle cx="12" cy="12.4" r="2.0" fill="#4c8dff"/>
+    <circle cx="12" cy="4.6" r="1.0" fill="#e9d5ff"/>
+    <circle cx="5.2" cy="16.3" r="1.0" fill="#e9d5ff"/>
+    <circle cx="18.8" cy="16.3" r="1.0" fill="#e9d5ff"/>
+  </svg>`,
   explorer: ms("folder_open", 17, true),
   team: ms("groups", 17, true),
   swarm: ms("hub", 17, true),
@@ -54,6 +84,15 @@ export const icons = {
   newFolder: ms("create_new_folder", 13),
   arrowRight: ms("arrow_right", 11),
   fileDefault: ms("description", 13),
+  moreHoriz: ms("more_horiz", 15),
+  undo: ms("undo", 13),
+  minus: ms("remove", 13),
+  openInNew: ms("open_in_new", 13),
+  arrowDown: ms("arrow_downward", 13),
+  arrowUp: ms("arrow_upward", 13),
+  sync: ms("sync", 13),
+  target: ms("adjust", 12),
+  cloud: ms("cloud", 12),
 };
 
 export function fileBadge(name: string): string {

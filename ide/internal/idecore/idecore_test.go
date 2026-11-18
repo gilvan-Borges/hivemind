@@ -147,9 +147,16 @@ func TestBuildTeamFromWizardDoesNotModifyGitignore(t *testing.T) {
 		Worktrees:  true,
 		AutoCommit: true,
 		AutoPR:     false,
+		SkillAssignments: []team.SkillAssignment{
+			{Name: "qa-only", Source: "native", Roles: []string{"qa"}},
+			{Name: "shared", Source: "project", Roles: []string{"all"}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(cfg.Settings.SkillAssignments) != 2 {
+		t.Fatalf("expected 2 skill assignments, got %+v", cfg.Settings.SkillAssignments)
 	}
 	if cfg.Active != "alpha" {
 		t.Fatalf("expected active team alpha, got %s", cfg.Active)
@@ -535,5 +542,84 @@ func TestUntrackedDiffDiscardAndSyncIntegration(t *testing.T) {
 	afterDiffs, err := WorkspaceDiff(ctx, repo)
 	if err != nil || len(afterDiffs) != 1 || afterDiffs[0].Path != "endpoint.go" {
 		t.Fatalf("expected synced endpoint.go visible in WorkspaceDiff, got %+v err=%v", afterDiffs, err)
+	}
+}
+
+func TestParseGHPRList(t *testing.T) {
+	raw := []byte(`[
+		{
+			"number": 42,
+			"title": "feat: adiciona dashboard de metas",
+			"body": "Resumo do PR",
+			"url": "https://github.com/org/repo/pull/42",
+			"state": "OPEN",
+			"isDraft": true,
+			"updatedAt": "2026-11-18T12:00:00Z",
+			"headRefName": "feat/metas",
+			"baseRefName": "homolog",
+			"author": {"login": "gilvan-Borges"}
+		}
+	]`)
+	prs, err := ParseGHPRList(raw)
+	if err != nil {
+		t.Fatalf("ParseGHPRList error: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(prs))
+	}
+	if prs[0].Number != 42 || prs[0].Author != "gilvan-Borges" || !prs[0].IsDraft || prs[0].HeadRef != "feat/metas" || prs[0].BaseRef != "homolog" {
+		t.Fatalf("unexpected PR parsed: %+v", prs[0])
+	}
+}
+
+func TestParseGitLogGraphAndPorcelainStatus(t *testing.T) {
+	raw := "aaaa1111aaaa1111\x1faaaa111\x1fbbbb2222 cccc3333\x1fGilvan\x1f2 hours ago\x1fMerge pull request #6\x1fHEAD -> main, origin/main\x1e" +
+		"bbbb2222bbbb2222\x1fbbbb222\x1fdddd4444\x1fGilvan\x1f3 hours ago\x1ffeat: skills panel\x1f\x1e"
+	commits := ParseGitLogGraph(raw)
+	if len(commits) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(commits))
+	}
+	if commits[0].Short != "aaaa111" || len(commits[0].Parents) != 2 || len(commits[0].Refs) != 2 {
+		t.Fatalf("unexpected first commit: %+v", commits[0])
+	}
+	if commits[1].Parents[0] != "dddd4444" {
+		t.Fatalf("unexpected second commit parents: %+v", commits[1])
+	}
+
+	st, staged := parsePorcelainStatus("M  ide/app.go\n M ide/main.go\nA  assets/logo.png\nD  old.txt\n")
+	if st["ide/app.go"] != "M" || !staged["ide/app.go"] {
+		t.Fatalf("expected staged M for ide/app.go, got status=%q staged=%v", st["ide/app.go"], staged["ide/app.go"])
+	}
+	if st["ide/main.go"] != "M" || staged["ide/main.go"] {
+		t.Fatalf("expected unstaged M for ide/main.go, got status=%q staged=%v", st["ide/main.go"], staged["ide/main.go"])
+	}
+	if st["assets/logo.png"] != "A" || st["old.txt"] != "D" {
+		t.Fatalf("unexpected statuses: %+v", st)
+	}
+}
+
+func TestDeleteTeam(t *testing.T) {
+	dir := t.TempDir()
+	_, err := BuildTeamFromWizard(dir, WizardInput{TeamName: "alpha", DevCount: 1, DefaultModel: "agy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = BuildTeamFromWizard(dir, WizardInput{TeamName: "beta", DevCount: 1, DefaultModel: "agy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := DeleteTeam(dir, "beta")
+	if err != nil {
+		t.Fatalf("DeleteTeam failed: %v", err)
+	}
+	if len(cfg.Teams) != 1 || cfg.Active != "alpha" {
+		t.Fatalf("expected alpha active with 1 remaining team, got active=%q teams=%d", cfg.Active, len(cfg.Teams))
+	}
+	cfg, err = DeleteTeam(dir, "alpha")
+	if err != nil {
+		t.Fatalf("DeleteTeam last team failed: %v", err)
+	}
+	if len(cfg.Teams) != 0 || cfg.Active != "" {
+		t.Fatalf("expected 0 teams and empty Active, got active=%q teams=%d", cfg.Active, len(cfg.Teams))
 	}
 }

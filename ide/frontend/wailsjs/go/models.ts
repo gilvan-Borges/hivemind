@@ -55,6 +55,8 @@ export namespace idecore {
 	}
 	export class FileDiff {
 	    path: string;
+	    status?: string;
+	    staged?: boolean;
 	    added: number;
 	    removed: number;
 	    lines: DiffLine[];
@@ -66,6 +68,8 @@ export namespace idecore {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
+	        this.status = source["status"];
+	        this.staged = source["staged"];
 	        this.added = source["added"];
 	        this.removed = source["removed"];
 	        this.lines = this.convertValues(source["lines"], DiffLine);
@@ -89,6 +93,50 @@ export namespace idecore {
 		    return a;
 		}
 	}
+	export class CommitDetail {
+	    hash: string;
+	    short: string;
+	    author: string;
+	    date: string;
+	    subject: string;
+	    body?: string;
+	    files: FileDiff[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CommitDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hash = source["hash"];
+	        this.short = source["short"];
+	        this.author = source["author"];
+	        this.date = source["date"];
+	        this.subject = source["subject"];
+	        this.body = source["body"];
+	        this.files = this.convertValues(source["files"], FileDiff);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class FileNode {
 	    name: string;
 	    path: string;
@@ -128,6 +176,30 @@ export namespace idecore {
 		    }
 		    return a;
 		}
+	}
+	export class GitGraphCommit {
+	    hash: string;
+	    short: string;
+	    parents: string[];
+	    author: string;
+	    date: string;
+	    subject: string;
+	    refs?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GitGraphCommit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hash = source["hash"];
+	        this.short = source["short"];
+	        this.parents = source["parents"];
+	        this.author = source["author"];
+	        this.date = source["date"];
+	        this.subject = source["subject"];
+	        this.refs = source["refs"];
+	    }
 	}
 	export class GitHubStatusInfo {
 	    installed: boolean;
@@ -183,6 +255,36 @@ export namespace idecore {
 	        this.title = source["title"];
 	        this.body = source["body"];
 	        this.status = source["status"];
+	    }
+	}
+	export class ProjectPullRequest {
+	    number: number;
+	    title: string;
+	    body?: string;
+	    url: string;
+	    state: string;
+	    isDraft: boolean;
+	    author?: string;
+	    headRef?: string;
+	    baseRef?: string;
+	    updatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectPullRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.number = source["number"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.url = source["url"];
+	        this.state = source["state"];
+	        this.isDraft = source["isDraft"];
+	        this.author = source["author"];
+	        this.headRef = source["headRef"];
+	        this.baseRef = source["baseRef"];
+	        this.updatedAt = source["updatedAt"];
 	    }
 	}
 	export class ProjectStack {
@@ -313,6 +415,28 @@ export namespace idecore {
 	        this.totalTokens = source["totalTokens"];
 	    }
 	}
+	export class SkillInfo {
+	    name: string;
+	    description: string;
+	    source: string;
+	    path: string;
+	    updatedAt: string;
+	    sizeBytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.source = source["source"];
+	        this.path = source["path"];
+	        this.updatedAt = source["updatedAt"];
+	        this.sizeBytes = source["sizeBytes"];
+	    }
+	}
 	export class TextSearchMatch {
 	    relPath: string;
 	    line: number;
@@ -334,15 +458,19 @@ export namespace idecore {
 	    teamName: string;
 	    chiefRole: string;
 	    devCount: number;
+	    maxDynamicDevs?: number;
 	    defaultModel: string;
 	    agentModels?: Record<string, string>;
+	    permissionMode?: string;
 	    worktrees: boolean;
 	    autoCommit: boolean;
 	    autoPR: boolean;
 	    jiraEnabled: boolean;
 	    jiraProject: string;
 	    baseBranch: string;
+	    homologBranch?: string;
 	    maxTokens: number;
+	    skillAssignments?: team.SkillAssignment[];
 	
 	    static createFrom(source: any = {}) {
 	        return new WizardInput(source);
@@ -353,16 +481,38 @@ export namespace idecore {
 	        this.teamName = source["teamName"];
 	        this.chiefRole = source["chiefRole"];
 	        this.devCount = source["devCount"];
+	        this.maxDynamicDevs = source["maxDynamicDevs"];
 	        this.defaultModel = source["defaultModel"];
 	        this.agentModels = source["agentModels"];
+	        this.permissionMode = source["permissionMode"];
 	        this.worktrees = source["worktrees"];
 	        this.autoCommit = source["autoCommit"];
 	        this.autoPR = source["autoPR"];
 	        this.jiraEnabled = source["jiraEnabled"];
 	        this.jiraProject = source["jiraProject"];
 	        this.baseBranch = source["baseBranch"];
+	        this.homologBranch = source["homologBranch"];
 	        this.maxTokens = source["maxTokens"];
+	        this.skillAssignments = this.convertValues(source["skillAssignments"], team.SkillAssignment);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class WorkspaceSessionsSummary {
 	    sessions: SessionSummary[];
@@ -485,6 +635,9 @@ export namespace main {
 	    recentProjects: string[];
 	    agyStatus: modelx.AgyStatus;
 	    models: modelx.AgyModel[];
+	    openCodeStatus: modelx.OpenCodeStatus;
+	    openCodeGoModels: modelx.AgyModel[];
+	    openCodeModels: modelx.AgyModel[];
 	    goVersion: string;
 	    os: string;
 	
@@ -499,8 +652,45 @@ export namespace main {
 	        this.recentProjects = source["recentProjects"];
 	        this.agyStatus = this.convertValues(source["agyStatus"], modelx.AgyStatus);
 	        this.models = this.convertValues(source["models"], modelx.AgyModel);
+	        this.openCodeStatus = this.convertValues(source["openCodeStatus"], modelx.OpenCodeStatus);
+	        this.openCodeGoModels = this.convertValues(source["openCodeGoModels"], modelx.AgyModel);
+	        this.openCodeModels = this.convertValues(source["openCodeModels"], modelx.AgyModel);
 	        this.goVersion = source["goVersion"];
 	        this.os = source["os"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OpenCodeBootstrap {
+	    status: modelx.OpenCodeStatus;
+	    goModels: modelx.AgyModel[];
+	    models: modelx.AgyModel[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenCodeBootstrap(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = this.convertValues(source["status"], modelx.OpenCodeStatus);
+	        this.goModels = this.convertValues(source["goModels"], modelx.AgyModel);
+	        this.models = this.convertValues(source["models"], modelx.AgyModel);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -558,6 +748,32 @@ export namespace modelx {
 	        this.Detail = source["Detail"];
 	    }
 	}
+	export class OpenCodeStatus {
+	    configured: boolean;
+	    source: string;
+	    baseUrl: string;
+	    keyMasked: string;
+	    goCount: number;
+	    zenCount: number;
+	    modelCount: number;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenCodeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.source = source["source"];
+	        this.baseUrl = source["baseUrl"];
+	        this.keyMasked = source["keyMasked"];
+	        this.goCount = source["goCount"];
+	        this.zenCount = source["zenCount"];
+	        this.modelCount = source["modelCount"];
+	        this.detail = source["detail"];
+	    }
+	}
 
 }
 
@@ -567,6 +783,7 @@ export namespace orchestrator {
 	    SessionID: string;
 	    Summary: string;
 	    Branches: string[];
+	    integrationBranch?: string;
 	    PullRequests: githubx.PullRequest[];
 	    inputTokens: number;
 	    outputTokens: number;
@@ -581,6 +798,7 @@ export namespace orchestrator {
 	        this.SessionID = source["SessionID"];
 	        this.Summary = source["Summary"];
 	        this.Branches = source["Branches"];
+	        this.integrationBranch = source["integrationBranch"];
 	        this.PullRequests = this.convertValues(source["PullRequests"], githubx.PullRequest);
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
@@ -664,18 +882,40 @@ export namespace team {
 		    return a;
 		}
 	}
+	export class SkillAssignment {
+	    name: string;
+	    source?: string;
+	    roles?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillAssignment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.roles = source["roles"];
+	    }
+	}
 	export class Settings {
+	    permission_mode?: string;
 	    jira_enabled: boolean;
 	    jira_project?: string;
 	    worktrees?: boolean;
 	    auto_commit: boolean;
 	    auto_pr: boolean;
+	    homolog_branch?: string;
+	    protected_branches?: string[];
+	    require_main_merge_approval?: boolean;
 	    max_qa_loops: number;
+	    max_dynamic_devs?: number;
 	    max_llm_calls: number;
 	    max_tokens?: number;
 	    base_branch: string;
 	    shell_allowlist?: string[];
 	    confirm_shell?: boolean;
+	    skill_assignments?: SkillAssignment[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -683,18 +923,42 @@ export namespace team {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.permission_mode = source["permission_mode"];
 	        this.jira_enabled = source["jira_enabled"];
 	        this.jira_project = source["jira_project"];
 	        this.worktrees = source["worktrees"];
 	        this.auto_commit = source["auto_commit"];
 	        this.auto_pr = source["auto_pr"];
+	        this.homolog_branch = source["homolog_branch"];
+	        this.protected_branches = source["protected_branches"];
+	        this.require_main_merge_approval = source["require_main_merge_approval"];
 	        this.max_qa_loops = source["max_qa_loops"];
+	        this.max_dynamic_devs = source["max_dynamic_devs"];
 	        this.max_llm_calls = source["max_llm_calls"];
 	        this.max_tokens = source["max_tokens"];
 	        this.base_branch = source["base_branch"];
 	        this.shell_allowlist = source["shell_allowlist"];
 	        this.confirm_shell = source["confirm_shell"];
+	        this.skill_assignments = this.convertValues(source["skill_assignments"], SkillAssignment);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class File {
 	    version: number;
@@ -732,6 +996,7 @@ export namespace team {
 		    return a;
 		}
 	}
+	
 	
 
 }

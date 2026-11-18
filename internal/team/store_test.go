@@ -83,3 +83,43 @@ func TestExampleFile(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSkillAssignmentsNormalizationAndFiltering(t *testing.T) {
+	f := File{
+		Active: "alfa",
+		Settings: Settings{
+			SkillAssignments: []SkillAssignment{
+				{Name: "  Arch-Rules ", Source: "NATIVE", Roles: []string{"chefe", "architect"}},
+				{Name: "dev-style", Source: "project", Roles: []string{"developer"}},
+				{Name: "qa-check", Source: "native", Roles: []string{"qa"}},
+				{Name: "shared", Roles: []string{"chief", "dev", "qa"}},
+				{Name: "empty", Roles: []string{}},
+			},
+		},
+		Teams: []Team{DefaultTeam("alfa", "", "gemini-flash-latest", "gemini", 1)},
+	}
+	f.Normalize()
+
+	if len(f.Settings.SkillAssignments) != 4 {
+		t.Fatalf("expected 4 normalized assignments, got %d: %+v", len(f.Settings.SkillAssignments), f.Settings.SkillAssignments)
+	}
+	if got := f.Settings.SkillAssignments[0]; got.Name != "arch-rules" || got.Source != "native" || len(got.Roles) != 1 || got.Roles[0] != SkillTargetChief {
+		t.Fatalf("unexpected chief assignment: %+v", got)
+	}
+	if got := f.Settings.SkillAssignments[3]; len(got.Roles) != 1 || got.Roles[0] != SkillTargetAll {
+		t.Fatalf("expected chief+dev+qa to collapse into all, got %+v", got)
+	}
+
+	chiefSkills := f.Settings.SkillsForTarget(SkillTargetChief)
+	if len(chiefSkills) != 2 || chiefSkills[0].Name != "arch-rules" || chiefSkills[1].Name != "shared" {
+		t.Fatalf("chiefSkills = %+v", chiefSkills)
+	}
+	devSkills := f.Settings.SkillsForTarget(SkillTargetDev)
+	if len(devSkills) != 2 || devSkills[0].Name != "dev-style" || devSkills[1].Name != "shared" {
+		t.Fatalf("devSkills = %+v", devSkills)
+	}
+	qaSkills := f.Settings.SkillsForTarget(SkillTargetQA)
+	if len(qaSkills) != 2 || qaSkills[0].Name != "qa-check" || qaSkills[1].Name != "shared" {
+		t.Fatalf("qaSkills = %+v", qaSkills)
+	}
+}

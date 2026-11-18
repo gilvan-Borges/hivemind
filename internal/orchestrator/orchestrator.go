@@ -538,25 +538,36 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return nil
 	}
+	chiefSkillGuide := r.guidanceForRole(team.SkillTargetChief, false)
+	joinExtra := func(base string) string {
+		if chiefSkillGuide == "" {
+			return base
+		}
+		if base == "" {
+			return chiefSkillGuide
+		}
+		return base + chiefSkillGuide
+	}
 	if r.chiefPlan != "" {
 		// Chief already planned and sliced tasks (via auto triage or plan checkpoint); Tech Lead refines technical guardrails if needed.
-		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe.", true); err != nil {
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, joinExtra("Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe."), true); err != nil {
 			return nil, nil, err
 		}
 	} else {
-		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), qaRoot, "", true); err != nil {
+		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), qaRoot, joinExtra(""), true); err != nil {
 			return nil, nil, err
 		}
-		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, "", true); err != nil {
+		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), qaRoot, joinExtra(""), true); err != nil {
 			return nil, nil, err
 		}
-		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), qaRoot, "", true); err != nil {
+		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), qaRoot, joinExtra(""), true); err != nil {
 			return nil, nil, err
 		}
 	}
 
 	var parallelSubs []agent.Agent
 	var wtLines []string
+	devSkillGuide := r.guidanceForRole(team.SkillTargetDev, true)
 	for idx, dev := range devs {
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
@@ -567,8 +578,8 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		} else if len(devs) > 1 {
 			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
 		}
-		if skillGuide := skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, r.selectedSkills, r.selectedNative, 0, 0); skillGuide != "" {
-			extra += skillGuide
+		if devSkillGuide != "" {
+			extra += devSkillGuide
 		}
 		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true)
 		if err != nil {
@@ -589,8 +600,8 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 	qaAgents := r.Team.ByRole(team.RoleQA)
 	qaExtra := "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
-	if skillGuide := skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, r.selectedSkills, r.selectedNative, 0, 0); skillGuide != "" {
-		qaExtra += skillGuide
+	if qaSkillGuide := r.guidanceForRole(team.SkillTargetQA, true); qaSkillGuide != "" {
+		qaExtra += qaSkillGuide
 	}
 	var qaSubs []agent.Agent
 	for i, a := range qaAgents {
@@ -655,6 +666,9 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 				r.prNumber, strings.Join(r.prReviewers, ", "), r.prNumber)
 		}
 		closingExtra += "Revise [qa_report], [qa_approval_note], [qa_feedback] e use git_diff se necessário.\nEntregue ao usuário um resumo executivo claro em Markdown contendo:\n1. O que foi implementado/alterado;\n2. Resultado da revisão/testes do QA;\n3. Branch/PR e próximos passos."
+		if chiefSkillGuide != "" {
+			closingExtra += chiefSkillGuide
+		}
 		ag, err := r.llm(ctx, closingAgent, closingName, "closing_summary", qaRoot, closingExtra, key, stateKeys, false, false)
 		if err != nil {
 			return nil, nil, err
@@ -1192,6 +1206,72 @@ func buildUserContent(objective string, attachments []Attachment) *genai.Content
 	}
 }
 
+func (r *Runner) resolveSkillCatalogs(target string, includeDynamic bool) (project []skillx.Skill, native []skillx.Skill) {
+	seenProject := map[string]bool{}
+	seenNative := map[string]bool{}
+	addProject := func(s skillx.Skill) {
+		if !seenProject[s.Name] {
+			seenProject[s.Name] = true
+			project = append(project, s)
+		}
+	}
+	addNative := func(s skillx.Skill) {
+		if !seenNative[s.Name] {
+			seenNative[s.Name] = true
+			native = append(native, s)
+		}
+	}
+	for _, a := range r.Project.Settings.SkillsForTarget(target) {
+		switch strings.ToLower(strings.TrimSpace(a.Source)) {
+		case "native":
+			if hit := skillx.Find(r.NativeSkills, a.Name); hit != nil {
+				addNative(*hit)
+			}
+		case "project":
+			if hit := skillx.Find(r.skills, a.Name); hit != nil {
+				addProject(*hit)
+			}
+		default:
+			if hit := skillx.Find(r.skills, a.Name); hit != nil {
+				addProject(*hit)
+			} else if hit := skillx.Find(r.NativeSkills, a.Name); hit != nil {
+				addNative(*hit)
+			}
+		}
+	}
+	if includeDynamic {
+		for _, s := range r.selectedSkills {
+			addProject(s)
+		}
+		for _, s := range r.selectedNative {
+			addNative(s)
+		}
+	}
+	return project, native
+}
+
+func (r *Runner) guidanceForRole(target string, includeDynamic bool) string {
+	project, native := r.resolveSkillCatalogs(target, includeDynamic)
+	return skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, project, native, 0, 0)
+}
+
+func (r *Runner) pinnedSkillsNote() string {
+	if len(r.Project.Settings.SkillAssignments) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, a := range r.Project.Settings.SkillAssignments {
+		if len(a.Roles) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- `%s`: %s", a.Name, strings.Join(a.Roles, ", ")))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nSKILLS FIXADAS POR PAPEL NA CONFIGURAÇÃO DO TIME (já injetadas automaticamente nos respectivos agentes):\n" + strings.Join(lines, "\n")
+}
+
 func (r *Runner) primaryChief() team.Agent {
 	if pms := r.Team.ByRole(team.RoleProjectManager); len(pms) > 0 {
 		for _, a := range pms {
@@ -1463,6 +1543,12 @@ REGRA DE TRIAGEM:
 			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
 			"- Se a versão NATIVA da IDE parecer mais atual ou melhor que a versão do projeto, passe o nome em \"native_skills\"; se o projeto tiver uma skill de mesmo nome, o usuário será consultado para autorizar a substituição.\n" +
 			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file."
+	}
+	if note := r.pinnedSkillsNote(); note != "" {
+		triageInstr += note
+	}
+	if chiefGuide := r.guidanceForRole(team.SkillTargetChief, false); chiefGuide != "" {
+		triageInstr += chiefGuide
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")

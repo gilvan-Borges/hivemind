@@ -994,7 +994,7 @@ button.icon-btn:hover:not(:disabled) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 9px;
+  padding: 3px 6px 3px 9px;
   border-radius: 6px;
   font-size: 11.5px;
   background: transparent;
@@ -1013,6 +1013,30 @@ button.icon-btn:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.26);
   color: #f2f4f6;
   font-weight: 500;
+}
+.lane-close-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.65;
+  transition: background 100ms ease, color 100ms ease, opacity 100ms ease;
+}
+.lane-pill:hover .lane-close-x,
+.lane-pill.active .lane-close-x {
+  opacity: 0.9;
+}
+.lane-close-x:hover {
+  opacity: 1;
+  background: var(--red-bg);
+  color: var(--red);
 }
 .lane-dot {
   width: 6px;
@@ -1312,10 +1336,11 @@ button.icon-btn:hover:not(:disabled) {
 
 /* Borderless Bottom Status Bar (JetBrains Islands Status Bar) */
 .status-bar {
-  height: 26px;
+  height: 28px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: nowrap;
+  gap: 10px;
   padding: 0 12px;
   background: var(--bg-chrome);
   border-top: 1px solid var(--border);
@@ -1323,6 +1348,28 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text-dim);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.status-bar > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.status-bar #status-stack {
+  max-width: 165px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.status-bar #status-text {
+  flex: 1 1 80px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-bar .spacer {
+  flex: 0 0 0;
+  display: none;
 }
 .status-chip {
   display: inline-flex;
@@ -1330,7 +1377,7 @@ button.icon-btn:hover:not(:disabled) {
   gap: 5px;
   color: #b9c0cb;
   font-weight: 600;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 5px;
 }
 .status-chip:hover {
@@ -2308,11 +2355,771 @@ button.lane-pill { text-align: left; }
 }
 
 /* ===== Welcome hero premium ===== */
+.welcome-hero-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+  filter: drop-shadow(0 6px 18px rgba(124, 92, 255, 0.28));
+}
 .welcome-title {
   font-size: 26px;
   font-weight: 700;
   letter-spacing: -0.6px;
   color: var(--text);
+}
+
+/* ===== Empty AI chat state ===== */
+.chat-empty-state {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+/* ===== Git & Issues clean sections ===== */
+.git-sidebar-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.git-status-row,
+.git-gh-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.git-remote-url {
+  font-size: 10.5px;
+  word-break: break-all;
+  opacity: 0.85;
+}
+.git-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.git-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.git-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.git-discard-link {
+  color: var(--red);
+  padding: 2px 6px;
+}
+.git-discard-link:hover {
+  background: var(--red-bg);
+}
+.diff-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-file-stat {
+  flex-shrink: 0;
+}
+.git-subtabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.git-subtab {
+  flex: 1 1 0;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: center;
+  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+.git-subtab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+.git-subtab.active {
+  color: var(--text);
+  background: var(--bg-card);
+  border-color: var(--border-strong);
+}
+.pr-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pr-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+.pr-draft-pill {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.14);
+  color: var(--amber);
+  letter-spacing: 0.4px;
+}
+.pr-branch-flow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== Skill Role Badges (sidebar) ===== */
+.skill-roles-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.skill-role-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+.skill-role-badge.all {
+  background: rgba(167, 139, 250, 0.16);
+  border-color: rgba(167, 139, 250, 0.42);
+  color: #c4b5fd;
+}
+.skill-role-badge.chief {
+  background: rgba(76, 141, 255, 0.15);
+  border-color: rgba(76, 141, 255, 0.38);
+  color: #93c5fd;
+}
+.skill-role-badge.dev {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.36);
+  color: #6ee7b7;
+}
+.skill-role-badge.qa {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.36);
+  color: #fcd34d;
+}
+
+/* ===== Página Central: Configuração da Equipe & Skills ===== */
+.team-config-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 36px;
+  background: radial-gradient(circle at 15% 0%, rgba(124, 92, 255, 0.06), transparent 45%), var(--bg-deep);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.tc-header {
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.tc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.tc-title-row h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.tc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tc-error {
+  background: var(--red-bg);
+  border: 1px solid rgba(251, 113, 133, 0.35);
+  color: var(--red);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+}
+.tc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+}
+.tc-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tc-card-wide {
+  grid-column: 1 / -1;
+}
+.tc-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.tc-card-head h3 {
+  margin: 0 0 2px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.tc-fields {
+  display: grid;
+  grid-template-columns: 145px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+}
+.tc-fields label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.tc-fields input,
+.tc-fields select {
+  width: 100%;
+  min-width: 0;
+}
+.tc-inline-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tc-git-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.tc-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tc-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.tc-toggle-row input {
+  margin-top: 2px;
+}
+.tc-toggle-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.tc-skills-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.tc-skills-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tc-skills-toolbar input {
+  width: 200px;
+}
+.tc-skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tc-empty-skills {
+  padding: 18px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-align: center;
+}
+.tc-skill-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.tc-skill-info {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tc-skill-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.tc-skill-scope {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.tc-skill-desc {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.tc-role-pills {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.tc-role-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 110ms ease, border-color 110ms ease, color 110ms ease;
+}
+.tc-role-pill:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.tc-role-pill.all.active {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: rgba(167, 139, 250, 0.55);
+  color: #ddd6fe;
+}
+.tc-role-pill.chief.active {
+  background: rgba(76, 141, 255, 0.2);
+  border-color: rgba(76, 141, 255, 0.55);
+  color: #bfdbfe;
+}
+.tc-role-pill.dev.active {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #a7f3d0;
+}
+.tc-role-pill.qa.active {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: rgba(251, 191, 36, 0.5);
+  color: #fde68a;
+}
+.tc-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 6px;
+  flex-wrap: wrap;
+}
+
+/* ===== VS Code-style Source Control & Git Graph ===== */
+.scm-header {
+  position: relative;
+}
+.scm-body {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+.scm-repo-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px 6px;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+.scm-branch-label {
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scm-tabs-pad {
+  margin: 8px 10px 6px;
+}
+.scm-commit-box {
+  padding: 2px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.scm-commit-box input {
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.scm-split-btn {
+  display: flex;
+  position: relative;
+  width: 100%;
+}
+.scm-commit-main {
+  flex: 1;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  justify-content: center;
+  height: 28px;
+}
+.scm-commit-arrow {
+  width: 26px;
+  padding: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+  border-left: 1px solid rgba(0, 0, 0, 0.28) !important;
+  justify-content: center;
+  height: 28px;
+}
+.scm-more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.scm-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 195px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72);
+  z-index: 160;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.scm-dropdown .dropdown-item.danger {
+  color: var(--red);
+}
+.scm-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 4px;
+}
+.scm-section {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+.scm-section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+}
+.scm-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  padding: 2px 3px;
+  cursor: pointer;
+}
+.scm-collapse-btn:hover {
+  color: var(--text);
+}
+.scm-count-pill {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.scm-group-label {
+  padding: 4px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.scm-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+.scm-file-row:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+.scm-file-row.active {
+  background: var(--bg-active);
+}
+.scm-file-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.scm-file-name {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scm-file-dir {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.scm-file-actions {
+  display: none;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.scm-file-row:hover .scm-file-actions {
+  display: inline-flex;
+}
+.scm-row-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.scm-row-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+.scm-status-letter {
+  width: 14px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.scm-status-letter.modified { color: #e2b96f; }
+.scm-status-letter.untracked,
+.scm-status-letter.added { color: var(--green); }
+.scm-status-letter.deleted { color: var(--red); }
+.scm-status-letter.renamed { color: #67e8f9; }
+
+.scm-mini-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.scm-mini-pill.active {
+  color: var(--text);
+  border-color: rgba(76, 141, 255, 0.45);
+  background: rgba(76, 141, 255, 0.14);
+}
+.scm-graph-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.scm-graph-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 4px;
+  cursor: pointer;
+  font-size: 11.5px;
+  min-width: 0;
+}
+.scm-graph-row:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+.scm-graph-row.active {
+  background: var(--bg-active);
+}
+.scm-graph-svg {
+  flex-shrink: 0;
+  display: block;
+}
+.scm-graph-subject {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.scm-graph-subject.is-head {
+  color: var(--text);
+  font-weight: 700;
+}
+.scm-graph-refs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.scm-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scm-ref-pill.head {
+  background: rgba(76, 141, 255, 0.24);
+  border: 1px solid rgba(76, 141, 255, 0.55);
+  color: #bfdbfe;
+}
+.scm-ref-pill.remote {
+  background: rgba(167, 139, 250, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  color: #ddd6fe;
+}
+.scm-ref-pill.local {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+.scm-ref-pill.tag {
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: #fde68a;
+}
+
+/* ===== Commit Viewer (ao clicar no Graph) ===== */
+.commit-view-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px 36px;
+  background: var(--bg-deep);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.commit-body-pre {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.commit-file-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.commit-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border);
 }
 
 /* ===== Material Symbols (ícones oficiais do Google, embutidos offline) ===== */

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -102,4 +103,31 @@ func UpsertTeam(f *File, t Team) {
 	}
 	f.Teams = append(f.Teams, t)
 	f.Active = t.Name
+}
+
+// RemoveTeam removes a team by name and updates Active to another remaining team (or empty).
+func RemoveTeam(f *File, name string) bool {
+	target := strings.TrimSpace(name)
+	if target == "" {
+		return false
+	}
+	idx := -1
+	for i := range f.Teams {
+		if f.Teams[i].Name == target {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	f.Teams = append(f.Teams[:idx], f.Teams[idx+1:]...)
+	if f.Active == target || f.Active == "" {
+		if len(f.Teams) > 0 {
+			f.Active = f.Teams[0].Name
+		} else {
+			f.Active = ""
+		}
+	}
+	return true
 }

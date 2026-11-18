@@ -9,21 +9,27 @@ import type {
   AgyStatus,
   ChatMessage,
   CommandAction,
+  CommitDetail,
   ConfirmDialogState,
   EditorTab,
   FileDiff,
   FileNode,
+  GitGraphCommit,
   GitHubStatus,
+  GitSubTab,
   ImageAttachment,
   OpenCodeStatus,
   PermissionMode,
   ProjectInfo,
   ProjectIssue,
+  ProjectPullRequest,
   ProjectWorkspaceContext,
   RunMode,
   SessionSummary,
   SidebarView,
+  SkillAssignment,
   SkillInfo,
+  SkillTargetRole,
   TeamLane,
   TerminalEntry,
   TextSearchMatch,
@@ -55,6 +61,29 @@ declare global {
 
 const api = () => window.go?.main?.App;
 const MISSION_TAB_KEY = "mission:swarm";
+const TEAM_CONFIG_TAB_KEY = "team:config";
+
+interface TeamConfigDraft {
+  workspace: string;
+  teamName: string;
+  chiefRole: string;
+  permissionMode: PermissionMode;
+  defaultModel: string;
+  maxDynamicDevs: number;
+  chiefModel: string;
+  devModel: string;
+  qaModel: string;
+  baseBranch: string;
+  homologBranch: string;
+  maxTokens: number;
+  worktrees: boolean;
+  autoCommit: boolean;
+  autoPR: boolean;
+  jiraEnabled: boolean;
+  jiraProject: string;
+  skillAssignments: SkillAssignment[];
+  skillFilter: string;
+}
 
 const state = {
   projectTabs: [] as ProjectWorkspaceContext[],
@@ -86,7 +115,7 @@ const state = {
   runMode: "auto" as RunMode,
   diffs: [] as FileDiff[],
   showFileMenu: false,
-  showWizard: false,
+  teamConfigDraft: null as TeamConfigDraft | null,
   showOpenCodeModal: false,
   doctorModal: null as AgyStatus | null,
   confirmModal: null as ConfirmDialogState | null,
@@ -118,6 +147,22 @@ const state = {
     loading: false,
     loadedOnce: false,
   },
+  prs: {
+    list: [] as ProjectPullRequest[],
+    loading: false,
+    loadedOnce: false,
+  },
+  gitGraph: {
+    commits: [] as GitGraphCommit[],
+    loading: false,
+    loadedOnce: false,
+    allBranches: true,
+    collapsed: false,
+  },
+  changesCollapsed: false,
+  gitMoreMenuOpen: false,
+  commitMenuOpen: false,
+  gitTab: "changes" as GitSubTab,
   skills: [] as SkillInfo[],
   skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
   branchPopover: {
@@ -195,6 +240,9 @@ function saveActiveToProjectContext() {
   ctx.textSearch = state.textSearch;
   ctx.sessionsSummary = state.sessionsSummary;
   ctx.issues = state.issues;
+  ctx.prs = state.prs;
+  ctx.gitGraph = state.gitGraph;
+  ctx.gitTab = state.gitTab;
   ctx.draftObjective = state.draftObjective;
   ctx.draftImages = state.draftImages;
   ctx.jiraKeyInput = state.jiraKeyInput;
@@ -220,6 +268,9 @@ function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.textSearch = ctx.textSearch;
   state.sessionsSummary = ctx.sessionsSummary;
   state.issues = ctx.issues;
+  state.prs = ctx.prs;
+  state.gitGraph = ctx.gitGraph;
+  state.gitTab = ctx.gitTab;
   state.draftObjective = ctx.draftObjective;
   state.draftImages = ctx.draftImages;
   state.jiraKeyInput = ctx.jiraKeyInput;
@@ -405,14 +456,7 @@ function createLane(teamName: string): TeamLane {
     sessionOutTokens: 0,
     sessionTotalTokens: 0,
     agents: buildAgentRuntimes(teamName),
-    messages: [
-      {
-        id: `sys-${Date.now()}`,
-        kind: "system",
-        label: "Sistema",
-        text: `Arquitetura **Chefe → Devs Paralelos → QA → Fecho** pronta (\`${state.project?.stack.summary ?? "detectando..."}\`). Escolha o modo acima (**Auto**, **Direto**, **Planejar** ou **Squad**), cole prints com \`Ctrl+V\` ou envie seleção com \`Ctrl+L\`.`,
-      },
-    ],
+    messages: [],
   };
 }
 
@@ -571,6 +615,9 @@ function openSidebarView(view: SidebarView) {
   syncActivityButtons();
   syncLayoutVisibility();
   renderLeftSidebar();
+  if (view === "git" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
+    void loadGitGraph();
+  }
 }
 
 function openMissionControlTab() {
@@ -587,6 +634,79 @@ function openMissionControlTab() {
   state.activeEditorPath = MISSION_TAB_KEY;
   renderEditorTabs();
   renderEditorBody();
+}
+
+function buildDraftFromProject(): TeamConfigDraft {
+  const settings = state.project?.teamConfig?.settings;
+  const activeTeamName = state.project?.teamConfig?.active || "principal";
+  const curTeam =
+    (state.project?.teamConfig?.teams || []).find((t) => t.name === activeTeamName) ||
+    state.project?.teamConfig?.teams?.[0];
+  const existingChief = curTeam?.agents?.find(
+    (a) => a.name === "chefe" || a.role === "architect" || a.role === "project_manager"
+  );
+  const existingDev = curTeam?.agents?.find((a) => a.role === "developer");
+  const existingQA = curTeam?.agents?.find((a) => a.role === "qa");
+  const curChiefRole = existingChief?.role === "project_manager" ? "project_manager" : "architect";
+  const defaultModel = existingChief?.model || existingDev?.model || state.models[0]?.slug || "agy";
+  return {
+    workspace: state.project?.root || "",
+    teamName: activeTeamName,
+    chiefRole: curChiefRole,
+    permissionMode: (settings?.permission_mode || "governed") as PermissionMode,
+    defaultModel,
+    maxDynamicDevs: settings?.max_dynamic_devs && settings.max_dynamic_devs > 0 ? settings.max_dynamic_devs : 5,
+    chiefModel: existingChief?.model || "",
+    devModel: existingDev?.model || "",
+    qaModel: existingQA?.model || "",
+    baseBranch: settings?.base_branch || "main",
+    homologBranch: settings?.homolog_branch || "homolog",
+    maxTokens: settings?.max_tokens || 0,
+    worktrees: settings?.worktrees !== false,
+    autoCommit: settings ? settings.auto_commit === true : false,
+    autoPR: settings ? settings.auto_pr === true : false,
+    jiraEnabled: settings?.jira_enabled === true,
+    jiraProject: settings?.jira_project || "",
+    skillAssignments: (settings?.skill_assignments || []).map((a) => ({
+      name: a.name,
+      source: a.source || "",
+      roles: [...(a.roles || [])] as SkillTargetRole[],
+    })),
+    skillFilter: "",
+  };
+}
+
+function ensureTeamConfigDraft(): TeamConfigDraft {
+  const curRoot = state.project?.root || "";
+  if (!state.teamConfigDraft || state.teamConfigDraft.workspace !== curRoot) {
+    state.teamConfigDraft = buildDraftFromProject();
+  }
+  return state.teamConfigDraft;
+}
+
+async function openTeamConfigTab(focusSection?: "skills") {
+  state.teamConfigDraft = buildDraftFromProject();
+  const existing = state.editorTabs.find((t) => t.relPath === TEAM_CONFIG_TAB_KEY);
+  if (!existing) {
+    state.editorTabs.unshift({
+      kind: "team-config",
+      relPath: TEAM_CONFIG_TAB_KEY,
+      name: "Configurar Equipe",
+      content: "",
+      dirty: false,
+    });
+  }
+  state.activeEditorPath = TEAM_CONFIG_TAB_KEY;
+  renderEditorTabs();
+  renderEditorBody();
+  if (state.project) {
+    await refreshSkills();
+  }
+  if (focusSection === "skills") {
+    requestAnimationFrame(() => {
+      document.getElementById("tc-skills-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 }
 
 async function openTeamMemoryFile() {
@@ -734,22 +854,26 @@ function bindStaticShellEvents() {
     renderFileMenu();
   });
   document.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
     if (state.showFileMenu) {
       state.showFileMenu = false;
       renderFileMenu();
     }
     if (state.branchPopover.open) {
-      const target = e.target as HTMLElement;
       if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-header-vcs")) {
         state.branchPopover.open = false;
         renderBranchPopover();
       }
     }
+    if ((state.gitMoreMenuOpen || state.commitMenuOpen) && !target.closest(".scm-dropdown") && !target.closest("#btn-scm-more") && !target.closest("#btn-commit-menu")) {
+      state.gitMoreMenuOpen = false;
+      state.commitMenuOpen = false;
+      if (state.sidebarView === "git") renderLeftSidebar();
+    }
   });
 
   document.getElementById("act-wizard")?.addEventListener("click", () => {
-    state.showWizard = true;
-    renderModalLayer();
+    void openTeamConfigTab();
   });
 
   document.getElementById("btn-quick-open")?.addEventListener("click", () => openQuickOpen());
@@ -764,6 +888,9 @@ function bindStaticShellEvents() {
         state.showLeftSidebar = true;
         if (view === "sessions") refreshSessions();
         if (view === "skills") refreshSkills();
+        if (view === "git" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
+          void loadGitGraph();
+        }
       }
       syncActivityButtons();
       syncLayoutVisibility();
@@ -891,9 +1018,6 @@ function bindStaticShellEvents() {
         renderModalLayer();
       } else if (state.doctorModal) {
         state.doctorModal = null;
-        renderModalLayer();
-      } else if (state.showWizard) {
-        state.showWizard = false;
         renderModalLayer();
       } else if (state.skillEditor) {
         state.skillEditor = null;
@@ -1094,8 +1218,7 @@ function renderFileMenu() {
   menu.querySelector("#menu-new-team")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    state.showWizard = true;
-    renderModalLayer();
+    void openTeamConfigTab();
   });
   menu.querySelector("#menu-opencode")?.addEventListener("click", () => {
     state.showFileMenu = false;
@@ -1151,27 +1274,40 @@ function updateStatusBar() {
   const envEl = document.getElementById("status-env");
 
   if (branchEl) {
-    branchEl.innerHTML = `${icons.gitSmall} <span>${escapeHtml(proj?.branch || "sem git")}</span>`;
+    const branchName = proj?.branch || "sem git";
+    branchEl.innerHTML = `${icons.gitSmall} <span>${escapeHtml(branchName)}</span>`;
+    branchEl.title = proj?.branch ? `Branch atual: ${proj.branch} (clique para trocar)` : "Sem repositório Git (clique para inicializar)";
   }
-  if (stackEl) stackEl.textContent = proj?.stack?.summary || "";
+  if (stackEl) {
+    const rawStack = proj?.stack?.summary || "";
+    const shortStack = rawStack.startsWith("Stack genérica") ? "Stack genérica" : rawStack;
+    stackEl.textContent = shortStack;
+    stackEl.title = rawStack;
+  }
   const perm = proj?.teamConfig?.settings?.permission_mode || "governed";
-  if (teamEl) teamEl.textContent = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)} · ${permissionModeLabel(perm)}`;
+  if (teamEl) {
+    teamEl.textContent = `${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
+    teamEl.title = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · Modo: ${runModeLabel(state.runMode)} · Permissão: ${permissionModeLabel(perm)}`;
+  }
   if (tokEl) {
     const sessTok = lane?.sessionTotalTokens || 0;
     const projTok = Math.max(state.sessionsSummary.projectTotalTokens, sessTok);
-    tokEl.innerHTML = `${icons.tokens} <span>Sessão: ${formatTokens(sessTok)} · Total: ${formatTokens(projTok)} tok</span>`;
+    tokEl.innerHTML = `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
     tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
   }
   if (agyEl) {
     if (!state.agyStatus) {
-      agyEl.textContent = "agy: verificando…";
+      agyEl.textContent = "agy: …";
       agyEl.style.color = "";
+      agyEl.title = "Verificando Antigravity CLI (agy)…";
     } else if (state.agyStatus.LoggedIn) {
-      agyEl.textContent = `agy: ok (${state.models.length} modelos)`;
+      agyEl.textContent = `agy: ok (${state.models.length})`;
       agyEl.style.color = "var(--green)";
+      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)`;
     } else {
-      agyEl.textContent = `agy: ${state.agyStatus.Detail}`;
+      agyEl.textContent = "agy: off";
       agyEl.style.color = "var(--amber)";
+      agyEl.title = `agy: ${state.agyStatus.Detail}`;
     }
   }
   const ocEl = document.getElementById("status-opencode");
@@ -1181,16 +1317,19 @@ function updateStatusBar() {
       ocEl.textContent = "opencode: …";
       ocEl.style.color = "";
     } else if (oc.configured) {
-      ocEl.textContent = `opencode: Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length}`;
+      ocEl.textContent = `opencode: ok`;
       ocEl.style.color = "var(--green)";
-      ocEl.title = oc.detail;
+      ocEl.title = `${oc.detail} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
     } else {
-      ocEl.textContent = `opencode: configurar token (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
+      ocEl.textContent = `opencode: off`;
       ocEl.style.color = "var(--text-dim)";
-      ocEl.title = oc.detail || "Clique para configurar OPENCODE_API_KEY";
+      ocEl.title = `${oc.detail || "Clique para configurar OPENCODE_API_KEY"} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
     }
   }
-  if (envEl) envEl.textContent = `${state.goVersion} · ${state.os}`;
+  if (envEl) {
+    envEl.textContent = state.goVersion || "";
+    envEl.title = `${state.goVersion} · ${state.os}`;
+  }
 }
 
 async function boot() {
@@ -1411,8 +1550,7 @@ async function boot() {
     state.os = init.os || "windows";
     applyProject(init.initialProject);
     if (!init.initialProject?.hasTeam) {
-      state.showWizard = true;
-      renderModalLayer();
+      void openTeamConfigTab();
     }
     bootstrapAsync(init.initialProject?.root);
   } catch (err: any) {
@@ -1432,7 +1570,8 @@ function bootstrapAsync(rootDir?: string) {
     updateStatusBar();
     updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-    if (state.showWizard || state.doctorModal) renderModalLayer();
+    if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+    if (state.doctorModal) renderModalLayer();
   }).catch(() => {});
 
   backend.BootstrapOpenCode?.(false).then((res) => {
@@ -1446,7 +1585,8 @@ function bootstrapAsync(rootDir?: string) {
     updateStatusBar();
     updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-    if (state.showWizard || state.showOpenCodeModal) renderModalLayer();
+    if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+    if (state.showOpenCodeModal) renderModalLayer();
   }).catch(() => {});
 
   if (rootDir) {
@@ -1606,6 +1746,9 @@ function applyProject(proj: ProjectInfo, inNewTab = true) {
       projectTotalTokens: 0,
     },
     issues: { list: [], loading: false, loadedOnce: false },
+    prs: { list: [], loading: false, loadedOnce: false },
+    gitGraph: { commits: [], loading: false, loadedOnce: false, allBranches: true, collapsed: false },
+    gitTab: "changes",
     draftObjective: "",
     draftImages: [],
     jiraKeyInput: "",
@@ -1663,8 +1806,7 @@ async function openProjectPath(dir: string, inNewTab = true) {
       applyProject(proj, inNewTab);
       bootstrapAsync(proj.root);
       if (!proj.hasTeam) {
-        state.showWizard = true;
-        renderModalLayer();
+        void openTeamConfigTab();
       }
     } catch (err: any) {
       toastError("abrir a pasta do projeto", err);
@@ -2111,16 +2253,50 @@ async function handleInlineModelChange(agentName: string, newModel: string) {
   }
 }
 
+function skillTargetLabel(role: SkillTargetRole): string {
+  switch (role) {
+    case "all":
+      return "Todos";
+    case "chief":
+      return "Chefe";
+    case "dev":
+      return "Dev";
+    case "qa":
+      return "QA";
+  }
+}
+
+function getAssignedSkillRoles(name: string, source?: string): SkillTargetRole[] {
+  const list = state.project?.teamConfig?.settings?.skill_assignments || [];
+  const normName = name.toLowerCase();
+  const hit =
+    list.find((a) => a.name.toLowerCase() === normName && (!a.source || a.source === source)) ||
+    list.find((a) => a.name.toLowerCase() === normName);
+  return hit?.roles || [];
+}
+
 function renderSkillRowHtml(s: SkillInfo, isNative: boolean): string {
+  const assignedRoles = getAssignedSkillRoles(s.name, s.source);
+  const roleBadges =
+    assignedRoles.length === 0
+      ? `<span class="skill-role-badge auto" title="Sem papel fixo: o Chefe decide quando usar">sob demanda</span>`
+      : assignedRoles
+          .map(
+            (r) =>
+              `<span class="skill-role-badge ${escapeHtml(r)}" title="Injetada automaticamente para ${escapeHtml(skillTargetLabel(r))}">${escapeHtml(skillTargetLabel(r))}</span>`
+          )
+          .join("");
   return `
     <div class="skill-row">
       <div class="skill-row-head">
         <span class="skill-name">${escapeHtml(s.name)}</span>
         <span class="skill-tag ${isNative ? "native" : "project"}">${isNative ? "nativa" : "projeto"}</span>
       </div>
+      <div class="skill-roles-strip">${roleBadges}</div>
       <div class="skill-desc" title="${escapeHtml(s.description)}">${escapeHtml(s.description || "sem descrição")}</div>
       <div class="skill-meta">${escapeHtml(s.updatedAt || "")}${s.sizeBytes > 0 ? ` · ${(s.sizeBytes / 1024).toFixed(1)} KB` : ""}</div>
       <div class="skill-actions">
+        <button class="mini" data-skill-assign="${escapeHtml(s.name)}" title="Definir para quem esta skill vai (Chefe, Dev, QA ou Todos)">${icons.team}<span>Papéis</span></button>
         ${isNative
           ? `<button class="mini" data-skill-edit="${escapeHtml(s.name)}" title="Editar no editor de skills">${icons.editPen}<span>Editar</span></button>
              <button class="mini" data-skill-install="${escapeHtml(s.name)}" title="Copiar para .agents/skills deste projeto">${icons.download}<span>Instalar no projeto</span></button>
@@ -2143,10 +2319,18 @@ async function refreshSkills(): Promise<void> {
   if (state.sidebarView === "skills" && state.showLeftSidebar) {
     renderLeftSidebar();
   }
+  if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) {
+    renderEditorBody();
+  }
 }
 
 function bindSkillsSidebarEvents(): void {
   document.getElementById("btn-skill-refresh")?.addEventListener("click", () => refreshSkills());
+  document.querySelectorAll("[data-skill-assign]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      void openTeamConfigTab("skills");
+    });
+  });
   document.getElementById("btn-skill-new")?.addEventListener("click", () => {
     state.skillEditor = {
       mode: "create",
@@ -2337,7 +2521,7 @@ function renderLeftSidebar() {
         <span class="eyebrow">Equipe (${lane?.agents.length || 0})</span>
         <div class="spacer"></div>
         <button class="mini" id="btn-open-mission-sb" title="Abrir Quadro Multiagente">${icons.swarm}<span>Quadro</span></button>
-        <button class="mini" id="btn-config-team">Wizard</button>
+        <button class="mini" id="btn-config-team" title="Configurar Equipe e Skills">${icons.settings}<span>Config</span></button>
       </div>
       <div class="sidebar-body">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
@@ -2345,6 +2529,7 @@ function renderLeftSidebar() {
             ${teams.map((t) => `<option value="${escapeHtml(t.name)}" ${t.name === lane?.teamName ? "selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}
           </select>
           <button class="mini" id="btn-new-team-sb">${icons.plus}<span>Novo</span></button>
+          ${teams.length > 0 ? `<button class="mini danger" id="btn-delete-team-sb" title="Excluir equipe selecionada e parar todos os serviços">${icons.trash}</button>` : ""}
         </div>
         <div style="margin-bottom:8px">
           <div class="dim" style="font-size:10.5px;margin-bottom:3px">Permissão & Autonomia (estilo Claude Code / GPT):</div>
@@ -2371,75 +2556,7 @@ function renderLeftSidebar() {
   }
 
   if (state.sidebarView === "git") {
-    const gh = state.ghStatus;
-    sidebar.innerHTML = `
-      <div class="sidebar-header">
-        <span class="eyebrow">Git & Issues (${state.diffs.length})</span>
-        <div class="spacer"></div>
-        <button class="icon-btn" id="btn-refresh-diff" title="Atualizar diffs">${icons.refresh}</button>
-      </div>
-      <div class="sidebar-body" style="display:flex;flex-direction:column;gap:8px">
-        <div class="gh-card">
-          <div>
-            <span class="gh-dot ${gh?.loggedIn ? "ok" : "off"}"></span>
-            <strong>GitHub:</strong> ${escapeHtml(gh?.detail || "Verificando…")}
-          </div>
-          ${gh?.remote ? `<div class="dim" style="word-break:break-all">${escapeHtml(gh.remote)}</div>` : ""}
-          ${!proj?.branch ? `
-            <div class="dim">Esta pasta ainda não é um repositório Git.</div>
-            <button class="primary mini" id="btn-init-git">Inicializar Git (git init)</button>
-          ` : `
-            <div class="dim">Branch ativa: <strong>${escapeHtml(proj.branch)}</strong></div>
-          `}
-        </div>
-        <input id="commit-msg-input" placeholder="Mensagem de commit…" value="${escapeHtml(state.commitMsgInput)}" />
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          <button class="primary mini" id="btn-commit">${icons.commit}<span>Commitar</span></button>
-          <button class="success mini" id="btn-commit-push">Commit + Push</button>
-          <button class="mini" id="btn-open-pr">${icons.pr}<span>Abrir PR</span></button>
-          <button class="mini" id="btn-comment-jira">Comentar Jira</button>
-        </div>
-        <button class="danger mini" id="btn-discard">${icons.trash}<span>Descartar Alterações</span></button>
-
-        <div class="dim" style="font-weight:600;margin-top:4px">Arquivos alterados</div>
-        <div id="git-diff-files">
-          ${state.diffs.length === 0
-            ? `<div class="dim">Sem alterações pendentes</div>`
-            : state.diffs.map((d) => `
-              <div class="diff-file-item ${state.activeEditorPath === "diff:" + d.path ? "active" : ""}" data-open-diff="${escapeHtml(d.path)}">
-                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(d.path)}</span>
-                <span><span style="color:var(--green)">+${d.added}</span> <span style="color:var(--red)">-${d.removed}</span></span>
-              </div>
-            `).join("")
-          }
-        </div>
-
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
-          <span class="dim" style="font-weight:600">Issues abertas (Jira / GitHub)</span>
-          <button class="mini" id="btn-load-issues" ${state.issues.loading ? "disabled" : ""}>
-            ${state.issues.loading ? icons.spinner : icons.refresh}
-            <span>Carregar</span>
-          </button>
-        </div>
-        <div id="git-issues-list">
-          ${!state.issues.loadedOnce
-            ? `<div class="dim">Clique em "Carregar" para buscar issues abertas do Jira ou GitHub.</div>`
-            : state.issues.list.length === 0
-              ? `<div class="dim">Nenhuma issue aberta encontrada.</div>`
-              : state.issues.list.map((iss, idx) => `
-                <div class="issue-card">
-                  <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
-                    <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
-                    ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
-                  </div>
-                  <div style="font-size:12px;font-weight:600;color:var(--text)">${escapeHtml(iss.title)}</div>
-                  <button class="mini primary" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
-                </div>
-              `).join("")
-          }
-        </div>
-      </div>
-    `;
+    sidebar.innerHTML = renderGitSidebarHtml(proj);
     bindGitSidebarEvents();
     return;
   }
@@ -2801,12 +2918,15 @@ function bindTeamSidebarEvents() {
   document.getElementById("btn-open-mission-sb")?.addEventListener("click", () => openMissionControlTab());
   document.getElementById("btn-team-memory")?.addEventListener("click", () => openTeamMemoryFile());
   document.getElementById("btn-config-team")?.addEventListener("click", () => {
-    state.showWizard = true;
-    renderModalLayer();
+    void openTeamConfigTab();
   });
   document.getElementById("btn-new-team-sb")?.addEventListener("click", () => {
-    state.showWizard = true;
-    renderModalLayer();
+    void openTeamConfigTab();
+  });
+  document.getElementById("btn-delete-team-sb")?.addEventListener("click", () => {
+    const sel = document.getElementById("team-select") as HTMLSelectElement | null;
+    const name = sel?.value || activeLane()?.teamName || state.project?.teamConfig?.active || "";
+    if (name) confirmDeleteSavedTeam(name);
   });
   const teamSel = document.getElementById("team-select") as HTMLSelectElement | null;
   teamSel?.addEventListener("change", async () => {
@@ -2846,8 +2966,605 @@ async function setProjectPermissionMode(mode: PermissionMode) {
   }
 }
 
+const GRAPH_PALETTE = ["#4c8dff", "#fbbf24", "#ec4899", "#34d399", "#a78bfa", "#f97316"];
+
+function buildGraphRowSvgs(commits: GitGraphCommit[]): string[] {
+  const lanes: Array<string | null> = [];
+  const laneColors: number[] = [];
+  let nextColor = 0;
+
+  const allocColor = () => {
+    const c = nextColor % GRAPH_PALETTE.length;
+    nextColor++;
+    return c;
+  };
+
+  interface EdgeSeg {
+    fromCol: number;
+    toCol: number;
+    color: string;
+    half: "top" | "bottom";
+  }
+
+  const rowPlans: Array<{
+    col: number;
+    color: string;
+    isMerge: boolean;
+    maxCols: number;
+    edges: EdgeSeg[];
+  }> = [];
+
+  for (const c of commits) {
+    const edges: EdgeSeg[] = [];
+    const matching: number[] = [];
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i] === c.hash) matching.push(i);
+    }
+
+    let col = -1;
+    let colColorIdx = 0;
+    if (matching.length > 0) {
+      col = matching[0];
+      colColorIdx = laneColors[col] ?? 0;
+      for (const idx of matching) {
+        const clr = GRAPH_PALETTE[(laneColors[idx] ?? idx) % GRAPH_PALETTE.length];
+        edges.push({ fromCol: idx, toCol: col, color: clr, half: "top" });
+        if (idx !== col) {
+          lanes[idx] = null;
+        }
+      }
+    } else {
+      col = lanes.indexOf(null);
+      if (col < 0) {
+        col = lanes.length;
+        lanes.push(null);
+        laneColors.push(allocColor());
+      } else {
+        laneColors[col] = allocColor();
+      }
+      colColorIdx = laneColors[col];
+    }
+
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i] !== null && i !== col) {
+        const clr = GRAPH_PALETTE[(laneColors[i] ?? i) % GRAPH_PALETTE.length];
+        edges.push({ fromCol: i, toCol: i, color: clr, half: "top" });
+      }
+    }
+
+    const colColor = GRAPH_PALETTE[colColorIdx % GRAPH_PALETTE.length];
+    const parents = c.parents || [];
+
+    if (parents.length === 0) {
+      lanes[col] = null;
+    } else {
+      lanes[col] = parents[0];
+      edges.push({ fromCol: col, toCol: col, color: colColor, half: "bottom" });
+
+      for (let pIdx = 1; pIdx < parents.length; pIdx++) {
+        const pHash = parents[pIdx];
+        let target = lanes.indexOf(pHash);
+        let pColorIdx: number;
+        if (target >= 0) {
+          pColorIdx = laneColors[target] ?? target;
+        } else {
+          target = lanes.indexOf(null);
+          if (target < 0) {
+            target = lanes.length;
+            lanes.push(pHash);
+            pColorIdx = allocColor();
+            laneColors.push(pColorIdx);
+          } else {
+            lanes[target] = pHash;
+            pColorIdx = allocColor();
+            laneColors[target] = pColorIdx;
+          }
+        }
+        const pColor = GRAPH_PALETTE[pColorIdx % GRAPH_PALETTE.length];
+        edges.push({ fromCol: col, toCol: target, color: pColor, half: "bottom" });
+      }
+    }
+
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i] !== null && i !== col) {
+        const clr = GRAPH_PALETTE[(laneColors[i] ?? i) % GRAPH_PALETTE.length];
+        edges.push({ fromCol: i, toCol: i, color: clr, half: "bottom" });
+      }
+    }
+
+    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+      lanes.pop();
+      laneColors.pop();
+    }
+
+    const maxCols = Math.max(col + 1, lanes.length, ...edges.map((e) => Math.max(e.fromCol, e.toCol) + 1));
+    rowPlans.push({
+      col,
+      color: colColor,
+      isMerge: parents.length > 1,
+      maxCols: Math.min(8, Math.max(1, maxCols)),
+      edges,
+    });
+  }
+
+  const step = 12;
+  const h = 24;
+  const cy = 12;
+  return rowPlans.map((plan) => {
+    const w = plan.maxCols * step + 6;
+    const xOf = (cIdx: number) => 8 + cIdx * step;
+    const paths = plan.edges
+      .map((e) => {
+        const x1 = xOf(e.fromCol);
+        const x2 = xOf(e.toCol);
+        if (e.half === "top") {
+          if (x1 === x2) {
+            return `<line x1="${x1}" y1="0" x2="${x2}" y2="${cy}" stroke="${e.color}" stroke-width="1.6"/>`;
+          }
+          return `<path d="M ${x1} 0 C ${x1} ${cy * 0.55}, ${x2} ${cy * 0.45}, ${x2} ${cy}" fill="none" stroke="${e.color}" stroke-width="1.6"/>`;
+        }
+        if (x1 === x2) {
+          return `<line x1="${x1}" y1="${cy}" x2="${x2}" y2="${h}" stroke="${e.color}" stroke-width="1.6"/>`;
+        }
+        return `<path d="M ${x1} ${cy} C ${x1} ${cy + 6}, ${x2} ${cy + 6}, ${x2} ${h}" fill="none" stroke="${e.color}" stroke-width="1.6"/>`;
+      })
+      .join("");
+    const cx = xOf(plan.col);
+    const node = plan.isMerge
+      ? `<circle cx="${cx}" cy="${cy}" r="3.7" fill="var(--bg-sidebar)" stroke="${plan.color}" stroke-width="1.8"/>`
+      : `<circle cx="${cx}" cy="${cy}" r="3.4" fill="${plan.color}"/>`;
+    return `<svg class="scm-graph-svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${paths}${node}</svg>`;
+  });
+}
+
+function renderGraphRefPillsHtml(refs?: string[]): string {
+  if (!refs || refs.length === 0) return "";
+  return refs
+    .slice(0, 3)
+    .map((r) => {
+      const clean = r.replace(/^HEAD\s*->\s*/, "").trim();
+      const isHead = r.startsWith("HEAD ->") || r === "HEAD";
+      const isRemote = clean.includes("origin/");
+      const isTag = clean.startsWith("tag:");
+      const label = clean.replace(/^tag:\s*/, "").replace(/^origin\//, "");
+      const cls = isHead ? "head" : isRemote ? "remote" : isTag ? "tag" : "local";
+      const ic = isHead ? icons.target : isRemote ? icons.cloud : icons.gitSmall;
+      return `<span class="scm-ref-pill ${cls}" title="${escapeHtml(r)}">${ic}<span>${escapeHtml(label)}</span></span>`;
+    })
+    .join("");
+}
+
+function renderScmFileRowHtml(d: FileDiff): string {
+  const parts = d.path.split("/");
+  const fileName = parts.pop() || d.path;
+  const dirPath = parts.join("\\");
+  const st = (d.status || "M").toUpperCase();
+  const stCls = st === "U" ? "untracked" : st === "A" ? "added" : st === "D" ? "deleted" : st === "R" ? "renamed" : "modified";
+  return `
+    <div class="scm-file-row ${state.activeEditorPath === "diff:" + d.path ? "active" : ""}" data-open-diff="${escapeHtml(d.path)}" title="${escapeHtml(d.path)} (+${d.added} -${d.removed})">
+      <span class="scm-file-icon">${fileBadge(fileName)}</span>
+      <span class="scm-file-name">${escapeHtml(fileName)}</span>
+      ${dirPath ? `<span class="scm-file-dir">${escapeHtml(dirPath)}</span>` : `<span class="scm-file-dir"></span>`}
+      <span class="scm-file-actions">
+        <button type="button" class="scm-row-btn" data-scm-open-file="${escapeHtml(d.path)}" title="Abrir arquivo">${icons.openInNew}</button>
+        <button type="button" class="scm-row-btn" data-scm-discard-file="${escapeHtml(d.path)}" title="Descartar alterações">${icons.undo}</button>
+        ${d.staged
+          ? `<button type="button" class="scm-row-btn" data-scm-unstage="${escapeHtml(d.path)}" title="Remover do Stage (Unstage)">${icons.minus}</button>`
+          : `<button type="button" class="scm-row-btn" data-scm-stage="${escapeHtml(d.path)}" title="Preparar Alteração (Stage)">${icons.plus}</button>`
+        }
+      </span>
+      <span class="scm-status-letter ${stCls}">${escapeHtml(st)}</span>
+    </div>
+  `;
+}
+
+function renderGitGraphSectionHtml(): string {
+  const g = state.gitGraph;
+  const rowSvgs = g.commits.length > 0 ? buildGraphRowSvgs(g.commits) : [];
+  return `
+    <div class="scm-section">
+      <div class="scm-section-head">
+        <button type="button" class="scm-collapse-btn" id="btn-toggle-graph">
+          ${g.collapsed ? icons.chevronRight : icons.chevronDown}
+          <span>Graph</span>
+        </button>
+        <div class="spacer"></div>
+        <button type="button" class="scm-mini-pill ${g.allBranches ? "active" : ""}" id="btn-graph-scope" title="${g.allBranches ? "Mostrando todas as branches (Auto)" : "Mostrando apenas a branch atual"}">
+          ${icons.gitSmall}
+          <span>${g.allBranches ? "Auto" : "Branch"}</span>
+        </button>
+        <button type="button" class="icon-btn" data-git-action="fetch" title="Fetch (buscar atualizações)">${icons.arrowDown}</button>
+        <button type="button" class="icon-btn" data-git-action="pull" title="Pull (baixar commits)">${icons.download}</button>
+        <button type="button" class="icon-btn" data-git-action="push" title="Push (enviar commits)">${icons.arrowUp}</button>
+        <button type="button" class="icon-btn" id="btn-refresh-graph" title="Atualizar Graph">${icons.refresh}</button>
+      </div>
+      ${g.collapsed ? "" : `
+        <div class="scm-graph-list" id="scm-graph-list">
+          ${g.loading && !g.loadedOnce
+            ? `<div class="dim" style="padding:8px 10px">${icons.spinner} Carregando histórico…</div>`
+            : g.commits.length === 0
+              ? `<div class="dim" style="padding:8px 10px">Nenhum commit neste repositório ainda.</div>`
+              : g.commits.map((c, i) => `
+                <div class="scm-graph-row ${state.activeEditorPath === "commit:" + c.hash ? "active" : ""}" data-open-commit="${escapeHtml(c.hash)}" title="${escapeHtml(c.short)} · ${escapeHtml(c.author)} · ${escapeHtml(c.date)}&#10;${escapeHtml(c.subject)}">
+                  ${rowSvgs[i] || ""}
+                  <span class="scm-graph-subject ${c.refs?.some((r) => r.includes("HEAD")) ? "is-head" : ""}">${escapeHtml(c.subject)}</span>
+                  <span class="scm-graph-refs">${renderGraphRefPillsHtml(c.refs)}</span>
+                </div>
+              `).join("")
+          }
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function renderGitSidebarHtml(proj: ProjectInfo | null): string {
+  const gh = state.ghStatus;
+  const hasGit = Boolean(proj?.branch);
+  const diffs = state.diffs;
+  const stagedDiffs = diffs.filter((d) => d.staged);
+  const unstagedDiffs = diffs.filter((d) => !d.staged);
+  const hasDiffs = diffs.length > 0;
+  const jiraOn = Boolean(proj?.teamConfig?.settings?.jira_enabled);
+  const activeGitTab: GitSubTab = !hasGit && state.gitTab === "changes" ? "issues" : state.gitTab;
+  const prBadge = state.prs.loadedOnce ? ` (${state.prs.list.length})` : "";
+  const issueBadge = state.issues.loadedOnce ? ` (${state.issues.list.length})` : "";
+
+  let tabContentHtml = "";
+  if (activeGitTab === "changes" && hasGit) {
+    tabContentHtml = `
+      <div class="scm-commit-box">
+        <input id="commit-msg-input" placeholder='Mensagem (Ctrl+Enter em "${escapeHtml(proj!.branch)}")' value="${escapeHtml(state.commitMsgInput)}" />
+        <div class="scm-split-btn">
+          <button type="button" class="primary scm-commit-main" id="btn-commit" ${hasDiffs ? "" : "disabled"}>${icons.check}<span>Commit</span></button>
+          <button type="button" class="primary scm-commit-arrow" id="btn-commit-menu" ${hasDiffs ? "" : "disabled"} title="Mais opções de Commit">${icons.chevronDown}</button>
+          ${state.commitMenuOpen ? `
+            <div class="scm-dropdown" id="scm-commit-dropdown">
+              <button type="button" class="dropdown-item" id="btn-commit-only">Commit</button>
+              <button type="button" class="dropdown-item" id="btn-commit-push">Commit & Push</button>
+              <button type="button" class="dropdown-item" id="btn-commit-sync">Commit & Sync (Pull + Push)</button>
+            </div>
+          ` : ""}
+        </div>
+      </div>
+
+      <div class="scm-section">
+        <div class="scm-section-head">
+          <button type="button" class="scm-collapse-btn" id="btn-toggle-changes">
+            ${state.changesCollapsed ? icons.chevronRight : icons.chevronDown}
+            <span>Alterações</span>
+          </button>
+          <div class="spacer"></div>
+          ${hasDiffs ? `<button type="button" class="icon-btn" id="btn-discard" title="Descartar todas as alterações">${icons.undo}</button>` : ""}
+          <span class="scm-count-pill">${diffs.length}</span>
+        </div>
+        ${state.changesCollapsed ? "" : `
+          <div id="git-diff-files">
+            ${!hasDiffs
+              ? `<div class="dim" style="padding:6px 10px">Nenhuma alteração pendente.</div>`
+              : `${stagedDiffs.length > 0 ? `
+                  <div class="scm-group-label">Preparadas (Staged) · ${stagedDiffs.length}</div>
+                  ${stagedDiffs.map(renderScmFileRowHtml).join("")}
+                ` : ""}
+                ${unstagedDiffs.length > 0 ? `
+                  ${stagedDiffs.length > 0 ? `<div class="scm-group-label">Alterações · ${unstagedDiffs.length}</div>` : ""}
+                  ${unstagedDiffs.map(renderScmFileRowHtml).join("")}
+                ` : ""}`
+            }
+          </div>
+        `}
+      </div>
+
+      ${renderGitGraphSectionHtml()}
+    `;
+  } else if (activeGitTab === "prs") {
+    tabContentHtml = `
+      <div class="git-section" style="padding:10px">
+        <div class="git-section-head">
+          <span>Pull Requests abertos</span>
+          <div style="display:flex;gap:5px">
+            <button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>
+            <button class="mini" id="btn-load-prs" ${state.prs.loading ? "disabled" : ""}>
+              ${state.prs.loading ? icons.spinner : icons.refresh}
+              <span>${state.prs.loadedOnce ? "Atualizar" : "Carregar"}</span>
+            </button>
+          </div>
+        </div>
+        <div id="git-prs-list">
+          ${state.prs.loading && !state.prs.loadedOnce
+            ? `<div class="dim">${icons.spinner} Carregando PRs…</div>`
+            : !state.prs.loadedOnce
+              ? `<div class="dim">Clique em "Carregar" para listar os PRs abertos do repositório.</div>`
+              : state.prs.list.length === 0
+                ? `<div class="dim">Nenhum Pull Request aberto neste repositório.</div>`
+                : state.prs.list.map((pr, idx) => `
+                  <div class="issue-card pr-card">
+                    <div class="pr-card-top">
+                      <span class="tok-pill">#${pr.number}</span>
+                      ${pr.isDraft ? `<span class="pr-draft-pill">DRAFT</span>` : ""}
+                      ${pr.author ? `<span class="dim" style="font-size:10.5px">@${escapeHtml(pr.author)}</span>` : ""}
+                    </div>
+                    <div class="pr-card-title">${escapeHtml(pr.title)}</div>
+                    ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
+                    <div class="git-actions-row">
+                      <button class="mini primary" data-review-pr="${idx}">${icons.send}<span>Revisar c/ Equipe</span></button>
+                      <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">Abrir</button>
+                    </div>
+                  </div>
+                `).join("")
+          }
+        </div>
+      </div>
+    `;
+  } else {
+    tabContentHtml = `
+      <div class="git-section" style="padding:10px">
+        <div class="git-section-head">
+          <span>Issues abertas</span>
+          <button class="mini" id="btn-load-issues" ${state.issues.loading ? "disabled" : ""}>
+            ${state.issues.loading ? icons.spinner : icons.refresh}
+            <span>${state.issues.loadedOnce ? "Atualizar" : "Carregar"}</span>
+          </button>
+        </div>
+        <div id="git-issues-list">
+          ${state.issues.loading && !state.issues.loadedOnce
+            ? `<div class="dim">${icons.spinner} Carregando issues…</div>`
+            : !state.issues.loadedOnce
+              ? `<div class="dim">Clique em "Carregar" para buscar issues do Jira ou GitHub.</div>`
+              : state.issues.list.length === 0
+                ? `<div class="dim">Nenhuma issue aberta encontrada.</div>`
+                : state.issues.list.map((iss, idx) => `
+                  <div class="issue-card">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+                      <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
+                      ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
+                    </div>
+                    <div class="pr-card-title">${escapeHtml(iss.title)}</div>
+                    <button class="mini primary" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
+                  </div>
+                `).join("")
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="sidebar-header scm-header">
+      <span class="eyebrow">Controle de Código</span>
+      <div class="spacer"></div>
+      ${hasGit ? `
+        <button type="button" class="icon-btn" id="btn-header-commit" title="Commitar alterações" ${hasDiffs ? "" : "disabled"}>${icons.check}</button>
+        <button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>
+        <div class="scm-more-wrap">
+          <button type="button" class="icon-btn" id="btn-scm-more" title="Mais ações Git…">${icons.moreHoriz}</button>
+          ${state.gitMoreMenuOpen ? `
+            <div class="scm-dropdown scm-more-menu" id="scm-more-dropdown">
+              <button type="button" class="dropdown-item" data-git-action="pull">Pull</button>
+              <button type="button" class="dropdown-item" data-git-action="push">Push</button>
+              <button type="button" class="dropdown-item" data-git-action="sync">Sync (Pull + Push)</button>
+              <button type="button" class="dropdown-item" data-git-action="fetch">Fetch</button>
+              <div class="scm-menu-sep"></div>
+              <button type="button" class="dropdown-item" data-git-action="stash">Stash alterações</button>
+              <button type="button" class="dropdown-item" data-git-action="stash-pop">Pop Stash</button>
+              <div class="scm-menu-sep"></div>
+              <button type="button" class="dropdown-item" id="menu-open-pr">Abrir Pull Request…</button>
+              ${jiraOn ? `<button type="button" class="dropdown-item" id="menu-comment-jira">Comentar no Jira…</button>` : ""}
+              <button type="button" class="dropdown-item" id="menu-switch-branch">Trocar / Criar Branch…</button>
+              ${hasDiffs ? `<div class="scm-menu-sep"></div><button type="button" class="dropdown-item danger" id="menu-discard-all">Descartar Todas as Alterações</button>` : ""}
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
+    </div>
+    <div class="sidebar-body scm-body">
+      <div class="scm-repo-strip">
+        <span class="gh-dot ${hasGit ? "ok" : "off"}"></span>
+        <span class="scm-branch-label">${hasGit ? escapeHtml(proj!.branch) : "Sem repositório Git"}</span>
+        <span class="dim" style="font-size:10.5px;margin-left:auto" title="${escapeHtml(gh?.remote || "")}">
+          ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : escapeHtml(gh?.detail || "")}
+        </span>
+      </div>
+      ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
+
+      <div class="git-subtabs scm-tabs-pad">
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Git (${diffs.length})</button>` : ""}
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "prs" ? "active" : ""}" data-git-tab="prs">PRs${prBadge}</button>` : ""}
+        <button type="button" class="git-subtab ${activeGitTab === "issues" ? "active" : ""}" data-git-tab="issues">Issues${issueBadge}</button>
+      </div>
+
+      ${tabContentHtml}
+    </div>
+  `;
+}
+
+async function loadGitGraph() {
+  const backend = api();
+  if (!backend || !state.project || state.gitGraph.loading || !backend.ListGitGraph) return;
+  state.gitGraph.loading = true;
+  if (state.sidebarView === "git") renderLeftSidebar();
+  try {
+    state.gitGraph.commits = (await backend.ListGitGraph(state.project.root, 60, state.gitGraph.allBranches)) || [];
+    state.gitGraph.loadedOnce = true;
+  } catch (err: any) {
+    toastError("carregar o Graph de commits", err);
+  } finally {
+    state.gitGraph.loading = false;
+    if (state.sidebarView === "git") renderLeftSidebar();
+  }
+}
+
+async function openCommitInEditor(hash: string) {
+  const backend = api();
+  if (!backend || !state.project || !backend.GetCommitDetail) return;
+  try {
+    const detail = await backend.GetCommitDetail(state.project.root, hash);
+    const key = `commit:${detail.hash}`;
+    const existing = state.editorTabs.find((t) => t.relPath === key);
+    if (existing) {
+      existing.commitDetail = detail;
+    } else {
+      state.editorTabs.push({
+        kind: "commit",
+        relPath: key,
+        name: `Commit ${detail.short || hash.slice(0, 7)}`,
+        content: "",
+        dirty: false,
+        commitDetail: detail,
+      });
+    }
+    state.activeEditorPath = key;
+    renderEditorTabs();
+    renderEditorBody();
+    if (state.sidebarView === "git") renderLeftSidebar();
+  } catch (err: any) {
+    toastError("abrir detalhes do commit", err);
+  }
+}
+
+async function runGitScmAction(action: string) {
+  const backend = api();
+  if (!backend || !state.project || !backend.RunGitAction) return;
+  setStatus(`Executando git ${action}…`);
+  try {
+    const out = await backend.RunGitAction(state.project.root, action);
+    setStatus(out || `Git ${action} concluído.`);
+    toast(out || `Git ${action} concluído.`, "success");
+    await refreshDiffs();
+    await loadGitGraph();
+  } catch (err: any) {
+    toastError(`executar git ${action}`, err);
+  }
+}
+
+async function loadGitHubPRs() {
+  const backend = api();
+  if (!backend || !state.project || state.prs.loading) return;
+  state.prs.loading = true;
+  if (state.sidebarView === "git") renderLeftSidebar();
+  try {
+    state.prs.list = (await backend.ListPullRequests(state.project.root)) || [];
+    state.prs.loadedOnce = true;
+  } catch (err: any) {
+    toastError("buscar os Pull Requests do repositório", err);
+  } finally {
+    state.prs.loading = false;
+    if (state.sidebarView === "git") renderLeftSidebar();
+  }
+}
+
+async function loadProjectIssues() {
+  const backend = api();
+  if (!backend || !state.project || state.issues.loading) return;
+  state.issues.loading = true;
+  if (state.sidebarView === "git") renderLeftSidebar();
+  try {
+    state.issues.list = (await backend.ListIssues(state.project.root)) || [];
+    state.issues.loadedOnce = true;
+  } catch (err: any) {
+    toastError("buscar as issues do GitHub", err);
+  } finally {
+    state.issues.loading = false;
+    if (state.sidebarView === "git") renderLeftSidebar();
+  }
+}
+
 function bindGitSidebarEvents() {
-  document.getElementById("btn-refresh-diff")?.addEventListener("click", refreshDiffs);
+  const doCommit = async (mode: "commit" | "push" | "sync") => {
+    const backend = api();
+    if (!backend || !state.project) return;
+    state.commitMenuOpen = false;
+    try {
+      const msg = await backend.CommitChanges(state.project.root, state.commitMsgInput, mode === "push");
+      state.commitMsgInput = "";
+      if (mode === "sync" && backend.RunGitAction) {
+        const syncMsg = await backend.RunGitAction(state.project.root, "sync");
+        setStatus(`${msg} ${syncMsg}`);
+        toast(`${msg} ${syncMsg}`, "success");
+      } else {
+        setStatus(msg);
+        toast(msg, "success");
+      }
+      await refreshDiffs();
+      await loadGitGraph();
+    } catch (err: any) {
+      toastError(mode === "commit" ? "commitar alterações" : `executar ${mode}`, err);
+    }
+  };
+
+  document.getElementById("btn-refresh-diff")?.addEventListener("click", () => {
+    void refreshDiffs();
+    if (state.gitTab === "changes") void loadGitGraph();
+    if (state.gitTab === "prs") void loadGitHubPRs();
+    if (state.gitTab === "issues") void loadProjectIssues();
+  });
+
+  document.getElementById("btn-scm-more")?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    state.gitMoreMenuOpen = !state.gitMoreMenuOpen;
+    state.commitMenuOpen = false;
+    renderLeftSidebar();
+  });
+
+  document.getElementById("btn-commit-menu")?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    state.commitMenuOpen = !state.commitMenuOpen;
+    state.gitMoreMenuOpen = false;
+    renderLeftSidebar();
+  });
+
+  document.querySelectorAll("[data-git-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = (btn as HTMLElement).dataset.gitTab as GitSubTab;
+      state.gitTab = tab;
+      state.gitMoreMenuOpen = false;
+      state.commitMenuOpen = false;
+      renderLeftSidebar();
+      if (tab === "changes" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
+        void loadGitGraph();
+      }
+      if (tab === "prs" && !state.prs.loadedOnce && !state.prs.loading) {
+        void loadGitHubPRs();
+      }
+      if (tab === "issues" && !state.issues.loadedOnce && !state.issues.loading) {
+        void loadProjectIssues();
+      }
+    });
+  });
+
+  document.getElementById("btn-toggle-changes")?.addEventListener("click", () => {
+    state.changesCollapsed = !state.changesCollapsed;
+    renderLeftSidebar();
+  });
+  document.getElementById("btn-toggle-graph")?.addEventListener("click", () => {
+    state.gitGraph.collapsed = !state.gitGraph.collapsed;
+    renderLeftSidebar();
+  });
+  document.getElementById("btn-graph-scope")?.addEventListener("click", () => {
+    state.gitGraph.allBranches = !state.gitGraph.allBranches;
+    state.gitGraph.loadedOnce = false;
+    void loadGitGraph();
+  });
+  document.getElementById("btn-refresh-graph")?.addEventListener("click", () => void loadGitGraph());
+
+  document.querySelectorAll("[data-git-action]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.gitMoreMenuOpen = false;
+      const action = (btn as HTMLElement).dataset.gitAction!;
+      void runGitScmAction(action);
+    });
+  });
+
+  document.getElementById("menu-switch-branch")?.addEventListener("click", () => {
+    state.gitMoreMenuOpen = false;
+    renderLeftSidebar();
+    void toggleBranchPopover(true);
+  });
+  document.getElementById("menu-discard-all")?.addEventListener("click", () => {
+    state.gitMoreMenuOpen = false;
+    promptDiscardChanges();
+  });
+
   document.getElementById("btn-init-git")?.addEventListener("click", async () => {
     const backend = api();
     if (!backend || !state.project) return;
@@ -2863,6 +3580,7 @@ function bindGitSidebarEvents() {
       toastError("inicializar o repositório Git", err);
     }
   });
+
   document.querySelectorAll("[data-open-diff]").forEach((el) => {
     el.addEventListener("click", () => {
       const p = (el as HTMLElement).dataset.openDiff!;
@@ -2870,72 +3588,142 @@ function bindGitSidebarEvents() {
       if (d) openDiffInEditor(d);
     });
   });
+
+  document.querySelectorAll("[data-scm-open-file]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const rel = (btn as HTMLElement).dataset.scmOpenFile!;
+      const name = rel.split("/").pop() || rel;
+      void openFileInEditor(rel, name);
+    });
+  });
+
+  document.querySelectorAll("[data-scm-discard-file]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const rel = (btn as HTMLElement).dataset.scmDiscardFile!;
+      if (!state.project) return;
+      askConfirm({
+        title: `Descartar "${rel}"`,
+        body: `As alterações locais em "${rel}" serão descartadas permanentemente.`,
+        confirmLabel: "Descartar",
+        danger: true,
+        onConfirm: async () => {
+          if (!state.project) return;
+          try {
+            await api()?.DiscardFile(state.project.root, rel);
+            await refreshDiffs();
+            setStatus(`Alterações de ${rel} descartadas.`);
+          } catch (err: any) {
+            toastError(`descartar "${rel}"`, err);
+          }
+        },
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-scm-stage], [data-scm-unstage]").forEach((btn) => {
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const el = btn as HTMLElement;
+      const stage = Boolean(el.dataset.scmStage);
+      const rel = el.dataset.scmStage || el.dataset.scmUnstage!;
+      if (!state.project || !api()?.StageFile) return;
+      try {
+        await api()!.StageFile(state.project.root, rel, stage);
+        await refreshDiffs();
+      } catch (err: any) {
+        toastError(stage ? `preparar "${rel}"` : `remover "${rel}" do stage`, err);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-open-commit]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const hash = (row as HTMLElement).dataset.openCommit!;
+      void openCommitInEditor(hash);
+    });
+  });
+
   const commitIn = document.getElementById("commit-msg-input") as HTMLInputElement | null;
   commitIn?.addEventListener("input", () => {
     state.commitMsgInput = commitIn.value;
   });
-  document.getElementById("btn-commit")?.addEventListener("click", async () => {
-    const backend = api();
-    if (!backend || !state.project) return;
-    try {
-      const msg = await backend.CommitChanges(state.project.root, state.commitMsgInput, false);
-      setStatus(msg);
-      state.commitMsgInput = "";
-      refreshDiffs();
-    } catch (err: any) {
-      setStatus(`Erro no commit: ${err?.message || err}`);
+  commitIn?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (state.diffs.length > 0) void doCommit("commit");
     }
   });
-  document.getElementById("btn-commit-push")?.addEventListener("click", async () => {
+
+  document.getElementById("btn-commit")?.addEventListener("click", () => void doCommit("commit"));
+  document.getElementById("btn-header-commit")?.addEventListener("click", () => void doCommit("commit"));
+  document.getElementById("btn-commit-only")?.addEventListener("click", () => void doCommit("commit"));
+  document.getElementById("btn-commit-push")?.addEventListener("click", () => void doCommit("push"));
+  document.getElementById("btn-commit-sync")?.addEventListener("click", () => void doCommit("sync"));
+
+  const openPrAction = async () => {
     const backend = api();
     if (!backend || !state.project) return;
-    try {
-      const msg = await backend.CommitChanges(state.project.root, state.commitMsgInput, true);
-      setStatus(msg);
-      state.commitMsgInput = "";
-      refreshDiffs();
-    } catch (err: any) {
-      toastError("publicar as alterações (commit e push)", err);
-    }
-  });
-  document.getElementById("btn-open-pr")?.addEventListener("click", async () => {
-    const backend = api();
-    if (!backend || !state.project) return;
+    state.gitMoreMenuOpen = false;
     try {
       const url = await backend.OpenPR(state.project.root, state.commitMsgInput, "", state.project.teamConfig?.settings?.base_branch || "main");
       setStatus(`PR aberto: ${url}`);
+      toast(`PR aberto: ${url}`, "success");
     } catch (err: any) {
       toastError("abrir o Pull Request", err);
     }
-  });
-  document.getElementById("btn-comment-jira")?.addEventListener("click", async () => {
+  };
+  document.getElementById("btn-open-pr")?.addEventListener("click", () => void openPrAction());
+  document.getElementById("menu-open-pr")?.addEventListener("click", () => void openPrAction());
+
+  const commentJiraAction = async () => {
     const backend = api();
     if (!backend || !state.project) return;
+    state.gitMoreMenuOpen = false;
     try {
       await backend.CommentJira(state.project.root, state.jiraKeyInput, state.commitMsgInput || "Atualização pela HiveMind IDE.");
       setStatus(`Comentário enviado ao Jira ${state.jiraKeyInput}.`);
     } catch (err: any) {
-      toastError("criar a issue no Jira", err);
+      toastError("comentar na issue Jira", err);
     }
-  });
-  document.getElementById("btn-discard")?.addEventListener("click", () => {
-    promptDiscardChanges();
+  };
+  document.getElementById("btn-comment-jira")?.addEventListener("click", () => void commentJiraAction());
+  document.getElementById("menu-comment-jira")?.addEventListener("click", () => void commentJiraAction());
+
+  document.getElementById("btn-discard")?.addEventListener("click", () => promptDiscardChanges());
+  document.getElementById("btn-load-prs")?.addEventListener("click", () => void loadGitHubPRs());
+  document.getElementById("btn-load-issues")?.addEventListener("click", () => void loadProjectIssues());
+
+  document.querySelectorAll("[data-open-pr-url]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const url = (btn as HTMLElement).dataset.openPrUrl || "";
+      if (!url) return;
+      try {
+        await api()?.OpenExternalURL(url);
+      } catch (err: any) {
+        toastError("abrir URL do Pull Request", err);
+      }
+    });
   });
 
-  document.getElementById("btn-load-issues")?.addEventListener("click", async () => {
-    const backend = api();
-    if (!backend || !state.project) return;
-    state.issues.loading = true;
-    renderLeftSidebar();
-    try {
-      state.issues.list = (await backend.ListIssues(state.project.root)) || [];
-      state.issues.loadedOnce = true;
-    } catch (err: any) {
-      toastError("buscar as issues do GitHub", err);
-    } finally {
-      state.issues.loading = false;
-      renderLeftSidebar();
-    }
+  document.querySelectorAll("[data-review-pr]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt((btn as HTMLElement).dataset.reviewPr || "0", 10);
+      const pr = state.prs.list[idx];
+      if (!pr) return;
+      const branchInfo = pr.headRef && pr.baseRef ? ` (${pr.headRef} → ${pr.baseRef})` : "";
+      const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body.slice(0, 1200)}` : "";
+      state.draftObjective = `Revisar PR #${pr.number}${branchInfo} — ${pr.title}${bodyPart}`;
+      state.showRightAI = true;
+      syncLayoutVisibility();
+      const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+      if (chatInput) {
+        chatInput.value = state.draftObjective;
+        chatInput.focus();
+      }
+      setStatus(`PR #${pr.number} carregado no chat do Chefe.`);
+    });
   });
 
   document.querySelectorAll("[data-solve-issue]").forEach((btn) => {
@@ -2966,7 +3754,14 @@ function renderEditorTabs() {
   const tabsEl = document.getElementById("editor-tabs");
   if (!tabsEl) return;
   tabsEl.innerHTML = state.editorTabs.map((t) => {
-    const tabIcon = t.kind === "mission" ? icons.swarm : t.kind === "diff" ? icons.gitSmall : fileBadge(t.name);
+    const tabIcon =
+      t.kind === "mission"
+        ? icons.swarm
+        : t.kind === "team-config"
+          ? icons.settings
+          : t.kind === "diff" || t.kind === "commit"
+            ? icons.gitSmall
+            : fileBadge(t.name);
     return `
       <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
         ${tabIcon}
@@ -3106,8 +3901,7 @@ function bindMissionBoardEvents() {
     refreshSessions();
   });
   document.getElementById("mc-open-wizard")?.addEventListener("click", () => {
-    state.showWizard = true;
-    renderModalLayer();
+    void openTeamConfigTab();
   });
   bindAgentModelSelects(root, "data-mc-agent-model");
 }
@@ -3152,6 +3946,418 @@ function updateMissionBoardIfOpen() {
     const inout = root.querySelector<HTMLElement>(`[data-mc-inout="${esc}"]`);
     if (inout) inout.textContent = `Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}`;
   }
+}
+
+function draftRolesForSkill(draft: TeamConfigDraft, name: string, source: "" | "native" | "project"): SkillTargetRole[] {
+  const norm = name.toLowerCase();
+  const hit =
+    draft.skillAssignments.find((a) => a.name.toLowerCase() === norm && (!a.source || a.source === source)) ||
+    draft.skillAssignments.find((a) => a.name.toLowerCase() === norm);
+  return hit?.roles || [];
+}
+
+function setDraftSkillRoles(draft: TeamConfigDraft, name: string, source: "" | "native" | "project", roles: SkillTargetRole[]) {
+  const norm = name.toLowerCase();
+  draft.skillAssignments = draft.skillAssignments.filter(
+    (a) => !(a.name.toLowerCase() === norm && (!a.source || !source || a.source === source))
+  );
+  if (roles.length > 0) {
+    draft.skillAssignments.push({ name, source, roles });
+  }
+}
+
+function toggleDraftSkillRole(draft: TeamConfigDraft, name: string, source: "" | "native" | "project", clicked: SkillTargetRole) {
+  const cur = draftRolesForSkill(draft, name, source);
+  let next: SkillTargetRole[] = [];
+  if (clicked === "all") {
+    next = cur.includes("all") ? [] : ["all"];
+  } else if (cur.includes("all")) {
+    next = [clicked];
+  } else if (cur.includes(clicked)) {
+    next = cur.filter((r) => r !== clicked);
+  } else {
+    next = [...cur, clicked];
+    if (next.includes("chief") && next.includes("dev") && next.includes("qa")) {
+      next = ["all"];
+    }
+  }
+  setDraftSkillRoles(draft, name, source, next);
+}
+
+function summarizeSkillScope(roles: SkillTargetRole[]): string {
+  if (roles.length === 0) return "Sob demanda (Chefe decide)";
+  if (roles.includes("all")) return "Todos os agentes";
+  return roles.map((r) => skillTargetLabel(r)).join(" + ");
+}
+
+function renderTeamConfigSkillRowsHtml(draft: TeamConfigDraft): string {
+  const q = draft.skillFilter.trim().toLowerCase();
+  const list = state.skills.filter(
+    (s) => !q || s.name.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q)
+  );
+  if (state.skills.length === 0) {
+    return `
+      <div class="tc-empty-skills">
+        Nenhuma skill cadastrada ainda. Clique em <strong>Nova Skill</strong> para criar diretrizes reutilizáveis para o Chefe, Devs ou QA.
+      </div>
+    `;
+  }
+  if (list.length === 0) {
+    return `<div class="dim" style="padding:10px 0">Nenhuma skill corresponde a "${escapeHtml(draft.skillFilter)}".</div>`;
+  }
+  const targets: SkillTargetRole[] = ["all", "chief", "dev", "qa"];
+  return list
+    .map((s) => {
+      const roles = draftRolesForSkill(draft, s.name, s.source);
+      const isNative = s.source === "native";
+      return `
+        <div class="tc-skill-row">
+          <div class="tc-skill-info">
+            <div class="tc-skill-title-row">
+              <span class="skill-name">${escapeHtml(s.name)}</span>
+              <span class="skill-tag ${isNative ? "native" : "project"}">${isNative ? "nativa" : "projeto"}</span>
+              <span class="tc-skill-scope">${escapeHtml(summarizeSkillScope(roles))}</span>
+            </div>
+            <div class="tc-skill-desc">${escapeHtml(s.description || "Sem descrição")}</div>
+          </div>
+          <div class="tc-role-pills" role="group" aria-label="Papéis para ${escapeHtml(s.name)}">
+            ${targets
+              .map((t) => {
+                const active = roles.includes(t);
+                return `<button type="button" class="tc-role-pill ${t} ${active ? "active" : ""}" data-tc-skill-name="${escapeHtml(s.name)}" data-tc-skill-src="${escapeHtml(s.source)}" data-tc-role="${t}">${escapeHtml(skillTargetLabel(t))}</button>`;
+              })
+              .join("")}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderTeamConfigPageHtml(): string {
+  const draft = ensureTeamConfigDraft();
+  const buildOpt = (selectedModel?: string, includeDefaultBlank = false) =>
+    buildModelSelectOptions(selectedModel || "", includeDefaultBlank);
+  const assignedCount = draft.skillAssignments.length;
+
+  return `
+    <div class="team-config-page" id="team-config-root">
+      <div class="tc-header">
+        <div>
+          <div class="tc-title-row">
+            ${icons.settings}
+            <h2>Configuração da Equipe & Skills</h2>
+            <span class="tok-pill">.hivemind/team.yaml</span>
+          </div>
+          <div class="dim">Configure modelos por especialista, autonomia, branches, integrações e quais skills cada papel recebe automaticamente.</div>
+        </div>
+        <div class="tc-header-actions">
+          <button type="button" class="mini" id="tc-opencode-btn" title="Configurar token portátil do OpenCode Zen">${icons.bolt}<span>Token OpenCode</span></button>
+          ${state.project?.hasTeam && (state.project.teamConfig?.teams?.length || 0) > 0 ? `<button type="button" class="mini danger" id="tc-delete-team-btn" title="Excluir equipe e parar todos os serviços">${icons.trash}<span>Excluir Equipe</span></button>` : ""}
+          <button type="button" class="mini" id="tc-close-btn">Fechar</button>
+          <button type="button" class="primary" id="tc-save-btn">${icons.save}<span>Salvar Configurações</span></button>
+        </div>
+      </div>
+
+      <div id="tc-error" class="tc-error" style="display:none"></div>
+
+      <div class="tc-grid">
+        <section class="tc-card">
+          <div class="tc-card-head">
+            ${icons.team}
+            <div>
+              <h3>Equipe & Autonomia</h3>
+              <div class="dim">Time base de 3 especialistas (Chefe, Dev e QA) com devs paralelos sob demanda.</div>
+            </div>
+          </div>
+          <div class="tc-fields">
+            <label>Nome da equipe</label>
+            <input id="tc-name" value="${escapeHtml(draft.teamName)}" placeholder="principal" />
+
+            <label>Chefe da equipe</label>
+            <select id="tc-chief">
+              <option value="architect" ${draft.chiefRole === "architect" ? "selected" : ""}>Arquiteto</option>
+              <option value="project_manager" ${draft.chiefRole === "project_manager" ? "selected" : ""}>Gerente de Projeto</option>
+            </select>
+
+            <label>Permissão / Autonomia</label>
+            <select id="tc-permission">
+              <option value="governed" ${draft.permissionMode === "governed" ? "selected" : ""}>Governado (Worktree + PR + Pede permissão p/ main)</option>
+              <option value="auto_edit" ${draft.permissionMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
+              <option value="full_access" ${draft.permissionMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
+            </select>
+
+            <label>Máx. Devs dinâmicos</label>
+            <input id="tc-max-devs" type="number" min="1" max="5" value="${draft.maxDynamicDevs}" />
+
+            <label>Limite tokens/turno</label>
+            <input id="tc-maxtokens" type="number" min="0" step="1000" value="${draft.maxTokens}" placeholder="0 = sem limite" />
+          </div>
+        </section>
+
+        <section class="tc-card">
+          <div class="tc-card-head">
+            ${icons.sparkle}
+            <div>
+              <h3>Modelos LLM por Especialista</h3>
+              <div class="dim">Use um modelo padrão ou escolha modelos dedicados para Chefe, Dev e QA.</div>
+            </div>
+          </div>
+          <div class="tc-fields">
+            <label>Modelo padrão</label>
+            <select id="tc-model">${buildOpt(draft.defaultModel)}</select>
+
+            <label>Modelo do Chefe</label>
+            <select id="tc-model-chief">${buildOpt(draft.chiefModel, true)}</select>
+
+            <label>Modelo do Dev</label>
+            <select id="tc-model-dev">${buildOpt(draft.devModel, true)}</select>
+
+            <label>Modelo do QA</label>
+            <select id="tc-model-qa">${buildOpt(draft.qaModel, true)}</select>
+          </div>
+        </section>
+
+        <section class="tc-card tc-card-wide">
+          <div class="tc-card-head">
+            ${icons.gitBranch}
+            <div>
+              <h3>Git, Worktrees & Integrações</h3>
+              <div class="dim">Branches protegidas, comportamento de commit/PR e integração com Jira Cloud.</div>
+            </div>
+          </div>
+          <div class="tc-git-grid">
+            <div class="tc-fields">
+              <label>Branch Base</label>
+              <input id="tc-base-branch" value="${escapeHtml(draft.baseBranch)}" placeholder="main" />
+
+              <label>Branch Homolog</label>
+              <input id="tc-homolog-branch" value="${escapeHtml(draft.homologBranch)}" placeholder="homolog" />
+
+              <label>Jira Cloud</label>
+              <div class="tc-inline-check">
+                <input id="tc-jira" type="checkbox" ${draft.jiraEnabled ? "checked" : ""} />
+                <input id="tc-jira-key" value="${escapeHtml(draft.jiraProject)}" placeholder="Projeto Jira (ex: PROJ)" style="flex:1" />
+              </div>
+            </div>
+            <div class="tc-toggles">
+              <label class="tc-toggle-row">
+                <input id="tc-worktrees" type="checkbox" ${draft.worktrees ? "checked" : ""} />
+                <div>
+                  <div class="tc-toggle-title">Worktree separada</div>
+                  <div class="dim">Recomendado: cada execução roda em cópia isolada do repositório.</div>
+                </div>
+              </label>
+              <label class="tc-toggle-row">
+                <input id="tc-autocommit" type="checkbox" ${draft.autoCommit ? "checked" : ""} />
+                <div>
+                  <div class="tc-toggle-title">Commit automático</div>
+                  <div class="dim">Quando desligado, o Chefe pede confirmação antes de commitar.</div>
+                </div>
+              </label>
+              <label class="tc-toggle-row">
+                <input id="tc-autopr" type="checkbox" ${draft.autoPR ? "checked" : ""} />
+                <div>
+                  <div class="tc-toggle-title">Criar PR automático</div>
+                  <div class="dim">Quando desligado, o Pull Request só é aberto quando você pedir.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="tc-card tc-card-wide" id="tc-skills-section">
+          <div class="tc-skills-header">
+            <div class="tc-card-head" style="margin:0">
+              ${icons.skills}
+              <div>
+                <h3>Skills por Agente (${assignedCount} atribuída${assignedCount === 1 ? "" : "s"})</h3>
+                <div class="dim">Fixe skills para <strong>Todos</strong>, ou apenas para <strong>Chefe</strong>, <strong>Dev</strong> ou <strong>QA</strong>. Sem seleção = o Chefe escolhe sob demanda.</div>
+              </div>
+            </div>
+            <div class="tc-skills-toolbar">
+              <input id="tc-skill-filter" value="${escapeHtml(draft.skillFilter)}" placeholder="Filtrar skills…" />
+              <button type="button" class="mini" id="tc-skill-refresh" title="Atualizar lista de skills">${icons.refresh}<span>Atualizar</span></button>
+              <button type="button" class="mini primary" id="tc-skill-new">${icons.plus}<span>Nova Skill</span></button>
+            </div>
+          </div>
+          <div class="tc-skills-list" id="tc-skills-list">
+            ${renderTeamConfigSkillRowsHtml(draft)}
+          </div>
+        </section>
+      </div>
+
+      <div class="tc-footer">
+        <span class="dim">Alterações em papéis de skills são salvas automaticamente se a equipe já existir, ou junto ao clicar em Salvar Configurações.</span>
+        <div class="spacer"></div>
+        <button type="button" class="primary" id="tc-save-btn-bottom">${icons.save}<span>Salvar Configurações</span></button>
+      </div>
+    </div>
+  `;
+}
+
+function syncTeamConfigDraftFromDom(draft: TeamConfigDraft) {
+  const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value;
+  const chk = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked;
+  if (val("tc-name") !== undefined) draft.teamName = val("tc-name") || "principal";
+  if (val("tc-chief") !== undefined) draft.chiefRole = val("tc-chief") || "architect";
+  if (val("tc-permission") !== undefined) draft.permissionMode = (val("tc-permission") || "governed") as PermissionMode;
+  if (val("tc-model") !== undefined) draft.defaultModel = val("tc-model") || "agy";
+  if (val("tc-max-devs") !== undefined) draft.maxDynamicDevs = Math.max(1, Math.min(5, parseInt(val("tc-max-devs")!, 10) || 5));
+  if (val("tc-maxtokens") !== undefined) draft.maxTokens = Math.max(0, parseInt(val("tc-maxtokens")!, 10) || 0);
+  if (val("tc-model-chief") !== undefined) draft.chiefModel = val("tc-model-chief") || "";
+  if (val("tc-model-dev") !== undefined) draft.devModel = val("tc-model-dev") || "";
+  if (val("tc-model-qa") !== undefined) draft.qaModel = val("tc-model-qa") || "";
+  if (val("tc-base-branch") !== undefined) draft.baseBranch = val("tc-base-branch") || "main";
+  if (val("tc-homolog-branch") !== undefined) draft.homologBranch = val("tc-homolog-branch") || "homolog";
+  if (chk("tc-worktrees") !== undefined) draft.worktrees = Boolean(chk("tc-worktrees"));
+  if (chk("tc-autocommit") !== undefined) draft.autoCommit = Boolean(chk("tc-autocommit"));
+  if (chk("tc-autopr") !== undefined) draft.autoPR = Boolean(chk("tc-autopr"));
+  if (chk("tc-jira") !== undefined) draft.jiraEnabled = Boolean(chk("tc-jira"));
+  if (val("tc-jira-key") !== undefined) draft.jiraProject = val("tc-jira-key") || "";
+}
+
+function bindTeamConfigSkillPills(draft: TeamConfigDraft) {
+  const listEl = document.getElementById("tc-skills-list");
+  if (!listEl) return;
+  listEl.querySelectorAll("[data-tc-skill-name]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const el = btn as HTMLElement;
+      const name = el.dataset.tcSkillName!;
+      const rawSrc = el.dataset.tcSkillSrc || "";
+      const source: "" | "native" | "project" =
+        rawSrc === "native" || rawSrc === "project" ? rawSrc : "";
+      const role = el.dataset.tcRole as SkillTargetRole;
+      toggleDraftSkillRole(draft, name, source, role);
+      listEl.innerHTML = renderTeamConfigSkillRowsHtml(draft);
+      bindTeamConfigSkillPills(draft);
+
+      const headCount = document.querySelector("#tc-skills-section h3");
+      if (headCount) {
+        const n = draft.skillAssignments.length;
+        headCount.textContent = `Skills por Agente (${n} atribuída${n === 1 ? "" : "s"})`;
+      }
+
+      const backend = api();
+      if (backend && state.project?.hasTeam && backend.SaveSkillAssignments) {
+        try {
+          const cfg = await backend.SaveSkillAssignments(state.project.root, draft.skillAssignments);
+          state.project.teamConfig = cfg;
+          if (state.sidebarView === "skills" && state.showLeftSidebar) renderLeftSidebar();
+          setStatus(`Atribuições de skill "${name}" atualizadas.`);
+        } catch (err: any) {
+          toastError(`salvar atribuição da skill "${name}"`, err);
+        }
+      }
+    });
+  });
+}
+
+function bindTeamConfigEvents() {
+  const draft = ensureTeamConfigDraft();
+  const root = document.getElementById("team-config-root");
+  if (!root) return;
+
+  root.querySelectorAll("input, select").forEach((el) => {
+    if ((el as HTMLElement).id === "tc-skill-filter") return;
+    el.addEventListener("change", () => syncTeamConfigDraftFromDom(draft));
+  });
+
+  const filterIn = document.getElementById("tc-skill-filter") as HTMLInputElement | null;
+  filterIn?.addEventListener("input", () => {
+    draft.skillFilter = filterIn.value;
+    const listEl = document.getElementById("tc-skills-list");
+    if (listEl) {
+      listEl.innerHTML = renderTeamConfigSkillRowsHtml(draft);
+      bindTeamConfigSkillPills(draft);
+    }
+  });
+
+  bindTeamConfigSkillPills(draft);
+
+  document.getElementById("tc-opencode-btn")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("tc-delete-team-btn")?.addEventListener("click", () => {
+    const target = draft.teamName || state.project?.teamConfig?.active || "";
+    if (target) confirmDeleteSavedTeam(target);
+  });
+  document.getElementById("tc-skill-refresh")?.addEventListener("click", () => void refreshSkills());
+  document.getElementById("tc-skill-new")?.addEventListener("click", () => {
+    state.skillEditor = {
+      mode: "create",
+      name: "",
+      body: "# Minha Skill\n\nDescreva em uma frase quando esta skill deve ser aplicada.\n\n## Diretrizes\n\n- …",
+    };
+    renderModalLayer();
+  });
+
+  document.getElementById("tc-close-btn")?.addEventListener("click", () => {
+    state.editorTabs = state.editorTabs.filter((t) => t.relPath !== TEAM_CONFIG_TAB_KEY);
+    if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) {
+      state.activeEditorPath = state.editorTabs[0]?.relPath || "";
+    }
+    renderEditorTabs();
+    renderEditorBody();
+  });
+
+  const saveAll = async () => {
+    const backend = api();
+    if (!backend || !state.project) return;
+    syncTeamConfigDraftFromDom(draft);
+    const agentModels: Record<string, string> = {};
+    if (draft.chiefModel) agentModels["chefe"] = draft.chiefModel;
+    if (draft.devModel) agentModels["dev"] = draft.devModel;
+    if (draft.qaModel) agentModels["qa"] = draft.qaModel;
+
+    const errEl = document.getElementById("tc-error");
+    if (errEl) errEl.style.display = "none";
+
+    try {
+      const cfg = await backend.SaveTeamWizard(state.project.root, {
+        teamName: draft.teamName || "principal",
+        chiefRole: draft.chiefRole || "architect",
+        devCount: 1,
+        maxDynamicDevs: draft.maxDynamicDevs,
+        defaultModel: draft.defaultModel || "agy",
+        agentModels,
+        permissionMode: draft.permissionMode,
+        worktrees: draft.worktrees,
+        autoCommit: draft.autoCommit,
+        autoPR: draft.autoPR,
+        jiraEnabled: draft.jiraEnabled,
+        jiraProject: draft.jiraProject,
+        baseBranch: draft.baseBranch || "main",
+        homologBranch: draft.homologBranch || "homolog",
+        maxTokens: draft.maxTokens,
+        skillAssignments: draft.skillAssignments,
+      });
+      state.project.hasTeam = true;
+      state.project.teamConfig = cfg;
+      state.teamConfigDraft = buildDraftFromProject();
+      const lane = activeLane();
+      if (lane) {
+        lane.teamName = cfg.active || "principal";
+        lane.agents = buildAgentRuntimes(lane.teamName);
+      }
+      renderLaneBarOnly();
+      renderTokenBar();
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      if ((state.sidebarView === "team" || state.sidebarView === "skills") && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
+      toast(`Configuração da equipe "${cfg.active}" salva em .hivemind/team.yaml.`, "success");
+      setStatus(`Equipe "${cfg.active}" e skills salvas em .hivemind/team.yaml.`);
+    } catch (err: any) {
+      const reason = err instanceof Error ? err.message : err?.message || String(err);
+      if (errEl) {
+        errEl.textContent = `Não foi possível salvar a configuração: ${reason}`;
+        errEl.style.display = "block";
+      }
+    }
+  };
+
+  document.getElementById("tc-save-btn")?.addEventListener("click", () => void saveAll());
+  document.getElementById("tc-save-btn-bottom")?.addEventListener("click", () => void saveAll());
 }
 
 interface DiffHunkParsed {
@@ -3479,11 +4685,13 @@ function renderEditorBody() {
     const proj = state.project;
     body.innerHTML = `
       <div class="empty-welcome">
-        <div class="welcome-hero-badge">${icons.brand}<span>Multi-Agent Dark Islands IDE</span></div>
+        <div class="welcome-hero-logo">${icons.brandHero}</div>
+        <div class="welcome-hero-badge"><span>Multi-Agent Dark Islands IDE</span></div>
         <div class="welcome-title">HiveMind IDE</div>
         <div class="dim">${proj ? `${escapeHtml(proj.name)} · ${escapeHtml(proj.stack.summary)}` : "Abra uma pasta para iniciar"}</div>
         <div class="welcome-actions">
           <button class="primary" id="welcome-mission">${icons.swarm}<span>Quadro Multiagente</span></button>
+          <button id="welcome-team-config">${icons.settings}<span>Configurar Equipe & Skills</span></button>
           <button id="welcome-quick-open">${icons.search}<span>Buscar Arquivo (Ctrl+P)</span></button>
           <button id="welcome-cmd-palette">${icons.command}<span>Comandos (Ctrl+K)</span></button>
           <button id="welcome-memory">${icons.memory}<span>Memória do Time</span></button>
@@ -3500,6 +4708,7 @@ function renderEditorBody() {
       </div>
     `;
     document.getElementById("welcome-mission")?.addEventListener("click", () => openMissionControlTab());
+    document.getElementById("welcome-team-config")?.addEventListener("click", () => void openTeamConfigTab());
     document.getElementById("welcome-quick-open")?.addEventListener("click", () => openQuickOpen());
     document.getElementById("welcome-cmd-palette")?.addEventListener("click", () => openCommandPalette());
     document.getElementById("welcome-memory")?.addEventListener("click", () => openTeamMemoryFile());
@@ -3509,6 +4718,46 @@ function renderEditorBody() {
   if (activeTab.kind === "mission") {
     body.innerHTML = renderMissionBoardHtml();
     bindMissionBoardEvents();
+    return;
+  }
+
+  if (activeTab.kind === "team-config") {
+    body.innerHTML = renderTeamConfigPageHtml();
+    bindTeamConfigEvents();
+    return;
+  }
+
+  if (activeTab.kind === "commit" && activeTab.commitDetail) {
+    const cd = activeTab.commitDetail;
+    body.innerHTML = `
+      <div class="commit-view-page">
+        <div class="tc-header">
+          <div>
+            <div class="tc-title-row">
+              ${icons.commit}
+              <h2>${escapeHtml(cd.subject)}</h2>
+              <span class="tok-pill">${escapeHtml(cd.short)}</span>
+            </div>
+            <div class="dim">${escapeHtml(cd.author)} · ${escapeHtml(cd.date)} · ${cd.files.length} arquivo(s) alterado(s)</div>
+            ${cd.body ? `<pre class="commit-body-pre">${escapeHtml(cd.body)}</pre>` : ""}
+          </div>
+        </div>
+        ${cd.files.map((f) => {
+          const { hunks } = parseDiffHunks(f);
+          return `
+            <div class="commit-file-card">
+              <div class="commit-file-head">
+                <span style="font-family:var(--mono);font-size:12px;font-weight:600">${escapeHtml(f.path)}</span>
+                <span class="spacer"></span>
+                <span style="color:var(--green);font-family:var(--mono);font-size:11px">+${f.added}</span>
+                <span style="color:var(--red);font-family:var(--mono);font-size:11px">-${f.removed}</span>
+              </div>
+              <div class="diff-lines">${renderUnifiedDiffHtml(hunks)}</div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
     return;
   }
 
@@ -3828,19 +5077,120 @@ function renderTokenBar() {
   });
 }
 
+function confirmDeleteSavedTeam(teamName: string) {
+  if (!state.project) return;
+  const matchingLanes = state.lanes.filter((l) => l.teamName === teamName);
+  const runningCount = matchingLanes.filter((l) => l.running).length;
+  askConfirm({
+    title: `Excluir equipe "${teamName}"`,
+    body: runningCount > 0
+      ? `Excluir a equipe "${teamName}" de .hivemind/team.yaml vai parar todos os serviços e agentes em execução (${runningCount} aba(s) ativa(s)) dessa equipe. Deseja continuar?`
+      : `Excluir a equipe "${teamName}" de .hivemind/team.yaml vai encerrar os serviços vinculados e removê-la do projeto. Deseja continuar?`,
+    confirmLabel: "Excluir e Parar Serviços",
+    danger: true,
+    onConfirm: async () => {
+      const backend = api();
+      if (!backend || !state.project) return;
+      try {
+        for (const l of matchingLanes) {
+          await backend.CancelRun(l.id);
+          l.running = false;
+        }
+        const cfg = await backend.DeleteTeam(state.project.root, teamName);
+        state.project.teamConfig = cfg;
+        state.project.hasTeam = (cfg.teams?.length || 0) > 0;
+        const fallbackTeam = cfg.active || cfg.teams?.[0]?.name || "principal";
+        const remaining = state.lanes.filter((l) => l.teamName !== teamName);
+        if (remaining.length > 0) {
+          state.lanes = remaining;
+        } else {
+          state.lanes = [createLane(fallbackTeam)];
+        }
+        if (!state.lanes.some((l) => l.id === state.activeLaneId)) {
+          state.activeLaneId = state.lanes[0].id;
+        }
+        state.teamConfigDraft = buildDraftFromProject();
+        renderLaneBarOnly();
+        renderPipelineBar();
+        renderTokenBar();
+        rebuildChatMessagesFull();
+        syncComposerButtons();
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+        toast(`Equipe "${teamName}" excluída e serviços encerrados.`, "success");
+        setStatus(`Equipe "${teamName}" excluída.`);
+      } catch (err: any) {
+        toastError(`excluir a equipe "${teamName}"`, err);
+      }
+    },
+  });
+}
+
+function confirmCloseParallelLane(laneId: string) {
+  const target = state.lanes.find((l) => l.id === laneId);
+  if (!target) return;
+  const isOnlyLane = state.lanes.length <= 1;
+  askConfirm({
+    title: isOnlyLane ? `Encerrar e limpar equipe "${target.teamName}"` : `Excluir equipe paralela "${target.teamName}"`,
+    body: target.running
+      ? `Esta equipe está executando tarefas agora. Excluir vai parar imediatamente todos os serviços e agentes desta aba. Deseja continuar?`
+      : isOnlyLane
+        ? `Isso vai parar qualquer serviço em andamento desta equipe e zerar a conversa atual. Deseja continuar?`
+        : `Excluir esta aba de equipe paralela vai encerrar seus serviços e removê-la da barra. Deseja continuar?`,
+    confirmLabel: "Excluir e Parar Serviços",
+    danger: true,
+    onConfirm: async () => {
+      try {
+        await api()?.CancelRun(target.id);
+      } catch {
+        // Ignore if already finished
+      }
+      target.running = false;
+      if (state.lanes.length > 1) {
+        const idx = state.lanes.findIndex((l) => l.id === laneId);
+        state.lanes = state.lanes.filter((l) => l.id !== laneId);
+        if (state.activeLaneId === laneId) {
+          const nextIdx = Math.min(idx, state.lanes.length - 1);
+          state.activeLaneId = state.lanes[nextIdx].id;
+        }
+      } else {
+        const fresh = createLane(target.teamName);
+        state.lanes = [fresh];
+        state.activeLaneId = fresh.id;
+      }
+      renderLaneBarOnly();
+      renderPipelineBar();
+      renderTokenBar();
+      rebuildChatMessagesFull();
+      syncComposerButtons();
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      if ((state.sidebarView === "team" || state.sidebarView === "sessions") && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
+      toast(`Serviços da equipe "${target.teamName}" parados e aba excluída.`, "info");
+      setStatus(`Equipe "${target.teamName}" excluída.`);
+    },
+  });
+}
+
 function renderLaneBarOnly() {
   const bar = document.getElementById("lane-bar");
   const lane = activeLane();
   if (bar) {
     bar.innerHTML = state.lanes.map((l) => `
-      <button type="button" class="lane-pill ${l.id === lane?.id ? "active" : ""}" data-lane="${l.id}">
+      <div class="lane-pill ${l.id === lane?.id ? "active" : ""}" data-lane="${l.id}" role="tab" aria-selected="${l.id === lane?.id ? "true" : "false"}">
         ${l.running ? `<span class="lane-dot"></span>` : ""}
-        <span>${escapeHtml(l.teamName)}</span>
+        <span class="lane-pill-name">${escapeHtml(l.teamName)}</span>
         ${l.sessionTotalTokens > 0 ? `<span class="dim" style="font-size:10px">${formatTokens(l.sessionTotalTokens)}</span>` : ""}
-      </button>
+        <button type="button" class="lane-close-x" data-close-lane="${l.id}" title="Excluir equipe e parar todos os serviços" aria-label="Excluir equipe ${escapeHtml(l.teamName)}">${icons.closeSmall}</button>
+      </div>
     `).join("");
     bar.querySelectorAll("[data-lane]").forEach((el) => {
-      el.addEventListener("click", () => {
+      el.addEventListener("click", (ev) => {
+        if ((ev.target as HTMLElement)?.closest("[data-close-lane]")) return;
         state.activeLaneId = (el as HTMLElement).dataset.lane!;
         renderLaneBarOnly();
         renderPipelineBar();
@@ -3852,6 +5202,13 @@ function renderLaneBarOnly() {
         if ((state.sidebarView === "team" || state.sidebarView === "sessions") && state.showLeftSidebar) {
           renderLeftSidebar();
         }
+      });
+    });
+    bar.querySelectorAll("[data-close-lane]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const id = (btn as HTMLElement).dataset.closeLane!;
+        confirmCloseParallelLane(id);
       });
     });
   }
@@ -4127,6 +5484,13 @@ function rebuildChatMessagesFull() {
   const lane = activeLane();
   if (!box || !lane) return;
   box.innerHTML = "";
+  if (lane.messages.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty-state";
+    empty.innerHTML = `${icons.brandHero}<span>Descreva o que deseja construir ou corrigir.</span>`;
+    box.appendChild(empty);
+    return;
+  }
   const frag = document.createDocumentFragment();
   for (const m of lane.messages) {
     frag.appendChild(createMessageElement(m));
@@ -4148,6 +5512,9 @@ function flushChatUpdates() {
   const lane = activeLane();
   if (!box || !lane) return;
 
+  if (lane.messages.length > 0) {
+    box.querySelector(".chat-empty-state")?.remove();
+  }
   for (const m of lane.messages) {
     const existing = box.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(m.id)}"]`);
     if (existing) {
@@ -4236,12 +5603,7 @@ function bindRightStaticEvents() {
     lane.sessionOutTokens = 0;
     lane.sessionTotalTokens = 0;
     lane.agents = buildAgentRuntimes(lane.teamName);
-    lane.messages = [{
-      id: `sys-${Date.now()}`,
-      kind: "system",
-      label: "Sistema",
-      text: "Nova sessão iniciada com o Chefe (contador de tokens da sessão zerado).",
-    }];
+    lane.messages = [];
     rebuildChatMessagesFull();
     renderTokenBar();
     renderLaneBarOnly();
@@ -4496,7 +5858,7 @@ function getCommandActions(): CommandAction[] {
     { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
     { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
-    { id: "wizard", label: "Configurar Equipe (.hivemind/team.yaml)", run: () => { state.showWizard = true; renderModalLayer(); } },
+    { id: "wizard", label: "Configurar Equipe e Skills (.hivemind/team.yaml)", run: () => void openTeamConfigTab() },
     { id: "opencode-token", label: "Configurar Token OpenCode Zen (OPENCODE_API_KEY)", run: () => openOpenCodeModal() },
     { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
     { id: "open-folder-tab", label: "Abrir Outro Projeto em Nova Aba Isolada…", shortcut: "Ctrl+Shift+O", run: () => openFolderDialog(true) },
@@ -5160,174 +6522,6 @@ function renderModalLayer() {
         const reason = err instanceof Error ? err.message : String(err);
         if (errEl) {
           errEl.textContent = `Não foi possível salvar a skill: ${reason}`;
-          errEl.style.display = "block";
-        }
-      }
-    });
-    return;
-  }
-
-  if (state.showWizard) {
-    const settings = state.project?.teamConfig?.settings;
-    const activeTeamName = state.project?.teamConfig?.active || "principal";
-    const curTeam = (state.project?.teamConfig?.teams || []).find((t) => t.name === activeTeamName) || state.project?.teamConfig?.teams?.[0];
-    const existingChief = curTeam?.agents?.find((a) => a.name === "chefe" || a.role === "architect" || a.role === "project_manager");
-    const existingDev = curTeam?.agents?.find((a) => a.role === "developer");
-    const existingQA = curTeam?.agents?.find((a) => a.role === "qa");
-    const curChiefRole = existingChief?.role === "project_manager" ? "project_manager" : "architect";
-    const curMaxDynDevs = settings?.max_dynamic_devs && settings.max_dynamic_devs > 0 ? settings.max_dynamic_devs : 5;
-    const existingMaxTok = settings?.max_tokens || 0;
-    const curPerm = settings?.permission_mode || "governed";
-    const curBase = settings?.base_branch || "main";
-    const curHomolog = settings?.homolog_branch || "homolog";
-    const autoCommitChecked = settings ? settings.auto_commit === true : false;
-    const autoPRChecked = settings ? settings.auto_pr === true : false;
-    const buildOptWithSel = (selectedModel?: string, includeDefaultBlank = false) =>
-      buildModelSelectOptions(selectedModel || "", includeDefaultBlank);
-
-    layer.innerHTML = `
-      <div class="modal-backdrop">
-        <div class="modal-box">
-          <h3 class="modal-title">Montar Equipe HiveMind (.hivemind/team.yaml)</h3>
-          <div class="form-grid">
-            <label>Nome da equipe:</label>
-            <input id="wiz-name" value="${escapeHtml(activeTeamName)}" />
-
-            <label>Chefe da equipe:</label>
-            <select id="wiz-chief">
-              <option value="architect" ${curChiefRole === "architect" ? "selected" : ""}>Arquiteto</option>
-              <option value="project_manager" ${curChiefRole === "project_manager" ? "selected" : ""}>Gerente de Projeto</option>
-            </select>
-
-            <label>Permissão / Autonomia:</label>
-            <select id="wiz-permission">
-              <option value="governed" ${curPerm === "governed" ? "selected" : ""}>Governado (Worktree + PR + Pede permissão p/ main)</option>
-              <option value="auto_edit" ${curPerm === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
-              <option value="full_access" ${curPerm === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total (estilo Claude Code / GPT)</option>
-            </select>
-
-            <label>Modelo padrão:</label>
-            <select id="wiz-model">${buildOptWithSel(existingChief?.model || existingDev?.model)}</select>
-          </div>
-          <div class="dim" style="margin-top:10px">Time base: <strong>3 agentes</strong> (Chefe/Arquiteto, Dev e QA). Em tarefas grandes, o Arquiteto dispara devs paralelos sob demanda.</div>
-          <details class="wiz-advanced" ${settings ? "open" : ""}>
-            <summary>${icons.settings}<span>Avançado — modelos por agente, branches, Git e integrações</span></summary>
-            <div class="wiz-advanced-body">
-              <label>Máx. Devs dinâmicos:</label>
-              <input id="wiz-max-devs" type="number" min="1" max="5" value="${curMaxDynDevs}" title="Padrão: 3 agentes (Chefe, Dev, QA). Para tarefas grandes, o Chefe/Arquiteto pode disparar até N devs paralelos sob demanda." />
-
-              <label>Modelo do Chefe:</label>
-              <select id="wiz-model-chief">${buildOptWithSel(existingChief?.model, true)}</select>
-
-              <label>Modelo do Dev:</label>
-              <select id="wiz-model-dev">${buildOptWithSel(existingDev?.model, true)}</select>
-
-              <label>Modelo do QA:</label>
-              <select id="wiz-model-qa">${buildOptWithSel(existingQA?.model, true)}</select>
-
-              <label>Branch Base / Homolog:</label>
-              <div style="display:flex;gap:8px">
-                <input id="wiz-base-branch" value="${escapeHtml(curBase)}" placeholder="Base (ex: main)" style="flex:1" title="Branch base principal (exige sua permissão para merge)" />
-                <input id="wiz-homolog-branch" value="${escapeHtml(curHomolog)}" placeholder="Homolog (ex: homolog)" style="flex:1" title="Branch de homologação (Chefe mescla automático após aprovação do revisor)" />
-              </div>
-
-              <label>Limite tokens/turno:</label>
-              <input id="wiz-maxtokens" type="number" min="0" step="1000" value="${existingMaxTok}" placeholder="0 = sem limite (ex: 50000)" />
-
-              <label>Worktree separada:</label>
-              <div>
-                <input id="wiz-worktrees" type="checkbox" ${settings?.worktrees !== false ? "checked" : ""} />
-                <span class="wiz-hint">Recomendado: cada execução acontece numa cópia isolada do projeto.</span>
-              </div>
-
-              <label>Commit automático:</label>
-              <div>
-                <input id="wiz-autocommit" type="checkbox" ${autoCommitChecked ? "checked" : ""} />
-                <span class="wiz-hint">Desligado por padrão: o Chefe pergunta antes de commitar.</span>
-              </div>
-
-              <label>Criar PR automático:</label>
-              <div>
-                <input id="wiz-autopr" type="checkbox" ${autoPRChecked ? "checked" : ""} />
-                <span class="wiz-hint">Desligado por padrão: o PR só abre quando você pedir.</span>
-              </div>
-
-              <label>Jira Cloud:</label>
-              <div style="display:flex;gap:8px;align-items:center">
-                <input id="wiz-jira" type="checkbox" ${settings?.jira_enabled ? "checked" : ""} />
-                <input id="wiz-jira-key" placeholder="Projeto Jira (ex: PROJ)" value="${escapeHtml(settings?.jira_project || "")}" style="flex:1" />
-              </div>
-            </div>
-          </details>
-          <div id="wiz-error" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
-          <div class="modal-footer">
-            <button class="mini" id="wiz-opencode-btn" title="Configurar token portátil do OpenCode Zen (OPENCODE_API_KEY)">${icons.bolt}<span>Token OpenCode…</span></button>
-            <div class="spacer"></div>
-            <button id="wiz-cancel">Cancelar</button>
-            <button class="primary" id="wiz-save">Salvar Equipe</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.getElementById("wiz-opencode-btn")?.addEventListener("click", () => {
-      state.showWizard = false;
-      openOpenCodeModal();
-    });
-    document.getElementById("wiz-cancel")?.addEventListener("click", () => {
-      state.showWizard = false;
-      renderModalLayer();
-    });
-    document.getElementById("wiz-save")?.addEventListener("click", async () => {
-      const backend = api();
-      if (!backend || !state.project) return;
-      const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement)?.value || "";
-      const chk = (id: string) => (document.getElementById(id) as HTMLInputElement)?.checked || false;
-      const maxDynamicDevs = Math.max(1, Math.min(5, parseInt(val("wiz-max-devs"), 10) || 5));
-      const maxTokens = Math.max(0, parseInt(val("wiz-maxtokens"), 10) || 0);
-      const defaultModel = val("wiz-model") || "agy";
-      const agentModels: Record<string, string> = {};
-      if (val("wiz-model-chief")) agentModels["chefe"] = val("wiz-model-chief");
-      if (val("wiz-model-qa")) agentModels["qa"] = val("wiz-model-qa");
-      if (val("wiz-model-dev")) agentModels["dev"] = val("wiz-model-dev");
-      try {
-        const cfg = await backend.SaveTeamWizard(state.project.root, {
-          teamName: val("wiz-name") || "principal",
-          chiefRole: val("wiz-chief") || "architect",
-          devCount: 1,
-          maxDynamicDevs,
-          defaultModel,
-          agentModels,
-          permissionMode: (val("wiz-permission") || "governed") as PermissionMode,
-          worktrees: chk("wiz-worktrees"),
-          autoCommit: chk("wiz-autocommit"),
-          autoPR: chk("wiz-autopr"),
-          jiraEnabled: chk("wiz-jira"),
-          jiraProject: val("wiz-jira-key"),
-          baseBranch: val("wiz-base-branch") || "main",
-          homologBranch: val("wiz-homolog-branch") || "homolog",
-          maxTokens,
-        });
-        state.project.hasTeam = true;
-        state.project.teamConfig = cfg;
-        state.showWizard = false;
-        const lane = activeLane();
-        if (lane) {
-          lane.teamName = cfg.active || "principal";
-          lane.agents = buildAgentRuntimes(lane.teamName);
-        }
-        renderModalLayer();
-        renderLaneBarOnly();
-        renderTokenBar();
-        updateStatusBar();
-        updateMissionBoardIfOpen();
-        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-        setStatus(`Equipe "${cfg.active}" salva em .hivemind/team.yaml.`);
-      } catch (err: any) {
-        const reason = err instanceof Error ? err.message : err?.message || String(err);
-        const errEl = document.getElementById("wiz-error");
-        if (errEl) {
-          errEl.textContent = `Não foi possível salvar a equipe: ${reason}`;
           errEl.style.display = "block";
         }
       }

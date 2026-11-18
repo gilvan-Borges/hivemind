@@ -17,7 +17,21 @@ const (
 	PermissionGoverned   = "governed"    // Default: strict worktree/PR/review governance & confirmations
 	PermissionAutoEdit   = "auto_edit"   // Local edits & allowlisted shell run without prompts; main merge still asks
 	PermissionFullAccess = "full_access" // Full autonomy & permissions granted by the user in settings
+
+	// Skill target scopes: restrict a skill to specific specialist roles or apply to everyone.
+	SkillTargetAll   = "all"
+	SkillTargetChief = "chief"
+	SkillTargetDev   = "dev"
+	SkillTargetQA    = "qa"
 )
+
+// SkillAssignment pins a skill (native or project) to specific specialist roles.
+// Roles may contain "all" or any combination of "chief", "dev", and "qa".
+type SkillAssignment struct {
+	Name   string   `yaml:"name" json:"name"`
+	Source string   `yaml:"source,omitempty" json:"source,omitempty"` // "native" | "project" | ""
+	Roles  []string `yaml:"roles,omitempty" json:"roles,omitempty"`
+}
 
 // File is the on-disk project configuration. Several teams can share one workspace.
 type File struct {
@@ -42,9 +56,10 @@ type Settings struct {
 	MaxDynamicDevs           int      `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
 	MaxLLMCalls              int      `yaml:"max_llm_calls" json:"max_llm_calls"`
 	MaxTokens                int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	BaseBranch               string   `yaml:"base_branch" json:"base_branch"`
-	ShellAllowlist           []string `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
-	ConfirmShell             *bool    `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
+	BaseBranch               string            `yaml:"base_branch" json:"base_branch"`
+	ShellAllowlist           []string          `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
+	ConfirmShell             *bool             `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
+	SkillAssignments         []SkillAssignment `yaml:"skill_assignments,omitempty" json:"skill_assignments,omitempty"`
 }
 
 // DefaultSettings returns the recommended governance defaults:
@@ -233,6 +248,7 @@ func (f *File) Normalize() {
 	if len(f.Settings.ShellAllowlist) == 0 {
 		f.Settings.ShellAllowlist = append([]string(nil), DefaultAllowlist...)
 	}
+	f.Settings.SkillAssignments = NormalizeSkillAssignments(f.Settings.SkillAssignments)
 	for i := range f.Teams {
 		f.Teams[i].Name = strings.TrimSpace(f.Teams[i].Name)
 		for j := range f.Teams[i].Agents {
@@ -249,6 +265,91 @@ func (f *File) Normalize() {
 	if f.Active == "" && len(f.Teams) == 1 {
 		f.Active = f.Teams[0].Name
 	}
+}
+
+// NormalizeSkillTarget canonicalizes a skill assignment role target.
+func NormalizeSkillTarget(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case SkillTargetAll, "todos", "*":
+		return SkillTargetAll
+	case SkillTargetChief, "chefe", RoleArchitect, RoleProjectManager, RoleTechLead, "arquiteto", "pm":
+		return SkillTargetChief
+	case SkillTargetDev, RoleDeveloper, "desenvolvedor", "devs":
+		return SkillTargetDev
+	case SkillTargetQA, "revisor":
+		return SkillTargetQA
+	default:
+		return ""
+	}
+}
+
+// NormalizeSkillAssignments deduplicates, normalizes names/sources/roles, and drops empty entries.
+func NormalizeSkillAssignments(in []SkillAssignment) []SkillAssignment {
+	if len(in) == 0 {
+		return nil
+	}
+	var out []SkillAssignment
+	seenIdx := make(map[string]int, len(in))
+	for _, item := range in {
+		name := strings.ToLower(strings.TrimSpace(item.Name))
+		if name == "" {
+			continue
+		}
+		src := strings.ToLower(strings.TrimSpace(item.Source))
+		if src != "native" && src != "project" {
+			src = ""
+		}
+		roleSet := make(map[string]bool, 4)
+		for _, r := range item.Roles {
+			if norm := NormalizeSkillTarget(r); norm != "" {
+				roleSet[norm] = true
+			}
+		}
+		var roles []string
+		if roleSet[SkillTargetAll] || (roleSet[SkillTargetChief] && roleSet[SkillTargetDev] && roleSet[SkillTargetQA]) {
+			roles = []string{SkillTargetAll}
+		} else {
+			for _, candidate := range []string{SkillTargetChief, SkillTargetDev, SkillTargetQA} {
+				if roleSet[candidate] {
+					roles = append(roles, candidate)
+				}
+			}
+		}
+		if len(roles) == 0 {
+			continue
+		}
+		key := src + ":" + name
+		if idx, exists := seenIdx[key]; exists {
+			out[idx].Roles = roles
+			continue
+		}
+		seenIdx[key] = len(out)
+		out = append(out, SkillAssignment{
+			Name:   name,
+			Source: src,
+			Roles:  roles,
+		})
+	}
+	return out
+}
+
+// SkillsForTarget returns all skill assignments that apply to target ("chief", "dev", or "qa").
+func (s Settings) SkillsForTarget(target string) []SkillAssignment {
+	norm := NormalizeSkillTarget(target)
+	if norm == "" {
+		return nil
+	}
+	var out []SkillAssignment
+	for _, a := range s.SkillAssignments {
+		for _, r := range a.Roles {
+			nr := NormalizeSkillTarget(r)
+			if nr == SkillTargetAll || nr == norm {
+				out = append(out, a)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // ActiveTeam returns the selected team.

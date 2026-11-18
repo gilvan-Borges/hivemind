@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
@@ -38,6 +42,8 @@ type DiffLine struct {
 // FileDiff holds the parsed patch and line stats for one modified file.
 type FileDiff struct {
 	Path    string     `json:"path"`
+	Status  string     `json:"status,omitempty"` // "M", "U", "A", "D", "R"
+	Staged  bool       `json:"staged,omitempty"`
 	Added   int        `json:"added"`
 	Removed int        `json:"removed"`
 	Lines   []DiffLine `json:"lines"`
@@ -144,11 +150,89 @@ func WorkspaceDiff(ctx context.Context, workspaceDir string) ([]FileDiff, error)
 			if rdErr != nil {
 				continue
 			}
-			diffs = append(diffs, buildUntrackedFileDiff(rel, data))
+			fd := buildUntrackedFileDiff(rel, data)
+			fd.Status = "U"
+			diffs = append(diffs, fd)
 			seen[rel] = true
 		}
 	}
+
+	// Enrich tracked diffs with status letter (M/A/D/R) and staged flag from porcelain status.
+	if stRaw, sErr := runGit(ctx, workspaceDir, "status", "--porcelain=v1", "--untracked-files=no"); sErr == nil {
+		statusByPath, stagedByPath := parsePorcelainStatus(stRaw)
+		for i := range diffs {
+			if diffs[i].Status == "" {
+				if st, ok := statusByPath[diffs[i].Path]; ok {
+					diffs[i].Status = st
+				} else {
+					diffs[i].Status = "M"
+				}
+			}
+			if stagedByPath[diffs[i].Path] {
+				diffs[i].Staged = true
+			}
+		}
+	}
 	return diffs, nil
+}
+
+func parsePorcelainStatus(raw string) (map[string]string, map[string]bool) {
+	statusMap := make(map[string]string)
+	stagedMap := make(map[string]bool)
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		x := line[0]
+		y := line[1]
+		pathPart := strings.TrimSpace(line[3:])
+		if idx := strings.LastIndex(pathPart, " -> "); idx >= 0 {
+			pathPart = strings.TrimSpace(pathPart[idx+4:])
+		}
+		pathPart = strings.Trim(pathPart, `"`)
+		pathPart = filepath.ToSlash(pathPart)
+		if pathPart == "" {
+			continue
+		}
+		code := "M"
+		switch {
+		case x == '?' && y == '?':
+			code = "U"
+		case x == 'A' || y == 'A':
+			code = "A"
+		case x == 'D' || y == 'D':
+			code = "D"
+		case x == 'R' || y == 'R':
+			code = "R"
+		}
+		statusMap[pathPart] = code
+		if x != ' ' && x != '?' {
+			stagedMap[pathPart] = true
+		}
+	}
+	return statusMap, stagedMap
+}
+
+// StageWorkspaceFile stages or unstages a single relative path in workspaceDir.
+func StageWorkspaceFile(ctx context.Context, workspaceDir, relPath string, stage bool) error {
+	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
+	if relClean == "" || relClean == ".hivemind" || strings.HasPrefix(relClean, ".hivemind/") {
+		return fmt.Errorf("caminho de arquivo inválido: %s", relPath)
+	}
+	if _, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean)); err != nil {
+		return err
+	}
+	if stage {
+		_, err := runGit(ctx, workspaceDir, "add", "--", relClean)
+		return err
+	}
+	g := gitx.Local{}
+	if g.HasCommit(ctx, workspaceDir) {
+		_, err := runGit(ctx, workspaceDir, "reset", "HEAD", "--", relClean)
+		return err
+	}
+	_, err := runGit(ctx, workspaceDir, "rm", "--cached", "--", relClean)
+	return err
 }
 
 func buildUntrackedFileDiff(relSlash string, data []byte) FileDiff {
@@ -312,19 +396,26 @@ func CurrentBranch(ctx context.Context, workspace string) string {
 	return b
 }
 
-// CommitAndPush stages all changes, commits with message, and optionally pushes.
+// CommitAndPush commits staged changes (or all changes when nothing is staged) and optionally pushes.
 func CommitAndPush(ctx context.Context, workspace, message string, push bool) (string, error) {
 	msg := strings.TrimSpace(message)
 	if msg == "" {
 		msg = "feat: alterações HiveMind IDE"
 	}
 	g := gitx.Local{}
-	committed, err := g.CommitAll(ctx, workspace, msg)
-	if err != nil {
-		return "", err
-	}
-	if !committed {
-		return "Nenhuma alteração pendente para commitar.", nil
+	// If user explicitly staged specific files, commit only the staged index.
+	if hasStagedChanges(ctx, workspace) {
+		if _, err := runGit(ctx, workspace, "commit", "-m", msg); err != nil {
+			return "", err
+		}
+	} else {
+		committed, err := g.CommitAll(ctx, workspace, msg)
+		if err != nil {
+			return "", err
+		}
+		if !committed {
+			return "Nenhuma alteração pendente para commitar.", nil
+		}
 	}
 	branch, _ := g.CurrentBranch(ctx, workspace)
 	if push && branch != "" {
@@ -334,6 +425,14 @@ func CommitAndPush(ctx context.Context, workspace, message string, push bool) (s
 		return fmt.Sprintf("Commit e push concluídos na branch %s.", branch), nil
 	}
 	return fmt.Sprintf("Commit criado em %s.", branch), nil
+}
+
+func hasStagedChanges(ctx context.Context, workspace string) bool {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
+	procx.ConfigureContext(cmd)
+	cmd.Dir = workspace
+	err := cmd.Run()
+	return err != nil
 }
 
 // OpenPullRequest pushes the current branch and opens a GitHub PR via `gh`.
@@ -640,6 +739,340 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 	}
 
 	return issues, nil
+}
+
+// ProjectPullRequest represents an open GitHub pull request listed in the IDE sidebar.
+type ProjectPullRequest struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Body      string `json:"body,omitempty"`
+	URL       string `json:"url"`
+	State     string `json:"state"`
+	IsDraft   bool   `json:"isDraft"`
+	Author    string `json:"author,omitempty"`
+	HeadRef   string `json:"headRef,omitempty"`
+	BaseRef   string `json:"baseRef,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+// ParseGHPRList parses the JSON output from `gh pr list --json ...`.
+func ParseGHPRList(data []byte) ([]ProjectPullRequest, error) {
+	var raw []struct {
+		Number    int    `json:"number"`
+		Title     string `json:"title"`
+		Body      string `json:"body"`
+		URL       string `json:"url"`
+		State     string `json:"state"`
+		IsDraft   bool   `json:"isDraft"`
+		UpdatedAt string `json:"updatedAt"`
+		HeadRef   string `json:"headRefName"`
+		BaseRef   string `json:"baseRefName"`
+		Author    struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]ProjectPullRequest, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, ProjectPullRequest{
+			Number:    item.Number,
+			Title:     item.Title,
+			Body:      item.Body,
+			URL:       item.URL,
+			State:     item.State,
+			IsDraft:   item.IsDraft,
+			Author:    item.Author.Login,
+			HeadRef:   item.HeadRef,
+			BaseRef:   item.BaseRef,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ListProjectPullRequests fetches open pull requests for a GitHub-backed workspace.
+func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspace) {
+		return nil, nil
+	}
+	remoteURL, err := g.RemoteURL(ctx, workspace)
+	if err != nil {
+		return nil, nil
+	}
+	owner, repo, ok := githubx.ParseRemote(remoteURL)
+	if !ok {
+		return nil, nil
+	}
+
+	if ghBin, err := exec.LookPath("gh"); err == nil {
+		cmd := exec.CommandContext(ctx, ghBin,
+			"pr", "list",
+			"--repo", owner+"/"+repo,
+			"--state", "open",
+			"--limit", "20",
+			"--json", "number,title,body,url,state,isDraft,author,headRefName,baseRefName,updatedAt",
+		)
+		procx.ConfigureContext(cmd)
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		if err := cmd.Run(); err == nil {
+			if prs, parseErr := ParseGHPRList(out.Bytes()); parseErr == nil {
+				return prs, nil
+			}
+		} else if token := githubEnvToken(); token == "" {
+			return nil, fmt.Errorf("gh pr list: %s", strings.TrimSpace(errBuf.String()))
+		}
+	}
+
+	token := githubEnvToken()
+	if token == "" {
+		return nil, fmt.Errorf("instale e autentique o `gh` CLI ou configure GITHUB_TOKEN")
+	}
+	return listPullRequestsREST(ctx, owner, repo, token)
+}
+
+func githubEnvToken() string {
+	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
+		return t
+	}
+	return strings.TrimSpace(os.Getenv("GH_TOKEN"))
+}
+
+func listPullRequestsREST(ctx context.Context, owner, repo, token string) ([]ProjectPullRequest, error) {
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?state=open&per_page=20",
+		url.PathEscape(owner), url.PathEscape(repo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	client := &http.Client{Timeout: 12 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var raw []struct {
+		Number    int    `json:"number"`
+		Title     string `json:"title"`
+		Body      string `json:"body"`
+		HTMLURL   string `json:"html_url"`
+		State     string `json:"state"`
+		Draft     bool   `json:"draft"`
+		UpdatedAt string `json:"updated_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Head struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	prs := make([]ProjectPullRequest, 0, len(raw))
+	for _, item := range raw {
+		prs = append(prs, ProjectPullRequest{
+			Number:    item.Number,
+			Title:     item.Title,
+			Body:      item.Body,
+			URL:       item.HTMLURL,
+			State:     strings.ToUpper(item.State),
+			IsDraft:   item.Draft,
+			Author:    item.User.Login,
+			HeadRef:   item.Head.Ref,
+			BaseRef:   item.Base.Ref,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return prs, nil
+}
+
+// GitGraphCommit represents a single commit node for the VS Code-style Source Control Graph.
+type GitGraphCommit struct {
+	Hash    string   `json:"hash"`
+	Short   string   `json:"short"`
+	Parents []string `json:"parents"`
+	Author  string   `json:"author"`
+	Date    string   `json:"date"`
+	Subject string   `json:"subject"`
+	Refs    []string `json:"refs,omitempty"`
+}
+
+// ParseGitLogGraph parses `git log --format=%H%x1f%h%x1f%P%x1f%an%x1f%ar%x1f%s%x1f%D%x1e` records.
+func ParseGitLogGraph(raw string) []GitGraphCommit {
+	records := strings.Split(raw, "\x1e")
+	out := make([]GitGraphCommit, 0, len(records))
+	for _, rec := range records {
+		rec = strings.TrimSpace(rec)
+		if rec == "" {
+			continue
+		}
+		parts := strings.Split(rec, "\x1f")
+		if len(parts) < 6 {
+			continue
+		}
+		var parents []string
+		if p := strings.TrimSpace(parts[2]); p != "" {
+			parents = strings.Fields(p)
+		}
+		var refs []string
+		if len(parts) >= 7 && strings.TrimSpace(parts[6]) != "" {
+			for _, r := range strings.Split(parts[6], ",") {
+				trimmed := strings.TrimSpace(r)
+				if trimmed != "" {
+					refs = append(refs, trimmed)
+				}
+			}
+		}
+		out = append(out, GitGraphCommit{
+			Hash:    strings.TrimSpace(parts[0]),
+			Short:   strings.TrimSpace(parts[1]),
+			Parents: parents,
+			Author:  strings.TrimSpace(parts[3]),
+			Date:    strings.TrimSpace(parts[4]),
+			Subject: strings.TrimSpace(parts[5]),
+			Refs:    refs,
+		})
+	}
+	return out
+}
+
+// ListGitGraph returns recent commits in topological order for the Source Control Graph.
+func ListGitGraph(ctx context.Context, workspaceDir string, limit int, allBranches bool) ([]GitGraphCommit, error) {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) || !g.HasCommit(ctx, workspaceDir) {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	args := []string{
+		"log",
+		"--topo-order",
+		fmt.Sprintf("-n%d", limit),
+		"--format=%H%x1f%h%x1f%P%x1f%an%x1f%ar%x1f%s%x1f%D%x1e",
+	}
+	if allBranches {
+		args = append(args, "--all")
+	}
+	raw, err := runGit(ctx, workspaceDir, args...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGitLogGraph(raw), nil
+}
+
+// CommitDetail holds commit metadata and parsed file diffs for viewing a commit from the Graph.
+type CommitDetail struct {
+	Hash    string     `json:"hash"`
+	Short   string     `json:"short"`
+	Author  string     `json:"author"`
+	Date    string     `json:"date"`
+	Subject string     `json:"subject"`
+	Body    string     `json:"body,omitempty"`
+	Files   []FileDiff `json:"files"`
+}
+
+// GetCommitDetail returns commit metadata and per-file diffs for hash.
+func GetCommitDetail(ctx context.Context, workspaceDir, hash string) (CommitDetail, error) {
+	clean := strings.TrimSpace(hash)
+	if clean == "" || strings.HasPrefix(clean, "-") {
+		return CommitDetail{}, fmt.Errorf("hash de commit inválido")
+	}
+	metaRaw, err := runGit(ctx, workspaceDir, "show", "--no-patch", "--format=%H%x1f%h%x1f%an%x1f%ar%x1f%s%x1f%b", clean)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	parts := strings.SplitN(strings.TrimRight(metaRaw, "\r\n"), "\x1f", 6)
+	detail := CommitDetail{Hash: clean}
+	if len(parts) >= 5 {
+		detail.Hash = parts[0]
+		detail.Short = parts[1]
+		detail.Author = parts[2]
+		detail.Date = parts[3]
+		detail.Subject = parts[4]
+	}
+	if len(parts) >= 6 {
+		detail.Body = strings.TrimSpace(parts[5])
+	}
+	patchRaw, err := runGit(ctx, workspaceDir, "show", "--format=", clean)
+	if err != nil {
+		return detail, err
+	}
+	detail.Files = ParseUnifiedDiff(patchRaw)
+	return detail, nil
+}
+
+// RunGitAction executes safe, allowlisted Source Control actions (pull, push, fetch, sync, stash, stash-pop).
+func RunGitAction(ctx context.Context, workspaceDir, action string) (string, error) {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) {
+		return "", fmt.Errorf("esta pasta não é um repositório Git")
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "fetch":
+		if _, err := runGit(ctx, workspaceDir, "fetch", "--all", "--prune"); err != nil {
+			return "", err
+		}
+		return "Fetch concluído (remotes atualizados).", nil
+	case "pull":
+		if _, err := runGit(ctx, workspaceDir, "pull", "--rebase"); err != nil {
+			return "", err
+		}
+		return "Pull concluído.", nil
+	case "push":
+		branch, err := g.CurrentBranch(ctx, workspaceDir)
+		if err != nil || branch == "" {
+			return "", fmt.Errorf("branch atual não identificada")
+		}
+		if err := g.Push(ctx, workspaceDir, "origin", branch); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Push concluído na branch %s.", branch), nil
+	case "sync":
+		if _, err := runGit(ctx, workspaceDir, "pull", "--rebase"); err != nil {
+			return "", err
+		}
+		branch, _ := g.CurrentBranch(ctx, workspaceDir)
+		if branch != "" {
+			if err := g.Push(ctx, workspaceDir, "origin", branch); err != nil {
+				return "", err
+			}
+		}
+		return "Sync (Pull + Push) concluído.", nil
+	case "stash":
+		out, err := runGit(ctx, workspaceDir, "stash", "push", "-u", "-m", "HiveMind IDE stash")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
+	case "stash-pop":
+		out, err := runGit(ctx, workspaceDir, "stash", "pop")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
+	default:
+		return "", fmt.Errorf("ação Git não suportada: %s", action)
+	}
 }
 
 func sanitizeJiraProjectKey(raw string) string {

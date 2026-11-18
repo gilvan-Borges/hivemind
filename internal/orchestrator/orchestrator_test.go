@@ -1090,3 +1090,136 @@ func TestLeanTeamDynamicDevScaling(t *testing.T) {
 		}
 	}
 }
+
+func TestRoleTargetedSkillsInjection(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não está instalado")
+	}
+	repo := t.TempDir()
+	g := gitx.Local{}
+	ctx := context.Background()
+	mustGit(t, g, ctx, repo, "init")
+	mustGit(t, g, ctx, repo, "config", "user.email", "hivemind@example.com")
+	mustGit(t, g, ctx, repo, "config", "user.name", "HiveMind Test")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("oi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"chief-only": "# Chief Only\nResumo chief.\n\nCORPO_EXCLUSIVO_CHIEF",
+		"dev-only":   "# Dev Only\nResumo dev.\n\nCORPO_EXCLUSIVO_DEV",
+		"qa-only":    "# QA Only\nResumo qa.\n\nCORPO_EXCLUSIVO_QA",
+		"everyone":   "# Everyone\nResumo geral.\n\nCORPO_PARA_TODOS",
+	} {
+		dir := filepath.Join(repo, ".agents", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustGit(t, g, ctx, repo, "add", ".")
+	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
+
+	squad := team.Team{
+		Name: "principal",
+		Agents: []team.Agent{
+			{Name: "chefe", Role: team.RoleArchitect, Provider: "scripted", Model: "scripted"},
+			{Name: "dev", Role: team.RoleDeveloper, Provider: "scripted", Model: "scripted"},
+			{Name: "qa", Role: team.RoleQA, Provider: "scripted", Model: "scripted"},
+		},
+	}
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			MaxQALoops: 2,
+			BaseBranch: "main",
+			SkillAssignments: []team.SkillAssignment{
+				{Name: "chief-only", Source: "project", Roles: []string{team.SkillTargetChief}},
+				{Name: "dev-only", Source: "project", Roles: []string{team.SkillTargetDev}},
+				{Name: "qa-only", Source: "project", Roles: []string{team.SkillTargetQA}},
+				{Name: "everyone", Source: "project", Roles: []string{team.SkillTargetAll}},
+			},
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	var chiefInst, devInst, qaInst string
+	extractSystem := func(req *model.LLMRequest) string {
+		if req == nil || req.Config == nil || req.Config.SystemInstruction == nil {
+			return ""
+		}
+		var sb strings.Builder
+		for _, p := range req.Config.SystemInstruction.Parts {
+			if p != nil {
+				sb.WriteString(p.Text)
+			}
+		}
+		return sb.String()
+	}
+
+	r := &Runner{
+		Workspace:          repo,
+		Project:            project,
+		Team:               squad,
+		Git:                g,
+		GitHub:             githubx.Disabled{Reason: "test"},
+		Jira:               jirax.Disabled{Reason: "test"},
+		EnableTriage:       true,
+		EnableClosingChief: false,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"chefe": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					chiefInst = extractSystem(req)
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan":      "Executar com skills por papel",
+						"dev_tasks": []any{"Alterar a.txt"},
+					})
+				}
+				return modelx.Text("ok")
+			}},
+			"dev": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					devInst = extractSystem(req)
+					return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "a.txt", "content": "1\n"})
+				}
+				return modelx.Text("dev ok")
+			}},
+			"qa": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					qaInst = extractSystem(req)
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+				}
+				return modelx.Text("qa ok")
+			}},
+		},
+	}
+
+	if _, err := r.Run(ctx, Request{Objective: "testar skills por papel"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(chiefInst, "CORPO_EXCLUSIVO_CHIEF") || !strings.Contains(chiefInst, "CORPO_PARA_TODOS") {
+		t.Fatalf("expected chief-only and everyone in chief instruction, got: %s", chiefInst)
+	}
+	if strings.Contains(chiefInst, "CORPO_EXCLUSIVO_DEV") || strings.Contains(chiefInst, "CORPO_EXCLUSIVO_QA") {
+		t.Fatalf("did not expect dev-only or qa-only body in chief instruction")
+	}
+	if !strings.Contains(devInst, "CORPO_EXCLUSIVO_DEV") || !strings.Contains(devInst, "CORPO_PARA_TODOS") {
+		t.Fatalf("expected dev-only and everyone in dev instruction, got: %s", devInst)
+	}
+	if strings.Contains(devInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(devInst, "CORPO_EXCLUSIVO_QA") {
+		t.Fatalf("did not expect chief-only or qa-only in dev instruction")
+	}
+	if !strings.Contains(qaInst, "CORPO_EXCLUSIVO_QA") || !strings.Contains(qaInst, "CORPO_PARA_TODOS") {
+		t.Fatalf("expected qa-only and everyone in qa instruction, got: %s", qaInst)
+	}
+	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") {
+		t.Fatalf("did not expect chief-only or dev-only in qa instruction")
+	}
+}

@@ -44,6 +44,14 @@ export interface TeamSpec {
 
 export type PermissionMode = "governed" | "auto_edit" | "full_access";
 
+export type SkillTargetRole = "all" | "chief" | "dev" | "qa";
+
+export interface SkillAssignment {
+  name: string;
+  source?: "native" | "project" | "";
+  roles: SkillTargetRole[];
+}
+
 export interface TeamSettings {
   permission_mode?: PermissionMode;
   jira_enabled: boolean;
@@ -57,6 +65,7 @@ export interface TeamSettings {
   base_branch: string;
   max_dynamic_devs?: number;
   max_tokens?: number;
+  skill_assignments?: SkillAssignment[];
 }
 
 export interface TeamFile {
@@ -92,9 +101,31 @@ export interface DiffLine {
 
 export interface FileDiff {
   path: string;
+  status?: string;
+  staged?: boolean;
   added: number;
   removed: number;
   lines: DiffLine[];
+}
+
+export interface GitGraphCommit {
+  hash: string;
+  short: string;
+  parents: string[];
+  author: string;
+  date: string;
+  subject: string;
+  refs?: string[];
+}
+
+export interface CommitDetail {
+  hash: string;
+  short: string;
+  author: string;
+  date: string;
+  subject: string;
+  body?: string;
+  files: FileDiff[];
 }
 
 export interface ImageAttachment {
@@ -170,12 +201,13 @@ export interface TerminalEntry {
 }
 
 export interface EditorTab {
-  kind: "file" | "diff" | "mission";
+  kind: "file" | "diff" | "mission" | "team-config" | "commit";
   relPath: string;
   name: string;
   content: string;
   dirty: boolean;
   diff?: FileDiff;
+  commitDetail?: CommitDetail;
   mdView?: "preview" | "source";
 }
 
@@ -244,6 +276,21 @@ export interface ProjectIssue {
   status?: string;
 }
 
+export interface ProjectPullRequest {
+  number: number;
+  title: string;
+  body?: string;
+  url: string;
+  state: string;
+  isDraft: boolean;
+  author?: string;
+  headRef?: string;
+  baseRef?: string;
+  updatedAt?: string;
+}
+
+export type GitSubTab = "changes" | "prs" | "issues";
+
 export interface CommandAction {
   id: string;
   label: string;
@@ -299,6 +346,7 @@ export interface WizardInputPayload {
   baseBranch?: string;
   homologBranch?: string;
   maxTokens: number;
+  skillAssignments?: SkillAssignment[];
 }
 
 export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions" | "skills";
@@ -334,6 +382,19 @@ export interface ProjectWorkspaceContext {
     loading: boolean;
     loadedOnce: boolean;
   };
+  prs: {
+    list: ProjectPullRequest[];
+    loading: boolean;
+    loadedOnce: boolean;
+  };
+  gitGraph: {
+    commits: GitGraphCommit[];
+    loading: boolean;
+    loadedOnce: boolean;
+    allBranches: boolean;
+    collapsed: boolean;
+  };
+  gitTab: GitSubTab;
   draftObjective: string;
   draftImages: ImageAttachment[];
   jiraKeyInput: string;
@@ -371,7 +432,9 @@ export interface WailsBackendApp {
   ListModels(): Promise<AgyModel[]>;
   DoctorAgy(): Promise<AgyStatus>;
   SaveTeamWizard(workspace: string, input: WizardInputPayload): Promise<TeamFile>;
+  SaveSkillAssignments(workspace: string, assignments: SkillAssignment[]): Promise<TeamFile>;
   SetActiveTeam(workspace: string, teamName: string): Promise<TeamFile>;
+  DeleteTeam(workspace: string, teamName: string): Promise<TeamFile>;
   UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
   UpdatePermissionMode(workspace: string, permissionMode: string): Promise<TeamFile>;
   RespondApproval(laneID: string, approved: boolean): Promise<boolean>;
@@ -382,6 +445,10 @@ export interface WailsBackendApp {
   CommentJira(workspace: string, issueKey: string, comment: string): Promise<void>;
   DiscardChanges(workspace: string): Promise<void>;
   DiscardFile(workspace: string, relPath: string): Promise<void>;
+  StageFile(workspace: string, relPath: string, stage: boolean): Promise<void>;
+  RunGitAction(workspace: string, action: string): Promise<string>;
+  ListGitGraph(workspace: string, limit: number, allBranches: boolean): Promise<GitGraphCommit[]>;
+  GetCommitDetail(workspace: string, hash: string): Promise<CommitDetail>;
   RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   InitGit(workspace: string): Promise<void>;
@@ -405,6 +472,8 @@ export interface WailsBackendApp {
   ListBranches(workspace: string): Promise<string[]>;
   CheckoutBranch(workspace: string, branch: string, create: boolean): Promise<void>;
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
+  ListPullRequests(workspace: string): Promise<ProjectPullRequest[]>;
+  OpenExternalURL(rawURL: string): Promise<void>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
   ReadNativeSkill(name: string): Promise<string>;
   SaveNativeSkill(name: string, body: string): Promise<void>;

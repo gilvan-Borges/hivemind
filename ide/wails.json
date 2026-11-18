@@ -8,5 +8,12 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "Gilvan Borges"
+  },
+  "info": {
+    "companyName": "HiveMind",
+    "productName": "HiveMind IDE",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright 2026 HiveMind CLI contributors",
+    "comments": "HiveMind Multi-Agent IDE"
   }
 }
