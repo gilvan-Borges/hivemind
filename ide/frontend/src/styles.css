@@ -1,21 +1,21 @@
 :root {
-  /* Obsidian Graphite × Silver — Premium Monochrome Tokens */
-  --bg-frame: #060607;
-  --bg: #0a0a0b;
-  --bg-chrome: #060607;
-  --bg-deep: #070708;
-  --bg-sidebar: #0e0e10;
-  --bg-card: #141416;
-  --bg-elevated: #1b1b1f;
-  --bg-input: #070708;
+  /* Obsidian Graphite × Silver — Premium Monochrome Tokens (escala clareada) */
+  --bg-frame: #0b0c0e;
+  --bg: #101114;
+  --bg-chrome: #0b0c0e;
+  --bg-deep: #0d0e11;
+  --bg-sidebar: #141519;
+  --bg-card: #1a1b20;
+  --bg-elevated: #232429;
+  --bg-input: #0e0f13;
   --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-active: rgba(255, 255, 255, 0.1);
-  --border: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.13);
-  --island-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --island-shadow: 0 12px 34px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --text: #eceef0;
   --text-dim: #9ba0a8;
-  --text-muted: #7a7a84;
+  --text-muted: #84858e;
   --accent: #b9c0cb;
   --accent-strong: #e6e9ee;
   --accent-hover: #d5dae1;
@@ -54,18 +54,18 @@ body,
 
 /* Dark scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.28);
 }
 
 /* Inputs, selects, textareas */
@@ -89,7 +89,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.132);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
 }
 select option {
   background: var(--bg-card);
@@ -110,7 +110,7 @@ button {
   background: var(--bg-elevated);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 5px 10px;
   font-size: 12px;
   font-family: inherit;
@@ -119,7 +119,7 @@ button {
   transition: background 0.11s ease, border-color 0.11s ease, color 0.11s ease, opacity 0.11s ease;
 }
 button:hover:not(:disabled) {
-  background: #232327;
+  background: #2b2c32;
   border-color: var(--border-strong);
 }
 button:focus-visible {
@@ -131,15 +131,18 @@ button:disabled {
   cursor: not-allowed;
 }
 button.primary {
-  background: linear-gradient(180deg, #f4f6f8 0%, #dcdfe4 100%);
+  background: linear-gradient(180deg, #f7f8fa 0%, #dcdfe4 100%);
   color: #101114;
-  border-color: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.6);
   font-weight: 600;
-  box-shadow: 0 2px 10px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 14px rgba(255, 255, 255, 0.1);
 }
 button.primary:hover:not(:disabled) {
   background: linear-gradient(180deg, #ffffff 0%, #e6e9ee 100%);
   border-color: #ffffff;
+}
+button.primary:active:not(:disabled) {
+  transform: translateY(0.5px);
 }
 button.danger {
   background: var(--red-bg);
@@ -202,12 +205,13 @@ button.icon-btn:hover:not(:disabled) {
 
 /* JetBrains New UI × Cursor 2.0 Frameless Titlebar */
 .titlebar {
-  height: 40px;
+  height: 42px;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 0 0 12px;
   background: var(--bg-frame);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   --wails-draggable: drag;
 }
@@ -232,7 +236,7 @@ button.icon-btn:hover:not(:disabled) {
   align-items: center;
   gap: 7px;
   padding: 0 10px;
-  background: #0b0b0d;
+  background: #121316;
   border: 1px solid var(--border);
   border-radius: 7px;
   font-size: 12px;
@@ -247,10 +251,10 @@ button.icon-btn:hover:not(:disabled) {
   border-color: var(--border-strong);
 }
 .project-tab.active {
-  background: var(--bg-elevated);
-  color: var(--text);
-  border-color: rgba(255, 255, 255, 0.252);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  background: #26272d;
+  color: #f2f4f6;
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 -2px 0 #e8eaee;
   font-weight: 600;
 }
 .project-tab .proj-branch-tag {
@@ -313,8 +317,16 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text);
   font-weight: 700;
   font-size: 12.5px;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.4px;
   margin-right: 4px;
+}
+.brand-suffix {
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  font-size: 10px;
+  margin-left: 1px;
+  transform: translateY(-0.5px);
 }
 
 /* IntelliJ New UI VCS Branch Pill in Titlebar */
@@ -389,7 +401,7 @@ button.icon-btn:hover:not(:disabled) {
   min-width: 280px;
   max-width: 460px;
   padding: 0 12px;
-  background: #0c0c0e;
+  background: #131417;
   border: 1px solid var(--border-strong);
   border-radius: 7px;
   color: var(--text-dim);
@@ -398,7 +410,7 @@ button.icon-btn:hover:not(:disabled) {
   --wails-draggable: no-drag;
 }
 .title-center-cmd:hover {
-  background: #151518;
+  background: #1a1b20;
   border-color: rgba(255, 255, 255, 0.228);
   color: var(--text);
 }
@@ -603,11 +615,12 @@ button.icon-btn:hover:not(:disabled) {
 .eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--text);
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.1px;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
 }
 .sidebar-filter {
   padding: 7px 8px;
@@ -723,10 +736,10 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text);
 }
 .editor-tab.active {
-  background: var(--bg-elevated);
-  color: var(--text);
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  background: #26272d;
+  color: #f2f4f6;
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 -2px 0 #e8eaee, inset 0 1px 0 rgba(255, 255, 255, 0.05);
   font-weight: 500;
 }
 .editor-tab .dirty-dot {
@@ -845,7 +858,7 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text-dim);
   padding: 36px;
   text-align: center;
-  background: radial-gradient(circle at 50% 28%, rgba(255, 255, 255, 0.03), transparent 58%);
+  background: radial-gradient(circle at 50% 26%, rgba(255, 255, 255, 0.05), transparent 60%);
 }
 .welcome-hero-badge {
   display: inline-flex;
@@ -853,11 +866,12 @@ button.icon-btn:hover:not(:disabled) {
   gap: 8px;
   padding: 5px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.066);
-  border: 1px solid rgba(255, 255, 255, 0.156);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.4px;
 }
 .welcome-actions {
   display: flex;
@@ -874,14 +888,15 @@ button.icon-btn:hover:not(:disabled) {
   text-align: left;
 }
 .kbd {
-  background: var(--bg-card);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 2px 7px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10.5px;
   text-align: center;
+  box-shadow: inset 0 -1.5px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 /* Multi-Agent Mission Control Board (Cursor 2.0 Agents View × IntelliJ Services) */
@@ -994,9 +1009,9 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text);
 }
 .lane-pill.active {
-  background: var(--bg-active);
-  border-color: rgba(255, 255, 255, 0.228);
-  color: #e2e5e9;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.26);
+  color: #f2f4f6;
   font-weight: 500;
 }
 .lane-dot {
@@ -1093,7 +1108,7 @@ button.icon-btn:hover:not(:disabled) {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   overflow: hidden;
-  background: #060607;
+  background: #0a0b0d;
 }
 .md-code-lang {
   padding: 4px 10px;
@@ -1129,7 +1144,7 @@ button.icon-btn:hover:not(:disabled) {
   border-top: 1px solid var(--border);
 }
 .composer-box {
-  background: #101013;
+  background: #17181c;
   border: 1px solid var(--border-strong);
   border-radius: 11px;
   padding: 8px 10px;
@@ -1140,8 +1155,8 @@ button.icon-btn:hover:not(:disabled) {
   transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
 .composer-box:focus-within {
-  border-color: rgba(255, 255, 255, 0.33);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.108), 0 10px 26px rgba(0, 0, 0, 0.6);
+  border-color: rgba(255, 255, 255, 0.42);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12), 0 12px 30px rgba(0, 0, 0, 0.65);
 }
 .composer-mode-bar {
   display: flex;
@@ -1169,9 +1184,9 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--text);
 }
 .mode-chip.active {
-  background: rgba(255, 255, 255, 0.108);
-  border-color: rgba(255, 255, 255, 0.24);
-  color: #e9ecef;
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #f2f4f6;
   font-weight: 600;
 }
 .composer-box textarea {
@@ -1297,13 +1312,14 @@ button.icon-btn:hover:not(:disabled) {
 
 /* Borderless Bottom Status Bar (JetBrains Islands Status Bar) */
 .status-bar {
-  height: 25px;
+  height: 26px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 12px;
-  background: var(--bg-frame);
-  font-size: 11.5px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
   color: var(--text-dim);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
@@ -1374,13 +1390,14 @@ button.icon-btn:hover:not(:disabled) {
   overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 18px 20px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .modal-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
+  letter-spacing: -0.2px;
   color: var(--text);
   margin: 0 0 12px 0;
 }
@@ -1419,10 +1436,11 @@ button.icon-btn:hover:not(:disabled) {
   transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
 .pipe-step.active {
-  background: var(--bg-active);
-  color: #e2e5e9;
-  border-color: rgba(255, 255, 255, 0.228);
+  background: rgba(255, 255, 255, 0.14);
+  color: #f2f4f6;
+  border-color: rgba(255, 255, 255, 0.3);
   font-weight: 600;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.06);
 }
 .pipe-step.done {
   color: var(--green);
@@ -1567,7 +1585,7 @@ button.icon-btn:hover:not(:disabled) {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.48;
-  background: #08080a;
+  background: #0b0c0e;
   color: var(--text);
   user-select: text;
   white-space: pre-wrap;
@@ -1810,7 +1828,7 @@ button.icon-btn:hover:not(:disabled) {
   flex-direction: column;
   gap: 5px;
   padding: 7px 9px;
-  background: #0e0e11;
+  background: #16171b;
   border: 1px solid var(--border-strong);
   border-radius: 9px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.82);
@@ -1827,7 +1845,7 @@ button.icon-btn:hover:not(:disabled) {
   padding: 4px 8px;
   font-size: 12px;
   font-family: var(--mono);
-  background: #060607;
+  background: #0a0b0d;
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
@@ -1950,7 +1968,7 @@ button.icon-btn:hover:not(:disabled) {
   margin-top: 6px;
   padding: 7px 9px;
   border-radius: 6px;
-  background: #060607;
+  background: #0a0b0d;
   border: 1px solid var(--border);
   font-family: var(--mono);
   font-size: 11px;
@@ -2131,3 +2149,130 @@ button.icon-btn { min-width: 28px; min-height: 28px; }
 
 /* Lane pills viram botões (mesma função, mesmo elemento — Lei 16) */
 button.lane-pill { text-align: left; }
+
+/* ===== Markdown Preview (padrão para .md, estilo VS Code) ===== */
+.md-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-deep);
+  user-select: text;
+}
+.md-preview-inner {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 30px 38px 90px;
+  font-size: 13.5px;
+  line-height: 1.68;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.md-preview-inner .md-code-wrap {
+  white-space: normal;
+}
+.md-h1 {
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  color: #ffffff;
+  margin: 26px 0 10px;
+  line-height: 1.3;
+}
+.md-h2 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: #f2f4f6;
+  margin: 22px 0 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.35;
+}
+.md-h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e9ecef;
+  margin: 16px 0 6px;
+  line-height: 1.4;
+}
+.md-h4 {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 13px 0 5px;
+  line-height: 1.4;
+}
+.md-quote {
+  margin: 12px 0;
+  padding: 9px 15px;
+  border-left: 3px solid var(--silver);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-dim);
+}
+.md-link {
+  color: #cdd3dc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(255, 255, 255, 0.3);
+}
+.md-link:hover {
+  color: #ffffff;
+  text-decoration-color: rgba(255, 255, 255, 0.65);
+}
+.md-hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 20px 0;
+}
+
+/* ===== Acabamento premium: luz superior sutil nos cartões ===== */
+.agent-card,
+.gh-card,
+.session-card,
+.issue-card,
+.mc-agent-card,
+.mission-top-card,
+.search-hit,
+.modal-box,
+.quick-open-modal,
+.composer-box {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 46%);
+}
+.toast {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 42%);
+}
+
+/* ===== Welcome hero premium ===== */
+.welcome-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  color: var(--text);
+}
+
+/* ===== Material Symbols (ícones oficiais do Google, embutidos offline) ===== */
+.ms {
+  font-family: "Material Symbols Outlined Variable";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  direction: ltr;
+  vertical-align: middle;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  -webkit-font-feature-settings: "liga";
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  flex-shrink: 0;
+}
+.ms.fill {
+  font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24;
+}

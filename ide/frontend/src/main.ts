@@ -1,3 +1,4 @@
+import "@fontsource-variable/material-symbols-outlined";
 import "./styles.css";
 import { highlightCode } from "./highlighter";
 import { fileBadge, icons } from "./icons";
@@ -474,7 +475,7 @@ function mountShell() {
   rootEl.innerHTML = `
     <div class="ide-shell">
       <header class="titlebar" id="titlebar">
-        <span class="brand-logo">${icons.brand}<span>HiveMind</span></span>
+        <span class="brand-logo">${icons.brand}<span>HiveMind</span><span class="brand-suffix">IDE</span></span>
         <div class="dropdown">
           <button class="ghost titlebar-interactive" id="btn-file-menu">Arquivo</button>
           <div class="dropdown-menu" id="file-menu-dropdown" style="display:none"></div>
@@ -1742,6 +1743,7 @@ function jumpEditorToLine(targetLine?: number) {
 async function openFileInEditor(relPath: string, name: string, targetLine?: number) {
   const existing = state.editorTabs.find((t) => t.kind === "file" && t.relPath === relPath);
   if (existing) {
+    if (targetLine && /\.md$/i.test(existing.name)) existing.mdView = "source";
     state.activeEditorPath = existing.relPath;
     renderEditorTabs();
     renderEditorBody();
@@ -1759,6 +1761,7 @@ async function openFileInEditor(relPath: string, name: string, targetLine?: numb
       name,
       content,
       dirty: false,
+      mdView: /\.md$/i.test(name) ? (targetLine ? "source" : "preview") : "source",
     });
     state.activeEditorPath = relPath;
     renderEditorTabs();
@@ -3325,7 +3328,7 @@ function renderEditorBody() {
     body.innerHTML = `
       <div class="empty-welcome">
         <div class="welcome-hero-badge">${icons.brand}<span>Multi-Agent Dark Islands IDE</span></div>
-        <div style="font-size:22px;color:var(--text);font-weight:700;letter-spacing:-0.3px">HiveMind IDE</div>
+        <div class="welcome-title">HiveMind IDE</div>
         <div class="dim">${proj ? `${escapeHtml(proj.name)} · ${escapeHtml(proj.stack.summary)}` : "Abra uma pasta para iniciar"}</div>
         <div class="welcome-actions">
           <button class="primary" id="welcome-mission">${icons.swarm}<span>Quadro Multiagente</span></button>
@@ -3431,13 +3434,48 @@ function renderEditorBody() {
     return;
   }
 
+  const isMdFile = activeTab.kind === "file" && /\.md$/i.test(activeTab.name);
+
+  if (isMdFile && activeTab.mdView !== "source") {
+    body.innerHTML = `
+      <div class="editor-breadcrumb">
+        <span class="dim">${escapeHtml(activeTab.relPath)}</span>
+        <div class="spacer"></div>
+        <button class="mini primary" id="btn-md-preview" title="Visualização renderizada do Markdown (padrão)">Visualização</button>
+        <button class="mini" id="btn-md-source" title="Ver e editar o código-fonte do Markdown">Código</button>
+        <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
+      </div>
+      <div class="md-preview" id="md-preview-scroll"><div class="md-preview-inner">${renderMarkdownLite(activeTab.content)}</div></div>
+    `;
+    document.getElementById("btn-md-preview")?.addEventListener("click", () => {
+      activeTab.mdView = "preview";
+      renderEditorBody();
+    });
+    document.getElementById("btn-md-source")?.addEventListener("click", () => {
+      activeTab.mdView = "source";
+      renderEditorBody();
+    });
+    document.getElementById("btn-save-file")?.addEventListener("click", saveActiveEditor);
+    body.querySelectorAll("[data-copy-code]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const wrap = (btn as HTMLElement).closest(".md-code-wrap");
+        const codeText = wrap?.querySelector("code")?.textContent ?? "";
+        navigator.clipboard?.writeText(codeText);
+        setStatus("Código copiado.");
+      });
+    });
+    return;
+  }
+
   lastRenderedGutterLines = countLinesFast(activeTab.content);
   body.innerHTML = `
     <div class="editor-breadcrumb">
       <span class="dim">${escapeHtml(activeTab.relPath)}</span>
       <div class="spacer"></div>
-      <button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar (Ctrl+F)</span></button>
-      <button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Enviar p/ Chefe (Ctrl+L)</span></button>
+      ${isMdFile
+        ? `<button class="mini" id="btn-md-preview" title="Voltar para a visualização renderizada">Visualização</button><button class="mini primary" id="btn-md-source" title="Editar o código-fonte do Markdown">Código</button>`
+        : `<button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar (Ctrl+F)</span></button><button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Enviar p/ Chefe (Ctrl+L)</span></button>`
+      }
       <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
     </div>
     <div class="editor-live-wrap">
@@ -3511,6 +3549,14 @@ function renderEditorBody() {
   document.getElementById("btn-editor-find")?.addEventListener("click", () => openEditorFind(false));
   document.getElementById("btn-send-selection")?.addEventListener("click", sendEditorSelectionToChief);
   document.getElementById("btn-save-file")?.addEventListener("click", saveActiveEditor);
+  document.getElementById("btn-md-preview")?.addEventListener("click", () => {
+    activeTab.mdView = "preview";
+    renderEditorBody();
+  });
+  document.getElementById("btn-md-source")?.addEventListener("click", () => {
+    activeTab.mdView = "source";
+    renderEditorBody();
+  });
 }
 
 function renderRightPane() {
