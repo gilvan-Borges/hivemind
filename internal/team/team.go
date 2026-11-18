@@ -31,6 +31,7 @@ type Settings struct {
 	AutoPR         bool     `yaml:"auto_pr" json:"auto_pr"`
 	MaxQALoops     int      `yaml:"max_qa_loops" json:"max_qa_loops"`
 	MaxLLMCalls    int      `yaml:"max_llm_calls" json:"max_llm_calls"`
+	MaxTokens      int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	BaseBranch     string   `yaml:"base_branch" json:"base_branch"`
 	ShellAllowlist []string `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
 	ConfirmShell   *bool    `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`

@@ -29,12 +29,15 @@ const (
 	UserID = "local"
 )
 
-// Meta is the summary shown by `hivemind session list`.
+// Meta is the summary shown by `hivemind session list` and IDE session telemetry.
 type Meta struct {
-	ID        string    `json:"id"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Objective string    `json:"objective,omitempty"`
-	JiraKey   string    `json:"jiraKey,omitempty"`
+	ID           string    `json:"id"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	Objective    string    `json:"objective,omitempty"`
+	JiraKey      string    `json:"jiraKey,omitempty"`
+	InputTokens  int64     `json:"inputTokens,omitempty"`
+	OutputTokens int64     `json:"outputTokens,omitempty"`
+	TotalTokens  int64     `json:"totalTokens,omitempty"`
 }
 
 // Store implements session.Service on top of one JSON file per session.
@@ -337,7 +340,29 @@ func (s *fileSession) Events() session.Events {
 }
 
 func (s *fileSession) metaNoLock() Meta {
-	return Meta{ID: s.id, UpdatedAt: s.updatedAt, Objective: s.objective, JiraKey: s.jiraKey}
+	var inTok, outTok, totTok int64
+	for _, ev := range s.events {
+		if ev == nil || ev.Partial || ev.LLMResponse.UsageMetadata == nil {
+			continue
+		}
+		u := ev.LLMResponse.UsageMetadata
+		inTok += int64(u.PromptTokenCount)
+		outTok += int64(u.CandidatesTokenCount)
+		t := int64(u.TotalTokenCount)
+		if t == 0 && (u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0) {
+			t = int64(u.PromptTokenCount) + int64(u.CandidatesTokenCount)
+		}
+		totTok += t
+	}
+	return Meta{
+		ID:           s.id,
+		UpdatedAt:    s.updatedAt,
+		Objective:    s.objective,
+		JiraKey:      s.jiraKey,
+		InputTokens:  inTok,
+		OutputTokens: outTok,
+		TotalTokens:  totTok,
+	}
 }
 
 func (s *fileSession) persist(meta Meta) error {

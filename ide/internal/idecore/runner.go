@@ -30,6 +30,7 @@ type WizardInput struct {
 	JiraEnabled    bool              `json:"jiraEnabled"`
 	JiraProject    string            `json:"jiraProject"`
 	BaseBranch     string            `json:"baseBranch"`
+	MaxTokens      int64             `json:"maxTokens"`
 }
 
 // BuildTeamFromWizard constructs a team.Team and updates/creates .hivemind/team.yaml
@@ -130,6 +131,9 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	file.Settings.AutoPR = in.AutoPR
 	file.Settings.JiraEnabled = in.JiraEnabled
 	file.Settings.JiraProject = strings.TrimSpace(in.JiraProject)
+	if in.MaxTokens >= 0 {
+		file.Settings.MaxTokens = in.MaxTokens
+	}
 	if strings.TrimSpace(in.BaseBranch) != "" {
 		file.Settings.BaseBranch = strings.TrimSpace(in.BaseBranch)
 	}

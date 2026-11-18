@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
+	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -295,5 +297,122 @@ func TestRunWorkspaceCommand(t *testing.T) {
 	}
 	if res.ExitCode != 0 || !strings.Contains(res.Output, "go version") {
 		t.Fatalf("unexpected command output: %+v", res)
+	}
+}
+
+func TestSessionsTokenAggregationAndRestore(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(ctx, &session.CreateRequest{
+		AppName: sessionx.AppName,
+		UserID:  sessionx.UserID,
+		State: map[string]any{
+			"objective": "[Contexto do Projeto]\nStack: Go\n[Objetivo do Usuário]\nRefatorar handler HTTP",
+			"jira_key":  "MEI-42",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := created.Session
+	_ = store.AppendEvent(ctx, sess, &session.Event{
+		ID:     "e1",
+		Author: "user",
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "[Objetivo do Usuário]\nRefatorar handler HTTP"}}},
+		},
+	})
+	_ = store.AppendEvent(ctx, sess, &session.Event{
+		ID:     "e2",
+		Author: "chefe",
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "Plano pronto."}}},
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:     1200,
+				CandidatesTokenCount: 300,
+				TotalTokenCount:      1500,
+			},
+		},
+	})
+	_ = store.AppendEvent(ctx, sess, &session.Event{
+		ID:     "e3",
+		Author: "dev",
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "Handler atualizado."}}},
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:     2000,
+				CandidatesTokenCount: 500,
+				TotalTokenCount:      2500,
+			},
+		},
+	})
+
+	summary, err := ListWorkspaceSessions(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(summary.Sessions))
+	}
+	s0 := summary.Sessions[0]
+	if s0.Title != "Refatorar handler HTTP" || s0.InputTokens != 3200 || s0.OutputTokens != 800 || s0.TotalTokens != 4000 {
+		t.Fatalf("unexpected session summary: %+v", s0)
+	}
+	if summary.ProjectTotalTokens != 4000 {
+		t.Fatalf("expected project total 4000, got %d", summary.ProjectTotalTokens)
+	}
+
+	detail, err := LoadSessionDetail(ctx, dir, sess.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.TotalTokens != 4000 || detail.AgentUsage["chefe"].TotalTokens != 1500 || detail.AgentUsage["dev"].TotalTokens != 2500 {
+		t.Fatalf("unexpected session detail usage: %+v", detail)
+	}
+	if len(detail.Messages) != 3 {
+		t.Fatalf("expected 3 restored messages, got %d", len(detail.Messages))
+	}
+
+	if err := DeleteWorkspaceSession(ctx, dir, sess.ID()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := ListWorkspaceSessions(ctx, dir)
+	if len(after.Sessions) != 0 {
+		t.Fatalf("expected 0 sessions after delete, got %d", len(after.Sessions))
+	}
+}
+
+func TestExplorerCRUDAndGlobalTextSearch(t *testing.T) {
+	dir := t.TempDir()
+	if err := CreateWorkspaceDir(dir, "pkg/api"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateWorkspaceFile(dir, "pkg/api/server.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteWorkspaceFile(dir, "pkg/api/server.go", "package api\nfunc StartServer() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := SearchWorkspaceText(dir, "startserver", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].RelPath != "pkg/api/server.go" || hits[0].Line != 2 {
+		t.Fatalf("unexpected text search hits: %+v", hits)
+	}
+
+	if err := RenameWorkspacePath(dir, "pkg/api/server.go", "pkg/api/http.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWorkspaceFile(dir, "pkg/api/http.go"); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+	if err := DeleteWorkspacePath(dir, "pkg"); err != nil {
+		t.Fatal(err)
 	}
 }

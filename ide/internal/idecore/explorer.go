@@ -329,3 +329,142 @@ func (f *FileIndex) Search(root, query string, limit int) []string {
 	}
 	return out
 }
+
+// CreateWorkspaceFile creates an empty file (and parent dirs) inside root.
+func CreateWorkspaceFile(root, relPath string) error {
+	target, err := ResolveSafe(root, relPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return fmt.Errorf("arquivo já existe: %s", relPath)
+	}
+	return os.WriteFile(target, []byte{}, 0o644)
+}
+
+// CreateWorkspaceDir creates a directory inside root.
+func CreateWorkspaceDir(root, relPath string) error {
+	target, err := ResolveSafe(root, relPath)
+	if err != nil {
+		return err
+	}
+	return os.MkdirAll(target, 0o755)
+}
+
+// RenameWorkspacePath renames or moves oldRel to newRel inside root.
+func RenameWorkspacePath(root, oldRel, newRel string) error {
+	src, err := ResolveSafe(root, oldRel)
+	if err != nil {
+		return err
+	}
+	dst, err := ResolveSafe(root, newRel)
+	if err != nil {
+		return err
+	}
+	absRoot, _ := filepath.Abs(root)
+	if filepath.Clean(src) == filepath.Clean(absRoot) {
+		return fmt.Errorf("não é permitido renomear a raiz do workspace")
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
+}
+
+// DeleteWorkspacePath deletes a file or directory inside root (never root itself).
+func DeleteWorkspacePath(root, relPath string) error {
+	target, err := ResolveSafe(root, relPath)
+	if err != nil {
+		return err
+	}
+	absRoot, _ := filepath.Abs(root)
+	if filepath.Clean(target) == filepath.Clean(absRoot) {
+		return fmt.Errorf("não é permitido excluir a raiz do workspace")
+	}
+	return os.RemoveAll(target)
+}
+
+// TextSearchMatch represents one line hit from global project search (Ctrl+Shift+F).
+type TextSearchMatch struct {
+	RelPath string `json:"relPath"`
+	Line    int    `json:"line"`
+	Preview string `json:"preview"`
+}
+
+// SearchWorkspaceText searches UTF-8 text files inside root for query (case-insensitive).
+func SearchWorkspaceText(root, query string, maxResults int) ([]TextSearchMatch, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	absRoot = filepath.Clean(absRoot)
+	lowerQ := strings.ToLower(q)
+
+	var matches []TextSearchMatch
+	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if ignoredDirs[d.Name()] || d.Name() == ".hivemind" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() == 0 || info.Size() > 512*1024 {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		// Skip binary files containing NUL byte in first 512 bytes.
+		probe := data
+		if len(probe) > 512 {
+			probe = probe[:512]
+		}
+		for _, b := range probe {
+			if b == 0 {
+				return nil
+			}
+		}
+		content := string(data)
+		if !strings.Contains(strings.ToLower(content), lowerQ) {
+			return nil
+		}
+		rel, err := filepath.Rel(absRoot, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		for idx, line := range strings.Split(content, "\n") {
+			if strings.Contains(strings.ToLower(line), lowerQ) {
+				preview := strings.TrimSpace(line)
+				if len(preview) > 140 {
+					preview = preview[:140] + "…"
+				}
+				matches = append(matches, TextSearchMatch{
+					RelPath: rel,
+					Line:    idx + 1,
+					Preview: preview,
+				})
+				if len(matches) >= maxResults {
+					return filepath.SkipAll
+				}
+			}
+		}
+		return nil
+	})
+	return matches, nil
+}

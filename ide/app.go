@@ -361,3 +361,88 @@ func (a *App) RunCommand(workspace, command string) (idecore.CommandOutput, erro
 	defer cancel()
 	return idecore.RunWorkspaceCommand(ctx, workspace, command)
 }
+
+// ListSessions returns all persisted sessions and token telemetry for workspace.
+func (a *App) ListSessions(workspace string) (idecore.WorkspaceSessionsSummary, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.ListWorkspaceSessions(ctx, workspace)
+}
+
+// LoadSession loads the transcript and per-agent token usage of sessionID.
+func (a *App) LoadSession(workspace, sessionID string) (idecore.SessionDetail, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.LoadSessionDetail(ctx, workspace, sessionID)
+}
+
+// DeleteSession removes a saved session.
+func (a *App) DeleteSession(workspace, sessionID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.DeleteWorkspaceSession(ctx, workspace, sessionID)
+}
+
+// SearchText performs global text search (Ctrl+Shift+F) across workspace files.
+func (a *App) SearchText(workspace, query string) ([]idecore.TextSearchMatch, error) {
+	return idecore.SearchWorkspaceText(workspace, query, 120)
+}
+
+// CreateFile creates a new empty file inside workspace.
+func (a *App) CreateFile(workspace, relPath string) error {
+	if err := idecore.CreateWorkspaceFile(workspace, relPath); err != nil {
+		return err
+	}
+	if a.fileIndex != nil {
+		go func() { _ = a.fileIndex.Refresh(workspace) }()
+	}
+	return nil
+}
+
+// CreateDir creates a new directory inside workspace.
+func (a *App) CreateDir(workspace, relPath string) error {
+	return idecore.CreateWorkspaceDir(workspace, relPath)
+}
+
+// RenamePath renames a file or directory inside workspace.
+func (a *App) RenamePath(workspace, oldRel, newRel string) error {
+	if err := idecore.RenameWorkspacePath(workspace, oldRel, newRel); err != nil {
+		return err
+	}
+	if a.fileIndex != nil {
+		go func() { _ = a.fileIndex.Refresh(workspace) }()
+	}
+	return nil
+}
+
+// DeletePath deletes a file or directory inside workspace.
+func (a *App) DeletePath(workspace, relPath string) error {
+	if err := idecore.DeleteWorkspacePath(workspace, relPath); err != nil {
+		return err
+	}
+	if a.fileIndex != nil {
+		go func() { _ = a.fileIndex.Refresh(workspace) }()
+	}
+	return nil
+}
+
+// ListBranches lists local Git branches in workspace.
+func (a *App) ListBranches(workspace string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.ListGitBranches(ctx, workspace)
+}
+
+// CheckoutBranch switches or creates a Git branch in workspace.
+func (a *App) CheckoutBranch(workspace, branch string, create bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.CheckoutGitBranch(ctx, workspace, branch, create)
+}
+
+// ListIssues fetches open Jira and/or GitHub issues for workspace.
+func (a *App) ListIssues(workspace string) ([]idecore.ProjectIssue, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.ListProjectIssues(ctx, workspace)
+}

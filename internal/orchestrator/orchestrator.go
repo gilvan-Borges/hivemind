@@ -36,15 +36,17 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind     string `json:"kind"` // "stage", "handoff", "text", "tool_call", "tool_result", "finish", "error"
-	Stage    string `json:"stage,omitempty"`
-	Author   string `json:"author,omitempty"`
-	Label    string `json:"label,omitempty"`
-	Text     string `json:"text,omitempty"`
-	ToolName string `json:"toolName,omitempty"`
-	Partial  bool   `json:"partial,omitempty"`
-	Thought  bool   `json:"thought,omitempty"`
-	Tokens   int32  `json:"tokens,omitempty"`
+	Kind         string `json:"kind"` // "stage", "handoff", "usage", "text", "tool_call", "tool_result", "finish", "error"
+	Stage        string `json:"stage,omitempty"`
+	Author       string `json:"author,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Text         string `json:"text,omitempty"`
+	ToolName     string `json:"toolName,omitempty"`
+	Partial      bool   `json:"partial,omitempty"`
+	Thought      bool   `json:"thought,omitempty"`
+	InputTokens  int32  `json:"inputTokens,omitempty"`
+	OutputTokens int32  `json:"outputTokens,omitempty"`
+	Tokens       int32  `json:"tokens,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
@@ -77,6 +79,9 @@ type Runner struct {
 	objectiveText      string
 	devSlices          []string
 	chiefPlan          string
+	turnInputTokens    int64
+	turnOutputTokens   int64
+	turnTotalTokens    int64
 }
 
 // Request is one user turn.
@@ -93,6 +98,9 @@ type Result struct {
 	Summary      string
 	Branches     []string
 	PullRequests []githubx.PullRequest
+	InputTokens  int64 `json:"inputTokens"`
+	OutputTokens int64 `json:"outputTokens"`
+	TotalTokens  int64 `json:"totalTokens"`
 }
 
 type devEnv struct {
@@ -166,6 +174,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	r.objectiveText = objective
 	r.devSlices = nil
 	r.chiefPlan = ""
+	r.turnInputTokens = 0
+	r.turnOutputTokens = 0
+	r.turnTotalTokens = 0
 
 	sess, err := r.openSession(ctx, req.SessionID, objective, key)
 	if err != nil {
@@ -181,6 +192,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 
 	if r.EnableTriage {
 		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode)
+		result.InputTokens = r.turnInputTokens
+		result.OutputTokens = r.turnOutputTokens
+		result.TotalTokens = r.turnTotalTokens
 		if err != nil {
 			if r.OnEvent != nil {
 				r.OnEvent(Event{Kind: "error", Text: err.Error()})
@@ -191,7 +205,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			result.Summary = summary
 			fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
 			if r.OnEvent != nil {
-				r.OnEvent(Event{Kind: "finish", Stage: "chief", Text: fmt.Sprintf("Sessão %s concluída.", result.SessionID)})
+				r.OnEvent(Event{
+					Kind:         "finish",
+					Stage:        "chief",
+					Text:         fmt.Sprintf("Sessão %s concluída.", result.SessionID),
+					InputTokens:  int32(r.turnInputTokens),
+					OutputTokens: int32(r.turnOutputTokens),
+					Tokens:       int32(r.turnTotalTokens),
+				})
 			}
 			return result, nil
 		}
@@ -222,14 +243,30 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
 	}) {
 		if err != nil {
+			result.InputTokens = r.turnInputTokens
+			result.OutputTokens = r.turnOutputTokens
+			result.TotalTokens = r.turnTotalTokens
 			if r.OnEvent != nil {
 				r.OnEvent(Event{Kind: "error", Text: err.Error()})
 			}
 			return result, err
 		}
 		printer.Event(ev)
-		if r.OnEvent != nil && ev != nil {
-			r.emitEvent(ev, labels)
+		if ev != nil {
+			r.recordUsage(ev, labels)
+			if r.OnEvent != nil {
+				r.emitEvent(ev, labels)
+			}
+			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
+				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
+				result.InputTokens = r.turnInputTokens
+				result.OutputTokens = r.turnOutputTokens
+				result.TotalTokens = r.turnTotalTokens
+				if r.OnEvent != nil {
+					r.OnEvent(Event{Kind: "error", Text: budgetErr.Error()})
+				}
+				return result, budgetErr
+			}
 		}
 		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {
 			continue
@@ -241,6 +278,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 
+	result.InputTokens = r.turnInputTokens
+	result.OutputTokens = r.turnOutputTokens
+	result.TotalTokens = r.turnTotalTokens
+
 	if err := r.finish(ctx, &result, devs, key, objective); err != nil {
 		if r.OnEvent != nil {
 			r.OnEvent(Event{Kind: "error", Text: err.Error()})
@@ -249,7 +290,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	fmt.Fprintf(r.Out, "\nSessão %s concluída.\n", result.SessionID)
 	if r.OnEvent != nil {
-		r.OnEvent(Event{Kind: "finish", Text: fmt.Sprintf("Sessão %s concluída.", result.SessionID)})
+		r.OnEvent(Event{
+			Kind:         "finish",
+			Text:         fmt.Sprintf("Sessão %s concluída.", result.SessionID),
+			InputTokens:  int32(r.turnInputTokens),
+			OutputTokens: int32(r.turnOutputTokens),
+			Tokens:       int32(r.turnTotalTokens),
+		})
 	}
 	return result, nil
 }
@@ -674,6 +721,41 @@ func roleLabel(role string) string {
 	}
 }
 
+func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
+	if ev == nil || ev.Partial || ev.LLMResponse.UsageMetadata == nil {
+		return
+	}
+	u := ev.LLMResponse.UsageMetadata
+	inTok := u.PromptTokenCount
+	outTok := u.CandidatesTokenCount
+	totTok := u.TotalTokenCount
+	if totTok == 0 && (inTok > 0 || outTok > 0) {
+		totTok = inTok + outTok
+	}
+	if inTok == 0 && outTok == 0 && totTok == 0 {
+		return
+	}
+	r.turnInputTokens += int64(inTok)
+	r.turnOutputTokens += int64(outTok)
+	r.turnTotalTokens += int64(totTok)
+
+	if r.OnEvent != nil {
+		label := labels[ev.Author]
+		if label == "" {
+			label = ev.Author
+		}
+		r.OnEvent(Event{
+			Kind:         "usage",
+			Stage:        inferStage(ev.Author, label),
+			Author:       ev.Author,
+			Label:        label,
+			InputTokens:  inTok,
+			OutputTokens: outTok,
+			Tokens:       totTok,
+		})
+	}
+}
+
 func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 	label := labels[ev.Author]
 	if label == "" {
@@ -940,8 +1022,14 @@ REGRA DE TRIAGEM:
 			return false, "", err
 		}
 		printer.Event(ev)
-		if r.OnEvent != nil && ev != nil {
-			r.emitEvent(ev, labels)
+		if ev != nil {
+			r.recordUsage(ev, labels)
+			if r.OnEvent != nil {
+				r.emitEvent(ev, labels)
+			}
+			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
+				return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
+			}
 		}
 		if ev != nil && !ev.Partial && ev.LLMResponse.Content != nil {
 			for _, part := range ev.LLMResponse.Content.Parts {

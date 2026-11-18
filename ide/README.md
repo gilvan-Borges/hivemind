@@ -45,13 +45,13 @@ hivemind-ide
 ### Funcionalidades principais
 
 1. **Abertura na pasta atual**, menu **Abrir Pasta...** e **Recentes** persistidos em `%LOCALAPPDATA%\HiveMind\ide-recent.txt`.
-2. **Explorador de arquivos** e **abas de editor** com syntax highlighting e salvamento (`Ctrl+S`).
-3. **Chat com o Chefe** com streaming ao vivo, auto-scroll inteligente, badges distintos (`Usuário`, `Chefe`, `Sistema`, `Ferramenta`), `@arquivo` e botão **Cancelar** habilitado apenas durante execução.
-4. **Painel do time** (`Chefe → Dev → QA → Chefe`), modelos vindos de `agy models` e botão **+ Equipe Paralela** para rodar múltiplos times em paralelo.
-5. **Diffs coloridos** com ações nativas de **Commitar**, **Commit + Push**, **Abrir PR**, **Comentar Jira** e **Descartar**.
-6. **Montagem interativa do time** gravando em `.hivemind/team.yaml` sem alterar o `.gitignore` raiz do projeto.
-7. **Detecção automática da stack** (Go, Java/Maven/Gradle, Node/Angular/React, Python, Rust, .NET) enviada automaticamente ao Chefe.
-8. **Tema escuro completo** (`#12121a` / `#e2e0ec`), incluindo inputs, combos e scrollbars.
+2. **Explorador de arquivos completo** (criar arquivo, criar pasta, renomear e excluir), **Busca Rápida (`Ctrl+P`)**, **Busca Global no Código (`Ctrl+Shift+F`)** com clique direto na linha e **editor ao vivo** com syntax highlighting, `Ctrl+S` e **`Ctrl+L`** (enviar seleção ao Chefe).
+3. **Chat Multimodal com o Chefe** com colagem de fotos/prints (`Ctrl+V`, Drag & Drop ou botão `Foto`), streaming ao vivo, handoffs expansíveis, resumo de diffs pós-execução, `@arquivo` e botão **Cancelar**.
+4. **Telemetria de Tokens & Histórico de Sessões (`Sessões & Tokens`)**: contador em tempo real do turno (`↑entrada / ↓saída`), total acumulado da sessão, consumo individual por agente, orçamento/alerta de tokens (`settings.max_tokens`), rodapé de tokens por mensagem e retomada/exclusão de sessões salvas em `.hivemind/sessions/`.
+5. **Painel inteligente do time** (`Chefe (Triagem) → Dev (fatias sem conflito) → QA (loop real) → Chefe (Fecho)`), modelos de `agy models` e **+ Equipe Paralela**.
+6. **Git, Branches & Issues**: seletor/criador de branches na barra de status, diffs coloridos, **Commitar**, **Commit + Push**, **Abrir PR**, **Comentar Jira**, **Descartar** e listagem de **Issues abertas (Jira / GitHub)** com botão **Resolver c/ Equipe**.
+7. **Terminal integrado (`Ctrl+J`)** com atalhos automáticos de teste da stack detectada (Go, Java/Maven/Gradle, Node/Angular/React, Python, Rust, .NET).
+8. **Tema escuro frameless** (`#12121a` / `#e2e0ec`) estilo Cursor/VS Code, sem janelas extras de console no Windows (`CREATE_NO_WINDOW`).
 
 ## Testes
 

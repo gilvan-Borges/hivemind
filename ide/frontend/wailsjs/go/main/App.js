@@ -10,6 +10,10 @@ export function CancelRun(arg1) {
   return window['go']['main']['App']['CancelRun'](arg1);
 }
 
+export function CheckoutBranch(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CheckoutBranch'](arg1, arg2, arg3);
+}
+
 export function ChooseDirectory() {
   return window['go']['main']['App']['ChooseDirectory']();
 }
@@ -20,6 +24,22 @@ export function CommentJira(arg1, arg2, arg3) {
 
 export function CommitChanges(arg1, arg2, arg3) {
   return window['go']['main']['App']['CommitChanges'](arg1, arg2, arg3);
+}
+
+export function CreateDir(arg1, arg2) {
+  return window['go']['main']['App']['CreateDir'](arg1, arg2);
+}
+
+export function CreateFile(arg1, arg2) {
+  return window['go']['main']['App']['CreateFile'](arg1, arg2);
+}
+
+export function DeletePath(arg1, arg2) {
+  return window['go']['main']['App']['DeletePath'](arg1, arg2);
+}
+
+export function DeleteSession(arg1, arg2) {
+  return window['go']['main']['App']['DeleteSession'](arg1, arg2);
 }
 
 export function DiscardChanges(arg1) {
@@ -50,6 +70,10 @@ export function InitGit(arg1) {
   return window['go']['main']['App']['InitGit'](arg1);
 }
 
+export function ListBranches(arg1) {
+  return window['go']['main']['App']['ListBranches'](arg1);
+}
+
 export function ListDirectory(arg1, arg2) {
   return window['go']['main']['App']['ListDirectory'](arg1, arg2);
 }
@@ -58,8 +82,20 @@ export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }
 
+export function ListIssues(arg1) {
+  return window['go']['main']['App']['ListIssues'](arg1);
+}
+
 export function ListModels() {
   return window['go']['main']['App']['ListModels']();
+}
+
+export function ListSessions(arg1) {
+  return window['go']['main']['App']['ListSessions'](arg1);
+}
+
+export function LoadSession(arg1, arg2) {
+  return window['go']['main']['App']['LoadSession'](arg1, arg2);
 }
 
 export function OpenPR(arg1, arg2, arg3, arg4) {
@@ -72,6 +108,10 @@ export function OpenProject(arg1) {
 
 export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
+}
+
+export function RenamePath(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RenamePath'](arg1, arg2, arg3);
 }
 
 export function RunCommand(arg1, arg2) {
@@ -88,6 +128,10 @@ export function SaveTeamWizard(arg1, arg2) {
 
 export function SearchFiles(arg1, arg2) {
   return window['go']['main']['App']['SearchFiles'](arg1, arg2);
+}
+
+export function SearchText(arg1, arg2) {
+  return window['go']['main']['App']['SearchText'](arg1, arg2);
 }
 
 export function SetActiveTeam(arg1, arg2) {

@@ -10,11 +10,21 @@ export function BootstrapAgy(arg1:boolean):Promise<main.AgyBootstrap>;
 
 export function CancelRun(arg1:string):Promise<boolean>;
 
+export function CheckoutBranch(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
 export function ChooseDirectory():Promise<string>;
 
 export function CommentJira(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CommitChanges(arg1:string,arg2:string,arg3:boolean):Promise<string>;
+
+export function CreateDir(arg1:string,arg2:string):Promise<void>;
+
+export function CreateFile(arg1:string,arg2:string):Promise<void>;
+
+export function DeletePath(arg1:string,arg2:string):Promise<void>;
+
+export function DeleteSession(arg1:string,arg2:string):Promise<void>;
 
 export function DiscardChanges(arg1:string):Promise<void>;
 
@@ -30,17 +40,27 @@ export function GitHubStatus(arg1:string):Promise<idecore.GitHubStatusInfo>;
 
 export function InitGit(arg1:string):Promise<void>;
 
+export function ListBranches(arg1:string):Promise<Array<string>>;
+
 export function ListDirectory(arg1:string,arg2:string):Promise<Array<idecore.FileNode>>;
 
 export function ListFiles(arg1:string):Promise<Array<idecore.FileNode>>;
 
+export function ListIssues(arg1:string):Promise<Array<idecore.ProjectIssue>>;
+
 export function ListModels():Promise<Array<modelx.AgyModel>>;
+
+export function ListSessions(arg1:string):Promise<idecore.WorkspaceSessionsSummary>;
+
+export function LoadSession(arg1:string,arg2:string):Promise<idecore.SessionDetail>;
 
 export function OpenPR(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
 
 export function ReadFile(arg1:string,arg2:string):Promise<string>;
+
+export function RenamePath(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutput>;
 
@@ -49,6 +69,8 @@ export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 export function SaveTeamWizard(arg1:string,arg2:idecore.WizardInput):Promise<team.File>;
 
 export function SearchFiles(arg1:string,arg2:string):Promise<Array<string>>;
+
+export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSearchMatch>>;
 
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 

@@ -3,6 +3,7 @@ package idecore
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -294,6 +295,117 @@ func CheckGitHubStatus(ctx context.Context, workspace string) GitHubStatusInfo {
 func InitGitRepo(ctx context.Context, workspace string) error {
 	_, err := runGit(ctx, workspace, "init", "-b", "main")
 	return err
+}
+
+// ListGitBranches returns local branch names for workspace.
+func ListGitBranches(ctx context.Context, workspace string) ([]string, error) {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspace) {
+		return nil, nil
+	}
+	raw, err := runGit(ctx, workspace, "branch", "--format=%(refname:short)")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		b := strings.TrimSpace(line)
+		if b != "" {
+			out = append(out, b)
+		}
+	}
+	if len(out) == 0 {
+		if cur := FastCurrentBranch(workspace); cur != "" {
+			out = append(out, cur)
+		}
+	}
+	return out, nil
+}
+
+// CheckoutGitBranch switches to an existing branch or creates a new one when create is true.
+func CheckoutGitBranch(ctx context.Context, workspace, branch string, create bool) error {
+	name := strings.TrimSpace(branch)
+	if name == "" {
+		return fmt.Errorf("informe o nome da branch")
+	}
+	if create {
+		_, err := runGit(ctx, workspace, "checkout", "-b", name)
+		return err
+	}
+	_, err := runGit(ctx, workspace, "checkout", name)
+	return err
+}
+
+// ProjectIssue represents a Jira or GitHub issue listed in the IDE sidebar.
+type ProjectIssue struct {
+	Source  string `json:"source"` // "jira" or "github"
+	Key     string `json:"key"`    // e.g. "PROJ-12" or "#42"
+	Title   string `json:"title"`
+	Body    string `json:"body,omitempty"`
+	Status  string `json:"status,omitempty"`
+}
+
+// ListProjectIssues fetches open Jira and/or GitHub issues for one-click squad execution.
+func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, error) {
+	var issues []ProjectIssue
+
+	// 1. Jira issues if enabled and configured
+	if cfg, err := team.Load(workspace); err == nil && cfg.Settings.JiraEnabled {
+		jc := jirax.FromEnv()
+		if jc.Enabled() {
+			jql := "resolution = Unresolved ORDER BY updated DESC"
+			if strings.TrimSpace(cfg.Settings.JiraProject) != "" {
+				jql = fmt.Sprintf("project = %s AND resolution = Unresolved ORDER BY updated DESC", strings.TrimSpace(cfg.Settings.JiraProject))
+			}
+			if list, err := jc.Search(ctx, jql, 15); err == nil {
+				for _, it := range list {
+					issues = append(issues, ProjectIssue{
+						Source: "jira",
+						Key:    it.Key,
+						Title:  it.Summary,
+						Body:   it.Description,
+						Status: it.Status,
+					})
+				}
+			}
+		}
+	}
+
+	// 2. GitHub issues if git origin is GitHub and `gh` is available
+	g := gitx.Local{}
+	if g.IsRepo(ctx, workspace) {
+		if url, err := g.RemoteURL(ctx, workspace); err == nil {
+			if owner, repo, ok := githubx.ParseRemote(url); ok {
+				if ghBin, err := exec.LookPath("gh"); err == nil {
+					cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "15", "--json", "number,title,body,state")
+					hideWindow(cmd)
+					var out bytes.Buffer
+					cmd.Stdout = &out
+					if err := cmd.Run(); err == nil {
+						var raw []struct {
+							Number int    `json:"number"`
+							Title  string `json:"title"`
+							Body   string `json:"body"`
+							State  string `json:"state"`
+						}
+						if json.Unmarshal(out.Bytes(), &raw) == nil {
+							for _, ghIt := range raw {
+								issues = append(issues, ProjectIssue{
+									Source: "github",
+									Key:    fmt.Sprintf("#%d", ghIt.Number),
+									Title:  ghIt.Title,
+									Body:   ghIt.Body,
+									Status: ghIt.State,
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return issues, nil
 }
 
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
