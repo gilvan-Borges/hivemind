@@ -80,4 +80,7 @@ func TestHTTPIssueSearchCommentTransition(t *testing.T) {
 	if !strings.Contains(transition, `"31"`) {
 		t.Fatalf("transition = %s", transition)
 	}
+	if _, err := client.GetIssue(context.Background(), "../../myself"); err == nil {
+		t.Fatal("expected traversal issue key to be rejected")
+	}
 }

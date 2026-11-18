@@ -3,10 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +21,11 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
+	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 type modal int
@@ -67,24 +72,27 @@ type cmdItem struct {
 type tickMsg time.Time
 type modelsMsg struct{ names []string }
 type streamed struct {
-	Agent string
-	Event modelx.StreamEvent
-	Err   error
-	Done  bool
+	Event          orchestrator.Event
+	Err            error
+	Done           bool
+	SessionID      string
+	HasIntegration bool
+	Files          map[string]fileChange
 }
 
 type model struct {
-	ctx       context.Context
-	workspace string
-	themeIdx  int
-	width     int
-	height    int
-	branch    string
-	project   team.File
-	hasTeam   bool
-	sessionID string
-	started   time.Time
-	tokens    int
+	ctx              context.Context
+	workspace        string
+	themeIdx         int
+	width            int
+	height           int
+	branch           string
+	project          team.File
+	hasTeam          bool
+	sessionID        string
+	persistedSession bool
+	started          time.Time
+	tokens           int
 
 	ta      textarea.Model
 	vp      viewport.Model
@@ -176,11 +184,7 @@ func newModel(ctx context.Context, opt Options) model {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{textarea.Blink, doTick()}
-	if m.modal == modalWizard {
-		cmds = append(cmds, loadAgyModels())
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(textarea.Blink, doTick(), loadAgyModels())
 }
 
 func doTick() tea.Cmd {
@@ -340,52 +344,70 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
-	m.running = true
-	m.files = map[string]fileChange{}
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancel = cancel
-	m.runCtx = ctx
-	if isSmallTalk(text) {
-		m.queue = []string{m.agentByRole(team.RoleProjectManager)}
-		m.status = "triagem"
-	} else {
-		m.queue = m.pipeline()
-		m.status = "time em execução"
-	}
-	return m.kick(text)
-}
-
-func (m model) kick(userText string) (model, tea.Cmd) {
-	if len(m.queue) == 0 {
-		m.running = false
-		m.status = "pronto"
-		if !isSmallTalk(userText) {
-			m.modal = modalBring
-		}
+	squad, err := m.project.ActiveTeam("")
+	if err != nil {
+		m.addSystem("Erro no time ativo: " + err.Error())
 		m.refresh()
 		return m, nil
 	}
-	name := m.queue[0]
-	m.queue = m.queue[1:]
-	m.setAgent(name, "pensando", "")
-	m.blocks = append(m.blocks, block{Kind: "agent", Author: m.titleOf(name), Body: ""})
+	m.running = true
+	m.files = map[string]fileChange{}
+	for i := range m.agents {
+		m.agents[i].Status = "aguardando"
+		m.agents[i].Tool = ""
+	}
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancel = cancel
+	m.runCtx = ctx
+	m.status = "time em execução"
 	m.refresh()
-	ch := make(chan streamed, 32)
-	prompt := m.agentPrompt(name, userText)
+
+	reqSessionID := ""
+	if m.persistedSession {
+		reqSessionID = m.sessionID
+	}
+	projectSnapshot := m.project
+	workspaceDir := m.workspace
+	ch := make(chan streamed, 64)
 	go func() {
 		defer close(ch)
-		ag, err := m.agyFor(name)
-		if err != nil {
-			ch <- streamed{Agent: name, Err: err, Done: true}
-			return
+		r := &orchestrator.Runner{
+			Workspace:          workspaceDir,
+			Project:            projectSnapshot,
+			Team:               squad,
+			Git:                gitx.Local{},
+			Out:                io.Discard,
+			Err:                io.Discard,
+			EnableTriage:       true,
+			EnableClosingChief: true,
+			OnEvent: func(ev orchestrator.Event) {
+				select {
+				case ch <- streamed{Event: ev}:
+				case <-ctx.Done():
+				}
+			},
 		}
-		err = ag.Stream(m.runCtx, prompt, func(ev modelx.StreamEvent) {
-			select {
-			case ch <- streamed{Agent: name, Event: ev}:
-			case <-m.runCtx.Done():
-			}
+		res, runErr := r.Run(ctx, orchestrator.Request{
+			Objective: text,
+			SessionID: reqSessionID,
+			RunMode:   "auto",
 		})
-		ch <- streamed{Agent: name, Err: err, Done: true}
+		hasInt := false
+		if runErr == nil && res.IntegrationBranch != "" {
+			hasInt = hasIntegrationAhead(workspaceDir)
+		}
+		files := collectDiffStats(workspaceDir, hasInt)
+		select {
+		case ch <- streamed{
+			Done:           true,
+			Err:            runErr,
+			SessionID:      res.SessionID,
+			HasIntegration: hasInt,
+			Files:          files,
+		}:
+		case <-ctx.Done():
+			ch <- streamed{Done: true, Err: ctx.Err(), SessionID: res.SessionID}
+		}
 	}()
 	m.events = ch
 	return m, listen(ch)
@@ -402,61 +424,86 @@ func listen(ch chan streamed) tea.Cmd {
 }
 
 func (m model) onStream(msg streamed) (tea.Model, tea.Cmd) {
-	if msg.Event.Type == "delta" {
-		m.appendDelta(msg.Agent, msg.Event.Text)
-		m.setAgent(msg.Agent, "pensando", "")
-	}
-	if msg.Event.Type == "tool" {
-		m.setAgent(msg.Agent, "usando ferramenta "+msg.Event.ToolName, msg.Event.ToolName)
-		body := strings.TrimSpace(msg.Event.ToolArgs + "\n" + msg.Event.ToolOut)
-		m.blocks = append(m.blocks, block{Kind: "tool", Author: m.titleOf(msg.Agent), Tool: msg.Event.ToolName, Body: body})
-		if isEditTool(msg.Event.ToolName) {
-			m.noteFile(msg.Event.ToolArgs, msg.Event.ToolOut)
+	ev := msg.Event
+	switch ev.Kind {
+	case "stage":
+		if ev.Stage != "" {
+			m.status = ev.Stage
 		}
-		if needsApproval(msg.Event.ToolName) && !m.project.Settings.AutoPR && !m.project.Settings.AutoCommit {
-			m.pending = msg.Event.ToolName
-			m.modal = modalApprove
-			m.refresh()
-			return m, nil
+	case "usage":
+		m.tokens += int(ev.Tokens)
+		if row := m.matchAgent(ev.Author, ev.Label); row != nil {
+			row.Tokens += int(ev.Tokens)
 		}
-	}
-	if msg.Event.Type == "result" {
-		m.tokens += msg.Event.Tokens
-		if row := m.findAgent(msg.Agent); row != nil {
-			row.Tokens += msg.Event.Tokens
+	case "tool_call":
+		agName := m.agentKeyFor(ev.Author, ev.Label)
+		m.setAgent(agName, "usando "+ev.ToolName, ev.ToolName)
+		authorTitle := ev.Label
+		if authorTitle == "" {
+			authorTitle = m.titleOf(agName)
 		}
-		if msg.Event.Text != "" {
-			m.appendDelta(msg.Agent, "")
-			if last := m.lastAgentBlock(msg.Agent); last != nil && strings.TrimSpace(last.Body) == "" {
-				last.Body = msg.Event.Text
+		m.blocks = append(m.blocks, block{Kind: "tool", Author: authorTitle, Tool: ev.ToolName, Body: ev.ToolName, Collapsed: true})
+	case "tool_result":
+		agName := m.agentKeyFor(ev.Author, ev.Label)
+		m.setAgent(agName, "pensando", "")
+	case "handoff":
+		lbl := ev.Label
+		if lbl == "" {
+			lbl = "Handoff"
+		}
+		m.blocks = append(m.blocks, block{Kind: "agent", Author: lbl, Body: ev.Text})
+	case "text":
+		if !ev.Thought && ev.Text != "" {
+			agName := m.agentKeyFor(ev.Author, ev.Label)
+			m.setAgent(agName, "pensando", "")
+			authorTitle := ev.Label
+			if authorTitle == "" {
+				authorTitle = m.titleOf(agName)
+			}
+			if ev.Partial {
+				m.appendDeltaByTitle(authorTitle, ev.Text)
+			} else {
+				m.setOrAppendAgentBlock(authorTitle, ev.Text)
 			}
 		}
 	}
 	if msg.Done {
-		status := "concluído"
-		if msg.Err != nil {
-			if isCancel(msg.Err) {
-				status = "cancelado"
-				m.running = false
-				m.queue = nil
-				m.status = "cancelado"
-				m.refresh()
-				return m, nil
-			}
-			status = "erro"
-			m.addSystem("Erro em " + m.titleOf(msg.Agent) + ": " + msg.Err.Error())
+		if msg.SessionID != "" {
+			m.sessionID = msg.SessionID
+			m.persistedSession = true
 		}
-		m.setAgent(msg.Agent, status, "")
-		if m.running && len(m.queue) > 0 && m.runCtx != nil {
-			return m.kick(m.lastUser())
+		if len(msg.Files) > 0 {
+			m.files = msg.Files
 		}
 		m.running = false
 		if m.cancel != nil {
 			m.cancel()
 			m.cancel = nil
 		}
+		if msg.Err != nil {
+			if isCancel(msg.Err) {
+				m.stopRun("cancelado")
+				m.refresh()
+				return m, nil
+			}
+			for i := range m.agents {
+				if m.agents[i].Status == "pensando" || strings.HasPrefix(m.agents[i].Status, "usando") {
+					m.agents[i].Status = "erro"
+				}
+			}
+			m.status = "erro"
+			m.addSystem("Erro na execução: " + msg.Err.Error())
+			m.refresh()
+			return m, nil
+		}
+		for i := range m.agents {
+			if m.agents[i].Status == "pensando" || strings.HasPrefix(m.agents[i].Status, "usando") {
+				m.agents[i].Status = "concluído"
+				m.agents[i].Tool = ""
+			}
+		}
 		m.status = "pronto"
-		if status != "erro" && !isSmallTalk(m.lastUser()) && len(m.queue) == 0 {
+		if msg.HasIntegration {
 			m.modal = modalBring
 		}
 		m.refresh()
@@ -858,11 +905,6 @@ func shortModel(s string) string {
 	return s
 }
 
-func isEditTool(name string) bool {
-	n := strings.ToLower(name)
-	return strings.Contains(n, "write") || strings.Contains(n, "edit") || strings.Contains(n, "diff")
-}
-
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -870,51 +912,16 @@ func max(a, b int) int {
 	return b
 }
 
-func needsApproval(name string) bool {
-	n := strings.ToLower(name)
-	return strings.Contains(n, "push") || strings.Contains(n, "pull_request") || strings.Contains(n, "create_pr")
-}
-
-func isSmallTalk(s string) bool {
-	t := strings.ToLower(strings.TrimSpace(s))
-	t = strings.Trim(t, "!.?, ")
-	switch t {
-	case "ola", "olá", "oi", "oie", "hello", "hi", "hey", "bom dia", "boa tarde", "boa noite", "obrigado", "obrigada", "valeu", "tudo bem", "tudo bom":
-		return true
-	}
-	if strings.HasSuffix(t, "?") && !hasChangeVerb(t) && len([]rune(t)) < 80 {
-		return true
-	}
-	return false
-}
-
-func hasChangeVerb(s string) bool {
-	for _, w := range []string{"adicione", "adicionar", "crie", "criar", "corrija", "implement", "função", "funcao", "teste", "arquivo", "refactor", "mude", "altere"} {
-		if strings.Contains(s, w) {
-			return true
-		}
-	}
-	return false
-}
-
 func listAgyModels(ctx context.Context) ([]string, error) {
-	bin, err := modelx.LookAgy()
+	models, err := modelx.ListAgyModels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cmd := execCommand(ctx, bin, "models")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		if m.Slug != "" {
+			names = append(names, m.Slug)
 		}
-		fields := strings.Fields(line)
-		names = append(names, fields[0])
 	}
 	return names, nil
 }
@@ -923,63 +930,89 @@ func (m *model) addSystem(text string) {
 	m.blocks = append(m.blocks, block{Kind: "system", Body: text})
 }
 
-func (m *model) appendDelta(agent, text string) {
-	blk := m.lastAgentBlock(agent)
-	if blk == nil {
-		m.blocks = append(m.blocks, block{Kind: "agent", Author: m.titleOf(agent), Body: text})
+func (m *model) appendDeltaByTitle(title, text string) {
+	if len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].Kind == "agent" && m.blocks[len(m.blocks)-1].Author == title {
+		m.blocks[len(m.blocks)-1].Body += text
 		return
 	}
-	blk.Body += text
+	m.blocks = append(m.blocks, block{Kind: "agent", Author: title, Body: text})
 }
 
-func (m *model) lastAgentBlock(agent string) *block {
-	title := m.titleOf(agent)
-	for i := len(m.blocks) - 1; i >= 0; i-- {
-		if m.blocks[i].Kind == "agent" && m.blocks[i].Author == title {
-			return &m.blocks[i]
-		}
-	}
-	return nil
-}
-
-func (m *model) lastUser() string {
-	for i := len(m.blocks) - 1; i >= 0; i-- {
-		if m.blocks[i].Kind == "user" {
-			return m.blocks[i].Body
-		}
-	}
-	return ""
-}
-
-func (m *model) noteFile(args, output string) {
-	path := ""
-	for _, key := range []string{`"path":"`, `"path": "`} {
-		if i := strings.Index(args, key); i >= 0 {
-			rest := args[i+len(key):]
-			if j := strings.IndexAny(rest, `"`); j >= 0 {
-				path = rest[:j]
-			}
-		}
-	}
-	if path == "" {
+func (m *model) setOrAppendAgentBlock(title, text string) {
+	if len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].Kind == "agent" && m.blocks[len(m.blocks)-1].Author == title {
+		m.blocks[len(m.blocks)-1].Body = text
 		return
 	}
-	add, del := 0, 0
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
-			add++
-		}
-		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
-			del++
+	m.blocks = append(m.blocks, block{Kind: "agent", Author: title, Body: text})
+}
+
+func (m *model) matchAgent(author, label string) *agentRow {
+	key := m.agentKeyFor(author, label)
+	return m.findAgent(key)
+}
+
+func (m model) agentKeyFor(author, label string) string {
+	auth := strings.ToLower(author)
+	lbl := strings.ToLower(label)
+	for _, a := range m.agents {
+		nm := strings.ToLower(a.Name)
+		if auth == nm || strings.HasPrefix(auth, nm+"_") || strings.HasSuffix(auth, "_"+nm) || strings.Contains(lbl, nm) {
+			return a.Name
 		}
 	}
-	if add == 0 && del == 0 {
-		add = 1
+	for _, a := range m.agents {
+		rl := strings.ToLower(a.Role)
+		if strings.Contains(auth, rl) || strings.Contains(lbl, rl) {
+			return a.Name
+		}
 	}
-	cur := m.files[path]
-	cur.Add += add
-	cur.Del += del
-	m.files[path] = cur
+	if len(m.agents) > 0 {
+		return m.agents[0].Name
+	}
+	return author
+}
+
+func hasIntegrationAhead(workspaceDir string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) || !g.BranchExists(ctx, workspaceDir, gitx.IntegrationBranch) {
+		return false
+	}
+	out, err := g.Run(ctx, workspaceDir, "rev-list", "--count", "HEAD.."+gitx.IntegrationBranch)
+	if err != nil {
+		return false
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n > 0
+}
+
+func collectDiffStats(workspaceDir string, againstIntegration bool) map[string]fileChange {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g := gitx.Local{}
+	outMap := map[string]fileChange{}
+	if !g.IsRepo(ctx, workspaceDir) {
+		return outMap
+	}
+	target := "HEAD"
+	if againstIntegration {
+		target = "HEAD.." + gitx.IntegrationBranch
+	}
+	raw, err := g.Run(ctx, workspaceDir, "diff", "--numstat", target)
+	if err != nil {
+		return outMap
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		add, _ := strconv.Atoi(fields[0])
+		del, _ := strconv.Atoi(fields[1])
+		outMap[fields[2]] = fileChange{Add: add, Del: del}
+	}
+	return outMap
 }
 
 func (m model) activeName() string {
@@ -1059,44 +1092,6 @@ func (m *model) findAgent(name string) *agentRow {
 		}
 	}
 	return nil
-}
-
-func (m model) agentByRole(role string) string {
-	for _, a := range m.agents {
-		if team.NormalizeRole(a.Role) == role {
-			return a.Name
-		}
-	}
-	if len(m.agents) > 0 {
-		return m.agents[0].Name
-	}
-	return "pm"
-}
-
-func (m model) pipeline() []string {
-	var out []string
-	for _, role := range []string{team.RoleProjectManager, team.RoleTechLead, team.RoleArchitect, team.RoleDeveloper, team.RoleQA} {
-		for _, a := range m.agents {
-			if team.NormalizeRole(a.Role) == role {
-				out = append(out, a.Name)
-			}
-		}
-	}
-	return out
-}
-
-func (m model) agyFor(name string) (*modelx.Agy, error) {
-	modelName := "agy"
-	for _, a := range m.agents {
-		if a.Name == name {
-			modelName = a.Model
-		}
-	}
-	return modelx.NewAgy("", modelName)
-}
-
-func (m model) agentPrompt(name, userText string) string {
-	return "Papel: " + m.titleOf(name) + ".\nResponda em português.\nNão use ferramentas internas do Antigravity; descreva a ação no texto e, se for editar arquivo, o HiveMind mostra o bloco.\n\nPedido do usuário:\n" + userText
 }
 
 func (m model) slashOpen() bool {
@@ -1267,13 +1262,19 @@ func (m *model) completeAt() {
 		m.atSel = 0
 	}
 	path := files[m.atSel]
-	data, err := os.ReadFile(filepath.Join(m.workspace, path))
-	snippet := string(data)
-	if err != nil {
+	var snippet string
+	if resolved, err := workspace.ResolveWithOptions(m.workspace, filepath.FromSlash(path), workspace.Options{AllowMemoryRead: true}); err != nil {
 		snippet = err.Error()
-	}
-	if len(snippet) > 4000 {
-		snippet = snippet[:4000] + "\n…"
+	} else if f, openErr := os.Open(resolved); openErr != nil {
+		snippet = openErr.Error()
+	} else {
+		data, rdErr := io.ReadAll(io.LimitReader(f, 4096))
+		_ = f.Close()
+		if rdErr != nil {
+			snippet = rdErr.Error()
+		} else {
+			snippet = strx.TruncateBytes(string(data), 4000, "\n…")
+		}
 	}
 	cur := m.ta.Value()
 	if i := strings.LastIndex(cur, "@"); i >= 0 {

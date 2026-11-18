@@ -83,11 +83,11 @@ func RecordRecentProject(filePath, dir string) ([]string, error) {
 			break
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		return nil, err
 	}
 	content := strings.Join(updated, "\n") + "\n"
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
 		return nil, err
 	}
 	return updated, nil

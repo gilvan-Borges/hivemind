@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // FileNode represents a file or directory in the workspace explorer tree.
@@ -30,24 +34,10 @@ var ignoredDirs = map[string]bool{
 	"__pycache__":  true,
 }
 
-// ResolveSafe resolves relOrAbs inside root, rejecting path traversal outside root.
+// ResolveSafe resolves relOrAbs inside root, evaluating symlinks and blocking .git
+// while allowing IDE configuration files under .hivemind/.
 func ResolveSafe(root, relOrAbs string) (string, error) {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	absRoot = filepath.Clean(absRoot)
-	var target string
-	if filepath.IsAbs(relOrAbs) {
-		target = filepath.Clean(relOrAbs)
-	} else {
-		target = filepath.Clean(filepath.Join(absRoot, relOrAbs))
-	}
-	rel, err := filepath.Rel(absRoot, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("caminho fora do workspace: %s", relOrAbs)
-	}
-	return target, nil
+	return workspace.ResolveWithOptions(root, relOrAbs, workspace.Options{AllowHivemind: true})
 }
 
 // ListDir returns immediate entries inside relDir (or root when relDir is empty)
@@ -279,7 +269,11 @@ func (f *FileIndex) Search(root, query string, limit int) []string {
 	absRoot = filepath.Clean(absRoot)
 
 	f.mu.RLock()
-	needPopulate := f.root != absRoot || len(f.files) == 0
+	sameRoot := f.root == absRoot
+	if !sameRoot && runtime.GOOS == "windows" {
+		sameRoot = strings.EqualFold(f.root, absRoot)
+	}
+	needPopulate := !sameRoot || len(f.files) == 0
 	f.mu.RUnlock()
 	if needPopulate {
 		_ = f.Refresh(absRoot)
@@ -374,15 +368,21 @@ func RenameWorkspacePath(root, oldRel, newRel string) error {
 	return os.Rename(src, dst)
 }
 
-// DeleteWorkspacePath deletes a file or directory inside root (never root itself).
+// DeleteWorkspacePath deletes a file or directory inside root (never root or .hivemind itself).
 func DeleteWorkspacePath(root, relPath string) error {
 	target, err := ResolveSafe(root, relPath)
 	if err != nil {
 		return err
 	}
-	absRoot, _ := filepath.Abs(root)
-	if filepath.Clean(target) == filepath.Clean(absRoot) {
+	rootResolved, err := ResolveSafe(root, ".")
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(target) == filepath.Clean(rootResolved) {
 		return fmt.Errorf("não é permitido excluir a raiz do workspace")
+	}
+	if strings.EqualFold(filepath.Base(target), ".hivemind") && filepath.Clean(filepath.Dir(target)) == filepath.Clean(rootResolved) {
+		return fmt.Errorf("não é permitido excluir o diretório .hivemind inteiro")
 	}
 	return os.RemoveAll(target)
 }
@@ -450,10 +450,7 @@ func SearchWorkspaceText(root, query string, maxResults int) ([]TextSearchMatch,
 		rel = filepath.ToSlash(rel)
 		for idx, line := range strings.Split(content, "\n") {
 			if strings.Contains(strings.ToLower(line), lowerQ) {
-				preview := strings.TrimSpace(line)
-				if len(preview) > 140 {
-					preview = preview[:140] + "…"
-				}
+				preview := strx.TruncateRunes(strings.TrimSpace(line), 140, "…")
 				matches = append(matches, TextSearchMatch{
 					RelPath: rel,
 					Line:    idx + 1,

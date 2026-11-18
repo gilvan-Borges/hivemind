@@ -4,6 +4,7 @@
 *.test
 .hivemind/
 *.out
+/build/
 ide/build/
 ide/frontend/node_modules/
 ide/frontend/dist/

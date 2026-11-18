@@ -74,4 +74,14 @@ func TestPersistAndReopen(t *testing.T) {
 	if err != nil || len(metas) != 1 || metas[0].JiraKey != "PROJ-1" {
 		t.Fatalf("metas = %+v %v", metas, err)
 	}
+	if err := reopened.Delete(context.Background(), &session.DeleteRequest{AppName: AppName, UserID: UserID, SessionID: "../../outside"}); err == nil {
+		t.Fatal("expected traversal session id to be rejected")
+	}
+	if err := reopened.Delete(context.Background(), &session.DeleteRequest{AppName: AppName, UserID: UserID, SessionID: id}); err != nil {
+		t.Fatalf("delete session failed: %v", err)
+	}
+	metasAfter, err := reopened.ListMeta()
+	if err != nil || len(metasAfter) != 0 {
+		t.Fatalf("expected 0 sessions after delete, got %+v (%v)", metasAfter, err)
+	}
 }

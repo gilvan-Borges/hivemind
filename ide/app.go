@@ -355,7 +355,13 @@ func (a *App) StartRunWithOptions(
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	return a.sessions.RunTurnWithOptions(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+	res, err := a.sessions.RunTurnWithOptions(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+	if a.fileIndex != nil && strings.TrimSpace(workspace) != "" {
+		go func(root string) {
+			_ = a.fileIndex.Refresh(root)
+		}(workspace)
+	}
+	return res, err
 }
 
 // UpdateAgentModel switches the LLM model of a single agent inside .hivemind/team.yaml.

@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/names"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // Issue is the part of a Jira issue the CLI uses.
@@ -111,9 +115,21 @@ func (h *HTTP) do(ctx context.Context, method, path string, body any, dest any) 
 	return json.Unmarshal(payload, dest)
 }
 
+func cleanIssueKey(raw string) (string, error) {
+	key := names.IssueKey(raw)
+	if key == "" {
+		return "", fmt.Errorf("chave Jira inválida: %q", raw)
+	}
+	return url.PathEscape(key), nil
+}
+
 func (h *HTTP) GetIssue(ctx context.Context, key string) (Issue, error) {
+	safeKey, err := cleanIssueKey(key)
+	if err != nil {
+		return Issue{}, err
+	}
 	var raw issuePayload
-	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+key+"?fields=summary,description,status", nil, &raw); err != nil {
+	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+safeKey+"?fields=summary,description,status", nil, &raw); err != nil {
 		return Issue{}, err
 	}
 	return raw.issue(), nil
@@ -144,14 +160,18 @@ func (h *HTTP) Search(ctx context.Context, jql string, limit int) ([]Issue, erro
 }
 
 func (h *HTTP) CreateSubtask(ctx context.Context, parent, summary, description string) (Issue, error) {
-	project := parent
-	if i := strings.IndexByte(parent, '-'); i > 0 {
-		project = parent[:i]
+	cleanParent := names.IssueKey(parent)
+	if cleanParent == "" {
+		return Issue{}, fmt.Errorf("chave Jira pai inválida: %q", parent)
+	}
+	project := cleanParent
+	if i := strings.IndexByte(cleanParent, '-'); i > 0 {
+		project = cleanParent[:i]
 	}
 	body := map[string]any{
 		"fields": map[string]any{
 			"project":   map[string]string{"key": project},
-			"parent":    map[string]string{"key": parent},
+			"parent":    map[string]string{"key": cleanParent},
 			"summary":   summary,
 			"issuetype": map[string]string{"name": "Sub-task"},
 			"description": map[string]any{
@@ -178,6 +198,10 @@ func (h *HTTP) CreateSubtask(ctx context.Context, parent, summary, description s
 }
 
 func (h *HTTP) Comment(ctx context.Context, key, body string) error {
+	safeKey, err := cleanIssueKey(key)
+	if err != nil {
+		return err
+	}
 	payload := map[string]any{
 		"body": map[string]any{
 			"type":    "doc",
@@ -192,17 +216,21 @@ func (h *HTTP) Comment(ctx context.Context, key, body string) error {
 			},
 		},
 	}
-	return h.do(ctx, http.MethodPost, "/rest/api/3/issue/"+key+"/comment", payload, nil)
+	return h.do(ctx, http.MethodPost, "/rest/api/3/issue/"+safeKey+"/comment", payload, nil)
 }
 
 func (h *HTTP) Transition(ctx context.Context, key, nameOrID string) error {
+	safeKey, err := cleanIssueKey(key)
+	if err != nil {
+		return err
+	}
 	var raw struct {
 		Transitions []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"transitions"`
 	}
-	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+key+"/transitions", nil, &raw); err != nil {
+	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+safeKey+"/transitions", nil, &raw); err != nil {
 		return err
 	}
 	id := ""
@@ -213,9 +241,9 @@ func (h *HTTP) Transition(ctx context.Context, key, nameOrID string) error {
 		}
 	}
 	if id == "" {
-		return fmt.Errorf("transição %q não encontrada em %s", nameOrID, key)
+		return fmt.Errorf("transição %q não encontrada em %s", nameOrID, safeKey)
 	}
-	return h.do(ctx, http.MethodPost, "/rest/api/3/issue/"+key+"/transitions", map[string]any{
+	return h.do(ctx, http.MethodPost, "/rest/api/3/issue/"+safeKey+"/transitions", map[string]any{
 		"transition": map[string]string{"id": id},
 	}, nil)
 }
@@ -298,8 +326,5 @@ func flatten(v any) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
+	return strx.TruncateBytes(s, n, "")
 }

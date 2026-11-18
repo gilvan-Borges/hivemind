@@ -2,7 +2,9 @@ function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function formatInline(escapedLine: string): string {
@@ -14,7 +16,7 @@ function formatInline(escapedLine: string): string {
 export function renderMarkdownLite(raw: string): string {
   if (!raw) return "";
   const escaped = escapeHtml(raw.replace(/\r\n/g, "\n"));
-  const parts = escaped.split(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g);
+  const parts = escaped.split(/```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```/g);
   const out: string[] = [];
 
   for (let i = 0; i < parts.length; i += 3) {
@@ -31,7 +33,8 @@ export function renderMarkdownLite(raw: string): string {
       out.push(formattedLines.join("\n"));
     }
     if (i + 2 < parts.length) {
-      const lang = parts[i + 1] || "code";
+      const rawLang = parts[i + 1] || "code";
+      const lang = rawLang.replace(/[^a-zA-Z0-9_+-]/g, "") || "code";
       const code = (parts[i + 2] ?? "").replace(/\n$/, "");
       out.push(
         `<div class="md-code-wrap"><div class="md-code-lang">${lang}</div><pre class="md-code"><code>${code}</code></pre></div>`

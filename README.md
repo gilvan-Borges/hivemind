@@ -1,10 +1,8 @@
-# HiveMind CLI
+# HiveMind CLI & IDE
 
-Time de software no terminal. Você abre o prompt na pasta do projeto, descreve um objetivo, e um grupo de agentes — gerente de projeto, tech lead, arquiteto, desenvolvedores e QA — se organiza para implementar, testar e, se você quiser, abrir o pull request.
+Time de software multiagente no terminal (TUI com Bubble Tea) e no desktop (**HiveMind IDE** em Go + Wails v2 em [`ide/`](ide/README.md)). Você abre o projeto, descreve um objetivo, e um grupo de agentes — gerente de projeto, tech lead, arquiteto, desenvolvedores e QA — se organiza para planejar, implementar em paralelo, testar e, se você quiser, abrir o pull request.
 
-O binário é estático (`hivemind` no Linux e no macOS, `hivemind.exe` no Windows). Os identificadores do código ficam em inglês; os textos do programa e este guia estão em português.
-
-Esta branch (`hivemind-cli-go`) é um projeto novo. Ela não contém o IDE da branch `main`.
+O binário da CLI é estático (`hivemind` no Linux e no macOS, `hivemind.exe` no Windows), e a IDE desktop gera `hivemind-ide.exe` (veja [`ide/README.md`](ide/README.md)). Os identificadores do código ficam em inglês; os textos do programa e este guia estão em português.
 
 ## Sessão interativa
 
@@ -34,7 +32,7 @@ Para **compilar**: Go **1.26.10 ou mais novo**. O ADK Go v2 exige essa versão.
 
 ### Baixar o binário
 
-No GitHub, abra a branch `hivemind-cli-go`, entre em **Actions**, abra a execução do workflow **HiveMind CLI** e baixe o artefato `hivemind-windows-amd64`. O arquivo é `hivemind.exe`.
+No GitHub, abra a branch `main`, entre em **Actions**, abra a execução do workflow **HiveMind CI** e baixe o artefato `hivemind-windows-amd64` (`hivemind.exe`) ou `hivemind-ide-windows-amd64` (`hivemind-ide.exe`).
 
 Coloque-o numa pasta que esteja no `PATH`, ou chame-o pelo caminho completo.
 
@@ -47,7 +45,7 @@ winget install --id GoLang.Go -e
 O `winget` pode instalar uma versão antiga. Confira com `go version`. Se for menor que 1.26.10, baixe o zip em [https://go.dev/dl/](https://go.dev/dl/) (`go1.26.10.windows-amd64.zip`), extraia e coloque `go\bin` no `PATH`.
 
 ```powershell
-git clone --branch hivemind-cli-go --single-branch https://github.com/gilvan-Borges/HiveMind.git
+git clone https://github.com/gilvan-Borges/HiveMind.git
 cd HiveMind
 $env:CGO_ENABLED = "0"
 go build -trimpath -ldflags "-s -w" -o hivemind.exe .\cmd\hivemind
@@ -58,7 +56,7 @@ go build -trimpath -ldflags "-s -w" -o hivemind.exe .\cmd\hivemind
 ## Instalação no Linux e no macOS
 
 ```bash
-git clone --branch hivemind-cli-go --single-branch https://github.com/gilvan-Borges/HiveMind.git
+git clone https://github.com/gilvan-Borges/HiveMind.git
 cd HiveMind
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o hivemind ./cmd/hivemind
 ./hivemind --help
@@ -228,7 +226,7 @@ go test ./...
 
 Os testes não chamam Gemini, GitHub nem Jira de verdade. O modelo é um `model.LLM` scriptado, o Jira é um servidor HTTP falso, o GitHub REST também, e o git dos testes é um repositório temporário local. O shell é exercitado com `echo` e com recusa de comando perigoso.
 
-O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda esses testes e compila os binários de Windows, Linux e macOS a cada push em `hivemind-cli-go`.
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI e da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`.
 
 ## Limitações do ADK Go (v2.8.0)
 
@@ -249,16 +247,20 @@ O que o ADK entrega e o que esta CLI completa:
 ## Layout
 
 ```
-cmd/hivemind            comando principal
+cmd/hivemind            comando principal da CLI
+ide/                    HiveMind IDE desktop (Go + Wails v2 + TypeScript/Vite)
 internal/cli            comandos em português
+internal/tui            interface interativa de terminal (Bubble Tea)
 internal/orchestrator   sequential + parallel + loop do ADK
 internal/tools          arquivos, shell, git, GitHub, Jira
 internal/modelx         agy, Gemini, Vertex, Anthropic, OpenAI e o modelo dos testes
-internal/sessionx       sessões em JSON
+internal/sessionx       sessões persistidas em JSON
 internal/team           .hivemind/team.yaml
-internal/gitx           git
+internal/gitx           git e worktrees de integração
 internal/githubx        API REST e gh
 internal/jirax          Jira Cloud
 internal/shellx         lista de comandos e confirmação
-internal/workspace      a escrita não sai da pasta do agente
+internal/procx          controle de subprocessos e árvore de processos (Windows/Unix)
+internal/strx           utilitários de truncamento seguro em UTF-8
+internal/workspace      confinamento de leitura e escrita na pasta do agente
 ```

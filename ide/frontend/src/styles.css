@@ -682,7 +682,7 @@ button.icon-btn:hover:not(:disabled) {
   margin: 0;
   padding: 12px 10px 12px 14px;
   text-align: right;
-  color: #484d69;
+  color: #747b9c;
   background: var(--bg-deep);
   border-right: 1px solid rgba(255, 255, 255, 0.045);
   font-family: var(--mono);
@@ -851,7 +851,7 @@ button.icon-btn:hover:not(:disabled) {
 .tok-kw { color: #cf8e6d; font-weight: 600; }
 .tok-str { color: #6aab73; }
 .tok-num { color: #2aacb8; }
-.tok-com { color: #5f6682; font-style: italic; }
+.tok-com { color: #7c84a6; font-style: italic; }
 .tok-type { color: #a78bfa; }
 
 /* Right Multi-Agent Composer Island */
@@ -1547,7 +1547,7 @@ button.icon-btn:hover:not(:disabled) {
   justify-content: flex-end;
   gap: 4px;
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }

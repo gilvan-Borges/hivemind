@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 // Git is the subset of git the CLI needs.
@@ -33,7 +35,7 @@ type Local struct{}
 
 func (Local) Run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}

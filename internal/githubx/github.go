@@ -8,10 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // PullRequest is a pull request the CLI created or found.
@@ -131,7 +135,7 @@ func (r *REST) CreatePullRequest(ctx context.Context, req CreatePR) (PullRequest
 		HTMLURL string `json:"html_url"`
 		Title   string `json:"title"`
 	}
-	err := r.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls", r.Owner, r.Repo), map[string]string{
+	err := r.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(r.Owner), url.PathEscape(r.Repo)), map[string]string{
 		"title": req.Title,
 		"head":  req.Head,
 		"base":  req.Base,
@@ -144,12 +148,18 @@ func (r *REST) CreatePullRequest(ctx context.Context, req CreatePR) (PullRequest
 }
 
 func (r *REST) CommentOnIssue(ctx context.Context, number int, body string) error {
-	return r.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", r.Owner, r.Repo, number), map[string]string{
+	if number <= 0 {
+		return fmt.Errorf("número de issue inválido: %d", number)
+	}
+	return r.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number), map[string]string{
 		"body": body,
 	}, nil)
 }
 
 func (r *REST) ListIssueComments(ctx context.Context, number int) ([]Comment, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("número de issue inválido: %d", number)
+	}
 	var raw []struct {
 		ID   int    `json:"id"`
 		Body string `json:"body"`
@@ -157,7 +167,7 @@ func (r *REST) ListIssueComments(ctx context.Context, number int) ([]Comment, er
 			Login string `json:"login"`
 		} `json:"user"`
 	}
-	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", r.Owner, r.Repo, number), nil, &raw); err != nil {
+	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number), nil, &raw); err != nil {
 		return nil, err
 	}
 	out := make([]Comment, 0, len(raw))
@@ -167,11 +177,23 @@ func (r *REST) ListIssueComments(ctx context.Context, number int) ([]Comment, er
 	return out, nil
 }
 
+func sanitizeGitRef(ref string) (string, error) {
+	clean := strings.TrimSpace(ref)
+	if clean == "" || strings.Contains(clean, "..") || strings.ContainsAny(clean, "?#\\ \t\r\n") {
+		return "", fmt.Errorf("referência Git inválida: %q", ref)
+	}
+	return url.PathEscape(clean), nil
+}
+
 func (r *REST) CIStatus(ctx context.Context, ref string) (string, error) {
+	escapedRef, err := sanitizeGitRef(ref)
+	if err != nil {
+		return "", err
+	}
 	var raw struct {
 		State string `json:"state"`
 	}
-	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/commits/%s/status", r.Owner, r.Repo, ref), nil, &raw); err != nil {
+	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/commits/%s/status", url.PathEscape(r.Owner), url.PathEscape(r.Repo), escapedRef), nil, &raw); err != nil {
 		return "", err
 	}
 	if raw.State == "" {
@@ -191,7 +213,7 @@ func (c *CLI) Enabled() bool { return c.Bin != "" && c.Owner != "" && c.Repo != 
 
 func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -243,7 +265,11 @@ func (c *CLI) ListIssueComments(ctx context.Context, number int) ([]Comment, err
 }
 
 func (c *CLI) CIStatus(ctx context.Context, ref string) (string, error) {
-	out, err := c.run(ctx, "api", fmt.Sprintf("repos/%s/commits/%s/status", c.repo(), ref), "--jq", ".state")
+	escapedRef, err := sanitizeGitRef(ref)
+	if err != nil {
+		return "", err
+	}
+	out, err := c.run(ctx, "api", fmt.Sprintf("repos/%s/%s/commits/%s/status", url.PathEscape(c.Owner), url.PathEscape(c.Repo), escapedRef), "--jq", ".state")
 	if err != nil {
 		return "", err
 	}
@@ -294,8 +320,5 @@ func ParseRemote(raw string) (owner, repo string, ok bool) {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
+	return strx.TruncateBytes(s, n, "")
 }

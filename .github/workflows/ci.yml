@@ -3,9 +3,11 @@ name: HiveMind CI
 on:
   push:
     branches:
+      - main
       - hivemind-cli-go
   pull_request:
     branches:
+      - main
       - hivemind-cli-go
   workflow_dispatch:
 
@@ -23,8 +25,10 @@ jobs:
         with:
           go-version: "1.26.10"
           cache: true
-      - name: Testes unitários do CLI
-        run: go test ./...
+      - name: Análise estática (go vet)
+        run: go vet ./...
+      - name: Testes unitários do CLI (com race detector)
+        run: go test -race ./...
 
   test-ide:
     name: Testes IDE (${{ matrix.os }})
@@ -53,14 +57,18 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Testes unitários do core da IDE
+      - name: Análise estática e testes unitários do core da IDE
         working-directory: ide
-        run: go test -v ./internal/idecore/...
-      - name: Build do executável da IDE (Windows)
+        run: |
+          go vet ./internal/idecore/...
+          go test -v ./internal/idecore/...
+      - name: Build e smoke-check do executável da IDE (Windows)
         if: runner.os == 'Windows'
         working-directory: ide
         run: |
+          go vet -tags desktop,production ./...
           go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o build\hivemind-ide.exe .
+          .\build\hivemind-ide.exe --smoke-check
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
@@ -81,6 +89,12 @@ jobs:
           - goos: windows
             goarch: amd64
             bin: hivemind.exe
+          - goos: darwin
+            goarch: amd64
+            bin: hivemind
+          - goos: darwin
+            goarch: arm64
+            bin: hivemind
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

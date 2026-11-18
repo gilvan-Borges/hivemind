@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const integrationBranch = "hivemind/integracao"
+// IntegrationBranch is the dedicated branch used to merge parallel developer worktrees.
+const IntegrationBranch = "hivemind/integracao"
+
+const integrationBranch = IntegrationBranch
 
 // Integrate commits nothing by itself. It merges branches that are ahead of
 // hivemind/integracao into a dedicated worktree. The user's checkout is not
@@ -24,6 +27,11 @@ func (g Local) Integrate(ctx context.Context, repo string, branches []string) (m
 	wt, err := g.EnsureWorktree(ctx, repo, "_integracao", integrationBranch)
 	if err != nil {
 		return nil, "", err
+	}
+	if len(branches) == 0 {
+		if headSHA, shaErr := g.Run(ctx, repo, "rev-parse", "HEAD"); shaErr == nil && strings.TrimSpace(headSHA) != "" {
+			_, _ = g.Run(ctx, wt, "merge", "--ff-only", strings.TrimSpace(headSHA))
+		}
 	}
 	for _, branch := range branches {
 		branch = strings.TrimSpace(branch)

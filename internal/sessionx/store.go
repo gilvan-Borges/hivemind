@@ -42,10 +42,11 @@ type Meta struct {
 
 // Store implements session.Service on top of one JSON file per session.
 type Store struct {
-	dir   string
-	mu    sync.Mutex
-	live  map[string]*fileSession
-	metas map[string]Meta
+	dir         string
+	mu          sync.Mutex
+	live        map[string]*fileSession
+	metas       map[string]Meta
+	indexLoaded bool
 }
 
 // Open creates the session directory if it does not exist.
@@ -62,9 +63,12 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	if req.AppName == "" || req.UserID == "" {
 		return nil, fmt.Errorf("app_name e user_id são obrigatórios")
 	}
-	id := req.SessionID
+	id := strings.TrimSpace(req.SessionID)
 	if id == "" {
 		id = newID()
+	}
+	if !validSessionID(id) {
+		return nil, fmt.Errorf("session_id inválido: %q", id)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,6 +91,7 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	if err := fs.writeLocked(); err != nil {
 		return nil, err
 	}
+	_ = s.ensureIndexLocked()
 	s.live[id] = fs
 	s.metas[id] = fs.metaNoLock()
 	s.writeIndexLocked()
@@ -97,6 +102,9 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 func (s *Store) Get(_ context.Context, req *session.GetRequest) (*session.GetResponse, error) {
 	if req.AppName == "" || req.UserID == "" || req.SessionID == "" {
 		return nil, fmt.Errorf("app_name, user_id e session_id são obrigatórios")
+	}
+	if !validSessionID(req.SessionID) {
+		return nil, fmt.Errorf("session_id inválido: %q", req.SessionID)
 	}
 	s.mu.Lock()
 	fs, ok := s.live[req.SessionID]
@@ -137,13 +145,28 @@ func (s *Store) List(context.Context, *session.ListRequest) (*session.ListRespon
 
 // Delete implements session.Service.
 func (s *Store) Delete(_ context.Context, req *session.DeleteRequest) error {
+	if req == nil || !validSessionID(req.SessionID) {
+		return fmt.Errorf("session_id inválido")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = s.ensureIndexLocked()
 	delete(s.live, req.SessionID)
 	delete(s.metas, req.SessionID)
 	_ = os.Remove(s.path(req.SessionID))
 	s.writeIndexLocked()
 	return nil
+}
+
+func validSessionID(id string) bool {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" || trimmed != id || strings.EqualFold(trimmed, "index") {
+		return false
+	}
+	if strings.Contains(trimmed, "..") || strings.ContainsAny(trimmed, `/\:*?"<>|`) {
+		return false
+	}
+	return true
 }
 
 // AppendEvent implements session.Service.
@@ -182,7 +205,17 @@ func (s *Store) AppendEvent(ctx context.Context, cur session.Session, event *ses
 func (s *Store) ListMeta() ([]Meta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.readIndexLocked()
+	if err := s.ensureIndexLocked(); err != nil {
+		return nil, err
+	}
+	entries := make([]Meta, 0, len(s.metas))
+	for _, m := range s.metas {
+		entries = append(entries, m)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].UpdatedAt.Before(entries[j].UpdatedAt)
+	})
+	return entries, nil
 }
 
 // SetObjective updates the fields shown in the session list and the state keys
@@ -200,6 +233,28 @@ func SetObjective(sess session.Session, objective, jiraKey string) error {
 	fs.state["jira_key"] = jiraKey
 	fs.objective = objective
 	fs.jiraKey = jiraKey
+	fs.updatedAt = time.Now().UTC()
+	meta := fs.metaNoLock()
+	fs.mu.Unlock()
+	return fs.persist(meta)
+}
+
+// UpdateState updates multiple state keys on sess and persists the snapshot to disk.
+func UpdateState(sess session.Session, updates map[string]any) error {
+	fs, ok := unwrap(sess)
+	if !ok {
+		for k, v := range updates {
+			_ = sess.State().Set(k, v)
+		}
+		return nil
+	}
+	fs.mu.Lock()
+	if fs.state == nil {
+		fs.state = map[string]any{}
+	}
+	for k, v := range updates {
+		fs.state[k] = v
+	}
 	fs.updatedAt = time.Now().UTC()
 	meta := fs.metaNoLock()
 	fs.mu.Unlock()
@@ -270,23 +325,34 @@ func (s *Store) readIndexLocked() ([]Meta, error) {
 	return idx.Sessions, nil
 }
 
+func (s *Store) ensureIndexLocked() error {
+	if s.indexLoaded {
+		return nil
+	}
+	if s.metas == nil {
+		s.metas = map[string]Meta{}
+	}
+	existing, err := s.readIndexLocked()
+	if err != nil {
+		return err
+	}
+	for _, m := range existing {
+		if _, statErr := os.Stat(s.path(m.ID)); statErr == nil {
+			if _, already := s.metas[m.ID]; !already {
+				s.metas[m.ID] = m
+			}
+		}
+	}
+	s.indexLoaded = true
+	return nil
+}
+
 // writeIndexLocked rewrites index.json. Caller holds s.mu.
 // It must not lock a fileSession.
 func (s *Store) writeIndexLocked() {
-	existing, _ := s.readIndexLocked()
-	byID := map[string]Meta{}
-	for _, m := range existing {
-		if _, err := os.Stat(s.path(m.ID)); err == nil {
-			byID[m.ID] = m
-		}
-	}
-	for id, m := range s.metas {
-		if _, err := os.Stat(s.path(id)); err == nil {
-			byID[id] = m
-		}
-	}
-	entries := make([]Meta, 0, len(byID))
-	for _, m := range byID {
+	_ = s.ensureIndexLocked()
+	entries := make([]Meta, 0, len(s.metas))
+	for _, m := range s.metas {
 		entries = append(entries, m)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].UpdatedAt.Before(entries[j].UpdatedAt) })
@@ -312,6 +378,7 @@ type record struct {
 
 type fileSession struct {
 	mu        sync.RWMutex
+	writeMu   sync.Mutex
 	id        string
 	appName   string
 	userID    string
@@ -365,10 +432,15 @@ func (s *fileSession) metaNoLock() Meta {
 	}
 }
 
-func (s *fileSession) persist(meta Meta) error {
+func (s *fileSession) persist(_ Meta) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	s.mu.RLock()
 	rec := s.snapshot()
+	meta := s.metaNoLock()
 	s.mu.RUnlock()
+
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err
@@ -377,9 +449,7 @@ func (s *fileSession) persist(meta Meta) error {
 		return err
 	}
 	s.store.mu.Lock()
-	if s.store.metas == nil {
-		s.store.metas = map[string]Meta{}
-	}
+	_ = s.store.ensureIndexLocked()
 	s.store.metas[s.id] = meta
 	s.store.writeIndexLocked()
 	s.store.mu.Unlock()
@@ -502,11 +572,34 @@ func newID() string {
 }
 
 func atomicWrite(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_ = f.Chmod(0o600)
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*10) * time.Millisecond)
+		}
+		if err := os.Rename(tmp, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	_ = os.Remove(tmp)
+	return lastErr
 }
 
 // Compile-time check.

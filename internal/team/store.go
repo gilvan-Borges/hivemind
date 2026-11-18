@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,11 +61,34 @@ func Save(workspace string, f File) error {
 		return err
 	}
 	path := Path(workspace)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	fTmp, err := os.CreateTemp(dir, "team.yaml.*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := fTmp.Name()
+	_ = fTmp.Chmod(0o600)
+	if _, err := fTmp.Write(data); err != nil {
+		_ = fTmp.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := fTmp.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*10) * time.Millisecond)
+		}
+		if err := os.Rename(tmp, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	_ = os.Remove(tmp)
+	return lastErr
 }
 
 // UpsertTeam adds or replaces a team and makes it active.

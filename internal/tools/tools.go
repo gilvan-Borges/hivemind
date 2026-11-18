@@ -3,6 +3,7 @@ package tools
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
@@ -170,19 +172,28 @@ func (d Deps) canRead() (tool.Tool, error) {
 		Name:        "read_file",
 		Description: "Lê um arquivo de texto dentro do workspace do agente.",
 	}, func(_ agent.Context, args pathArgs) (textResult, error) {
-		path, err := workspace.Resolve(d.Root, args.Path)
+		path, err := workspace.ResolveWithOptions(d.Root, args.Path, workspace.Options{AllowMemoryRead: true})
 		if err != nil {
 			return textResult{}, err
 		}
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
 			return textResult{}, err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return textResult{}, err
+		}
+		if info.IsDir() {
+			return textResult{}, fmt.Errorf("%s é um diretório", args.Path)
 		}
 		const limit = 64 * 1024
-		text := string(data)
-		if len(text) > limit {
-			text = text[:limit] + "\n…(arquivo truncado)"
+		data, err := io.ReadAll(io.LimitReader(f, limit+8))
+		if err != nil {
+			return textResult{}, err
 		}
+		text := strx.TruncateBytes(string(data), limit, "\n…(arquivo truncado)")
 		return textResult{Text: text}, nil
 	})
 }
@@ -209,7 +220,7 @@ func (d Deps) canList() (tool.Tool, error) {
 		out := make([]string, 0, len(entries))
 		for _, e := range entries {
 			name := e.Name()
-			if name == ".git" {
+			if strings.EqualFold(name, ".git") || strings.EqualFold(name, ".hivemind") {
 				continue
 			}
 			if e.IsDir() {
@@ -300,9 +311,7 @@ func (d Deps) gitDiff() (tool.Tool, error) {
 		Unused string `json:"unused,omitempty" jsonschema:"Campo ignorado."`
 	}) (textResult, error) {
 		out, err := d.Git.Diff(ctx, d.Root)
-		if len(out) > 16*1024 {
-			out = out[:16*1024] + "\n…(diff truncado)"
-		}
+		out = strx.TruncateBytes(out, 16*1024, "\n…(diff truncado)")
 		return textResult{Text: out}, err
 	})
 }

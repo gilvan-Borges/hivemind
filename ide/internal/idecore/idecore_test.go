@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -449,5 +451,89 @@ func TestUpdateTeamAgentModelAndWorkspaceMemory(t *testing.T) {
 	snippet := loadWorkspaceMemorySnippet(dir)
 	if !strings.Contains(snippet, "Memória Compartilhada do Time") {
 		t.Fatalf("expected memory snippet, got %q", snippet)
+	}
+	if err := DeleteWorkspacePath(dir, ".hivemind"); err == nil {
+		t.Fatal("expected deleting .hivemind root to be blocked")
+	}
+	if err := DeleteWorkspacePath(dir, ".git"); err == nil {
+		t.Fatal("expected deleting .git to be blocked")
+	}
+}
+
+func TestExpandAtFileMentionsAndSafety(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "pkg", "hello.go"), []byte("package pkg\nfunc Hello() {}\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, ".hivemind"), 0o700)
+	_ = os.WriteFile(filepath.Join(dir, ".hivemind", "team.yaml"), []byte("secret: 1\n"), 0o600)
+
+	got := expandAtFileMentions(dir, "Revise @pkg/hello.go e ignore dev@empresa.com e @.hivemind/team.yaml")
+	if !strings.Contains(got, "func Hello()") {
+		t.Fatalf("expected @pkg/hello.go content expanded, got %q", got)
+	}
+	if strings.Contains(got, "secret: 1") {
+		t.Fatalf("team.yaml must not be expanded by @mention: %q", got)
+	}
+}
+
+func TestUntrackedDiffDiscardAndSyncIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	repo := t.TempDir()
+	ctx := context.Background()
+	g := gitx.Local{}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "HiveMind"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if _, err := g.Run(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644)
+	_, _ = g.Run(ctx, repo, "add", "README.md")
+	_, _ = g.Run(ctx, repo, "commit", "-m", "init")
+
+	// 1. Untracked file must appear in WorkspaceDiff and be cleaned by DiscardWorkspaceChanges.
+	_ = os.WriteFile(filepath.Join(repo, "novo.go"), []byte("package main\n"), 0o644)
+	diffs, err := WorkspaceDiff(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diffs) != 1 || diffs[0].Path != "novo.go" || diffs[0].Added != 1 {
+		t.Fatalf("expected untracked novo.go in diff, got %+v", diffs)
+	}
+	if err := DiscardWorkspaceChanges(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "novo.go")); !os.IsNotExist(err) {
+		t.Fatal("expected DiscardWorkspaceChanges to clean untracked novo.go")
+	}
+
+	// 2. Changes merged into hivemind/integracao worktree must sync into workspace working tree.
+	devWT, err := g.EnsureWorktree(ctx, repo, "dev_1", "hivemind/t/dev_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(devWT, "endpoint.go"), []byte("package main\nfunc Health() {}\n"), 0o644)
+	if _, err := g.CommitAll(ctx, devWT, "feat: endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := g.Integrate(ctx, repo, []string{"hivemind/t/dev_1"}); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := SyncIntegrationToWorkspace(ctx, repo)
+	if err != nil || synced != 1 {
+		t.Fatalf("expected 1 file synced from integration worktree, got synced=%d err=%v", synced, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "endpoint.go")); err != nil {
+		t.Fatalf("expected endpoint.go synced into workspace: %v", err)
+	}
+	afterDiffs, err := WorkspaceDiff(ctx, repo)
+	if err != nil || len(afterDiffs) != 1 || afterDiffs[0].Path != "endpoint.go" {
+		t.Fatalf("expected synced endpoint.go visible in WorkspaceDiff, got %+v err=%v", afterDiffs, err)
 	}
 }

@@ -10,6 +10,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // CommandOutput captures the result of running a shell command in the integrated IDE terminal.
@@ -38,7 +41,7 @@ func RunWorkspaceCommand(ctx context.Context, workspace, command string) (Comman
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", trimmed)
 	}
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	cmd.Dir = absRoot
 
 	var buf bytes.Buffer
@@ -58,11 +61,8 @@ func RunWorkspaceCommand(ctx context.Context, workspace, command string) (Comman
 		}
 	}
 
-	out := buf.String()
 	const maxBytes = 64 * 1024
-	if len(out) > maxBytes {
-		out = out[:maxBytes] + "\n…(saída truncada em 64 KB)"
-	}
+	out := strx.TruncateBytes(buf.String(), maxBytes, "\n…(saída truncada em 64 KB)")
 
 	return CommandOutput{
 		Command:    trimmed,

@@ -16,7 +16,9 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // WizardInput holds the interactive team builder choices from the IDE.
@@ -255,7 +257,7 @@ func EnsureWorkspaceMemory(workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(target); os.IsNotExist(err) {
@@ -264,15 +266,15 @@ func EnsureWorkspaceMemory(workspace string) (string, error) {
 			"Todos os agentes da equipe recebem este contexto automaticamente sem precisar repetir no chat.\n\n" +
 			"## Convenções & Arquitetura\n- \n\n" +
 			"## Comandos & Ambiente\n- \n"
-		if err := os.WriteFile(target, []byte(starter), 0o644); err != nil {
+		if err := os.WriteFile(target, []byte(starter), 0o600); err != nil {
 			return "", err
 		}
 	}
 	return rel, nil
 }
 
-func loadWorkspaceMemorySnippet(workspace string) string {
-	target, err := ResolveSafe(workspace, ".hivemind/MEMORY.md")
+func loadWorkspaceMemorySnippet(workspaceDir string) string {
+	target, err := ResolveSafe(workspaceDir, ".hivemind/MEMORY.md")
 	if err != nil {
 		return ""
 	}
@@ -284,10 +286,70 @@ func loadWorkspaceMemorySnippet(workspace string) string {
 	if txt == "" {
 		return ""
 	}
-	if len(txt) > 4096 {
-		txt = txt[:4096] + "\n…"
-	}
+	txt = strx.TruncateBytes(txt, 4096, "\n…")
 	return "\n[Memória Compartilhada do Time (.hivemind/MEMORY.md)]\n" + txt + "\n"
+}
+
+func expandAtFileMentions(workspaceRoot, userText string) string {
+	if !strings.Contains(userText, "@") {
+		return ""
+	}
+	seen := map[string]bool{}
+	var b strings.Builder
+	count := 0
+	rs := []rune(userText)
+	for i := 0; i < len(rs); i++ {
+		if rs[i] != '@' {
+			continue
+		}
+		if i > 0 {
+			prev := rs[i-1]
+			if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') || prev == '_' {
+				continue
+			}
+		}
+		j := i + 1
+		for j < len(rs) {
+			c := rs[j]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == '/' || c == '\\' {
+				j++
+			} else {
+				break
+			}
+		}
+		if j <= i+1 {
+			continue
+		}
+		// Skip Ctrl+L inline selection snippets (@file:L10-L20 followed by code fence).
+		if j < len(rs) && rs[j] == ':' {
+			continue
+		}
+		candidate := strings.TrimRight(string(rs[i+1:j]), ".,")
+		i = j - 1
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		full, err := workspace.ResolveWithOptions(workspaceRoot, filepath.FromSlash(candidate), workspace.Options{AllowMemoryRead: true})
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(full)
+		if err != nil || info.IsDir() || info.Size() > 512*1024 {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			continue
+		}
+		seen[candidate] = true
+		snippet := strx.TruncateBytes(string(data), 16*1024, "\n…(arquivo truncado)")
+		fmt.Fprintf(&b, "\n[Arquivo anexado @%s]\n```\n%s\n```\n", filepath.ToSlash(candidate), snippet)
+		count++
+		if count >= 4 {
+			break
+		}
+	}
+	return b.String()
 }
 
 // RunTurn executes one user objective on a specific lane (team) with stack context injected.
@@ -334,7 +396,8 @@ func (m *SessionManager) RunTurnWithOptions(
 	}
 	stack := DetectStack(workspace)
 	memBlock := loadWorkspaceMemorySnippet(workspace)
-	fullObjective := stack.FormatForChief() + memBlock + "\n[Objetivo do Usuário]\n" + userText
+	atBlock := expandAtFileMentions(workspace, userText)
+	fullObjective := stack.FormatForChief() + memBlock + atBlock + "\n[Objetivo do Usuário]\n" + userText
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.mu.Lock()
@@ -392,13 +455,17 @@ func (m *SessionManager) RunTurnWithOptions(
 			}
 		},
 	}
-	return runner.Run(ctx, orchestrator.Request{
+	res, runErr := runner.Run(ctx, orchestrator.Request{
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
 		SessionID:   sessionID,
 		RunMode:     normMode,
 		Attachments: attachments,
 	})
+	if runErr == nil && res.IntegrationBranch != "" {
+		_, _ = SyncIntegrationToWorkspace(ctx, workspace)
+	}
+	return res, runErr
 }
 
 // Cancel stops the active run on laneID (cancelling only child processes started by that lane).

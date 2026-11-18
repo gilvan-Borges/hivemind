@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -65,6 +66,16 @@ func executeRun(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bo
 }
 
 func confirmer(cmd *cobra.Command, settings team.Settings, yes bool) shellx.Confirmer {
+	return confirmerWithReader(cmd, settings, yes, nil, nil)
+}
+
+func confirmerWithReader(cmd *cobra.Command, settings team.Settings, yes bool, sharedReader *bufio.Reader, sharedMu *sync.Mutex) shellx.Confirmer {
+	var localMu sync.Mutex
+	mu := sharedMu
+	if mu == nil {
+		mu = &localMu
+	}
+	var reader *bufio.Reader
 	return func(command string) bool {
 		if yes {
 			return true
@@ -77,8 +88,17 @@ func confirmer(cmd *cobra.Command, settings team.Settings, yes bool) shellx.Conf
 			fmt.Fprintf(cmd.ErrOrStderr(), "comando perigoso recusado fora de um terminal: %s\n", command)
 			return false
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		r := sharedReader
+		if r == nil {
+			if reader == nil {
+				reader = bufio.NewReader(cmd.InOrStdin())
+			}
+			r = reader
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Executar comando perigoso?\n  %s\n[s/N]: ", command)
-		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		line, err := r.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return false
 		}

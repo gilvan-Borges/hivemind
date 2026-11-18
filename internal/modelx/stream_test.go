@@ -58,6 +58,17 @@ printf '%s\n' '{"event":"result","result":{"status":"SUCCESS","response":"Olá",
 	}
 }
 
+func TestStreamNilReceiverDoesNotPanic(t *testing.T) {
+	t.Setenv("HIVEMIND_AGY_PATH", "")
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	var nilAgy *Agy
+	err := nilAgy.Stream(context.Background(), "oi", nil)
+	if err == nil {
+		t.Fatal("expected error when agy binary is absent")
+	}
+}
+
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)

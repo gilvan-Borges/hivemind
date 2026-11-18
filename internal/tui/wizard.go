@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -13,11 +12,10 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
-func execCommand(ctx context.Context, bin string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, bin, args...)
-}
-
 func (m model) onModalKey(k string) (tea.Model, tea.Cmd) {
+	if k == "ctrl+c" {
+		return m, tea.Quit
+	}
 	switch m.modal {
 	case modalWizard:
 		return m.onWizard(k)
@@ -32,7 +30,7 @@ func (m model) onModalKey(k string) (tea.Model, tea.Cmd) {
 		}
 	case modalBring:
 		if k == "s" || k == "S" {
-			_, err := gitx.Local{}.Run(context.Background(), m.workspace, "merge", "--no-edit", "hivemind/integracao")
+			_, err := gitx.Local{}.Run(context.Background(), m.workspace, "merge", "--no-edit", gitx.IntegrationBranch)
 			if err != nil {
 				m.addSystem("Não foi possível trazer as mudanças: " + err.Error())
 			} else {
@@ -63,11 +61,17 @@ func (m model) onModalKey(k string) (tea.Model, tea.Cmd) {
 		}
 	case modalSessions:
 		m.movePick(k)
-		if k == "enter" {
+		if k == "enter" && len(m.pickItems) > 0 {
+			fields := strings.Fields(m.pickItems[m.pick])
+			if len(fields) > 0 && !strings.HasPrefix(fields[0], "(") {
+				m.sessionID = fields[0]
+				m.persistedSession = true
+				m.addSystem("Sessão `" + m.sessionID + "` retomada. Os próximos envios continuarão este contexto.")
+			}
 			m.modal = modalNone
 		}
 	}
-	if k == "esc" && m.modal != modalWizard {
+	if k == "esc" && (m.modal != modalWizard || m.hasTeam) {
 		m.modal = modalNone
 	}
 	m.refresh()
@@ -158,6 +162,8 @@ func (m *model) editLine(field *string, k string) {
 		if len(r) > 0 {
 			*field = string(r[:len(r)-1])
 		}
+	case "space":
+		*field += " "
 	default:
 		if len([]rune(k)) == 1 && k != "enter" && k != "esc" {
 			*field += k

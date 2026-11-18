@@ -2,12 +2,14 @@ package idecore
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
 	"google.golang.org/adk/v2/session"
 
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // TokenStat holds accumulated input, output, and total tokens plus LLM call count.
@@ -66,10 +68,7 @@ func cleanObjectiveTitle(raw string) string {
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			if len(line) > 100 {
-				return line[:100] + "…"
-			}
-			return line
+			return strx.TruncateRunes(line, 100, "…")
 		}
 	}
 	if s == "" {
@@ -211,7 +210,7 @@ func LoadSessionDetail(ctx context.Context, workspace, sessionID string) (Sessio
 			}
 			if part.FunctionCall != nil {
 				detail.Messages = append(detail.Messages, RestoredMessage{
-					ID:    ev.ID + "-fc-" + string(rune('0'+pIdx)),
+					ID:    ev.ID + "-fc-" + strconv.Itoa(pIdx),
 					Kind:  "tool",
 					Label: ev.Author,
 					Text:  part.FunctionCall.Name,

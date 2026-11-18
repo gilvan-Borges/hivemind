@@ -9,6 +9,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 func newSessionCmd() *cobra.Command {
@@ -48,10 +49,7 @@ func printSessions(cmd *cobra.Command, dir string) error {
 		return nil
 	}
 	for _, m := range metas {
-		obj := strings.ReplaceAll(m.Objective, "\n", " ")
-		if len(obj) > 80 {
-			obj = obj[:80] + "…"
-		}
+		obj := strx.TruncateRunes(strings.ReplaceAll(m.Objective, "\n", " "), 80, "…")
 		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s  %s\n", m.ID, m.UpdatedAt.Local().Format("2006-01-02 15:04"), m.JiraKey, obj)
 	}
 	return nil
@@ -95,9 +93,7 @@ func newSessionShow() *cobra.Command {
 						}
 					}
 				}
-				if len(text) > 120 {
-					text = text[:120] + "…"
-				}
+				text = strx.TruncateRunes(text, 120, "…")
 				fmt.Fprintf(out, "- %s: %s\n", ev.Author, text)
 			}
 			return nil

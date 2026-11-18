@@ -2,285 +2,43 @@ import "./styles.css";
 import { highlightCode } from "./highlighter";
 import { fileBadge, icons } from "./icons";
 import { renderMarkdownLite } from "./markdown";
-
-interface FileNode {
-  name: string;
-  path: string;
-  relPath: string;
-  isDir: boolean;
-  hasChildren?: boolean;
-  children?: FileNode[];
-}
-
-interface AgyModel {
-  slug: string;
-  name: string;
-}
-
-interface AgyStatus {
-  Found: boolean;
-  Path: string;
-  LoggedIn: boolean;
-  Detail: string;
-}
-
-interface TeamAgent {
-  name: string;
-  role: string;
-  provider: string;
-  model: string;
-}
-
-interface TeamSpec {
-  name: string;
-  agents: TeamAgent[];
-}
-
-interface TeamSettings {
-  jira_enabled: boolean;
-  jira_project?: string;
-  worktrees?: boolean;
-  auto_commit: boolean;
-  auto_pr: boolean;
-  base_branch: string;
-  max_tokens?: number;
-}
-
-interface TeamFile {
-  version: number;
-  active: string;
-  settings: TeamSettings;
-  teams: TeamSpec[];
-}
-
-interface ProjectStack {
-  root: string;
-  name: string;
-  stacks: string[];
-  buildTools: string[];
-  testHint: string;
-  summary: string;
-}
-
-interface ProjectInfo {
-  root: string;
-  name: string;
-  branch: string;
-  stack: ProjectStack;
-  hasTeam: boolean;
-  teamConfig: TeamFile;
-  files: FileNode[];
-}
-
-interface DiffLine {
-  kind: "header" | "hunk" | "added" | "removed" | "context";
-  text: string;
-}
-
-interface FileDiff {
-  path: string;
-  added: number;
-  removed: number;
-  lines: DiffLine[];
-}
-
-interface ImageAttachment {
-  id: string;
-  name: string;
-  mimeType: string;
-  dataBase64: string;
-}
-
-interface DiffSummaryItem {
-  path: string;
-  added: number;
-  removed: number;
-}
-
-type RunMode = "auto" | "direct" | "plan" | "squad";
-
-interface ChatMessage {
-  id: string;
-  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff" | "plan";
-  label: string;
-  text: string;
-  active?: boolean;
-  approved?: boolean;
-  images?: string[];
-  diffItems?: DiffSummaryItem[];
-  tokens?: number;
-}
-
-interface AgentRuntime {
-  name: string;
-  role: string;
-  model: string;
-  status: "idle" | "running" | "done" | "error";
-  tool?: string;
-  inTokens: number;
-  outTokens: number;
-  tokens: number;
-  calls: number;
-}
-
-interface TeamLane {
-  id: string;
-  teamName: string;
-  sessionId: string;
-  running: boolean;
-  stage: "" | "chief" | "dev" | "qa" | "closing";
-  doneStages: string[];
-  messages: ChatMessage[];
-  agents: AgentRuntime[];
-  autoScroll: boolean;
-  turnInTokens: number;
-  turnOutTokens: number;
-  turnTotalTokens: number;
-  sessionInTokens: number;
-  sessionOutTokens: number;
-  sessionTotalTokens: number;
-}
-
-interface TerminalEntry {
-  id: string;
-  command: string;
-  output: string;
-  exitCode: number | null;
-  durationMs: number;
-  running: boolean;
-}
-
-interface EditorTab {
-  kind: "file" | "diff" | "mission";
-  relPath: string;
-  name: string;
-  content: string;
-  dirty: boolean;
-  diff?: FileDiff;
-}
-
-interface GitHubStatus {
-  installed: boolean;
-  loggedIn: boolean;
-  user: string;
-  remote: string;
-  detail: string;
-}
-
-interface TokenStat {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  calls: number;
-}
-
-interface SessionSummary {
-  id: string;
-  updatedAt: string;
-  title: string;
-  jiraKey?: string;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-}
-
-interface WorkspaceSessionsSummary {
-  sessions: SessionSummary[];
-  projectInputTokens: number;
-  projectOutputTokens: number;
-  projectTotalTokens: number;
-}
-
-interface RestoredMessage {
-  id: string;
-  kind: string;
-  label: string;
-  text: string;
-  tokens?: number;
-}
-
-interface SessionDetail {
-  id: string;
-  title: string;
-  jiraKey?: string;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  agentUsage: Record<string, TokenStat>;
-  messages: RestoredMessage[];
-}
-
-interface TextSearchMatch {
-  relPath: string;
-  line: number;
-  preview: string;
-}
-
-interface ProjectIssue {
-  source: string;
-  key: string;
-  title: string;
-  body?: string;
-  status?: string;
-}
-
-interface CommandAction {
-  id: string;
-  label: string;
-  shortcut?: string;
-  run: () => void;
-}
-
-type SidebarView = "explorer" | "search" | "team" | "git" | "sessions";
+import type {
+  AgentRuntime,
+  AgyModel,
+  AgyStatus,
+  ChatMessage,
+  CommandAction,
+  ConfirmDialogState,
+  EditorTab,
+  FileDiff,
+  FileNode,
+  GitHubStatus,
+  ImageAttachment,
+  ProjectInfo,
+  ProjectIssue,
+  RunMode,
+  SessionSummary,
+  SidebarView,
+  TeamLane,
+  TerminalEntry,
+  TextSearchMatch,
+  WailsBackendApp,
+} from "./types";
+import {
+  escapeHtml,
+  exactTokens,
+  formatTokens,
+  matchAgentRuntime,
+  roleLabelPt,
+  runModeLabel,
+  safeImageSrc,
+} from "./utils";
 
 declare global {
   interface Window {
     go?: {
       main?: {
-        App?: {
-          GetInitialState(): Promise<any>;
-          BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
-          ChooseDirectory(): Promise<string>;
-          OpenProject(dir: string): Promise<ProjectInfo>;
-          GetRecentProjects(): Promise<string[]>;
-          ListFiles(workspace: string): Promise<FileNode[]>;
-          ListDirectory(workspace: string, relDir: string): Promise<FileNode[]>;
-          SearchFiles(workspace: string, query: string): Promise<string[]>;
-          ReadFile(workspace: string, relOrAbs: string): Promise<string>;
-          SaveFile(workspace: string, relOrAbs: string, content: string): Promise<void>;
-          ListModels(): Promise<AgyModel[]>;
-          DoctorAgy(): Promise<AgyStatus>;
-          SaveTeamWizard(workspace: string, input: any): Promise<TeamFile>;
-          SetActiveTeam(workspace: string, teamName: string): Promise<TeamFile>;
-          UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
-          EnsureTeamMemory(workspace: string): Promise<string>;
-          GetDiff(workspace: string): Promise<FileDiff[]>;
-          CommitChanges(workspace: string, message: string, push: boolean): Promise<string>;
-          OpenPR(workspace: string, title: string, body: string, baseBranch: string): Promise<string>;
-          CommentJira(workspace: string, issueKey: string, comment: string): Promise<void>;
-          DiscardChanges(workspace: string): Promise<void>;
-          GitHubStatus(workspace: string): Promise<GitHubStatus>;
-          InitGit(workspace: string): Promise<void>;
-          WindowMinimize(): Promise<void>;
-          WindowToggleMaximize(): Promise<void>;
-          WindowClose(): Promise<void>;
-          StartRun(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string): Promise<any>;
-          StartRunWithImages(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<any>;
-          StartRunWithOptions(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, runMode: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<any>;
-          CancelRun(laneID: string): Promise<boolean>;
-          RunCommand(workspace: string, command: string): Promise<{ command: string; output: string; exitCode: number; durationMs: number }>;
-          ListSessions(workspace: string): Promise<WorkspaceSessionsSummary>;
-          LoadSession(workspace: string, sessionID: string): Promise<SessionDetail>;
-          DeleteSession(workspace: string, sessionID: string): Promise<void>;
-          SearchText(workspace: string, query: string): Promise<TextSearchMatch[]>;
-          CreateFile(workspace: string, relPath: string): Promise<void>;
-          CreateDir(workspace: string, relPath: string): Promise<void>;
-          RenamePath(workspace: string, oldRel: string, newRel: string): Promise<void>;
-          DeletePath(workspace: string, relPath: string): Promise<void>;
-          ListBranches(workspace: string): Promise<string[]>;
-          CheckoutBranch(workspace: string, branch: string, create: boolean): Promise<void>;
-          ListIssues(workspace: string): Promise<ProjectIssue[]>;
-        };
+        App?: WailsBackendApp;
       };
     };
     runtime?: {
@@ -309,6 +67,7 @@ const state = {
   expandedDirs: new Set<string>(),
   dirCache: new Map<string, FileNode[]>(),
   explorerFilter: "",
+  explorerFilterResults: [] as string[],
   editorTabs: [] as EditorTab[],
   activeEditorPath: "",
   lanes: [] as TeamLane[],
@@ -318,6 +77,7 @@ const state = {
   showFileMenu: false,
   showWizard: false,
   doctorModal: null as AgyStatus | null,
+  confirmModal: null as ConfirmDialogState | null,
   pathModal: null as null | {
     mode: "newFile" | "newDir" | "rename" | "delete";
     targetRel: string;
@@ -372,45 +132,15 @@ let editorHighlightRaf = 0;
 let mentionTimer = 0;
 let quickOpenTimer = 0;
 let globalSearchTimer = 0;
+let explorerFilterTimer = 0;
 
-function escapeHtml(text: string | undefined | null): string {
-  return String(text ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function hasDirtyTabs(): boolean {
+  return state.editorTabs.some((t) => t.kind === "file" && t.dirty);
 }
 
-function formatTokens(n: number | undefined | null): string {
-  const val = Number(n || 0);
-  if (val <= 0) return "0";
-  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(2)}M`;
-  if (val >= 1_000) return `${(val / 1_000).toFixed(1)}k`;
-  return String(val);
-}
-
-function exactTokens(n: number | undefined | null): string {
-  return Number(n || 0).toLocaleString("pt-BR");
-}
-
-function roleLabelPt(role: string): string {
-  switch (role) {
-    case "architect": return "Arquiteto (Chefe)";
-    case "project_manager": return "Gerente de Projeto (Chefe)";
-    case "tech_lead": return "Tech Lead";
-    case "developer": return "Desenvolvedor";
-    case "qa": return "QA";
-    default: return role;
-  }
-}
-
-function runModeLabel(mode: RunMode): string {
-  switch (mode) {
-    case "direct": return "Direto (1 Agente)";
-    case "plan": return "Planejar (Aprovação)";
-    case "squad": return "Squad Completo";
-    default: return "Auto (Triagem)";
-  }
+function askConfirm(dialog: ConfirmDialogState) {
+  state.confirmModal = dialog;
+  renderModalLayer();
 }
 
 function buildAgentRuntimes(teamName: string): AgentRuntime[] {
@@ -643,7 +373,19 @@ function bindStaticShellEvents() {
 
   document.getElementById("win-min")?.addEventListener("click", () => api()?.WindowMinimize());
   document.getElementById("win-max")?.addEventListener("click", () => api()?.WindowToggleMaximize());
-  document.getElementById("win-close")?.addEventListener("click", () => api()?.WindowClose());
+  document.getElementById("win-close")?.addEventListener("click", () => {
+    if (hasDirtyTabs()) {
+      askConfirm({
+        title: "Alterações não salvas",
+        body: "Existem abas editadas sem salvar. Deseja fechar a HiveMind IDE mesmo assim?",
+        confirmLabel: "Fechar sem salvar",
+        danger: true,
+        onConfirm: () => api()?.WindowClose(),
+      });
+      return;
+    }
+    api()?.WindowClose();
+  });
 
   document.getElementById("btn-toggle-term")?.addEventListener("click", () => toggleTerminal());
   document.getElementById("status-term-btn")?.addEventListener("click", () => toggleTerminal());
@@ -789,7 +531,10 @@ function bindStaticShellEvents() {
       return;
     }
     if (e.key === "Escape") {
-      if (state.imagePreviewUrl) {
+      if (state.confirmModal) {
+        state.confirmModal = null;
+        renderModalLayer();
+      } else if (state.imagePreviewUrl) {
         state.imagePreviewUrl = "";
         renderModalLayer();
       } else if (state.pathModal) {
@@ -858,18 +603,35 @@ function renderBranchPopover() {
         renderBranchPopover();
         return;
       }
-      try {
-        await api()?.CheckoutBranch(state.project.root, targetBranch, false);
-        state.project.branch = targetBranch;
+      const performSwitch = async () => {
+        if (!state.project) return;
+        try {
+          await api()?.CheckoutBranch(state.project.root, targetBranch, false);
+          state.project.branch = targetBranch;
+          state.branchPopover.open = false;
+          renderBranchPopover();
+          updateHeaderAndStatusBar();
+          refreshDiffs();
+          refreshExplorerTree();
+          await reloadCleanOpenTabs();
+          setStatus(`Branch alterada para ${targetBranch}.`);
+        } catch (err: any) {
+          setStatus(`Erro ao trocar branch: ${err?.message || err}`);
+        }
+      };
+      if (hasDirtyTabs()) {
         state.branchPopover.open = false;
         renderBranchPopover();
-        updateHeaderAndStatusBar();
-        refreshDiffs();
-        refreshExplorerTree();
-        setStatus(`Branch alterada para ${targetBranch}.`);
-      } catch (err: any) {
-        setStatus(`Erro ao trocar branch: ${err?.message || err}`);
+        askConfirm({
+          title: "Trocar de Branch com Edições Abertas",
+          body: `Existem arquivos editados não salvos no editor. Deseja trocar para "${targetBranch}" mesmo assim?`,
+          confirmLabel: "Trocar Branch",
+          danger: true,
+          onConfirm: performSwitch,
+        });
+        return;
       }
+      await performSwitch();
     });
   });
 
@@ -1046,25 +808,6 @@ function updateStatusBar() {
     }
   }
   if (envEl) envEl.textContent = `${state.goVersion} · ${state.os}`;
-}
-
-function matchAgentRuntime(agents: AgentRuntime[], author: string, label?: string): AgentRuntime | undefined {
-  const auth = (author || "").toLowerCase();
-  const lbl = (label || "").toLowerCase();
-  const byLen = [...agents].sort((a, b) => b.name.length - a.name.length);
-  for (const a of byLen) {
-    const nm = a.name.toLowerCase();
-    if (auth === nm || auth.endsWith("_" + nm) || auth.startsWith(nm + "_") || auth.includes(nm) || lbl.includes(nm)) {
-      return a;
-    }
-  }
-  for (const a of byLen) {
-    const rl = a.role.toLowerCase();
-    if (auth.includes(rl) || lbl.includes(rl)) {
-      return a;
-    }
-  }
-  return agents[0];
 }
 
 async function boot() {
@@ -1300,6 +1043,7 @@ function applyProject(proj: ProjectInfo) {
   state.dirCache.clear();
   state.dirCache.set("", proj.files || []);
   state.explorerFilter = "";
+  state.explorerFilterResults = [];
   state.editorTabs = [];
   state.activeEditorPath = "";
   state.diffs = [];
@@ -1339,20 +1083,76 @@ async function openFolderDialog() {
 async function openProjectPath(dir: string) {
   const backend = api();
   if (!backend) return;
-  try {
-    const proj = await backend.OpenProject(dir);
-    state.recent = await backend.GetRecentProjects();
-    state.showFileMenu = false;
-    renderFileMenu();
-    applyProject(proj);
-    bootstrapAsync(proj.root);
-    if (!proj.hasTeam) {
-      state.showWizard = true;
-      renderModalLayer();
+  const doOpen = async () => {
+    try {
+      const proj = await backend.OpenProject(dir);
+      state.recent = await backend.GetRecentProjects();
+      state.showFileMenu = false;
+      renderFileMenu();
+      applyProject(proj);
+      bootstrapAsync(proj.root);
+      if (!proj.hasTeam) {
+        state.showWizard = true;
+        renderModalLayer();
+      }
+    } catch (err: any) {
+      setStatus(`Erro ao abrir pasta: ${err?.message || err}`);
     }
-  } catch (err: any) {
-    setStatus(`Erro ao abrir pasta: ${err?.message || err}`);
+  };
+  if (hasDirtyTabs()) {
+    askConfirm({
+      title: "Trocar de Projeto com Edições Abertas",
+      body: "Existem arquivos modificados não salvos no editor. Deseja abrir outra pasta e descartar as edições em memória?",
+      confirmLabel: "Abrir Pasta",
+      danger: true,
+      onConfirm: doOpen,
+    });
+    return;
   }
+  await doOpen();
+}
+
+async function reloadCleanOpenTabs() {
+  const backend = api();
+  if (!backend || !state.project) return;
+  let activeChanged = false;
+  for (const tab of state.editorTabs) {
+    if (tab.kind !== "file" || tab.dirty) continue;
+    try {
+      const fresh = await backend.ReadFile(state.project.root, tab.relPath);
+      if (fresh !== tab.content) {
+        tab.content = fresh;
+        if (tab.relPath === state.activeEditorPath) activeChanged = true;
+      }
+    } catch {
+      // File may have been removed or moved
+    }
+  }
+  if (activeChanged) {
+    renderEditorBody();
+  }
+}
+
+function promptDiscardChanges() {
+  if (!state.project) return;
+  askConfirm({
+    title: "Descartar Todas as Alterações",
+    body: "Isso reverterá arquivos rastreados para HEAD e removerá arquivos novos não rastreados (mantendo .hivemind/). Deseja continuar?",
+    confirmLabel: "Descartar Alterações",
+    danger: true,
+    onConfirm: async () => {
+      if (!state.project) return;
+      try {
+        await api()?.DiscardChanges(state.project.root);
+        setStatus("Alterações descartadas.");
+        await refreshExplorerTree();
+        await reloadCleanOpenTabs();
+        await refreshDiffs();
+      } catch (err: any) {
+        setStatus(`Erro ao descartar: ${err?.message || err}`);
+      }
+    },
+  });
 }
 
 function jumpEditorToLine(targetLine?: number) {
@@ -1988,7 +1788,23 @@ function bindSessionsSidebarEvents() {
 function renderExplorerTreeHtml(): string {
   const rootNodes = state.dirCache.get("") ?? state.project?.files ?? [];
   if (!state.project) return `<div class="dim" style="padding:8px">Abra uma pasta</div>`;
-  const html = renderTreeNodes(rootNodes, 0, state.explorerFilter);
+  const q = state.explorerFilter.trim();
+  if (q && state.explorerFilterResults.length > 0) {
+    return state.explorerFilterResults
+      .map((rel) => {
+        const name = rel.split("/").pop() || rel;
+        const dirPart = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+        const isAct = state.activeEditorPath === rel ? "active" : "";
+        return `
+          <div class="tree-row ${isAct}" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" style="padding-left:10px" title="${escapeHtml(rel)}">
+            ${fileBadge(name)}
+            <span class="tree-name">${escapeHtml(name)}${dirPart ? ` <span class="dim" style="font-size:10.5px">· ${escapeHtml(dirPart)}</span>` : ""}</span>
+          </div>
+        `;
+      })
+      .join("");
+  }
+  const html = renderTreeNodes(rootNodes, 0, q);
   return html || `<div class="dim" style="padding:8px">Nenhum arquivo correspondente</div>`;
 }
 
@@ -2034,11 +1850,27 @@ function bindExplorerEvents() {
   const filterIn = document.getElementById("explorer-filter") as HTMLInputElement | null;
   filterIn?.addEventListener("input", () => {
     state.explorerFilter = filterIn.value;
-    const body = document.getElementById("explorer-tree-body");
-    if (body) {
-      body.innerHTML = renderExplorerTreeHtml();
-      bindTreeRowClicks();
+    const q = state.explorerFilter.trim();
+    if (explorerFilterTimer) window.clearTimeout(explorerFilterTimer);
+    if (!q) {
+      state.explorerFilterResults = [];
+      const body = document.getElementById("explorer-tree-body");
+      if (body) {
+        body.innerHTML = renderExplorerTreeHtml();
+        bindTreeRowClicks();
+      }
+      return;
     }
+    explorerFilterTimer = window.setTimeout(async () => {
+      if (state.project) {
+        state.explorerFilterResults = (await api()?.SearchFiles(state.project.root, q)) || [];
+      }
+      const body = document.getElementById("explorer-tree-body");
+      if (body) {
+        body.innerHTML = renderExplorerTreeHtml();
+        bindTreeRowClicks();
+      }
+    }, 60);
   });
 
   document.getElementById("btn-new-file")?.addEventListener("click", () => {
@@ -2213,16 +2045,8 @@ function bindGitSidebarEvents() {
       setStatus(`Erro no Jira: ${err?.message || err}`);
     }
   });
-  document.getElementById("btn-discard")?.addEventListener("click", async () => {
-    const backend = api();
-    if (!backend || !state.project) return;
-    try {
-      await backend.DiscardChanges(state.project.root);
-      setStatus("Alterações descartadas.");
-      refreshDiffs();
-    } catch (err: any) {
-      setStatus(`Erro ao descartar: ${err?.message || err}`);
-    }
+  document.getElementById("btn-discard")?.addEventListener("click", () => {
+    promptDiscardChanges();
   });
 
   document.getElementById("btn-load-issues")?.addEventListener("click", async () => {
@@ -2292,13 +2116,27 @@ function renderEditorTabs() {
     el.addEventListener("click", (ev) => {
       ev.stopPropagation();
       const path = (el as HTMLElement).dataset.closeTab!;
-      state.editorTabs = state.editorTabs.filter((t) => t.relPath !== path);
-      if (state.activeEditorPath === path) {
-        state.activeEditorPath = state.editorTabs[0]?.relPath || "";
+      const closing = state.editorTabs.find((t) => t.relPath === path);
+      const doClose = () => {
+        state.editorTabs = state.editorTabs.filter((t) => t.relPath !== path);
+        if (state.activeEditorPath === path) {
+          state.activeEditorPath = state.editorTabs[0]?.relPath || "";
+        }
+        renderEditorTabs();
+        renderEditorBody();
+        highlightActiveTreeRow();
+      };
+      if (closing?.kind === "file" && closing.dirty) {
+        askConfirm({
+          title: "Fechar Aba sem Salvar",
+          body: `O arquivo "${closing.name}" possui alterações não salvas. Deseja fechá-lo sem salvar?`,
+          confirmLabel: "Fechar sem salvar",
+          danger: true,
+          onConfirm: doClose,
+        });
+        return;
       }
-      renderEditorTabs();
-      renderEditorBody();
-      highlightActiveTreeRow();
+      doClose();
     });
   });
 }
@@ -2334,7 +2172,7 @@ function renderMissionBoardHtml(): string {
             ${icons.swarm}
             <span>Quadro de Controle Multiagente — ${escapeHtml(lane?.teamName || "principal")}</span>
           </div>
-          <div class="dim" style="margin-top:4px">
+          <div class="dim" style="margin-top:4px" id="mc-header-summary">
             Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(lane?.sessionTotalTokens)} tok</strong> · Projeto: <strong>${exactTokens(projTotal)} tok</strong>
           </div>
         </div>
@@ -2349,13 +2187,13 @@ function renderMissionBoardHtml(): string {
         ${agents.map((a) => {
           const pct = lane?.sessionTotalTokens ? Math.min(100, Math.round((a.tokens / sessTotal) * 100)) : 0;
           return `
-            <div class="mc-agent-card ${a.status}">
+            <div class="mc-agent-card ${a.status}" data-mc-card="${escapeHtml(a.name)}">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
                 <div>
                   <div style="font-size:13px;font-weight:700;color:var(--text)">${escapeHtml(a.name)}</div>
                   <div class="dim">${escapeHtml(roleLabelPt(a.role))}</div>
                 </div>
-                <span class="status-pill ${a.status}">
+                <span class="status-pill ${a.status}" data-mc-pill="${escapeHtml(a.name)}">
                   ${a.status === "running" ? `${icons.spinner} rodando` : a.status === "done" ? "concluído" : a.status === "error" ? "erro" : "pronto"}
                 </span>
               </div>
@@ -2368,13 +2206,13 @@ function renderMissionBoardHtml(): string {
               </div>
 
               <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-family:var(--mono)">
-                <span class="dim">${a.tool ? `Ativo: ${escapeHtml(a.tool)}` : `${a.calls} chamada(s)`}</span>
-                <span style="color:var(--accent)">${exactTokens(a.tokens)} tok (${pct}%)</span>
+                <span class="dim" data-mc-activity="${escapeHtml(a.name)}">${a.tool ? `Ativo: ${escapeHtml(a.tool)}` : `${a.calls} chamada(s)`}</span>
+                <span style="color:var(--accent)" data-mc-tok="${escapeHtml(a.name)}">${exactTokens(a.tokens)} tok (${pct}%)</span>
               </div>
               <div class="mc-tok-track">
-                <div class="mc-tok-fill" style="width:${pct}%"></div>
+                <div class="mc-tok-fill" data-mc-fill="${escapeHtml(a.name)}" style="width:${pct}%"></div>
               </div>
-              <div class="dim" style="font-size:10.5px;font-family:var(--mono)">
+              <div class="dim" style="font-size:10.5px;font-family:var(--mono)" data-mc-inout="${escapeHtml(a.name)}">
                 Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}
               </div>
             </div>
@@ -2404,8 +2242,42 @@ function updateMissionBoardIfOpen() {
   if (state.activeEditorPath !== MISSION_TAB_KEY) return;
   const body = document.getElementById("editor-body");
   if (!body) return;
-  body.innerHTML = renderMissionBoardHtml();
-  bindMissionBoardEvents();
+  const root = document.getElementById("mission-board-root");
+  const lane = activeLane();
+  const agents = lane?.agents || [];
+  const cards = root?.querySelectorAll("[data-mc-card]");
+  if (!root || !cards || cards.length !== agents.length) {
+    body.innerHTML = renderMissionBoardHtml();
+    bindMissionBoardEvents();
+    return;
+  }
+  const sessTotal = Math.max(1, lane?.sessionTotalTokens || 0);
+  const projTotal = Math.max(state.sessionsSummary.projectTotalTokens, lane?.sessionTotalTokens || 0);
+  const summaryEl = document.getElementById("mc-header-summary");
+  if (summaryEl) {
+    summaryEl.innerHTML = `Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(lane?.sessionTotalTokens)} tok</strong> · Projeto: <strong>${exactTokens(projTotal)} tok</strong>`;
+  }
+  for (const a of agents) {
+    const pct = lane?.sessionTotalTokens ? Math.min(100, Math.round((a.tokens / sessTotal) * 100)) : 0;
+    const esc = CSS.escape(a.name);
+    const card = root.querySelector<HTMLElement>(`[data-mc-card="${esc}"]`);
+    if (card) card.className = `mc-agent-card ${a.status}`;
+    const pill = root.querySelector<HTMLElement>(`[data-mc-pill="${esc}"]`);
+    if (pill) {
+      pill.className = `status-pill ${a.status}`;
+      pill.innerHTML = a.status === "running" ? `${icons.spinner} rodando` : a.status === "done" ? "concluído" : a.status === "error" ? "erro" : "pronto";
+    }
+    const sel = root.querySelector<HTMLSelectElement>(`[data-mc-agent-model="${esc}"]`);
+    if (sel) sel.disabled = !!lane?.running;
+    const act = root.querySelector<HTMLElement>(`[data-mc-activity="${esc}"]`);
+    if (act) act.textContent = a.tool ? `Ativo: ${a.tool}` : `${a.calls} chamada(s)`;
+    const tok = root.querySelector<HTMLElement>(`[data-mc-tok="${esc}"]`);
+    if (tok) tok.textContent = `${exactTokens(a.tokens)} tok (${pct}%)`;
+    const fill = root.querySelector<HTMLElement>(`[data-mc-fill="${esc}"]`);
+    if (fill) fill.style.width = `${pct}%`;
+    const inout = root.querySelector<HTMLElement>(`[data-mc-inout="${esc}"]`);
+    if (inout) inout.textContent = `Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}`;
+  }
 }
 
 function renderEditorBody() {
@@ -2689,12 +2561,16 @@ function renderComposerImages() {
   }
   wrap.style.display = "flex";
   wrap.innerHTML = state.draftImages
-    .map((img) => `
-      <div class="img-thumb-wrap" title="${escapeHtml(img.name)}">
-        <img src="${escapeHtml(img.dataBase64)}" data-preview-img="${escapeHtml(img.dataBase64)}" alt="${escapeHtml(img.name)}" />
-        <button class="img-thumb-remove" data-remove-img="${escapeHtml(img.id)}" title="Remover imagem">${icons.closeSmall}</button>
-      </div>
-    `)
+    .map((img) => {
+      const safeSrc = safeImageSrc(img.dataBase64);
+      if (!safeSrc) return "";
+      return `
+        <div class="img-thumb-wrap" title="${escapeHtml(img.name)}">
+          <img src="${escapeHtml(safeSrc)}" data-preview-img="${escapeHtml(safeSrc)}" alt="${escapeHtml(img.name)}" />
+          <button class="img-thumb-remove" data-remove-img="${escapeHtml(img.id)}" title="Remover imagem" aria-label="Remover imagem">${icons.closeSmall}</button>
+        </div>
+      `;
+    })
     .join("");
   wrap.querySelectorAll("[data-remove-img]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2826,22 +2702,16 @@ function updateMessageElement(el: HTMLElement, m: ChatMessage) {
         setStatus(`Erro no commit: ${err?.message || err}`);
       }
     });
-    el.querySelector("[data-chat-discard]")?.addEventListener("click", async () => {
-      if (!state.project) return;
-      try {
-        await api()?.DiscardChanges(state.project.root);
-        setStatus("Alterações descartadas.");
-        refreshDiffs();
-      } catch (err: any) {
-        setStatus(`Erro ao descartar: ${err?.message || err}`);
-      }
+    el.querySelector("[data-chat-discard]")?.addEventListener("click", () => {
+      promptDiscardChanges();
     });
     return;
   }
 
   const bodyHtml = m.kind === "chief" || m.kind === "system" ? renderMarkdownLite(m.text) : escapeHtml(m.text);
-  const imgsHtml = m.images && m.images.length > 0
-    ? `<div class="msg-images">${m.images.map((src) => `<img src="${escapeHtml(src)}" data-preview-img="${escapeHtml(src)}" alt="anexo" />`).join("")}</div>`
+  const validImages = (m.images || []).map(safeImageSrc).filter(Boolean);
+  const imgsHtml = validImages.length > 0
+    ? `<div class="msg-images">${validImages.map((src) => `<img src="${escapeHtml(src)}" data-preview-img="${escapeHtml(src)}" alt="anexo" />`).join("")}</div>`
     : "";
   const tokHtml = m.kind === "chief" && m.tokens && m.tokens > 0
     ? `<div class="msg-tok-footer">${icons.bolt}<span>${exactTokens(m.tokens)} tokens</span></div>`
@@ -3171,6 +3041,8 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     lane.running = false;
     lane.stage = "";
     markToolsDone(lane);
+    await refreshExplorerTree();
+    await reloadCleanOpenTabs();
     await refreshDiffsAndSummarize(lane);
     await refreshSessions();
     flushChatUpdates();
@@ -3258,7 +3130,7 @@ function renderQuickOpenModal() {
   const isCmd = state.quickOpen.mode === "commands";
   layer.innerHTML = `
     <div class="quick-open-backdrop" id="qo-backdrop">
-      <div class="quick-open-modal">
+      <div class="quick-open-modal" role="dialog" aria-modal="true" aria-label="${isCmd ? "Paleta de Comandos" : "Busca Rápida de Arquivos"}">
         <input id="qo-input" placeholder="${isCmd ? "Digite um comando (Ctrl+K)…" : "Buscar arquivo no projeto (Ctrl+P) ou comece com > para comandos…"}" value="${escapeHtml(state.quickOpen.query)}" />
         <div class="quick-open-list" id="qo-list"></div>
       </div>
@@ -3485,11 +3357,49 @@ function renderModalLayer() {
   const layer = document.getElementById("modal-layer");
   if (!layer) return;
 
+  if (state.confirmModal) {
+    const cm = state.confirmModal;
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="confirm-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:430px">
+          <h3 class="modal-title">${escapeHtml(cm.title)}</h3>
+          <p style="font-size:12.5px;line-height:1.5;color:var(--text-dim)">${escapeHtml(cm.body)}</p>
+          <div class="modal-footer">
+            <button id="confirm-modal-cancel">Cancelar</button>
+            <button class="${cm.danger ? "danger" : "primary"}" id="confirm-modal-ok">${escapeHtml(cm.confirmLabel)}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const closeConfirm = () => {
+      state.confirmModal = null;
+      renderModalLayer();
+    };
+    document.getElementById("confirm-modal-cancel")?.addEventListener("click", closeConfirm);
+    document.getElementById("confirm-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "confirm-modal-backdrop") closeConfirm();
+    });
+    const okBtn = document.getElementById("confirm-modal-ok") as HTMLButtonElement | null;
+    okBtn?.focus();
+    okBtn?.addEventListener("click", async () => {
+      const action = cm.onConfirm;
+      closeConfirm();
+      await action();
+    });
+    return;
+  }
+
   if (state.imagePreviewUrl) {
+    const safeUrl = safeImageSrc(state.imagePreviewUrl);
+    if (!safeUrl) {
+      state.imagePreviewUrl = "";
+      layer.innerHTML = "";
+      return;
+    }
     layer.innerHTML = `
       <div class="modal-backdrop" id="img-preview-backdrop">
-        <div class="modal-box" style="width:auto;max-width:92vw;padding:12px;text-align:center">
-          <img src="${escapeHtml(state.imagePreviewUrl)}" style="max-width:86vw;max-height:80vh;border-radius:6px;display:block" alt="preview" />
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:auto;max-width:92vw;padding:12px;text-align:center">
+          <img src="${escapeHtml(safeUrl)}" style="max-width:86vw;max-height:80vh;border-radius:6px;display:block" alt="preview" />
           <div class="modal-footer" style="margin-top:10px">
             <button class="primary mini" id="img-preview-close">Fechar</button>
           </div>

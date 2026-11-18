@@ -77,7 +77,10 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 		return true, "metacaracteres de shell precisam de confirmação"
 	}
 	if base == "git" && gitDangerous(argv) {
-		return true, "este subcomando do git reescreve histórico ou envia com --force e precisa de confirmação"
+		return true, "este subcomando do git reescreve histórico, executa hooks customizados ou envia com --force e precisa de confirmação"
+	}
+	if ok, why := interpreterInlineDangerous(base, argv[1:]); ok {
+		return true, why
 	}
 	for _, a := range argv[1:] {
 		low := strings.ToLower(a)
@@ -86,8 +89,31 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 			if base == "git" && (low == "-f" || low == "--force") {
 				continue
 			}
-			if low == "--force" || low == "--hard" || low == "invoke-expression" || low == "iex" || low == "-enc" || low == "-encodedcommand" {
-				return true, "argumento destrutivo: " + a
+			return true, "argumento destrutivo: " + a
+		}
+	}
+	return false, ""
+}
+
+func interpreterInlineDangerous(base string, args []string) (bool, string) {
+	for _, raw := range args {
+		low := strings.ToLower(strings.TrimSpace(raw))
+		switch base {
+		case "python", "python3":
+			if low == "-c" || strings.HasPrefix(low, "-c") {
+				return true, "execução inline de código Python (-c) precisa de confirmação"
+			}
+		case "node", "bun":
+			if low == "-e" || low == "--eval" || low == "-p" || low == "--print" || strings.HasPrefix(low, "--eval=") {
+				return true, fmt.Sprintf("execução inline via %s (%s) precisa de confirmação", base, raw)
+			}
+		case "npx":
+			if low == "-y" || low == "--yes" || low == "-c" || low == "--call" {
+				return true, "execução de pacote remoto npx sem prompt precisa de confirmação"
+			}
+		case "find":
+			if low == "-exec" || low == "-execdir" || low == "-delete" {
+				return true, "find com -exec/-delete precisa de confirmação"
 			}
 		}
 	}
@@ -95,6 +121,19 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 }
 
 func gitDangerous(argv []string) bool {
+	for _, raw := range argv[1:] {
+		trimmed := strings.TrimSpace(raw)
+		low := strings.ToLower(trimmed)
+		if strings.HasPrefix(low, "--config-env") || strings.HasPrefix(low, "--git-dir") || strings.HasPrefix(low, "--work-tree") {
+			return true
+		}
+		if !strings.HasPrefix(trimmed, "-") {
+			break
+		}
+		if low == "-c" || strings.HasPrefix(low, "-c") {
+			return true
+		}
+	}
 	joined := strings.ToLower(strings.Join(argv, " "))
 	if strings.Contains(joined, "--force") || strings.Contains(joined, " -f") || strings.HasSuffix(joined, " -f") {
 		return true
@@ -115,9 +154,13 @@ func gitDangerous(argv []string) bool {
 }
 
 func split(command string) ([]string, bool, error) {
+	if strings.Contains(command, "$(") || strings.Contains(command, "${") {
+		argv, err := fields(command)
+		return argv, true, err
+	}
 	for _, r := range command {
 		switch r {
-		case '|', '>', '<', '&', ';', '`':
+		case '|', '>', '<', '&', ';', '`', '\n', '\r':
 			argv, err := fields(command)
 			return argv, true, err
 		}
@@ -127,39 +170,55 @@ func split(command string) ([]string, bool, error) {
 }
 
 func fields(s string) ([]string, error) {
+	rs := []rune(s)
 	var out []string
 	var b strings.Builder
 	var quote rune
-	escaped := false
+	hasToken := false
+
 	flush := func() {
-		if b.Len() > 0 || quote != 0 {
+		if hasToken {
 			out = append(out, b.String())
 			b.Reset()
+			hasToken = false
 		}
 	}
-	for _, r := range s {
-		switch {
-		case escaped:
-			b.WriteRune(r)
-			escaped = false
-		case r == '\\' && quote != '\'':
-			escaped = true
-		case quote != 0:
+
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		if quote != 0 {
+			if quote == '"' && r == '\\' && i+1 < len(rs) && (rs[i+1] == '"' || rs[i+1] == '\\') {
+				i++
+				b.WriteRune(rs[i])
+				continue
+			}
 			if r == quote {
 				quote = 0
-				flush()
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		switch {
+		case r == '\\':
+			hasToken = true
+			if i+1 < len(rs) && (rs[i+1] == '"' || rs[i+1] == '\'' || unicode.IsSpace(rs[i+1])) {
+				i++
+				b.WriteRune(rs[i])
 			} else {
 				b.WriteRune(r)
 			}
 		case r == '\'' || r == '"':
 			quote = r
+			hasToken = true
 		case unicode.IsSpace(r):
 			flush()
 		default:
+			hasToken = true
 			b.WriteRune(r)
 		}
 	}
-	if escaped || quote != 0 {
+	if quote != 0 {
 		return nil, fmt.Errorf("aspas ou escape sem fechar")
 	}
 	flush()

@@ -5,6 +5,8 @@ package names
 
 import (
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // ADK converts a free-form agent name into an identifier accepted by ADK.
@@ -158,8 +160,5 @@ func oneLine(s string, max int) string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = strings.TrimSpace(s[:i])
 	}
-	if len(s) > max {
-		s = strings.TrimSpace(s[:max])
-	}
-	return s
+	return strings.TrimSpace(strx.TruncateRunes(s, max, ""))
 }

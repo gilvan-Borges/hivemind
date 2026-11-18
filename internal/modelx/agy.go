@@ -19,6 +19,9 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/model"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 const (
@@ -220,7 +223,6 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	prompt := BuildAgyPromptWithImages(req, decls, images)
 
 	args := []string{
-		"--dangerously-skip-permissions",
 		"--output-format", "json",
 		"--input-format", "text",
 		"--print-timeout", formatAgyTimeout(timeout),
@@ -808,7 +810,7 @@ func agyCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
 	} else {
 		cmd = exec.CommandContext(ctx, bin, args...)
 	}
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	return cmd
 }
 
@@ -845,10 +847,7 @@ func looksLikeAuth(s string) bool {
 }
 
 func truncateText(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return strx.TruncateBytes(s, n, "…")
 }
 
 // AgyModel represents one model entry returned by `agy models`.

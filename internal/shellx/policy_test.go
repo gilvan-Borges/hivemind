@@ -3,7 +3,7 @@ package shellx
 import "testing"
 
 func TestEvaluateAllowAndDeny(t *testing.T) {
-	allow := []string{"git", "go", "echo"}
+	allow := []string{"git", "go", "echo", "python", "node", "find"}
 	ok := Evaluate("go test ./...", allow)
 	if !ok.Allowed || ok.Dangerous || ok.UseShell {
 		t.Fatalf("go test: %+v", ok)
@@ -11,6 +11,23 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	if got := ok.Argv; len(got) != 3 || got[0] != "go" || got[2] != "./..." {
 		t.Fatalf("argv = %#v", got)
 	}
+
+	// Windows paths with backslashes must not lose characters.
+	winPath := Evaluate(`go test .\internal\cli\...`, allow)
+	if !winPath.Allowed || winPath.Dangerous || len(winPath.Argv) != 3 || winPath.Argv[2] != `.\internal\cli\...` {
+		t.Fatalf("windows path argv = %+v", winPath)
+	}
+
+	// Empty quoted arguments and flag="value" must remain intact.
+	emptyArg := Evaluate(`git commit -m ""`, allow)
+	if len(emptyArg.Argv) != 4 || emptyArg.Argv[3] != "" {
+		t.Fatalf("empty quoted arg lost: %#v", emptyArg.Argv)
+	}
+	concatFlag := Evaluate(`go build -ldflags="-s -w"`, allow)
+	if len(concatFlag.Argv) != 3 || concatFlag.Argv[2] != "-ldflags=-s -w" {
+		t.Fatalf("concatenated quoted flag split: %#v", concatFlag.Argv)
+	}
+
 	denied := Evaluate("rm -rf .", allow)
 	if denied.Allowed {
 		t.Fatal("rm should be denied")
@@ -18,6 +35,34 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	force := Evaluate("git push --force origin main", allow)
 	if !force.Allowed || !force.Dangerous {
 		t.Fatalf("force push: %+v", force)
+	}
+	gitCfg := Evaluate("git -c core.sshCommand=evil status", allow)
+	if !gitCfg.Dangerous {
+		t.Fatalf("git -c must require confirmation: %+v", gitCfg)
+	}
+	gitDirEscape := Evaluate("git -C ../outside status", allow)
+	if !gitDirEscape.Dangerous {
+		t.Fatalf("git -C must require confirmation: %+v", gitDirEscape)
+	}
+	gitSwitchCreate := Evaluate("git switch -c feature/nova", allow)
+	if !gitSwitchCreate.Allowed || gitSwitchCreate.Dangerous {
+		t.Fatalf("git switch -c should be allowed safely: %+v", gitSwitchCreate)
+	}
+	pyInline := Evaluate(`python -c "import os"`, allow)
+	if !pyInline.Dangerous {
+		t.Fatalf("python -c must require confirmation: %+v", pyInline)
+	}
+	nodeInline := Evaluate(`node -e "process.exit(0)"`, allow)
+	if !nodeInline.Dangerous {
+		t.Fatalf("node -e must require confirmation: %+v", nodeInline)
+	}
+	findExec := Evaluate(`find . -exec rm {} +`, allow)
+	if !findExec.Dangerous {
+		t.Fatalf("find -exec must require confirmation: %+v", findExec)
+	}
+	newlineChain := Evaluate("echo oi\nrm -rf /", allow)
+	if !newlineChain.UseShell || !newlineChain.Dangerous {
+		t.Fatalf("newline command injection must require confirmation: %+v", newlineChain)
 	}
 	hard := Evaluate("git reset --hard HEAD", allow)
 	if !hard.Dangerous {

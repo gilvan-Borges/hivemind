@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // Runner executes a command line inside dir after the policy check.
@@ -40,21 +43,14 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 		cmd = exec.CommandContext(ctx, dec.Argv[0], dec.Argv[1:]...)
 	}
 	cmd.Dir = dir
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
-	out := truncate(buf.String(), 16*1024)
+	out := strx.TruncateBytes(buf.String(), 16*1024, "\n…(saída truncada)")
 	if err != nil {
 		return out, fmt.Errorf("%s: %w", strings.TrimSpace(out), err)
 	}
 	return out, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "\n…(saída truncada)"
 }

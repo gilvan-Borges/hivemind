@@ -77,6 +77,9 @@ func TestREST(t *testing.T) {
 	if err != nil || state != "success" {
 		t.Fatalf("ci = %s %v", state, err)
 	}
+	if _, err := client.CIStatus(context.Background(), "../../secret"); err == nil {
+		t.Fatal("expected path traversal ref to fail")
+	}
 }
 
 func TestGHCLI(t *testing.T) {

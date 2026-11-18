@@ -425,3 +425,201 @@ func TestTriageDirectAnswerAndDelegationWithSlicesAndClosingChief(t *testing.T) 
 		t.Fatal("expected handoff events emitted for IDE")
 	}
 }
+
+func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
+	dir := t.TempDir()
+	squad := team.DefaultTeam("ide-plan", "", "scripted", "gemini", 2)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			MaxQALoops:   1,
+			BaseBranch:   "main",
+			ConfirmShell: boolPtr(true),
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	store1, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 1: Run in "plan" mode -> Chief delegates plan + slices, execution pauses before devs.
+	devRanDuringPlan := false
+	pmPlanCalls := 0
+	planRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store1,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, _ int) *model.LLMResponse {
+				pmPlanCalls++
+				if pmPlanCalls == 1 {
+					return modelx.FunctionCall("delegate_to_squad", "p1", map[string]any{
+						"plan":      "Plano arquitetural aprovado pelo humano",
+						"dev_tasks": []any{"fatia exclusiva frontend.ts", "fatia exclusiva backend.go"},
+					})
+				}
+				return modelx.Text("Plano pronto para revisão.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				devRanDuringPlan = true
+				return modelx.Text("erro")
+			}},
+		},
+	}
+	planRes, err := planRunner.Run(context.Background(), Request{
+		Objective: "criar módulo de autenticação",
+		RunMode:   "plan",
+	})
+	if err != nil {
+		t.Fatalf("plan mode failed: %v", err)
+	}
+	if devRanDuringPlan {
+		t.Fatal("devs must not run during plan mode")
+	}
+
+	// Step 2: Re-open session store (simulating a new Wails RPC turn) and execute approved plan in "squad" mode.
+	store2, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dev1SawPlan, dev1SawSlice, dev2SawSlice, architectReRan bool
+	squadRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store2,
+		EnableTriage:       false,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Resumo executivo final.")
+			}},
+			"architect": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				architectReRan = true
+				return modelx.Text("não deveria reexecutar arquiteto")
+			}},
+			"tech_lead": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Guardrails ok.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "Plano arquitetural aprovado pelo humano") {
+							dev1SawPlan = true
+						}
+						if strings.Contains(p.Text, "fatia exclusiva frontend.ts") {
+							dev1SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("frontend pronto")
+			}},
+			"dev_2": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "fatia exclusiva backend.go") {
+							dev2SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("backend pronto")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "aprovado"})
+				}
+				return modelx.Text("ok")
+			}},
+		},
+	}
+
+	_, err = squadRunner.Run(context.Background(), Request{
+		Objective: "Plano aprovado. Prossigam.",
+		SessionID: planRes.SessionID,
+		RunMode:   "squad",
+	})
+	if err != nil {
+		t.Fatalf("approved squad run failed: %v", err)
+	}
+	if architectReRan {
+		t.Fatal("expected approved chief_plan to skip redundant PM/Architect planning")
+	}
+	if !dev1SawPlan || !dev1SawSlice || !dev2SawSlice {
+		t.Fatalf("expected approved plan and slices preserved: plan=%v slice1=%v slice2=%v", dev1SawPlan, dev1SawSlice, dev2SawSlice)
+	}
+}
+
+func TestWorktreesSettingDisabledWritesDirectlyToWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não está instalado")
+	}
+	repo := t.TempDir()
+	g := gitx.Local{}
+	ctx := context.Background()
+	mustGit(t, g, ctx, repo, "init")
+	mustGit(t, g, ctx, repo, "config", "user.email", "hivemind@example.com")
+	mustGit(t, g, ctx, repo, "config", "user.name", "HiveMind Test")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	_ = os.WriteFile(filepath.Join(repo, "README.md"), []byte("init\n"), 0o644)
+	mustGit(t, g, ctx, repo, "add", "README.md")
+	mustGit(t, g, ctx, repo, "commit", "-m", "init")
+
+	squad := team.DefaultTeam("direto", "", "scripted", "gemini", 1)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			Worktrees:    boolPtr(false),
+			MaxQALoops:   1,
+			BaseBranch:   "main",
+			ConfirmShell: boolPtr(true),
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	text := func(*model.LLMRequest, int) *model.LLMResponse { return modelx.Text("ok") }
+	r := &Runner{
+		Workspace: repo,
+		Project:   project,
+		Team:      squad,
+		Git:       g,
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm":        &modelx.Scripted{Fn: text},
+			"tech_lead": &modelx.Scripted{Fn: text},
+			"architect": &modelx.Scripted{Fn: text},
+			"dev_1": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "direto.txt", "content": "no-wt\n"})
+				}
+				return modelx.Text("feito")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+				}
+				return modelx.Text("ok")
+			}},
+		},
+	}
+	if _, err := r.Run(ctx, Request{Objective: "criar direto.txt"}); err != nil {
+		t.Fatalf("run without worktrees failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "direto.txt")); err != nil {
+		t.Fatalf("expected direto.txt written directly in workspace when worktrees=false: %v", err)
+	}
+}

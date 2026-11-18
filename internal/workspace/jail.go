@@ -8,10 +8,25 @@ import (
 	"strings"
 )
 
-// Resolve returns the absolute path of rel inside root.
+// Options customizes workspace confinement rules.
+type Options struct {
+	// AllowHivemind permits access to .hivemind/* (used by the desktop IDE for
+	// editing MEMORY.md and team.yaml, while still blocking .git and symlinks).
+	AllowHivemind bool
+	// AllowMemoryRead permits read-only access to .hivemind/MEMORY.md while
+	// keeping .hivemind/team.yaml, sessions, and worktrees off-limits to agents.
+	AllowMemoryRead bool
+}
+
+// Resolve returns the absolute path of rel inside root, blocking .git and .hivemind.
 // Absolute paths are accepted only when they already live inside root.
 // Symlinks are evaluated so a link cannot escape the workspace.
 func Resolve(root, rel string) (string, error) {
+	return ResolveWithOptions(root, rel, Options{})
+}
+
+// ResolveWithOptions resolves rel inside root using the given confinement options.
+func ResolveWithOptions(root, rel string, opts Options) (string, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -41,12 +56,33 @@ func Resolve(root, rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, part := range strings.Split(relToRoot, string(os.PathSeparator)) {
-		if part == ".git" {
+	parts := strings.Split(relToRoot, string(os.PathSeparator))
+	for i, part := range parts {
+		cleanPart := normalizeSegment(part)
+		if isGitSegment(cleanPart) {
 			return "", fmt.Errorf("acesso a .git não é permitido: %s", rel)
+		}
+		if !opts.AllowHivemind && isHivemindSegment(cleanPart) {
+			if opts.AllowMemoryRead && i == 0 && len(parts) == 2 && strings.EqualFold(normalizeSegment(parts[1]), "memory.md") {
+				continue
+			}
+			return "", fmt.Errorf("acesso a .hivemind não é permitido para agentes: %s", rel)
 		}
 	}
 	return candidate, nil
+}
+
+func normalizeSegment(part string) string {
+	// Windows NTFS ignores trailing dots and spaces on path components.
+	return strings.ToLower(strings.TrimRight(strings.TrimSpace(part), ". "))
+}
+
+func isGitSegment(cleanLower string) bool {
+	return cleanLower == ".git" || strings.HasPrefix(cleanLower, "git~")
+}
+
+func isHivemindSegment(cleanLower string) bool {
+	return cleanLower == ".hivemind" || strings.HasPrefix(cleanLower, "hivemi~")
 }
 
 // Within reports whether target is root or a path inside root.

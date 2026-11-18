@@ -26,7 +26,10 @@ type StreamEvent struct {
 // Stream runs agy with --output-format stream-json. The prompt is UTF-8 on
 // stdin and --json-schema is a temp file, same as a normal turn.
 func (a *Agy) Stream(ctx context.Context, prompt string, fn func(StreamEvent)) error {
-	if a == nil || a.Bin == "" {
+	if a == nil {
+		a = &Agy{}
+	}
+	if a.Bin == "" {
 		found, err := LookAgy()
 		if err != nil {
 			return err

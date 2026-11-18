@@ -13,7 +13,9 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // DiffLineKind classifies a line inside a unified diff.
@@ -104,21 +106,165 @@ func parseDiffGitPath(header string) string {
 	return header
 }
 
-// WorkspaceDiff returns parsed unified diffs (staged + unstaged) for workspace.
-func WorkspaceDiff(ctx context.Context, workspace string) ([]FileDiff, error) {
+// WorkspaceDiff returns parsed unified diffs (staged, unstaged, and untracked new files) for workspace.
+func WorkspaceDiff(ctx context.Context, workspaceDir string) ([]FileDiff, error) {
 	g := gitx.Local{}
-	if !g.IsRepo(ctx, workspace) {
+	if !g.IsRepo(ctx, workspaceDir) {
 		return nil, nil
 	}
-	raw, err := runGit(ctx, workspace, "diff", "HEAD")
+	raw, err := runGit(ctx, workspaceDir, "diff", "HEAD")
 	if err != nil {
 		// Repo without HEAD commit yet: fallback to plain diff
-		raw, err = runGit(ctx, workspace, "diff")
+		raw, err = runGit(ctx, workspaceDir, "diff")
 		if err != nil {
 			return nil, err
 		}
 	}
-	return ParseUnifiedDiff(raw), nil
+	diffs := ParseUnifiedDiff(raw)
+	seen := make(map[string]bool, len(diffs))
+	for _, d := range diffs {
+		seen[d.Path] = true
+	}
+
+	if untrackedRaw, uErr := runGit(ctx, workspaceDir, "ls-files", "--others", "--exclude-standard"); uErr == nil {
+		for _, line := range strings.Split(strings.ReplaceAll(untrackedRaw, "\r\n", "\n"), "\n") {
+			rel := strings.TrimSpace(line)
+			if rel == "" || seen[rel] || rel == ".hivemind" || strings.HasPrefix(rel, ".hivemind/") {
+				continue
+			}
+			full, resErr := workspace.Resolve(workspaceDir, filepath.FromSlash(rel))
+			if resErr != nil {
+				continue
+			}
+			info, statErr := os.Stat(full)
+			if statErr != nil || info.IsDir() || info.Size() > 512*1024 {
+				continue
+			}
+			data, rdErr := os.ReadFile(full)
+			if rdErr != nil {
+				continue
+			}
+			diffs = append(diffs, buildUntrackedFileDiff(rel, data))
+			seen[rel] = true
+		}
+	}
+	return diffs, nil
+}
+
+func buildUntrackedFileDiff(relSlash string, data []byte) FileDiff {
+	fd := FileDiff{
+		Path: relSlash,
+		Lines: []DiffLine{
+			{Kind: DiffHeader, Text: fmt.Sprintf("diff --git a/%s b/%s", relSlash, relSlash)},
+			{Kind: DiffHeader, Text: "new file mode 100644"},
+			{Kind: DiffHeader, Text: "--- /dev/null"},
+			{Kind: DiffHeader, Text: "+++ b/" + relSlash},
+		},
+	}
+	probe := data
+	if len(probe) > 512 {
+		probe = probe[:512]
+	}
+	for _, b := range probe {
+		if b == 0 {
+			fd.Lines = append(fd.Lines, DiffLine{Kind: DiffContext, Text: "(arquivo binário novo)"})
+			return fd
+		}
+	}
+	norm := strings.ReplaceAll(string(data), "\r\n", "\n")
+	norm = strings.TrimSuffix(norm, "\n")
+	if norm == "" {
+		return fd
+	}
+	split := strings.Split(norm, "\n")
+	fd.Added = len(split)
+	fd.Lines = append(fd.Lines, DiffLine{
+		Kind: DiffHunk,
+		Text: fmt.Sprintf("@@ -0,0 +1,%d @@", len(split)),
+	})
+	for _, ln := range split {
+		fd.Lines = append(fd.Lines, DiffLine{Kind: DiffAdded, Text: "+" + ln})
+	}
+	return fd
+}
+
+// SyncIntegrationToWorkspace copies added/modified/renamed/deleted files from the
+// hivemind/integracao worktree into the user's open workspace working tree without
+// switching branches or creating automatic commits on the user's branch.
+func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, error) {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) || !g.HasCommit(ctx, workspaceDir) {
+		return 0, nil
+	}
+	if !g.BranchExists(ctx, workspaceDir, gitx.IntegrationBranch) {
+		return 0, nil
+	}
+	intWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
+	if info, err := os.Stat(intWT); err != nil || !info.IsDir() {
+		return 0, nil
+	}
+	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+gitx.IntegrationBranch)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return 0, err
+	}
+
+	copyFromWT := func(relSlash string) error {
+		relOS := filepath.FromSlash(relSlash)
+		src, err := workspace.Resolve(intWT, relOS)
+		if err != nil {
+			return err
+		}
+		dst, err := workspace.Resolve(workspaceDir, relOS)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(src)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, info.Mode().Perm())
+	}
+
+	removeInWorkspace := func(relSlash string) {
+		if dst, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relSlash)); err == nil {
+			_ = os.Remove(dst)
+		}
+	}
+
+	synced := 0
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		code := parts[0]
+		switch {
+		case strings.HasPrefix(code, "R") && len(parts) >= 3:
+			removeInWorkspace(parts[1])
+			if copyFromWT(parts[2]) == nil {
+				synced++
+			}
+		case code == "D":
+			removeInWorkspace(parts[1])
+			synced++
+		default:
+			if copyFromWT(parts[1]) == nil {
+				synced++
+			}
+		}
+	}
+	return synced, nil
 }
 
 // FastCurrentBranch reads <workspace>/.git/HEAD directly without spawning git.
@@ -245,9 +391,18 @@ func CommentJiraIssue(ctx context.Context, workspace, issueKey, comment string) 
 	return client.Comment(ctx, key, comment)
 }
 
-// DiscardWorkspaceChanges restores tracked files in workspace to HEAD.
-func DiscardWorkspaceChanges(ctx context.Context, workspace string) error {
-	_, err := runGit(ctx, workspace, "checkout", "--", ".")
+// DiscardWorkspaceChanges restores tracked files to HEAD and cleans untracked files (preserving .hivemind/).
+func DiscardWorkspaceChanges(ctx context.Context, workspaceDir string) error {
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) {
+		return nil
+	}
+	if g.HasCommit(ctx, workspaceDir) {
+		if _, err := runGit(ctx, workspaceDir, "checkout", "--", "."); err != nil {
+			return err
+		}
+	}
+	_, err := runGit(ctx, workspaceDir, "clean", "-fd", "-e", ".hivemind", "-e", ".hivemind/")
 	return err
 }
 
@@ -269,7 +424,7 @@ func CheckGitHubStatus(ctx context.Context, workspace string) GitHubStatusInfo {
 	}
 	info.Installed = true
 	cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -354,8 +509,8 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 		jc := jirax.FromEnv()
 		if jc.Enabled() {
 			jql := "resolution = Unresolved ORDER BY updated DESC"
-			if strings.TrimSpace(cfg.Settings.JiraProject) != "" {
-				jql = fmt.Sprintf("project = %s AND resolution = Unresolved ORDER BY updated DESC", strings.TrimSpace(cfg.Settings.JiraProject))
+			if projKey := sanitizeJiraProjectKey(cfg.Settings.JiraProject); projKey != "" {
+				jql = fmt.Sprintf(`project = "%s" AND resolution = Unresolved ORDER BY updated DESC`, projKey)
 			}
 			if list, err := jc.Search(ctx, jql, 15); err == nil {
 				for _, it := range list {
@@ -378,7 +533,7 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 			if owner, repo, ok := githubx.ParseRemote(url); ok {
 				if ghBin, err := exec.LookPath("gh"); err == nil {
 					cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "15", "--json", "number,title,body,state")
-					hideWindow(cmd)
+					procx.ConfigureContext(cmd)
 					var out bytes.Buffer
 					cmd.Stdout = &out
 					if err := cmd.Run(); err == nil {
@@ -408,9 +563,22 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 	return issues, nil
 }
 
+func sanitizeJiraProjectKey(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	for _, r := range s {
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return ""
+		}
+	}
+	return s
+}
+
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	hideWindow(cmd)
+	procx.ConfigureContext(cmd)
 	cmd.Dir = dir
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out

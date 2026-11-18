@@ -95,13 +95,14 @@ type Request struct {
 
 // Result is what the CLI prints after the team finishes.
 type Result struct {
-	SessionID    string
-	Summary      string
-	Branches     []string
-	PullRequests []githubx.PullRequest
-	InputTokens  int64 `json:"inputTokens"`
-	OutputTokens int64 `json:"outputTokens"`
-	TotalTokens  int64 `json:"totalTokens"`
+	SessionID         string
+	Summary           string
+	Branches          []string
+	IntegrationBranch string `json:"integrationBranch,omitempty"`
+	PullRequests      []githubx.PullRequest
+	InputTokens       int64 `json:"inputTokens"`
+	OutputTokens      int64 `json:"outputTokens"`
+	TotalTokens       int64 `json:"totalTokens"`
 }
 
 type devEnv struct {
@@ -112,7 +113,10 @@ type devEnv struct {
 }
 
 // Run builds the ADK pipeline and streams events until it finishes.
-func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
+func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
 	var result Result
 	if err := r.Team.ValidateForRun(); err != nil {
 		return result, err
@@ -171,6 +175,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		return result, fmt.Errorf("informe um objetivo ou uma chave Jira")
 	}
 
+	r.integration = ""
 	r.issueKey = key
 	r.objectiveText = objective
 	r.devSlices = nil
@@ -179,7 +184,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
 
-	sess, err := r.openSession(ctx, req.SessionID, objective, key)
+	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
+	sess, err := r.openSession(ctx, req.SessionID, objective, key, runMode == "squad")
 	if err != nil {
 		return result, err
 	}
@@ -190,18 +196,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		mode = agent.StreamingModeSSE
 	}
 	msg := buildUserContent(objective, req.Attachments)
-	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
-
-	if runMode == "squad" {
-		if prevPlan, err := sess.State().Get("chief_plan"); err == nil && prevPlan != nil {
-			r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
-		}
-		if prevSlices, err := sess.State().Get("dev_slices_joined"); err == nil && prevSlices != nil {
-			if raw := strings.TrimSpace(fmt.Sprint(prevSlices)); raw != "" {
-				r.devSlices = strings.Split(raw, "\n|||\n")
-			}
-		}
-	}
 
 	useTriage := (runMode == "" && r.EnableTriage) || runMode == "auto" || runMode == "direct" || runMode == "plan"
 	if useTriage {
@@ -220,8 +214,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			planBody := strings.TrimSpace(r.chiefPlan)
 			if planBody == "" {
 				planBody = summary
-				_ = sess.State().Set("chief_plan", planBody)
 			}
+			_ = sessionx.UpdateState(sess, map[string]any{
+				"chief_plan":            planBody,
+				"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
+				"plan_pending_approval": "1",
+			})
 			if r.OnEvent != nil {
 				r.OnEvent(Event{
 					Kind:         "finish",
@@ -349,9 +347,13 @@ func (r *Runner) detectGitHub(ctx context.Context) githubx.Client {
 func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devEnv, error) {
 	agents := r.Team.ByRole(team.RoleDeveloper)
 	envs := make([]devEnv, 0, len(agents))
-	repo := r.Git.IsRepo(ctx, r.Workspace) && r.Git.HasCommit(ctx, r.Workspace)
-	if !repo {
+	allowWorktrees := r.Project.Settings.Worktrees == nil || *r.Project.Settings.Worktrees
+	hasGitRepo := r.Git.IsRepo(ctx, r.Workspace) && r.Git.HasCommit(ctx, r.Workspace)
+	repo := allowWorktrees && hasGitRepo
+	if !hasGitRepo {
 		fmt.Fprintln(r.Err, "aviso: o workspace não tem um commit Git; os desenvolvedores compartilham a pasta e não usam worktrees")
+	} else if !allowWorktrees {
+		fmt.Fprintln(r.Err, "aviso: worktrees desativadas em settings.worktrees; os desenvolvedores compartilham a pasta do workspace")
 	}
 	for _, a := range agents {
 		adkName := names.ADK(a.Name)
@@ -390,7 +392,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "qa_feedback", "qa_report", "qa_approval_note"}
+	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	var steps []agent.Agent
 	addGroup := func(output string, agents []team.Agent, root, extra string) error {
@@ -412,17 +414,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return nil
 	}
-	if !r.EnableTriage && r.chiefPlan == "" {
-		if err := addGroup("pm_plan", r.Team.ByRole(team.RoleProjectManager), r.Workspace, ""); err != nil {
-			return nil, nil, err
-		}
-		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, ""); err != nil {
-			return nil, nil, err
-		}
-		if err := addGroup("architect_plan", r.Team.ByRole(team.RoleArchitect), r.Workspace, ""); err != nil {
-			return nil, nil, err
-		}
-	} else if r.chiefPlan != "" {
+	if r.chiefPlan != "" {
 		// Chief already planned and sliced tasks (via auto triage or plan checkpoint); Tech Lead refines technical guardrails if needed.
 		if err := addGroup("tech_lead_plan", r.Team.ByRole(team.RoleTechLead), r.Workspace, "Refine brevemente os pontos críticos de implementação sem repetir o plano do Chefe."); err != nil {
 			return nil, nil, err
@@ -628,10 +620,13 @@ func (r *Runner) newIntegrateAgent(devs []devEnv) (agent.Agent, error) {
 				}
 				merged, _, err := r.Git.Integrate(ctx, r.Workspace, branches)
 				text := "Nada novo para integrar."
+				delta := map[string]any{"integrate_status": ""}
 				if err != nil {
 					text = "Falha ao integrar: " + err.Error()
+					delta["integrate_status"] = text
 				} else if len(merged) > 0 {
 					text = "Integrado: " + strings.Join(merged, ", ")
+					delta["integrate_status"] = text
 				}
 				yield(&session.Event{
 					Author: "integrate_branches",
@@ -639,6 +634,7 @@ func (r *Runner) newIntegrateAgent(devs []devEnv) (agent.Agent, error) {
 						Role:  "model",
 						Parts: []*genai.Part{{Text: text}},
 					}},
+					Actions: session.EventActions{StateDelta: delta},
 				}, nil)
 			}
 		},
@@ -657,31 +653,54 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	return modelx.New(ctx, a.Provider, a.Model)
 }
 
-func (r *Runner) openSession(ctx context.Context, id, objective, key string) (session.Session, error) {
+func (r *Runner) openSession(ctx context.Context, id, objective, key string, consumePendingPlan bool) (session.Session, error) {
 	if id != "" {
 		got, err := r.Sessions.Get(ctx, &session.GetRequest{AppName: sessionx.AppName, UserID: sessionx.UserID, SessionID: id})
 		if err != nil {
 			return nil, fmt.Errorf("retomar sessão %s: %w", id, err)
 		}
+		pendingFlag, _ := got.Session.State().Get("plan_pending_approval")
+		isPendingPlan := strings.TrimSpace(fmt.Sprint(pendingFlag)) == "1"
+		if consumePendingPlan && isPendingPlan {
+			if prevPlan, err := got.Session.State().Get("chief_plan"); err == nil && prevPlan != nil {
+				r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
+			}
+			if prevSlices, err := got.Session.State().Get("dev_slices_joined"); err == nil && prevSlices != nil {
+				if raw := strings.TrimSpace(fmt.Sprint(prevSlices)); raw != "" {
+					r.devSlices = strings.Split(raw, "\n|||\n")
+				}
+			}
+		}
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
-		_ = got.Session.State().Set("qa_feedback", "")
-		_ = got.Session.State().Set("qa_report", "")
-		_ = got.Session.State().Set("qa_approval_note", "")
-		_ = got.Session.State().Set("chief_plan", "")
+		resetMap := map[string]any{
+			"qa_feedback":           "",
+			"qa_report":             "",
+			"qa_approval_note":      "",
+			"integrate_status":      "",
+			"plan_pending_approval": "",
+			"dev_slices_joined":     "",
+		}
+		if !(consumePendingPlan && isPendingPlan && r.chiefPlan != "") {
+			resetMap["chief_plan"] = ""
+		}
+		_ = sessionx.UpdateState(got.Session, resetMap)
 		return got.Session, nil
 	}
 	created, err := r.Sessions.Create(ctx, &session.CreateRequest{
 		AppName: sessionx.AppName,
 		UserID:  sessionx.UserID,
 		State: map[string]any{
-			"objective":        objective,
-			"jira_key":         key,
-			"qa_feedback":      "",
-			"qa_report":        "",
-			"qa_approval_note": "",
-			"chief_plan":       "",
+			"objective":             objective,
+			"jira_key":              key,
+			"qa_feedback":           "",
+			"qa_report":             "",
+			"qa_approval_note":      "",
+			"integrate_status":      "",
+			"chief_plan":            "",
+			"dev_slices_joined":     "",
+			"plan_pending_approval": "",
 		},
 	})
 	if err != nil {
@@ -691,6 +710,9 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string) (se
 }
 
 func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key, objective string) error {
+	if r.integration != "" {
+		result.IntegrationBranch = gitx.IntegrationBranch
+	}
 	base := r.Project.Settings.BaseBranch
 	if base == "" {
 		base = "main"

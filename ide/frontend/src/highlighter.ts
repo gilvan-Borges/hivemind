@@ -27,13 +27,52 @@ export function highlightCode(code: string, filename: string): string {
   }
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
 
-  if (ext === "json" || ext === "yaml" || ext === "yml") {
-    return escaped
-      .replace(/(&quot;|")([^"\n]*)(\1)\s*:/g, '<span class="tok-kw">$1$2$3</span>:')
-      .replace(/^([a-zA-Z0-9_.-]+):/gm, '<span class="tok-kw">$1</span>:')
-      .replace(/(".*?")/g, '<span class="tok-str">$1</span>')
-      .replace(/\b(\d+(?:\.\d+)?|true|false|null)\b/g, '<span class="tok-num">$1</span>')
-      .replace(/(#.*)$/gm, '<span class="tok-com">$1</span>');
+  if (ext === "json") {
+    return escaped.replace(
+      /("(?:\\.|[^"\\\n])*")(?=\s*:)|("(?:\\.|[^"\\\n])*")|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/gm,
+      (match, jsonKey, jsonStr, jsonKw, jsonNum) => {
+        if (jsonKey !== undefined) {
+          return `<span class="tok-kw">${jsonKey}</span>`;
+        }
+        if (jsonStr !== undefined) {
+          return `<span class="tok-str">${jsonStr}</span>`;
+        }
+        if (jsonKw !== undefined) {
+          return `<span class="tok-kw">${jsonKw}</span>`;
+        }
+        if (jsonNum !== undefined) {
+          return `<span class="tok-num">${jsonNum}</span>`;
+        }
+        return match;
+      }
+    );
+  }
+
+  if (ext === "yaml" || ext === "yml") {
+    return escaped.replace(
+      /(#.*$)|("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')(?=\s*:)|(^[ \t-]*)([a-zA-Z0-9_.-]+)(?=\s*:)|("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|\b(true|false|null)\b|\b(-?\d+(?:\.\d+)?)\b/gm,
+      (match, comment, quotedKey, yamlIndent, yamlKey, strVal, boolKw, numVal) => {
+        if (comment !== undefined) {
+          return `<span class="tok-com">${comment}</span>`;
+        }
+        if (quotedKey !== undefined) {
+          return `<span class="tok-kw">${quotedKey}</span>`;
+        }
+        if (yamlKey !== undefined) {
+          return `${yamlIndent ?? ""}<span class="tok-kw">${yamlKey}</span>`;
+        }
+        if (strVal !== undefined) {
+          return `<span class="tok-str">${strVal}</span>`;
+        }
+        if (boolKw !== undefined) {
+          return `<span class="tok-kw">${boolKw}</span>`;
+        }
+        if (numVal !== undefined) {
+          return `<span class="tok-num">${numVal}</span>`;
+        }
+        return match;
+      }
+    );
   }
 
   return escaped.replace(
