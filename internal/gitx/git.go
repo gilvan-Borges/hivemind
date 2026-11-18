@@ -33,6 +33,7 @@ type Local struct{}
 
 func (Local) Run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	hideWindow(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}

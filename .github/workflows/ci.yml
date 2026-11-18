@@ -1,7 +1,10 @@
-name: HiveMind CLI
+name: HiveMind CI
 
 on:
   push:
+    branches:
+      - hivemind-cli-go
+  pull_request:
     branches:
       - hivemind-cli-go
   workflow_dispatch:
@@ -10,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Testes
+  test-cli-ubuntu:
+    name: Testes CLI (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -20,11 +23,52 @@ jobs:
         with:
           go-version: "1.26.10"
           cache: true
-      - name: Testes com LLM, git, gh e Jira simulados
+      - name: Testes unitários do CLI
         run: go test ./...
 
-  build:
-    name: Binário ${{ matrix.goos }}/${{ matrix.goarch }}
+  test-ide:
+    name: Testes IDE (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Instalar dependências do frontend (Linux WebKit)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev || sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Build do frontend da IDE
+        working-directory: ide/frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Testes unitários do core da IDE
+        working-directory: ide
+        run: go test -v ./internal/idecore/...
+      - name: Build do executável da IDE (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ide
+        run: |
+          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o build\hivemind-ide.exe .
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: hivemind-ide-windows-amd64
+          path: ide/build/hivemind-ide.exe
+
+  build-cli:
+    name: Binário CLI ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -37,12 +81,6 @@ jobs:
           - goos: windows
             goarch: amd64
             bin: hivemind.exe
-          - goos: darwin
-            goarch: amd64
-            bin: hivemind
-          - goos: darwin
-            goarch: arm64
-            bin: hivemind
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

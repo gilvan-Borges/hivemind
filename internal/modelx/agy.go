@@ -208,6 +208,7 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	defer cancel()
 
 	args := []string{
+		"--dangerously-skip-permissions",
 		"--output-format", "json",
 		"--input-format", "text",
 		"--print-timeout", formatAgyTimeout(timeout),
@@ -235,6 +236,13 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		dir = fresh
 	}
 	stdout, stderr, code, err := invokeAgy(runCtx, a.Bin, dir, args, prompt)
+	if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
+		select {
+		case <-runCtx.Done():
+		case <-time.After(2 * time.Second):
+			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+		}
+	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("agy excedeu o tempo (%s). Confira o login com `agy` ou aumente o contexto", formatAgyTimeout(timeout))
 	}
@@ -711,13 +719,17 @@ func errString(err error) string {
 
 func agyCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
 	ext := strings.ToLower(filepath.Ext(bin))
+	var cmd *exec.Cmd
 	if ext == ".cmd" || ext == ".bat" {
 		wrapped := make([]string, 0, len(args)+3)
 		wrapped = append(wrapped, "/d", "/c", bin)
 		wrapped = append(wrapped, args...)
-		return exec.CommandContext(ctx, "cmd.exe", wrapped...)
+		cmd = exec.CommandContext(ctx, "cmd.exe", wrapped...)
+	} else {
+		cmd = exec.CommandContext(ctx, bin, args...)
 	}
-	return exec.CommandContext(ctx, bin, args...)
+	hideWindow(cmd)
+	return cmd
 }
 
 func formatAgyTimeout(d time.Duration) string {
@@ -757,4 +769,54 @@ func truncateText(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// AgyModel represents one model entry returned by `agy models`.
+type AgyModel struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+// ListAgyModels runs `agy models` and returns the parsed model catalog.
+func ListAgyModels(ctx context.Context) ([]AgyModel, error) {
+	bin, err := LookAgy()
+	if err != nil {
+		return nil, err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cmd := agyCommand(probeCtx, bin, []string{"models"})
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("agy models falhou: %s", detail)
+	}
+	return ParseAgyModelsOutput(stdout.String()), nil
+}
+
+// ParseAgyModelsOutput parses tab-separated `slug\tName` lines from `agy models`.
+func ParseAgyModelsOutput(raw string) []AgyModel {
+	var models []AgyModel
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "fetching") {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		slug := strings.TrimSpace(parts[0])
+		if slug == "" || strings.Contains(slug, " ") {
+			continue
+		}
+		name := slug
+		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+			name = strings.TrimSpace(parts[1])
+		}
+		models = append(models, AgyModel{Slug: slug, Name: name})
+	}
+	return models
 }

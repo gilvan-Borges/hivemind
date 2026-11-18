@@ -16,40 +16,40 @@ const (
 
 // File is the on-disk project configuration. Several teams can share one workspace.
 type File struct {
-	Version  int      `yaml:"version"`
-	Active   string   `yaml:"active"`
-	Settings Settings `yaml:"settings"`
-	Teams    []Team   `yaml:"teams"`
+	Version  int      `yaml:"version" json:"version"`
+	Active   string   `yaml:"active" json:"active"`
+	Settings Settings `yaml:"settings" json:"settings"`
+	Teams    []Team   `yaml:"teams" json:"teams"`
 }
 
 // Settings apply to every team in the project.
 type Settings struct {
-	JiraEnabled    bool     `yaml:"jira_enabled"`
-	JiraProject    string   `yaml:"jira_project,omitempty"`
-	Worktrees      *bool    `yaml:"worktrees,omitempty"`
-	AutoCommit     bool     `yaml:"auto_commit"`
-	AutoPR         bool     `yaml:"auto_pr"`
-	MaxQALoops     int      `yaml:"max_qa_loops"`
-	MaxLLMCalls    int      `yaml:"max_llm_calls"`
-	BaseBranch     string   `yaml:"base_branch"`
-	ShellAllowlist []string `yaml:"shell_allowlist,omitempty"`
-	ConfirmShell   *bool    `yaml:"confirm_shell,omitempty"`
+	JiraEnabled    bool     `yaml:"jira_enabled" json:"jira_enabled"`
+	JiraProject    string   `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
+	Worktrees      *bool    `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
+	AutoCommit     bool     `yaml:"auto_commit" json:"auto_commit"`
+	AutoPR         bool     `yaml:"auto_pr" json:"auto_pr"`
+	MaxQALoops     int      `yaml:"max_qa_loops" json:"max_qa_loops"`
+	MaxLLMCalls    int      `yaml:"max_llm_calls" json:"max_llm_calls"`
+	BaseBranch     string   `yaml:"base_branch" json:"base_branch"`
+	ShellAllowlist []string `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
+	ConfirmShell   *bool    `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
 }
 
 // Team is one named group of agents.
 type Team struct {
-	Name        string  `yaml:"name"`
-	Description string  `yaml:"description,omitempty"`
-	Agents      []Agent `yaml:"agents"`
+	Name        string  `yaml:"name" json:"name"`
+	Description string  `yaml:"description,omitempty" json:"description,omitempty"`
+	Agents      []Agent `yaml:"agents" json:"agents"`
 }
 
 // Agent is one specialist. Each agent picks its own model.
 type Agent struct {
-	Name         string `yaml:"name"`
-	Role         string `yaml:"role"`
-	Provider     string `yaml:"provider"`
-	Model        string `yaml:"model"`
-	Instructions string `yaml:"instructions,omitempty"`
+	Name         string `yaml:"name" json:"name"`
+	Role         string `yaml:"role" json:"role"`
+	Provider     string `yaml:"provider" json:"provider"`
+	Model        string `yaml:"model" json:"model"`
+	Instructions string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 }
 
 // Normalize fills defaults and canonical role names.

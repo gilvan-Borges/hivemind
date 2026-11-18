@@ -33,6 +33,18 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
 )
 
+// Event is a structured live update emitted by Runner when OnEvent is set.
+type Event struct {
+	Kind      string `json:"kind"` // "agent_start", "text", "tool_call", "tool_result", "finish", "error"
+	Author    string `json:"author,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Text      string `json:"text,omitempty"`
+	ToolName  string `json:"toolName,omitempty"`
+	Partial   bool   `json:"partial,omitempty"`
+	Thought   bool   `json:"thought,omitempty"`
+	Tokens    int32  `json:"tokens,omitempty"`
+}
+
 // Runner executes one team against a workspace.
 type Runner struct {
 	Workspace     string
@@ -48,6 +60,7 @@ type Runner struct {
 	Out           io.Writer
 	Err           io.Writer
 	Streaming     agent.StreamingMode
+	OnEvent       func(Event)
 	integration   string
 	issueKey      string
 	objectiveText string
@@ -171,9 +184,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
 	}) {
 		if err != nil {
+			if r.OnEvent != nil {
+				r.OnEvent(Event{Kind: "error", Text: err.Error()})
+			}
 			return result, err
 		}
 		printer.Event(ev)
+		if r.OnEvent != nil && ev != nil {
+			r.emitEvent(ev, labels)
+		}
 		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {
 			continue
 		}
@@ -185,9 +204,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if err := r.finish(ctx, &result, devs, key, objective); err != nil {
+		if r.OnEvent != nil {
+			r.OnEvent(Event{Kind: "error", Text: err.Error()})
+		}
 		return result, err
 	}
 	fmt.Fprintf(r.Out, "\nSessão %s concluída.\n", result.SessionID)
+	if r.OnEvent != nil {
+		r.OnEvent(Event{Kind: "finish", Text: fmt.Sprintf("Sessão %s concluída.", result.SessionID)})
+	}
 	return result, nil
 }
 
@@ -572,5 +597,51 @@ func roleLabel(role string) string {
 		return "QA"
 	default:
 		return role
+	}
+}
+
+func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
+	label := labels[ev.Author]
+	if label == "" {
+		label = ev.Author
+	}
+	var tokens int32
+	if ev.LLMResponse.UsageMetadata != nil {
+		tokens = ev.LLMResponse.UsageMetadata.TotalTokenCount
+	}
+	if ev.LLMResponse.Content == nil {
+		return
+	}
+	for _, part := range ev.LLMResponse.Content.Parts {
+		if part == nil {
+			continue
+		}
+		if part.FunctionCall != nil {
+			r.OnEvent(Event{
+				Kind:     "tool_call",
+				Author:   ev.Author,
+				Label:    label,
+				ToolName: part.FunctionCall.Name,
+				Tokens:   tokens,
+			})
+		} else if part.FunctionResponse != nil {
+			r.OnEvent(Event{
+				Kind:     "tool_result",
+				Author:   ev.Author,
+				Label:    label,
+				ToolName: part.FunctionResponse.Name,
+				Tokens:   tokens,
+			})
+		} else if part.Text != "" {
+			r.OnEvent(Event{
+				Kind:    "text",
+				Author:  ev.Author,
+				Label:   label,
+				Text:    part.Text,
+				Partial: ev.Partial,
+				Thought: part.Thought,
+				Tokens:  tokens,
+			})
+		}
 	}
 }

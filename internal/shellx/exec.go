@@ -40,6 +40,7 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 		cmd = exec.CommandContext(ctx, dec.Argv[0], dec.Argv[1:]...)
 	}
 	cmd.Dir = dir
+	hideWindow(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
