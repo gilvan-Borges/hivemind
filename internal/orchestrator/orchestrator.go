@@ -28,6 +28,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
@@ -90,6 +91,8 @@ type Runner struct {
 	prReviewers        []string
 	devSlices          []string
 	chiefPlan          string
+	skills             []skillx.Skill
+	selectedSkills     []skillx.Skill
 	turnInputTokens    int64
 	turnOutputTokens   int64
 	turnTotalTokens    int64
@@ -199,6 +202,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.prReviewers = nil
 	r.devSlices = nil
 	r.chiefPlan = ""
+	r.skills = skillx.Load(r.Workspace)
+	r.selectedSkills = nil
 	r.turnInputTokens = 0
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
@@ -557,6 +562,9 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		} else if len(devs) > 1 {
 			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
 		}
+		if skillGuide := skillx.GuidanceBlock(r.Workspace, r.selectedSkills, 0, 0); skillGuide != "" {
+			extra += skillGuide
+		}
 		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true)
 		if err != nil {
 			return nil, nil, err
@@ -576,6 +584,9 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 	qaAgents := r.Team.ByRole(team.RoleQA)
 	qaExtra := "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
+	if skillGuide := skillx.GuidanceBlock(r.Workspace, r.selectedSkills, 0, 0); skillGuide != "" {
+		qaExtra += skillGuide
+	}
 	var qaSubs []agent.Agent
 	for i, a := range qaAgents {
 		name := unique(a.Name)
@@ -808,6 +819,11 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 					r.prReviewers = strings.Split(raw, ",")
 				}
 			}
+			if prevSkills, err := got.Session.State().Get("selected_skills"); err == nil && prevSkills != nil {
+				if raw := strings.TrimSpace(fmt.Sprint(prevSkills)); raw != "" {
+					r.selectedSkills = skillx.Match(r.skills, strings.Split(raw, "\n"))
+				}
+			}
 		}
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
@@ -825,6 +841,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 		}
 		if !(consumePendingPlan && isPendingPlan && r.chiefPlan != "") {
 			resetMap["chief_plan"] = ""
+			resetMap["selected_skills"] = ""
 		}
 		_ = sessionx.UpdateState(got.Session, resetMap)
 		_ = sessionx.CompactOldToolOutputs(got.Session, 10)
@@ -1173,6 +1190,7 @@ type delegateArgs struct {
 	PRNumber  int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
 	PRBranch  string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
 	Reviewers []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
+	Skills    []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
 }
 
 type delegateResult struct {
@@ -1234,15 +1252,22 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			r.prNumber = args.PRNumber
 			r.prBranch = strings.TrimSpace(args.PRBranch)
 			r.prReviewers = append([]string(nil), args.Reviewers...)
+			r.selectedSkills = skillx.Match(r.skills, args.Skills)
+			if len(args.Skills) > 0 && len(r.selectedSkills) == 0 {
+				fmt.Fprintf(r.Err, "aviso: skills pedidas pelo Chefe não existem no catálogo %s: %s\n", skillx.SkillsDir, strings.Join(args.Skills, ", "))
+			}
+			skillNames := skillx.Names(r.selectedSkills)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
+			_ = tctx.State().Set("selected_skills", strings.Join(skillNames, "\n"))
 			if actions := tctx.Actions(); actions != nil {
 				if actions.StateDelta == nil {
 					actions.StateDelta = map[string]any{}
 				}
 				actions.StateDelta["chief_plan"] = r.chiefPlan
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
+				actions.StateDelta["selected_skills"] = strings.Join(skillNames, "\n")
 			}
 
 			resolved := r.resolveDynamicDevs()
@@ -1253,6 +1278,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				}
 				if r.prNumber > 0 {
 					fmt.Fprintf(&hb, "\n- **PR Alvo**: #%d (%s)", r.prNumber, r.prBranch)
+				}
+				if len(skillNames) > 0 {
+					fmt.Fprintf(&hb, "\n- **Skills selecionadas**: %s", strings.Join(skillNames, ", "))
 				}
 				for i, slice := range r.devSlices {
 					dn := fmt.Sprintf("dev_%d", i+1)
@@ -1349,6 +1377,13 @@ REGRA DE TRIAGEM:
 %s
 %s`,
 			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
+	}
+
+	if catalogBlock := skillx.CatalogBlock(r.skills); catalogBlock != "" {
+		triageInstr += "\n\n" + catalogBlock +
+			"SELEÇÃO DE SKILLS:\n" +
+			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
+			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file."
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")
