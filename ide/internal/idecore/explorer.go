@@ -209,19 +209,29 @@ func SearchFiles(root, query string, limit int) []string {
 const maxIndexedFiles = 20000
 
 // FileIndex maintains a thread-safe in-memory index of workspace file paths
-// for sub-millisecond @arquivo and Ctrl+P Quick Open searches.
+// per project root for sub-millisecond @arquivo and Ctrl+P Quick Open searches
+// across multiple simultaneously open project tabs.
 type FileIndex struct {
-	mu    sync.RWMutex
-	root  string
-	files []string
+	mu      sync.RWMutex
+	byRoot  map[string][]string
 }
 
 // NewFileIndex constructs an empty FileIndex.
 func NewFileIndex() *FileIndex {
-	return &FileIndex{}
+	return &FileIndex{
+		byRoot: make(map[string][]string),
+	}
 }
 
-// Refresh walks root once and replaces the indexed file list.
+func normalizeRootKey(absRoot string) string {
+	clean := filepath.Clean(absRoot)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
+
+// Refresh walks root once and replaces the indexed file list for that workspace.
 func (f *FileIndex) Refresh(root string) error {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -249,9 +259,12 @@ func (f *FileIndex) Refresh(root string) error {
 		}
 		return nil
 	})
+	key := normalizeRootKey(absRoot)
 	f.mu.Lock()
-	f.root = absRoot
-	f.files = collected
+	if f.byRoot == nil {
+		f.byRoot = make(map[string][]string)
+	}
+	f.byRoot[key] = collected
 	f.mu.Unlock()
 	return nil
 }
@@ -267,21 +280,18 @@ func (f *FileIndex) Search(root, query string, limit int) []string {
 		return nil
 	}
 	absRoot = filepath.Clean(absRoot)
+	key := normalizeRootKey(absRoot)
 
 	f.mu.RLock()
-	sameRoot := f.root == absRoot
-	if !sameRoot && runtime.GOOS == "windows" {
-		sameRoot = strings.EqualFold(f.root, absRoot)
-	}
-	needPopulate := !sameRoot || len(f.files) == 0
+	files, ok := f.byRoot[key]
+	needPopulate := !ok || len(files) == 0
 	f.mu.RUnlock()
 	if needPopulate {
 		_ = f.Refresh(absRoot)
+		f.mu.RLock()
+		files = f.byRoot[key]
+		f.mu.RUnlock()
 	}
-
-	f.mu.RLock()
-	files := f.files
-	f.mu.RUnlock()
 
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {

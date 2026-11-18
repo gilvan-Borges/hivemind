@@ -2,7 +2,7 @@ const svg = (d: string, size = 15, extra = "") =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 
 export const icons = {
-  brand: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="#a78bfa" stroke-width="1.9" fill="rgba(139,92,246,0.18)"/><path d="M12 7.5L16 9.8V14.2L12 16.5L8 14.2V9.8L12 7.5Z" fill="#a78bfa"/></svg>`,
+  brand: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="#60a5fa" stroke-width="1.9" fill="rgba(59,130,246,0.16)"/><path d="M12 7.5L16 9.8V14.2L12 16.5L8 14.2V9.8L12 7.5Z" fill="#60a5fa"/></svg>`,
   explorer: svg(`<path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/>`, 17),
   team: svg(`<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`, 17),
   swarm: svg(`<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><line x1="10.5" y1="7" x2="6.3" y2="15.8"/><line x1="13.5" y1="7" x2="17.7" y2="15.8"/><line x1="7.5" y1="18" x2="16.5" y2="18"/>`, 17),
@@ -59,10 +59,10 @@ export function fileBadge(name: string): string {
     js: ["JS", "#facc15"],
     jsx: ["JX", "#facc15"],
     json: ["{}", "#fbbf24"],
-    yaml: ["YM", "#a78bfa"],
-    yml: ["YM", "#a78bfa"],
+    yaml: ["YM", "#38bdf8"],
+    yml: ["YM", "#38bdf8"],
     xml: ["XM", "#fb923c"],
-    md: ["MD", "#c4b5fd"],
+    md: ["MD", "#93c5fd"],
     css: ["CS", "#38bdf8"],
     html: ["HT", "#f87171"],
     sql: ["SQ", "#34d399"],

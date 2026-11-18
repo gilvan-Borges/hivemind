@@ -281,6 +281,49 @@ export interface WizardInputPayload {
 
 export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions";
 
+export interface ProjectWorkspaceContext {
+  id: string;
+  project: ProjectInfo;
+  sidebarView: SidebarView;
+  expandedDirs: Set<string>;
+  dirCache: Map<string, FileNode[]>;
+  explorerFilter: string;
+  explorerFilterResults: string[];
+  editorTabs: EditorTab[];
+  activeEditorPath: string;
+  lanes: TeamLane[];
+  activeLaneId: string;
+  runMode: RunMode;
+  diffs: FileDiff[];
+  ghStatus: GitHubStatus | null;
+  textSearch: {
+    query: string;
+    results: TextSearchMatch[];
+    searching: boolean;
+  };
+  sessionsSummary: {
+    sessions: SessionSummary[];
+    projectInputTokens: number;
+    projectOutputTokens: number;
+    projectTotalTokens: number;
+  };
+  issues: {
+    list: ProjectIssue[];
+    loading: boolean;
+    loadedOnce: boolean;
+  };
+  draftObjective: string;
+  draftImages: ImageAttachment[];
+  jiraKeyInput: string;
+  commitMsgInput: string;
+  terminal: {
+    open: boolean;
+    running: boolean;
+    cmdInput: string;
+    entries: TerminalEntry[];
+  };
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;

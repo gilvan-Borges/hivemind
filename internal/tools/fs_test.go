@@ -17,10 +17,13 @@ func TestRoleToolSets(t *testing.T) {
 	for _, tl := range devs {
 		names[tl.Name()] = true
 	}
-	for _, want := range []string{"read_file", "list_dir", "write_file", "run_shell", "git_commit", "git_push"} {
+	for _, want := range []string{"read_file", "list_dir", "write_file", "run_shell", "git_status", "git_diff"} {
 		if !names[want] {
 			t.Fatalf("desenvolvedor sem %s em %v", want, names)
 		}
+	}
+	if names["git_commit"] || names["git_push"] {
+		t.Fatalf("desenvolvedor não deve ter git_commit/git_push (exclusivos do Chefe/Arquiteto): %v", names)
 	}
 	if names["qa_approve"] {
 		t.Fatal("desenvolvedor não aprova QA")

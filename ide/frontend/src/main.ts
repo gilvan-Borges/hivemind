@@ -17,6 +17,7 @@ import type {
   PermissionMode,
   ProjectInfo,
   ProjectIssue,
+  ProjectWorkspaceContext,
   RunMode,
   SessionSummary,
   SidebarView,
@@ -53,6 +54,8 @@ const api = () => window.go?.main?.App;
 const MISSION_TAB_KEY = "mission:swarm";
 
 const state = {
+  projectTabs: [] as ProjectWorkspaceContext[],
+  activeProjectId: "",
   project: null as ProjectInfo | null,
   recent: [] as string[],
   models: [] as AgyModel[],
@@ -129,6 +132,7 @@ const state = {
 };
 
 let laneSeq = 1;
+let projectSeq = 1;
 let chatFlushRaf = 0;
 let editorHighlightRaf = 0;
 let mentionTimer = 0;
@@ -136,8 +140,211 @@ let quickOpenTimer = 0;
 let globalSearchTimer = 0;
 let explorerFilterTimer = 0;
 
+function normalizePathKey(p: string): string {
+  return (p || "").trim().replace(/\\/g, "/").toLowerCase();
+}
+
 function hasDirtyTabs(): boolean {
   return state.editorTabs.some((t) => t.kind === "file" && t.dirty);
+}
+
+function hasAnyProjectDirtyTabs(): boolean {
+  if (hasDirtyTabs()) return true;
+  return state.projectTabs.some((ctx) =>
+    ctx.id !== state.activeProjectId && ctx.editorTabs.some((t) => t.kind === "file" && t.dirty)
+  );
+}
+
+function saveActiveToProjectContext() {
+  if (!state.project || !state.activeProjectId) return;
+  const ctx = state.projectTabs.find((p) => p.id === state.activeProjectId);
+  if (!ctx) return;
+  ctx.project = state.project;
+  ctx.sidebarView = state.sidebarView;
+  ctx.expandedDirs = state.expandedDirs;
+  ctx.dirCache = state.dirCache;
+  ctx.explorerFilter = state.explorerFilter;
+  ctx.explorerFilterResults = state.explorerFilterResults;
+  ctx.editorTabs = state.editorTabs;
+  ctx.activeEditorPath = state.activeEditorPath;
+  ctx.lanes = state.lanes;
+  ctx.activeLaneId = state.activeLaneId;
+  ctx.runMode = state.runMode;
+  ctx.diffs = state.diffs;
+  ctx.ghStatus = state.ghStatus;
+  ctx.textSearch = state.textSearch;
+  ctx.sessionsSummary = state.sessionsSummary;
+  ctx.issues = state.issues;
+  ctx.draftObjective = state.draftObjective;
+  ctx.draftImages = state.draftImages;
+  ctx.jiraKeyInput = state.jiraKeyInput;
+  ctx.commitMsgInput = state.commitMsgInput;
+  ctx.terminal = state.terminal;
+}
+
+function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
+  state.activeProjectId = ctx.id;
+  state.project = ctx.project;
+  state.sidebarView = ctx.sidebarView;
+  state.expandedDirs = ctx.expandedDirs;
+  state.dirCache = ctx.dirCache;
+  state.explorerFilter = ctx.explorerFilter;
+  state.explorerFilterResults = ctx.explorerFilterResults;
+  state.editorTabs = ctx.editorTabs;
+  state.activeEditorPath = ctx.activeEditorPath;
+  state.lanes = ctx.lanes;
+  state.activeLaneId = ctx.activeLaneId;
+  state.runMode = ctx.runMode;
+  state.diffs = ctx.diffs;
+  state.ghStatus = ctx.ghStatus;
+  state.textSearch = ctx.textSearch;
+  state.sessionsSummary = ctx.sessionsSummary;
+  state.issues = ctx.issues;
+  state.draftObjective = ctx.draftObjective;
+  state.draftImages = ctx.draftImages;
+  state.jiraKeyInput = ctx.jiraKeyInput;
+  state.commitMsgInput = ctx.commitMsgInput;
+  state.terminal = ctx.terminal;
+  state.mentionResults = [];
+  state.branchPopover.open = false;
+}
+
+function findLaneWithContext(laneId: string): { lane: TeamLane; ctx?: ProjectWorkspaceContext; isActiveProject: boolean } | null {
+  saveActiveToProjectContext();
+  for (const ctx of state.projectTabs) {
+    const found = ctx.lanes.find((l) => l.id === laneId);
+    if (found) {
+      return { lane: found, ctx, isActiveProject: ctx.id === state.activeProjectId };
+    }
+  }
+  const activeFound = state.lanes.find((l) => l.id === laneId);
+  if (activeFound) {
+    return { lane: activeFound, isActiveProject: true };
+  }
+  return null;
+}
+
+function switchProjectTab(projectId: string) {
+  if (projectId === state.activeProjectId) return;
+  saveActiveToProjectContext();
+  const target = state.projectTabs.find((p) => p.id === projectId);
+  if (!target) return;
+  loadFromProjectContext(target);
+  syncActivityButtons();
+  syncLayoutVisibility();
+  renderProjectTabsBar();
+  renderBranchPopover();
+  updateHeaderAndStatusBar();
+  renderLeftSidebar();
+  renderEditorTabs();
+  renderEditorBody();
+  renderTerminalDrawer();
+  renderRightPane();
+  const gitBadge = document.getElementById("git-badge");
+  if (gitBadge) {
+    gitBadge.textContent = String(state.diffs.length);
+    gitBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
+  }
+  setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
+}
+
+function closeProjectTab(projectId: string) {
+  saveActiveToProjectContext();
+  if (state.projectTabs.length <= 1) {
+    setStatus("Mantenha ao menos uma aba de projeto aberta (ou abra outro projeto).");
+    return;
+  }
+  const target = state.projectTabs.find((p) => p.id === projectId);
+  if (!target) return;
+
+  const hasDirty = target.editorTabs.some((t) => t.kind === "file" && t.dirty);
+  const hasRunning = target.lanes.some((l) => l.running);
+
+  const performClose = async () => {
+    for (const l of target.lanes) {
+      if (l.running) {
+        await api()?.CancelRun(l.id);
+      }
+    }
+    const idx = state.projectTabs.findIndex((p) => p.id === projectId);
+    state.projectTabs = state.projectTabs.filter((p) => p.id !== projectId);
+    if (state.activeProjectId === projectId) {
+      const next = state.projectTabs[Math.max(0, idx - 1)] || state.projectTabs[0];
+      if (next) {
+        loadFromProjectContext(next);
+        syncActivityButtons();
+        syncLayoutVisibility();
+        updateHeaderAndStatusBar();
+        renderLeftSidebar();
+        renderEditorTabs();
+        renderEditorBody();
+        renderTerminalDrawer();
+        renderRightPane();
+      }
+    }
+    renderProjectTabsBar();
+    setStatus(`Aba do projeto "${target.project.name}" fechada.`);
+  };
+
+  if (hasDirty || hasRunning) {
+    askConfirm({
+      title: `Fechar Aba do Projeto "${target.project.name}"`,
+      body: hasRunning
+        ? `A equipe de "${target.project.name}" ainda está em execução (e/ou há arquivos não salvos). Deseja interromper e fechar esta aba de projeto?`
+        : `O projeto "${target.project.name}" possui arquivos editados não salvos. Deseja fechar esta aba de projeto sem salvar?`,
+      confirmLabel: "Fechar Aba do Projeto",
+      danger: true,
+      onConfirm: performClose,
+    });
+    return;
+  }
+  performClose();
+}
+
+function renderProjectTabsBar() {
+  saveActiveToProjectContext();
+  const bar = document.getElementById("project-tabs-bar");
+  if (!bar) return;
+  bar.innerHTML = `
+    ${state.projectTabs.map((ctx) => {
+      const isAct = ctx.id === state.activeProjectId;
+      const isRunning = ctx.lanes.some((l) => l.running);
+      const isDirty = ctx.editorTabs.some((t) => t.kind === "file" && t.dirty);
+      const branch = ctx.project.branch || "sem git";
+      return `
+        <div class="project-tab ${isAct ? "active" : ""}" data-proj-tab="${escapeHtml(ctx.id)}" title="${escapeHtml(ctx.project.root)} — Contexto e Chat 100% isolados">
+          ${icons.folderOpen}
+          <span>${escapeHtml(ctx.project.name)}</span>
+          <span class="proj-branch-tag">${escapeHtml(branch)}</span>
+          ${isRunning ? `<span class="proj-run-dot" title="Equipe executando em segundo plano neste projeto"></span>` : ""}
+          ${isDirty ? `<span class="proj-dirty-dot" title="Arquivos com edições não salvas">${icons.dot}</span>` : ""}
+          ${state.projectTabs.length > 1
+            ? `<span class="proj-close-x" data-close-proj="${escapeHtml(ctx.id)}" title="Fechar aba deste projeto">${icons.closeSmall}</span>`
+            : ""
+          }
+        </div>
+      `;
+    }).join("")}
+    <button class="project-tab-add" id="btn-add-project-tab" title="Abrir outro projeto em uma nova aba isolada (Ctrl+Shift+O)">
+      ${icons.plus}
+      <span>Novo Projeto em Aba</span>
+    </button>
+  `;
+
+  bar.querySelectorAll("[data-proj-tab]").forEach((el) => {
+    el.addEventListener("click", () => {
+      switchProjectTab((el as HTMLElement).dataset.projTab!);
+    });
+  });
+  bar.querySelectorAll("[data-close-proj]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeProjectTab((el as HTMLElement).dataset.closeProj!);
+    });
+  });
+  document.getElementById("btn-add-project-tab")?.addEventListener("click", () => {
+    openFolderDialog(true);
+  });
 }
 
 function askConfirm(dialog: ConfirmDialogState) {
@@ -239,6 +446,8 @@ function mountShell() {
           <button class="win-btn close" id="win-close" title="Fechar">${icons.winClose}</button>
         </div>
       </header>
+
+      <div class="project-tabs-bar" id="project-tabs-bar"></div>
 
       <div class="workbench">
         <nav class="activity-bar" id="activity-bar">
@@ -376,10 +585,10 @@ function bindStaticShellEvents() {
   document.getElementById("win-min")?.addEventListener("click", () => api()?.WindowMinimize());
   document.getElementById("win-max")?.addEventListener("click", () => api()?.WindowToggleMaximize());
   document.getElementById("win-close")?.addEventListener("click", () => {
-    if (hasDirtyTabs()) {
+    if (hasAnyProjectDirtyTabs()) {
       askConfirm({
         title: "Alterações não salvas",
-        body: "Existem abas editadas sem salvar. Deseja fechar a HiveMind IDE mesmo assim?",
+        body: "Existem abas editadas sem salvar em um ou mais projetos abertos. Deseja fechar a HiveMind IDE mesmo assim?",
         confirmLabel: "Fechar sem salvar",
         danger: true,
         onConfirm: () => api()?.WindowClose(),
@@ -499,6 +708,20 @@ function bindStaticShellEvents() {
       openMissionControlTab();
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o") {
+      e.preventDefault();
+      openFolderDialog(true);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Tab" && state.projectTabs.length > 1) {
+      e.preventDefault();
+      const idx = state.projectTabs.findIndex((p) => p.id === state.activeProjectId);
+      const nextIdx = e.shiftKey
+        ? (idx - 1 + state.projectTabs.length) % state.projectTabs.length
+        : (idx + 1) % state.projectTabs.length;
+      switchProjectTab(state.projectTabs[nextIdx].id);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
       e.preventDefault();
       openCommandPalette();
@@ -612,6 +835,7 @@ function renderBranchPopover() {
           state.project.branch = targetBranch;
           state.branchPopover.open = false;
           renderBranchPopover();
+          renderProjectTabsBar();
           updateHeaderAndStatusBar();
           refreshDiffs();
           refreshExplorerTree();
@@ -646,6 +870,7 @@ function renderBranchPopover() {
       state.project.branch = name;
       state.branchPopover.open = false;
       renderBranchPopover();
+      renderProjectTabsBar();
       updateHeaderAndStatusBar();
       refreshDiffs();
       setStatus(`Branch "${name}" criada e ativada.`);
@@ -712,20 +937,26 @@ function renderFileMenu() {
   }
   menu.style.display = "block";
   menu.innerHTML = `
-    <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Abrir Pasta…</span></button>
+    <button class="dropdown-item" id="menu-open-folder-tab">${icons.plus}<span>Abrir Projeto em Nova Aba… (Ctrl+Shift+O)</span></button>
+    <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Substituir Projeto na Aba Atual…</span></button>
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
     <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
     <button class="dropdown-item" id="menu-doctor">${icons.bolt}<span>Doctor — Antigravity CLI (agy)</span></button>
-    <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes</div>
+    <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
       ? `<div class="dim" style="padding:6px 10px">Nenhum projeto recente</div>`
       : state.recent.map((r) => `<button class="dropdown-item" data-recent="${escapeHtml(r)}" title="${escapeHtml(r)}">${escapeHtml(r)}</button>`).join("")
     }
   `;
+  menu.querySelector("#menu-open-folder-tab")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    openFolderDialog(true);
+  });
   menu.querySelector("#menu-open-folder")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    openFolderDialog();
+    openFolderDialog(false);
   });
   menu.querySelector("#menu-open-memory")?.addEventListener("click", () => {
     state.showFileMenu = false;
@@ -744,7 +975,7 @@ function renderFileMenu() {
     openDoctorModal();
   });
   menu.querySelectorAll("[data-recent]").forEach((el) => {
-    el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!));
+    el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!, true));
   });
 }
 
@@ -826,8 +1057,12 @@ async function boot() {
   }
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
-    const lane = state.lanes.find((l) => l.id === payload.laneId);
-    if (!lane) return;
+    const hit = findLaneWithContext(payload.laneId);
+    if (!hit) return;
+    const { lane, ctx, isActiveProject } = hit;
+    const targetSummary = isActiveProject
+      ? state.sessionsSummary
+      : (ctx?.sessionsSummary ?? state.sessionsSummary);
     const ev = payload.event;
     if (ev.stage) {
       if (lane.stage && lane.stage !== ev.stage && !lane.doneStages.includes(lane.stage)) {
@@ -848,9 +1083,9 @@ async function boot() {
       lane.sessionInTokens += inTok;
       lane.sessionOutTokens += outTok;
       lane.sessionTotalTokens += totTok;
-      state.sessionsSummary.projectInputTokens += inTok;
-      state.sessionsSummary.projectOutputTokens += outTok;
-      state.sessionsSummary.projectTotalTokens += totTok;
+      targetSummary.projectInputTokens += inTok;
+      targetSummary.projectOutputTokens += outTok;
+      targetSummary.projectTotalTokens += totTok;
 
       const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
       if (ag) {
@@ -859,7 +1094,7 @@ async function boot() {
         ag.tokens += totTok;
         ag.calls += 1;
       }
-      updateStatusBar();
+      if (isActiveProject) updateStatusBar();
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);
       lane.messages.push({
@@ -953,8 +1188,15 @@ async function boot() {
         label: "Sistema",
         text: `${ev.text || "Execução concluída."}${tokSuffix}`,
       });
-      refreshDiffsAndSummarize(lane);
-      refreshSessions();
+      if (isActiveProject) {
+        refreshDiffsAndSummarize(lane);
+        refreshSessions();
+      }
+    }
+
+    if (!isActiveProject) {
+      renderProjectTabsBar();
+      return;
     }
 
     if (lane.id === activeLane()?.id) {
@@ -1002,32 +1244,44 @@ function bootstrapAsync(rootDir?: string) {
   }).catch(() => {});
 
   if (rootDir) {
+    const targetKey = normalizePathKey(rootDir);
     backend.GitHubStatus(rootDir).then((gh) => {
-      state.ghStatus = gh;
-      if (state.sidebarView === "git" && state.showLeftSidebar) {
-        renderLeftSidebar();
+      const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+      if (ctx) ctx.ghStatus = gh;
+      if (state.project && normalizePathKey(state.project.root) === targetKey) {
+        state.ghStatus = gh;
+        if (state.sidebarView === "git" && state.showLeftSidebar) {
+          renderLeftSidebar();
+        }
       }
     }).catch(() => {});
 
-    refreshSessions();
+    refreshSessions(rootDir);
   }
 }
 
-async function refreshSessions() {
+async function refreshSessions(targetRoot?: string) {
   const backend = api();
-  if (!backend || !state.project) return;
+  const root = targetRoot || state.project?.root;
+  if (!backend || !root) return;
+  const targetKey = normalizePathKey(root);
   try {
-    const sum = await backend.ListSessions(state.project.root);
-    state.sessionsSummary = {
+    const sum = await backend.ListSessions(root);
+    const summaryObj = {
       sessions: sum?.sessions || [],
       projectInputTokens: Number(sum?.projectInputTokens || 0),
       projectOutputTokens: Number(sum?.projectOutputTokens || 0),
       projectTotalTokens: Number(sum?.projectTotalTokens || 0),
     };
-    updateStatusBar();
-    updateMissionBoardIfOpen();
-    if (state.sidebarView === "sessions" && state.showLeftSidebar) {
-      renderLeftSidebar();
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+    if (ctx) ctx.sessionsSummary = summaryObj;
+    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+      state.sessionsSummary = summaryObj;
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      if (state.sidebarView === "sessions" && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
     }
   } catch {
     // ignore empty workspace sessions
@@ -1048,59 +1302,112 @@ function updateAgentStatus(lane: TeamLane, author: string, label: string | undef
   }
 }
 
-function applyProject(proj: ProjectInfo) {
-  state.project = proj;
-  state.expandedDirs.clear();
-  state.dirCache.clear();
-  state.dirCache.set("", proj.files || []);
-  state.explorerFilter = "";
-  state.explorerFilterResults = [];
-  state.editorTabs = [];
-  state.activeEditorPath = "";
-  state.diffs = [];
-  state.ghStatus = null;
-  state.textSearch = { query: "", results: [], searching: false };
-  state.issues = { list: [], loading: false, loadedOnce: false };
-  state.sessionsSummary = {
-    sessions: [],
-    projectInputTokens: 0,
-    projectOutputTokens: 0,
-    projectTotalTokens: 0,
-  };
+function applyProject(proj: ProjectInfo, inNewTab = true) {
+  saveActiveToProjectContext();
+  const targetKey = normalizePathKey(proj.root);
+  const alreadyOpen = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+  if (alreadyOpen) {
+    alreadyOpen.project = proj;
+    loadFromProjectContext(alreadyOpen);
+    renderProjectTabsBar();
+    updateHeaderAndStatusBar();
+    renderLeftSidebar();
+    renderEditorTabs();
+    renderEditorBody();
+    renderTerminalDrawer();
+    renderRightPane();
+    setStatus(`Projeto em foco: ${proj.root}`);
+    refreshDiffs();
+    return;
+  }
 
   const activeTeam = proj.teamConfig?.active || proj.teamConfig?.teams?.[0]?.name || "principal";
+  const tempPrevProj = state.project;
+  state.project = proj;
   const firstLane = createLane(activeTeam);
-  state.lanes = [firstLane];
-  state.activeLaneId = firstLane.id;
+  state.project = tempPrevProj;
 
+  const dirCache = new Map<string, FileNode[]>();
+  dirCache.set("", proj.files || []);
+
+  const newCtx: ProjectWorkspaceContext = {
+    id: (inNewTab || !state.activeProjectId) ? `proj-${projectSeq++}` : state.activeProjectId,
+    project: proj,
+    sidebarView: "explorer",
+    expandedDirs: new Set<string>(),
+    dirCache,
+    explorerFilter: "",
+    explorerFilterResults: [],
+    editorTabs: [],
+    activeEditorPath: "",
+    lanes: [firstLane],
+    activeLaneId: firstLane.id,
+    runMode: "auto",
+    diffs: [],
+    ghStatus: null,
+    textSearch: { query: "", results: [], searching: false },
+    sessionsSummary: {
+      sessions: [],
+      projectInputTokens: 0,
+      projectOutputTokens: 0,
+      projectTotalTokens: 0,
+    },
+    issues: { list: [], loading: false, loadedOnce: false },
+    draftObjective: "",
+    draftImages: [],
+    jiraKeyInput: "",
+    commitMsgInput: "",
+    terminal: { open: false, running: false, cmdInput: "", entries: [] },
+  };
+
+  if (inNewTab || state.projectTabs.length === 0) {
+    state.projectTabs.push(newCtx);
+  } else {
+    const idx = state.projectTabs.findIndex((p) => p.id === state.activeProjectId);
+    if (idx >= 0) state.projectTabs[idx] = newCtx;
+    else state.projectTabs.push(newCtx);
+  }
+
+  loadFromProjectContext(newCtx);
+  syncActivityButtons();
+  syncLayoutVisibility();
+  renderProjectTabsBar();
   updateHeaderAndStatusBar();
   renderLeftSidebar();
   renderEditorTabs();
   renderEditorBody();
   renderTerminalDrawer();
   renderRightPane();
-  setStatus(`Projeto aberto: ${proj.root}`);
+  setStatus(`Projeto aberto em aba isolada: ${proj.root}`);
   refreshDiffs();
 }
 
-async function openFolderDialog() {
+async function openFolderDialog(inNewTab = true) {
   const backend = api();
   if (!backend) return;
   const dir = await backend.ChooseDirectory();
   if (!dir) return;
-  await openProjectPath(dir);
+  await openProjectPath(dir, inNewTab);
 }
 
-async function openProjectPath(dir: string) {
+async function openProjectPath(dir: string, inNewTab = true) {
   const backend = api();
   if (!backend) return;
+  const targetKey = normalizePathKey(dir);
+  const existingTab = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+  if (existingTab) {
+    state.showFileMenu = false;
+    renderFileMenu();
+    switchProjectTab(existingTab.id);
+    return;
+  }
   const doOpen = async () => {
     try {
       const proj = await backend.OpenProject(dir);
       state.recent = await backend.GetRecentProjects();
       state.showFileMenu = false;
       renderFileMenu();
-      applyProject(proj);
+      applyProject(proj, inNewTab);
       bootstrapAsync(proj.root);
       if (!proj.hasTeam) {
         state.showWizard = true;
@@ -1110,11 +1417,11 @@ async function openProjectPath(dir: string) {
       setStatus(`Erro ao abrir pasta: ${err?.message || err}`);
     }
   };
-  if (hasDirtyTabs()) {
+  if (!inNewTab && hasDirtyTabs()) {
     askConfirm({
-      title: "Trocar de Projeto com Edições Abertas",
-      body: "Existem arquivos modificados não salvos no editor. Deseja abrir outra pasta e descartar as edições em memória?",
-      confirmLabel: "Abrir Pasta",
+      title: "Substituir Projeto na Aba Atual",
+      body: "Existem arquivos modificados não salvos nesta aba de projeto. Deseja substituir mesmo assim? (Dica: use 'Abrir Projeto em Nova Aba' para manter ambos abertos)",
+      confirmLabel: "Substituir Projeto",
       danger: true,
       onConfirm: doOpen,
     });
@@ -2193,6 +2500,7 @@ function syncActiveTabDirtyUI(tab: EditorTab) {
       dot.style.display = tab.dirty ? "inline-flex" : "none";
     }
   });
+  renderProjectTabsBar();
 }
 
 function renderLineNumbers(text: string): string {
@@ -3078,6 +3386,8 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     renderMentionPopup();
   }
 
+  const runProjectId = state.activeProjectId;
+  const runProjectRoot = state.project.root;
   lane.running = true;
   lane.stage = effectiveMode === "squad" ? "dev" : "chief";
   lane.doneStages = [];
@@ -3089,6 +3399,7 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     a.tool = "";
   });
   setStatus(`Executando "${lane.teamName}" em modo ${runModeLabel(effectiveMode)}…`);
+  renderProjectTabsBar();
   flushChatUpdates();
   updateMissionBoardIfOpen();
   if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
@@ -3098,7 +3409,7 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     const res = backend.StartRunWithOptions
       ? await backend.StartRunWithOptions(
           lane.id,
-          state.project.root,
+          runProjectRoot,
           lane.teamName,
           text,
           state.jiraKeyInput.trim(),
@@ -3108,7 +3419,7 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
         )
       : await backend.StartRunWithImages(
           lane.id,
-          state.project.root,
+          runProjectRoot,
           lane.teamName,
           text,
           state.jiraKeyInput.trim(),
@@ -3130,13 +3441,16 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     lane.running = false;
     lane.stage = "";
     markToolsDone(lane);
-    await refreshExplorerTree();
-    await reloadCleanOpenTabs();
-    await refreshDiffsAndSummarize(lane);
-    await refreshSessions();
-    flushChatUpdates();
-    updateMissionBoardIfOpen();
-    if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
+    renderProjectTabsBar();
+    await refreshSessions(runProjectRoot);
+    if (state.activeProjectId === runProjectId) {
+      await refreshExplorerTree();
+      await reloadCleanOpenTabs();
+      await refreshDiffsAndSummarize(lane);
+      flushChatUpdates();
+      updateMissionBoardIfOpen();
+      if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
+    }
   }
 }
 
@@ -3173,7 +3487,8 @@ function getCommandActions(): CommandAction[] {
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
     { id: "wizard", label: "Configurar Equipe (.hivemind/team.yaml)", run: () => { state.showWizard = true; renderModalLayer(); } },
     { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
-    { id: "open-folder", label: "Abrir Outra Pasta de Projeto…", run: () => openFolderDialog() },
+    { id: "open-folder-tab", label: "Abrir Outro Projeto em Nova Aba Isolada…", shortcut: "Ctrl+Shift+O", run: () => openFolderDialog(true) },
+    { id: "open-folder", label: "Substituir Projeto na Aba Atual…", run: () => openFolderDialog(false) },
   ];
 }
 
