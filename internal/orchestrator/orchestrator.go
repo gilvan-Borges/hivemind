@@ -93,6 +93,10 @@ type Runner struct {
 	chiefPlan          string
 	skills             []skillx.Skill
 	selectedSkills     []skillx.Skill
+	// NativeSkills é o catálogo nativo da IDE, preenchido pelo runner da IDE (CLI deixa vazio).
+	NativeSkills       []skillx.Skill
+	NativeSkillsRoot   string
+	selectedNative     []skillx.Skill
 	turnInputTokens    int64
 	turnOutputTokens   int64
 	turnTotalTokens    int64
@@ -204,6 +208,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.chiefPlan = ""
 	r.skills = skillx.Load(r.Workspace)
 	r.selectedSkills = nil
+	r.selectedNative = nil
 	r.turnInputTokens = 0
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
@@ -562,7 +567,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		} else if len(devs) > 1 {
 			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
 		}
-		if skillGuide := skillx.GuidanceBlock(r.Workspace, r.selectedSkills, 0, 0); skillGuide != "" {
+		if skillGuide := skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, r.selectedSkills, r.selectedNative, 0, 0); skillGuide != "" {
 			extra += skillGuide
 		}
 		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true)
@@ -584,7 +589,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 	qaAgents := r.Team.ByRole(team.RoleQA)
 	qaExtra := "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
-	if skillGuide := skillx.GuidanceBlock(r.Workspace, r.selectedSkills, 0, 0); skillGuide != "" {
+	if skillGuide := skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, r.selectedSkills, r.selectedNative, 0, 0); skillGuide != "" {
 		qaExtra += skillGuide
 	}
 	var qaSubs []agent.Agent
@@ -824,6 +829,11 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 					r.selectedSkills = skillx.Match(r.skills, strings.Split(raw, "\n"))
 				}
 			}
+			if prevNative, err := got.Session.State().Get("selected_native_skills"); err == nil && prevNative != nil {
+				if raw := strings.TrimSpace(fmt.Sprint(prevNative)); raw != "" {
+					r.selectedNative = skillx.Match(r.NativeSkills, strings.Split(raw, "\n"))
+				}
+			}
 		}
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
@@ -842,6 +852,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 		if !(consumePendingPlan && isPendingPlan && r.chiefPlan != "") {
 			resetMap["chief_plan"] = ""
 			resetMap["selected_skills"] = ""
+			resetMap["selected_native_skills"] = ""
 		}
 		_ = sessionx.UpdateState(got.Session, resetMap)
 		_ = sessionx.CompactOldToolOutputs(got.Session, 10)
@@ -982,6 +993,27 @@ func roleLabel(role string) string {
 	default:
 		return role
 	}
+}
+
+func filterOutSkill(list []skillx.Skill, name string) []skillx.Skill {
+	out := make([]skillx.Skill, 0, len(list))
+	for _, s := range list {
+		if s.Name != name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func skillSelectionLabel(project, native []string) string {
+	var parts []string
+	if len(project) > 0 {
+		parts = append(parts, strings.Join(project, ", "))
+	}
+	if len(native) > 0 {
+		parts = append(parts, "nativas da IDE: "+strings.Join(native, ", "))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
@@ -1190,7 +1222,8 @@ type delegateArgs struct {
 	PRNumber  int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
 	PRBranch  string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
 	Reviewers []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
-	Skills    []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
+	Skills    []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills do projeto que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
+	NativeSkills []string `json:"native_skills,omitempty" jsonschema:"Opcional: nomes das skills NATIVAS da IDE que a equipe deve seguir. Use quando a nativa parecer mais atual ou melhor que a versão do projeto; se houver conflito de nome, o usuário será consultado para autorizar."`
 }
 
 type delegateResult struct {
@@ -1253,14 +1286,58 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			r.prBranch = strings.TrimSpace(args.PRBranch)
 			r.prReviewers = append([]string(nil), args.Reviewers...)
 			r.selectedSkills = skillx.Match(r.skills, args.Skills)
-			if len(args.Skills) > 0 && len(r.selectedSkills) == 0 {
-				fmt.Fprintf(r.Err, "aviso: skills pedidas pelo Chefe não existem no catálogo %s: %s\n", skillx.SkillsDir, strings.Join(args.Skills, ", "))
+			r.selectedNative = skillx.Match(r.NativeSkills, args.NativeSkills)
+			// Fallback: nome pedido em "skills" que só existe como nativa da IDE (e vice-versa).
+			for _, raw := range args.Skills {
+				if skillx.Find(r.selectedSkills, raw) != nil {
+					continue
+				}
+				if hit := skillx.Find(r.NativeSkills, raw); hit != nil && skillx.Find(r.selectedNative, raw) == nil {
+					r.selectedNative = append(r.selectedNative, *hit)
+					fmt.Fprintf(r.Err, "aviso: skill %q não existe no projeto; usando a nativa da IDE\n", raw)
+				}
+			}
+			for _, raw := range args.NativeSkills {
+				if skillx.Find(r.selectedNative, raw) != nil {
+					continue
+				}
+				if hit := skillx.Find(r.skills, raw); hit != nil {
+					r.selectedSkills = append(r.selectedSkills, *hit)
+					fmt.Fprintf(r.Err, "aviso: skill nativa %q não existe na IDE; usando a versão do projeto\n", raw)
+				}
+			}
+			// Conflito: o Chefe escolheu a nativa, mas o projeto tem versão própria — o usuário autoriza a troca.
+			if len(r.selectedNative) > 0 {
+				keptNative := make([]skillx.Skill, 0, len(r.selectedNative))
+				for _, ns := range r.selectedNative {
+					if skillx.Find(r.skills, ns.Name) == nil {
+						keptNative = append(keptNative, ns)
+						continue
+					}
+					prompt := fmt.Sprintf("O Chefe considera a skill nativa da IDE `%s` mais atual que a versão do projeto. Autorizar o uso da versão nativa da IDE? (Recuse para manter a versão do projeto.)", ns.Name)
+					if r.Approve != nil && !r.Approve(prompt) {
+						if skillx.Find(r.selectedSkills, ns.Name) == nil {
+							if ps := skillx.Find(r.skills, ns.Name); ps != nil {
+								r.selectedSkills = append(r.selectedSkills, *ps)
+							}
+						}
+						continue
+					}
+					keptNative = append(keptNative, ns)
+					r.selectedSkills = filterOutSkill(r.selectedSkills, ns.Name)
+				}
+				r.selectedNative = keptNative
+			}
+			if len(args.Skills) > 0 && len(r.selectedSkills) == 0 && len(r.selectedNative) == 0 {
+				fmt.Fprintf(r.Err, "aviso: skills pedidas pelo Chefe não existem nos catálogos (%s e nativas da IDE): %s\n", skillx.SkillsDir, strings.Join(args.Skills, ", "))
 			}
 			skillNames := skillx.Names(r.selectedSkills)
+			nativeNames := skillx.Names(r.selectedNative)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
 			_ = tctx.State().Set("selected_skills", strings.Join(skillNames, "\n"))
+			_ = tctx.State().Set("selected_native_skills", strings.Join(nativeNames, "\n"))
 			if actions := tctx.Actions(); actions != nil {
 				if actions.StateDelta == nil {
 					actions.StateDelta = map[string]any{}
@@ -1268,6 +1345,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				actions.StateDelta["chief_plan"] = r.chiefPlan
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
 				actions.StateDelta["selected_skills"] = strings.Join(skillNames, "\n")
+				actions.StateDelta["selected_native_skills"] = strings.Join(nativeNames, "\n")
 			}
 
 			resolved := r.resolveDynamicDevs()
@@ -1279,8 +1357,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				if r.prNumber > 0 {
 					fmt.Fprintf(&hb, "\n- **PR Alvo**: #%d (%s)", r.prNumber, r.prBranch)
 				}
-				if len(skillNames) > 0 {
-					fmt.Fprintf(&hb, "\n- **Skills selecionadas**: %s", strings.Join(skillNames, ", "))
+				if skillLabel := skillSelectionLabel(skillNames, nativeNames); skillLabel != "" {
+					fmt.Fprintf(&hb, "\n- **Skills selecionadas**: %s", skillLabel)
 				}
 				for i, slice := range r.devSlices {
 					dn := fmt.Sprintf("dev_%d", i+1)
@@ -1379,10 +1457,11 @@ REGRA DE TRIAGEM:
 			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
 	}
 
-	if catalogBlock := skillx.CatalogBlock(r.skills); catalogBlock != "" {
+	if catalogBlock := skillx.CatalogBlock(r.skills, r.NativeSkills); catalogBlock != "" {
 		triageInstr += "\n\n" + catalogBlock +
 			"SELEÇÃO DE SKILLS:\n" +
 			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
+			"- Se a versão NATIVA da IDE parecer mais atual ou melhor que a versão do projeto, passe o nome em \"native_skills\"; se o projeto tiver uma skill de mesmo nome, o usuário será consultado para autorizar a substituição.\n" +
 			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file."
 	}
 

@@ -2150,6 +2150,69 @@ button.icon-btn { min-width: 28px; min-height: 28px; }
 /* Lane pills viram botões (mesma função, mesmo elemento — Lei 16) */
 button.lane-pill { text-align: left; }
 
+/* ===== Painel de Skills (nativas da IDE + projeto) ===== */
+.skill-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 8px 10px;
+  margin-bottom: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.skill-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.skill-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-all;
+}
+.skill-tag {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.skill-tag.native {
+  background: var(--silver-bg);
+  color: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.skill-tag.project {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.skill-desc {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.skill-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+.skill-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+
 /* ===== Markdown Preview (padrão para .md, estilo VS Code) ===== */
 .md-preview {
   flex: 1;

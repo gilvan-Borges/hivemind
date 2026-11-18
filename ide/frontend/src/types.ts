@@ -301,7 +301,7 @@ export interface WizardInputPayload {
   maxTokens: number;
 }
 
-export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions";
+export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions" | "skills";
 
 export interface ProjectWorkspaceContext {
   id: string;
@@ -344,6 +344,15 @@ export interface ProjectWorkspaceContext {
     cmdInput: string;
     entries: TerminalEntry[];
   };
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  source: "native" | "project";
+  path: string;
+  updatedAt: string;
+  sizeBytes: number;
 }
 
 export interface WailsBackendApp {
@@ -396,4 +405,10 @@ export interface WailsBackendApp {
   ListBranches(workspace: string): Promise<string[]>;
   CheckoutBranch(workspace: string, branch: string, create: boolean): Promise<void>;
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
+  ListSkills(workspace: string): Promise<SkillInfo[]>;
+  ReadNativeSkill(name: string): Promise<string>;
+  SaveNativeSkill(name: string, body: string): Promise<void>;
+  DeleteNativeSkill(name: string): Promise<void>;
+  InstallSkillToProject(workspace: string, name: string): Promise<void>;
+  RemoveProjectSkill(workspace: string, name: string): Promise<void>;
 }

@@ -23,6 +23,7 @@ import type {
   RunMode,
   SessionSummary,
   SidebarView,
+  SkillInfo,
   TeamLane,
   TerminalEntry,
   TextSearchMatch,
@@ -117,6 +118,8 @@ const state = {
     loading: false,
     loadedOnce: false,
   },
+  skills: [] as SkillInfo[],
+  skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
   branchPopover: {
     open: false,
     anchorTop: false,
@@ -522,6 +525,7 @@ function mountShell() {
             <span class="act-badge" id="git-badge" style="display:none">0</span>
           </button>
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
+          <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
           <div class="spacer"></div>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
           <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
@@ -759,6 +763,7 @@ function bindStaticShellEvents() {
         state.sidebarView = view;
         state.showLeftSidebar = true;
         if (view === "sessions") refreshSessions();
+        if (view === "skills") refreshSkills();
       }
       syncActivityButtons();
       syncLayoutVisibility();
@@ -889,6 +894,9 @@ function bindStaticShellEvents() {
         renderModalLayer();
       } else if (state.showWizard) {
         state.showWizard = false;
+        renderModalLayer();
+      } else if (state.skillEditor) {
+        state.skillEditor = null;
         renderModalLayer();
       }
     }
@@ -2103,6 +2111,123 @@ async function handleInlineModelChange(agentName: string, newModel: string) {
   }
 }
 
+function renderSkillRowHtml(s: SkillInfo, isNative: boolean): string {
+  return `
+    <div class="skill-row">
+      <div class="skill-row-head">
+        <span class="skill-name">${escapeHtml(s.name)}</span>
+        <span class="skill-tag ${isNative ? "native" : "project"}">${isNative ? "nativa" : "projeto"}</span>
+      </div>
+      <div class="skill-desc" title="${escapeHtml(s.description)}">${escapeHtml(s.description || "sem descrição")}</div>
+      <div class="skill-meta">${escapeHtml(s.updatedAt || "")}${s.sizeBytes > 0 ? ` · ${(s.sizeBytes / 1024).toFixed(1)} KB` : ""}</div>
+      <div class="skill-actions">
+        ${isNative
+          ? `<button class="mini" data-skill-edit="${escapeHtml(s.name)}" title="Editar no editor de skills">${icons.editPen}<span>Editar</span></button>
+             <button class="mini" data-skill-install="${escapeHtml(s.name)}" title="Copiar para .agents/skills deste projeto">${icons.download}<span>Instalar no projeto</span></button>
+             <button class="mini danger" data-skill-delete-native="${escapeHtml(s.name)}" title="Excluir skill nativa da IDE">${icons.trash}</button>`
+          : `<button class="mini danger" data-skill-remove-project="${escapeHtml(s.name)}" title="Remover do projeto (.agents/skills)">${icons.trash}<span>Remover</span></button>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+async function refreshSkills(): Promise<void> {
+  const backend = api();
+  if (!backend || !state.project) return;
+  try {
+    state.skills = (await backend.ListSkills(state.project.root)) || [];
+  } catch {
+    state.skills = [];
+  }
+  if (state.sidebarView === "skills" && state.showLeftSidebar) {
+    renderLeftSidebar();
+  }
+}
+
+function bindSkillsSidebarEvents(): void {
+  document.getElementById("btn-skill-refresh")?.addEventListener("click", () => refreshSkills());
+  document.getElementById("btn-skill-new")?.addEventListener("click", () => {
+    state.skillEditor = {
+      mode: "create",
+      name: "",
+      body: "# Minha Skill\n\nDescreva em uma frase quando o Chefe deve usar estas diretrizes.\n\n## Diretrizes\n\n- …",
+    };
+    renderModalLayer();
+  });
+  document.querySelectorAll("[data-skill-edit]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = (btn as HTMLElement).dataset.skillEdit!;
+      const backend = api();
+      if (!backend) return;
+      try {
+        const body = await backend.ReadNativeSkill(name);
+        state.skillEditor = { mode: "edit", name, body };
+        renderModalLayer();
+      } catch (err: any) {
+        toastError(`abrir a skill nativa "${name}"`, err);
+      }
+    });
+  });
+  document.querySelectorAll("[data-skill-install]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = (btn as HTMLElement).dataset.skillInstall!;
+      const backend = api();
+      if (!backend || !state.project) return;
+      try {
+        await backend.InstallSkillToProject(state.project.root, name);
+        setStatus(`Skill "${name}" instalada em .agents/skills do projeto.`);
+        await refreshSkills();
+        await refreshExplorerTree();
+      } catch (err: any) {
+        toastError(`instalar a skill "${name}" no projeto`, err);
+      }
+    });
+  });
+  document.querySelectorAll("[data-skill-delete-native]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = (btn as HTMLElement).dataset.skillDeleteNative!;
+      askConfirm({
+        title: `Excluir skill nativa "${name}"`,
+        body: `A skill nativa "${name}" será removida da IDE (as skills dos projetos não são afetadas). Excluir?`,
+        confirmLabel: "Excluir Skill",
+        danger: true,
+        onConfirm: async () => {
+          try {
+            await api()?.DeleteNativeSkill(name);
+            setStatus(`Skill nativa "${name}" excluída.`);
+            await refreshSkills();
+          } catch (err: any) {
+            toastError(`excluir a skill nativa "${name}"`, err);
+          }
+        },
+      });
+    });
+  });
+  document.querySelectorAll("[data-skill-remove-project]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = (btn as HTMLElement).dataset.skillRemoveProject!;
+      askConfirm({
+        title: `Remover skill "${name}" do projeto`,
+        body: `A skill "${name}" será removida de .agents/skills deste projeto (a nativa da IDE, se houver, permanece). Remover?`,
+        confirmLabel: "Remover do Projeto",
+        danger: true,
+        onConfirm: async () => {
+          if (!state.project) return;
+          try {
+            await api()?.RemoveProjectSkill(state.project.root, name);
+            setStatus(`Skill "${name}" removida do projeto.`);
+            await refreshSkills();
+            await refreshExplorerTree();
+          } catch (err: any) {
+            toastError(`remover a skill "${name}" do projeto`, err);
+          }
+        },
+      });
+    });
+  });
+}
+
 function renderLeftSidebar() {
   const sidebar = document.getElementById("left-sidebar");
   if (!sidebar) return;
@@ -2174,6 +2299,33 @@ function renderLeftSidebar() {
       </div>
     `;
     bindSessionsSidebarEvents();
+    return;
+  }
+
+  if (state.sidebarView === "skills") {
+    const native = state.skills.filter((s) => s.source === "native");
+    const project = state.skills.filter((s) => s.source === "project");
+    sidebar.innerHTML = `
+      <div class="sidebar-header">
+        <span class="eyebrow">Skills</span>
+        <div class="spacer"></div>
+        <button class="icon-btn" id="btn-skill-refresh" title="Atualizar catálogo">${icons.refresh}</button>
+        <button class="mini primary" id="btn-skill-new" title="Criar uma skill nativa da IDE">${icons.plus}<span>Nova</span></button>
+      </div>
+      <div class="sidebar-body">
+        <div class="dim" style="font-weight:600;margin-bottom:6px">Nativas da IDE (${native.length}) · valem para todos os projetos</div>
+        ${native.length === 0
+          ? `<div class="dim" style="margin-bottom:12px">Nenhuma skill nativa ainda. Clique em <strong>Nova</strong> para criar diretrizes reutilizáveis — o Chefe as avalia ao delegar tarefas.</div>`
+          : native.map((s) => renderSkillRowHtml(s, true)).join("")
+        }
+        <div class="dim" style="font-weight:600;margin:12px 0 6px">Do projeto (${project.length}) · .agents/skills</div>
+        ${project.length === 0
+          ? `<div class="dim">Este projeto não tem skills em .agents/skills. Instale uma nativa aqui ou crie .agents/skills/&lt;nome&gt;/SKILL.md.</div>`
+          : project.map((s) => renderSkillRowHtml(s, false)).join("")
+        }
+      </div>
+    `;
+    bindSkillsSidebarEvents();
     return;
   }
 
@@ -4948,6 +5100,66 @@ function renderModalLayer() {
         if (errEl) {
           const reason = err instanceof Error ? err.message : String(err);
           errEl.textContent = `Não foi possível salvar e testar o token: ${reason}. Confira a chave e a Base URL e tente novamente.`;
+          errEl.style.display = "block";
+        }
+      }
+    });
+    return;
+  }
+
+  if (state.skillEditor) {
+    const ed = state.skillEditor;
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="skill-editor-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:620px">
+          <h3 class="modal-title">${ed.mode === "create" ? "Nova Skill Nativa da IDE" : `Editar Skill Nativa — ${escapeHtml(ed.name)}`}</h3>
+          <p class="dim" style="font-size:11.5px;margin-top:-6px;margin-bottom:10px">
+            Skills nativas vivem em %LOCALAPPDATA%\\HiveMind\\skills e valem para todos os projetos.
+            Comece com <code># Título</code> e uma frase dizendo <strong>quando usá-la</strong> — é isso que o Chefe lê para decidir se aplica à tarefa.
+          </p>
+          <div class="form-grid" style="grid-template-columns:120px 1fr;margin-bottom:10px">
+            <label>Nome:</label>
+            <input id="skill-editor-name" value="${escapeHtml(ed.name)}" placeholder="ex: code-review" ${ed.mode === "edit" ? "disabled" : ""} />
+          </div>
+          <textarea id="skill-editor-body" style="width:100%;height:300px;font-family:var(--mono);font-size:12px;line-height:1.5">${escapeHtml(ed.body)}</textarea>
+          <div id="skill-editor-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          <div class="modal-footer">
+            <button id="skill-editor-cancel">Cancelar</button>
+            <button class="primary" id="skill-editor-save">${icons.save}<span>Salvar Skill</span></button>
+          </div>
+        </div>
+      </div>
+    `;
+    const closeEd = () => {
+      state.skillEditor = null;
+      renderModalLayer();
+    };
+    document.getElementById("skill-editor-cancel")?.addEventListener("click", closeEd);
+    document.getElementById("skill-editor-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "skill-editor-backdrop") closeEd();
+    });
+    document.getElementById("skill-editor-save")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend) return;
+      const nameIn = (document.getElementById("skill-editor-name") as HTMLInputElement | null)?.value.trim() || "";
+      const bodyIn = (document.getElementById("skill-editor-body") as HTMLTextAreaElement | null)?.value || "";
+      const errEl = document.getElementById("skill-editor-err");
+      if (!nameIn) {
+        if (errEl) {
+          errEl.textContent = "Dê um nome para a skill (ex: code-review).";
+          errEl.style.display = "block";
+        }
+        return;
+      }
+      try {
+        await backend.SaveNativeSkill(nameIn, bodyIn);
+        closeEd();
+        setStatus(`Skill nativa "${nameIn.toLowerCase()}" salva.`);
+        await refreshSkills();
+      } catch (err: any) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (errEl) {
+          errEl.textContent = `Não foi possível salvar a skill: ${reason}`;
           errEl.style.display = "block";
         }
       }
