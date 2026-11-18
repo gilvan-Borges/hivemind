@@ -290,6 +290,36 @@ func (a *App) GetRecentProjects() []string {
 	return idecore.LoadRecentProjects("")
 }
 
+// ListSkills returns the combined skill catalog: IDE-native first, then project skills.
+func (a *App) ListSkills(workspace string) ([]idecore.SkillInfo, error) {
+	return idecore.ListSkills(workspace)
+}
+
+// ReadNativeSkill returns the SKILL.md body of an IDE-native skill for editing.
+func (a *App) ReadNativeSkill(name string) (string, error) {
+	return idecore.ReadNativeSkill(name)
+}
+
+// SaveNativeSkill creates or updates an IDE-native skill from the skill editor.
+func (a *App) SaveNativeSkill(name, body string) error {
+	return idecore.SaveNativeSkill(name, body)
+}
+
+// DeleteNativeSkill removes an IDE-native skill.
+func (a *App) DeleteNativeSkill(name string) error {
+	return idecore.DeleteNativeSkill(name)
+}
+
+// InstallSkillToProject copies an IDE-native skill into the project's .agents/skills catalog.
+func (a *App) InstallSkillToProject(workspace, name string) error {
+	return idecore.InstallSkillToProject(name, workspace)
+}
+
+// RemoveProjectSkill removes a skill from the project's .agents/skills catalog.
+func (a *App) RemoveProjectSkill(workspace, name string) error {
+	return idecore.RemoveProjectSkill(name, workspace)
+}
+
 // ListFiles refreshes the shallow root explorer entries.
 func (a *App) ListFiles(workspace string) ([]idecore.FileNode, error) {
 	return idecore.ListDir(workspace, "")

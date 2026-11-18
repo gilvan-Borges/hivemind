@@ -1,18 +1,21 @@
-// Package skillx carrega o catálogo de skills do projeto (.agents/skills)
-// para que o Chefe escolha as diretrizes certas ao delegar tarefas à equipe.
+// Package skillx carrega os catálogos de skills do projeto (.agents/skills)
+// e nativos da IDE (%LOCALAPPDATA%\HiveMind\skills) para que o Chefe escolha
+// as diretrizes certas ao delegar tarefas à equipe.
 package skillx
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
-// SkillsDir é o catálogo de skills relativo à raiz do workspace.
+// SkillsDir é o catálogo de skills relativo à raiz do workspace do projeto.
 const SkillsDir = ".agents/skills"
 
 const (
@@ -23,17 +26,35 @@ const (
 	DefaultTotalBytes = 12 * 1024
 )
 
-// Skill é uma entrada do catálogo, lida de <root>/.agents/skills/<name>/SKILL.md.
+// Skill é uma entrada de catálogo, lida de <root>/SKILL.md.
+// Para skills de projeto, Path é relativo à raiz do workspace;
+// para skills nativas da IDE, Path é relativo ao diretório nativo.
 type Skill struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Path        string `json:"path"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Path        string    `json:"path"`
+	Source      string    `json:"source,omitempty"` // "project" | "native"
+	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
 }
 
-// Load lê <root>/.agents/skills/*/SKILL.md e devolve o catálogo ordenado por nome.
-// Retorna nil quando o diretório não existe (catálogo vazio é estado normal).
+// Load lê <root>/.agents/skills/*/SKILL.md e devolve o catálogo do projeto,
+// ordenado por nome. Retorna nil quando o diretório não existe.
 func Load(root string) []Skill {
-	entries, err := os.ReadDir(filepath.Join(root, SkillsDir))
+	out := loadDir(filepath.Join(root, SkillsDir), SkillsDir, "project")
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// LoadNative lê <dir>/<name>/SKILL.md, onde dir é a raiz do catálogo nativo
+// da IDE (ex.: %LOCALAPPDATA%\HiveMind\skills). Retorna nil se inexistente.
+func LoadNative(dir string) []Skill {
+	out := loadDir(dir, "", "native")
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func loadDir(dir, relBase, source string) []Skill {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
@@ -46,17 +67,27 @@ func Load(root string) []Skill {
 		if name == "" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(root, SkillsDir, e.Name(), "SKILL.md"))
+		abs := filepath.Join(dir, e.Name(), "SKILL.md")
+		info, err := os.Stat(abs)
 		if err != nil {
 			continue
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Join(e.Name(), "SKILL.md"))
+		if relBase != "" {
+			rel = relBase + "/" + rel
 		}
 		out = append(out, Skill{
 			Name:        name,
 			Description: ExtractDescription(string(data)),
-			Path:        filepath.ToSlash(filepath.Join(SkillsDir, e.Name(), "SKILL.md")),
+			Path:        rel,
+			Source:      source,
+			UpdatedAt:   info.ModTime(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -112,6 +143,18 @@ func Match(catalog []Skill, names []string) []Skill {
 	return out
 }
 
+// Find devolve a skill do catálogo com o nome exato (case-insensitive) ou nil.
+func Find(catalog []Skill, name string) *Skill {
+	n := strings.ToLower(strings.TrimSpace(name))
+	for _, s := range catalog {
+		if s.Name == n {
+			cp := s
+			return &cp
+		}
+	}
+	return nil
+}
+
 // Names devolve os nomes das skills na ordem recebida.
 func Names(skills []Skill) []string {
 	out := make([]string, 0, len(skills))
@@ -121,29 +164,57 @@ func Names(skills []Skill) []string {
 	return out
 }
 
-// CatalogBlock formata o catálogo para o prompt do Chefe (uma linha por skill).
-func CatalogBlock(catalog []Skill) string {
-	if len(catalog) == 0 {
+func day(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02")
+}
+
+// CatalogBlock formata o catálogo combinado para o prompt do Chefe:
+// primeiro as skills do projeto, depois as nativas da IDE (com data de atualização).
+func CatalogBlock(project, native []Skill) string {
+	if len(project) == 0 && len(native) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "SKILLS DO PROJETO (catálogo em %s):\n", SkillsDir)
-	for _, s := range catalog {
-		if s.Description == "" {
-			fmt.Fprintf(&b, "- `%s` — sem descrição; leia `%s` antes de decidir.\n", s.Name, s.Path)
-			continue
+	if len(project) > 0 {
+		fmt.Fprintf(&b, "SKILLS DO PROJETO (%s):\n", SkillsDir)
+		for _, s := range project {
+			writeCatalogLine(&b, s)
 		}
-		fmt.Fprintf(&b, "- `%s` — %s\n", s.Name, s.Description)
+	}
+	if len(native) > 0 {
+		b.WriteString("SKILLS NATIVAS DA IDE (gerenciadas pelo painel Skills do app, mais fáceis de manter atualizadas):\n")
+		for _, s := range native {
+			writeCatalogLine(&b, s)
+		}
 	}
 	return b.String()
 }
 
+func writeCatalogLine(b *strings.Builder, s Skill) {
+	if s.Description == "" {
+		if d := day(s.UpdatedAt); d != "" {
+			fmt.Fprintf(b, "- `%s` — sem descrição; leia `%s` antes de decidir. (atualizada em %s)\n", s.Name, s.Path, d)
+			return
+		}
+		fmt.Fprintf(b, "- `%s` — sem descrição; leia `%s` antes de decidir.\n", s.Name, s.Path)
+		return
+	}
+	if d := day(s.UpdatedAt); d != "" {
+		fmt.Fprintf(b, "- `%s` — %s (atualizada em %s)\n", s.Name, s.Description, d)
+		return
+	}
+	fmt.Fprintf(b, "- `%s` — %s\n", s.Name, s.Description)
+}
+
 // GuidanceBlock monta o bloco de diretrizes das skills escolhidas para o prompt
-// dos executores (dev/QA). Cada corpo é truncado em maxPerSkill bytes e o
-// conjunto em maxTotal bytes (valores <= 0 usam os padrões), mantendo o consumo
-// de tokens sob controle.
-func GuidanceBlock(root string, skills []Skill, maxPerSkill, maxTotal int) string {
-	if len(skills) == 0 {
+// dos executores (dev/QA). Skills de projeto são lidas de projectRoot e nativas
+// de nativeRoot. Cada corpo é truncado em maxPerSkill bytes e o conjunto em
+// maxTotal bytes (valores <= 0 usam os padrões), mantendo o consumo sob controle.
+func GuidanceBlock(projectRoot, nativeRoot string, project, native []Skill, maxPerSkill, maxTotal int) string {
+	if len(project) == 0 && len(native) == 0 {
 		return ""
 	}
 	if maxPerSkill <= 0 {
@@ -154,10 +225,10 @@ func GuidanceBlock(root string, skills []Skill, maxPerSkill, maxTotal int) strin
 	}
 	var b strings.Builder
 	total := 0
-	for _, s := range skills {
+	appendBody := func(root string, s Skill) bool {
 		remaining := maxTotal - total
 		if remaining <= 0 {
-			break
+			return false
 		}
 		limit := maxPerSkill
 		if limit > remaining {
@@ -165,10 +236,21 @@ func GuidanceBlock(root string, skills []Skill, maxPerSkill, maxTotal int) strin
 		}
 		body := strings.TrimSpace(s.ReadBody(root, limit))
 		if body == "" {
-			continue
+			return true
 		}
 		fmt.Fprintf(&b, "\n\n[Skill `%s` selecionada pelo Chefe — siga estas diretrizes]\n%s\n(fonte: %s)", s.Name, body, s.Path)
 		total += len(body)
+		return true
+	}
+	for _, s := range project {
+		if !appendBody(projectRoot, s) {
+			break
+		}
+	}
+	for _, s := range native {
+		if !appendBody(nativeRoot, s) {
+			break
+		}
 	}
 	return b.String()
 }
@@ -178,7 +260,12 @@ func (s Skill) ReadBody(root string, maxBytes int) string {
 	if maxBytes <= 0 {
 		maxBytes = DefaultBodyBytes
 	}
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(s.Path)))
+	f, err := os.Open(filepath.Join(root, filepath.FromSlash(s.Path)))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)+8))
 	if err != nil {
 		return ""
 	}

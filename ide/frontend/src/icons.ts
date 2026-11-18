@@ -46,6 +46,8 @@ export const icons = {
   image: ms("image", 14),
   terminal: ms("terminal", 14),
   sessions: ms("history", 17),
+  skills: ms("extension", 17, true),
+  download: ms("download", 13),
   tokens: ms("bolt", 12),
   editPen: ms("edit", 12),
   newFile: ms("note_add", 13),

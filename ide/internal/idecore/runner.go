@@ -16,6 +16,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -516,6 +517,9 @@ func (m *SessionManager) RunTurnWithOptions(
 		}
 	}
 
+	nativeRoot := NativeSkillsDir()
+	nativeSkills := skillx.LoadNative(nativeRoot)
+
 	runner := &orchestrator.Runner{
 		Workspace:          workspace,
 		Project:            cfg,
@@ -530,6 +534,8 @@ func (m *SessionManager) RunTurnWithOptions(
 		Err:                io.Discard,
 		EnableTriage:       normMode != "squad",
 		EnableClosingChief: true,
+		NativeSkills:       nativeSkills,
+		NativeSkillsRoot:   nativeRoot,
 		OnEvent: func(ev orchestrator.Event) {
 			if m.Emit != nil {
 				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
