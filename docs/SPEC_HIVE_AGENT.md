@@ -132,8 +132,9 @@ Um turno:
 3. `FunctionCall` do ADK vira `Call`. Texto livre dentro de um resultado de ferramenta não é interpretado como chamada. Não há `eval` de saída.
 4. `Decide`. Se `Ask`, emite `approval_required` com o mesmo `ApprovalID` de hoje e espera. O cartão mostra origem, classe, alvo redigido e se a ação veio de página, rotina ou app.
 5. Se a classe for `exec`, `write` fora da raiz já concedida, ou qualquer classe com processo filho: `sandboxx.Probe`. Indisponível ou erro ao aplicar significa recusa, com o motivo na auditoria. Não há segundo caminho “roda mesmo assim”.
-6. Executa. O resultado volta cercado (`source=tool|web|mcp|skill`) e passa pela compactação in-turn.
-7. Grava auditoria. Persiste o turno. Fato de longo prazo só nasce de texto da pessoa ou de um “lembrar” explícito confirmado. Conteúdo de ferramenta, web e MCP não vira memória sozinho.
+6. Antes de qualquer efeito, grava a linha de decisão e só então segue. Efeito aqui é `allow` de `write`, `exec`, `network`, `credentials` ou `destructive`, e também `read` cuja resposta sai da máquina (origem `remote` ou `routine`). Falha ao gravar essa linha cancela a chamada. Negação também fica registrada, e pode ser depois do `Decide`, porque nada correu.
+7. Executa. O resultado volta cercado (`source=tool|web|mcp|skill`) e passa pela compactação in-turn.
+8. Acrescenta o desfecho na mesma trilha (ok, classe do erro, sandbox `applied`). Persiste o turno. Fato de longo prazo só nasce de texto da pessoa ou de um “lembrar” explícito confirmado. Conteúdo de ferramenta, web e MCP não vira memória sozinho.
 
 Orçamento, no espírito de `checkDevGuard`: 40 chamadas de modelo por turno, 8 leituras seguidas sem outro efeito, 80 mil tokens de entrada no turno. Estourar aborta com mensagem acionável. Rotina usa o mesmo teto e, além disso, um teto diário (padrão 20 turnos).
 
@@ -334,7 +335,9 @@ Um classificador de texto não faz parte do desenho. Goose deixa o dele desligad
 
 ### 12.7 Auditoria e conta
 
-Cada decisão do broker acrescenta uma linha JSON: instante, `accountId`, `deviceId` se houver, origem, workstream, ferramenta, classe, decisão (`allow`, `deny`, `ask`), `approvalId`, resultado do sandbox (`applied`, `unavailable`), alvo redigido (caminho relativo ou host, nunca conteúdo), classe do erro. Sem a linha, a chamada que teria efeito colateral não começa.
+A trilha é um acréscimo em `audit.jsonl`, com `fsync` antes de voltar ao broker. Cada linha traz instante, `accountId`, `deviceId` se houver, origem, workstream, ferramenta, classe, decisão (`allow`, `deny`, `ask`), `approvalId`, resultado do sandbox (`applied`, `unavailable`), alvo redigido (caminho relativo ou host, nunca conteúdo) e, no desfecho, a classe do erro.
+
+A linha de decisão é gravada e sincronizada antes do efeito. Sem essa linha durável, a chamada não começa. O desfecho (ok ou erro) é uma segunda linha, com o mesmo `approvalId`, escrita depois. Se o processo cair no meio, a decisão sem desfecho significa que o efeito pode ter ocorrido: na subida o host não repete essa chamada sozinho e mostra o `approvalId` pendente na vista de auditoria. Negação não tem essa janela, porque não há efeito.
 
 Conta, alinhada ao relay: papéis `owner` e `member` existem lá. No PC, gravar política, rotina, allowlist e revisão de skill é ação local de quem está na IDE. O membro, pelo app, manda turno com origem `remote` e aprova cartões que o host emitiu. Ele não ganha RPC que escreva `policy.json`. A memória aberta é a da conta vinculada àquele device. Device revogado perde o socket e a pasta deixa de ser a pasta ativa.
 
@@ -424,6 +427,7 @@ Testes de unidade no `go test` que o CI já roda no Linux e no Windows (`.github
 - Jail e argv: rejeitar `UseShell`, prefixo `GIT_SSH=`, caminho `..`, symlink.
 - Cerca de dado: fixture de injeção não vira `Call`.
 - Redaction: uma string com cara de chave no argumento some do evento e da auditoria.
+- Ordem: num broker falso, a linha de decisão com `fsync` acontece antes do efeito, e a chamada não começa se a gravação falha.
 - `Probe` falso: `exec` recusa.
 - Scheduler: relógio falso dispara uma vez, não cria processo, origem `routine`.
 - Bridge: `runMode` desconhecido continua recusado; `resident` só entra no handler do residente.
