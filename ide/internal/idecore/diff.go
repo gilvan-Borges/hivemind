@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -272,9 +273,18 @@ func buildUntrackedFileDiff(relSlash string, data []byte) FileDiff {
 	return fd
 }
 
+// ErrWorkspaceDirty is returned by SyncIntegrationToWorkspace when the user's
+// working tree has local changes. Sync refuses to run in that case: copying the
+// integration output over uncommitted work would destroy it (the IDE used to do
+// this automatically after every successful run).
+var ErrWorkspaceDirty = errors.New("workspace tem alterações locais não commitadas")
+
 // SyncIntegrationToWorkspace copies added/modified/renamed/deleted files from the
 // hivemind/integracao worktree into the user's open workspace working tree without
 // switching branches or creating automatic commits on the user's branch.
+//
+// It is a no-op when the integration branch has nothing new. When the user's
+// working tree is not clean it returns ErrWorkspaceDirty and changes nothing.
 func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspaceDir) || !g.HasCommit(ctx, workspaceDir) {
@@ -286,6 +296,13 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 	intWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
 	if info, err := os.Stat(intWT); err != nil || !info.IsDir() {
 		return 0, nil
+	}
+	status, err := runGit(ctx, workspaceDir, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(status) != "" && hasUserChanges(status) {
+		return 0, ErrWorkspaceDirty
 	}
 	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+gitx.IntegrationBranch)
 	if err != nil || strings.TrimSpace(raw) == "" {
@@ -313,16 +330,22 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, info.Mode().Perm())
+		return atomicWriteFile(dst, data, info.Mode().Perm())
 	}
 
-	removeInWorkspace := func(relSlash string) {
-		if dst, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relSlash)); err == nil {
-			_ = os.Remove(dst)
+	removeInWorkspace := func(relSlash string) error {
+		dst, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relSlash))
+		if err != nil {
+			return err
 		}
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 
 	synced := 0
+	var failures []string
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -335,20 +358,88 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 		code := parts[0]
 		switch {
 		case strings.HasPrefix(code, "R") && len(parts) >= 3:
-			removeInWorkspace(parts[1])
-			if copyFromWT(parts[2]) == nil {
-				synced++
+			// Copy the new path before removing the old one so a failed copy
+			// never loses the user's file.
+			if err := copyFromWT(parts[2]); err != nil {
+				failures = append(failures, parts[2]+": "+err.Error())
+				continue
 			}
+			if err := removeInWorkspace(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
+			}
+			synced++
 		case code == "D":
-			removeInWorkspace(parts[1])
+			if err := removeInWorkspace(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
+			}
 			synced++
 		default:
-			if copyFromWT(parts[1]) == nil {
-				synced++
+			if err := copyFromWT(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
 			}
+			synced++
 		}
 	}
+	if len(failures) > 0 {
+		return synced, fmt.Errorf("falha ao sincronizar %d arquivo(s): %s", len(failures), strings.Join(failures, "; "))
+	}
 	return synced, nil
+}
+
+// hasUserChanges reports whether git status --porcelain contains changes that
+// are not HiveMind's own bookkeeping. .hivemind/ holds sessions and worktrees;
+// it is expected to be untracked while the project has not committed the
+// recommended .gitignore entry, and must not block a safe integration sync.
+func hasUserChanges(porcelain string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(porcelain, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if idx := strings.LastIndex(path, " -> "); idx >= 0 {
+			path = strings.TrimSpace(path[idx+4:])
+		}
+		path = strings.Trim(path, `"`)
+		path = filepath.ToSlash(path)
+		if path == ".hivemind" || strings.HasPrefix(path, ".hivemind/") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// atomicWriteFile writes data to path through a temporary file in the same
+// directory, then renames it into place. A crash mid-write cannot truncate the
+// original file.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	if mode == 0 {
+		mode = 0o644
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FastCurrentBranch reads <workspace>/.git/HEAD directly without spawning git.

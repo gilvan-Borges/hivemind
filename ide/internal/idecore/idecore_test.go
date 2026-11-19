@@ -3,6 +3,7 @@ package idecore
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -543,6 +544,63 @@ func TestUntrackedDiffDiscardAndSyncIntegration(t *testing.T) {
 	afterDiffs, err := WorkspaceDiff(ctx, repo)
 	if err != nil || len(afterDiffs) != 1 || afterDiffs[0].Path != "endpoint.go" {
 		t.Fatalf("expected synced endpoint.go visible in WorkspaceDiff, got %+v err=%v", afterDiffs, err)
+	}
+}
+
+func TestSyncIntegrationRefusesDirtyWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	repo := t.TempDir()
+	ctx := context.Background()
+	g := gitx.Local{}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "HiveMind"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if _, err := g.Run(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readme := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(readme, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = g.Run(ctx, repo, "add", "README.md")
+	_, _ = g.Run(ctx, repo, "commit", "-m", "init")
+
+	devWT, err := g.EnsureWorktree(ctx, repo, "dev_1", "hivemind/t/dev_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(devWT, "endpoint.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.CommitAll(ctx, devWT, "feat: endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := g.Integrate(ctx, repo, []string{"hivemind/t/dev_1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Local, uncommitted work in the user's tree: sync must refuse to touch it.
+	if err := os.WriteFile(readme, []byte("alteração local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := SyncIntegrationToWorkspace(ctx, repo)
+	if !errors.Is(err, ErrWorkspaceDirty) {
+		t.Fatalf("expected ErrWorkspaceDirty, got synced=%d err=%v", synced, err)
+	}
+	if synced != 0 {
+		t.Fatalf("dirty workspace must not sync files, got %d", synced)
+	}
+	if data, _ := os.ReadFile(readme); string(data) != "alteração local\n" {
+		t.Fatalf("local work was overwritten: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "endpoint.go")); !os.IsNotExist(err) {
+		t.Fatal("integration file must not be copied into a dirty workspace")
 	}
 }
 
