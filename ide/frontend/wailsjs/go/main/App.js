@@ -110,6 +110,10 @@ export function InstallSkillToProject(arg1, arg2) {
   return window['go']['main']['App']['InstallSkillToProject'](arg1, arg2);
 }
 
+export function JiraStatus() {
+  return window['go']['main']['App']['JiraStatus']();
+}
+
 export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
@@ -204,6 +208,10 @@ export function SaveFile(arg1, arg2, arg3) {
 
 export function SaveGitHubConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveGitHubConfig'](arg1, arg2, arg3);
+}
+
+export function SaveJiraConfig(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveJiraConfig'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SaveNativeSkill(arg1, arg2) {

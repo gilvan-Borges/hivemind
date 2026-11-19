@@ -583,6 +583,39 @@ export namespace idecore {
 
 }
 
+export namespace jirax {
+	
+	export class ConnectorStatus {
+	    configured: boolean;
+	    connected: boolean;
+	    source: string;
+	    baseUrl: string;
+	    email: string;
+	    tokenMasked: string;
+	    defaultProject: string;
+	    user: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnectorStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.connected = source["connected"];
+	        this.source = source["source"];
+	        this.baseUrl = source["baseUrl"];
+	        this.email = source["email"];
+	        this.tokenMasked = source["tokenMasked"];
+	        this.defaultProject = source["defaultProject"];
+	        this.user = source["user"];
+	        this.detail = source["detail"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
 	export class AgyBootstrap {
@@ -1082,6 +1115,7 @@ export namespace orchestrator {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    pendingQa?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Result(source);
@@ -1097,6 +1131,7 @@ export namespace orchestrator {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.pendingQa = source["pendingQa"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

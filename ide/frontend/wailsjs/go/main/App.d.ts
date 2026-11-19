@@ -4,6 +4,7 @@ import {main} from '../models';
 import {team} from '../models';
 import {modelx} from '../models';
 import {idecore} from '../models';
+import {jirax} from '../models';
 import {orchestrator} from '../models';
 
 export function BootstrapAgy(arg1:boolean):Promise<main.AgyBootstrap>;
@@ -60,6 +61,8 @@ export function InitGit(arg1:string):Promise<void>;
 
 export function InstallSkillToProject(arg1:string,arg2:string):Promise<void>;
 
+export function JiraStatus():Promise<jirax.ConnectorStatus>;
+
 export function ListBranches(arg1:string):Promise<Array<string>>;
 
 export function ListDirectory(arg1:string,arg2:string):Promise<Array<idecore.FileNode>>;
@@ -107,6 +110,8 @@ export function SaveAIUsageLimits(arg1:string,arg2:number,arg3:number):Promise<m
 export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveGitHubConfig(arg1:string,arg2:string,arg3:string):Promise<idecore.GitHubStatusInfo>;
+
+export function SaveJiraConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean):Promise<jirax.ConnectorStatus>;
 
 export function SaveNativeSkill(arg1:string,arg2:string):Promise<void>;
 
