@@ -15,6 +15,12 @@ func TestNormalizeProviderOpenRouter(t *testing.T) {
 	if got := NormalizeProvider("", "gpt-4.1"); got != "openai" {
 		t.Fatalf("plain gpt id must infer openai, got %q", got)
 	}
+	if got := NormalizeProvider("", "cursor:auto"); got != "cursor" {
+		t.Fatalf("cursor:auto deve ser o provedor cursor, veio %q", got)
+	}
+	if got := NormalizeProvider("cursor", "auto"); got != "cursor" {
+		t.Fatalf("provedor explícito, veio %q", got)
+	}
 	if got := NormalizeProvider("", "claude-sonnet-4-5"); got != "anthropic" {
 		t.Fatalf("plain claude id must infer anthropic, got %q", got)
 	}

@@ -145,6 +145,12 @@ func newDoctorCmd() *cobra.Command {
 			} else {
 				fmt.Fprintf(out, "agy: %s\n", agy.Detail)
 			}
+			cur := modelx.ProbeCursor()
+			if cur.Found {
+				fmt.Fprintf(out, "cursor CLI: %s (%s)\n", cur.Detail, cur.Path)
+			} else {
+				fmt.Fprintf(out, "cursor CLI: %s\n", cur.Detail)
+			}
 			if f, err := team.Load(dir); err != nil {
 				fmt.Fprintln(out, "Time: ausente")
 			} else {
@@ -152,8 +158,12 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Fprintf(out, "Jira na configuração: %s\n", simNao(f.Settings.JiraEnabled))
 				fmt.Fprintf(out, "Auto-commit: %s | auto-pr: %s\n", simNao(f.Settings.AutoCommit), simNao(f.Settings.AutoPR))
 			}
-			for _, key := range []string{"GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
-				fmt.Fprintf(out, "%s: %s\n", key, presente(os.Getenv(key)))
+			for _, key := range []string{"GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "CURSOR_API_KEY", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
+				val := os.Getenv(key)
+				if key == "CURSOR_API_KEY" {
+					val = modelx.EnvOrStored(key)
+				}
+				fmt.Fprintf(out, "%s: %s\n", key, presente(val))
 			}
 			probe, _ := cmd.Flags().GetBool("probe")
 			if probe {

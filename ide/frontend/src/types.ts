@@ -12,6 +12,13 @@ export interface AgyModel {
   name: string;
 }
 
+export interface CursorCLIStatus {
+  found: boolean;
+  path: string;
+  hasKey: boolean;
+  detail: string;
+}
+
 export interface OpenRouterModelInfo {
   id: string;
   name: string;
@@ -799,6 +806,8 @@ export interface WailsBackendApp {
   GetAPIKeysStatus?(): Promise<Record<string, string>>;
   SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
   ListOpenRouterModels?(): Promise<OpenRouterModelInfo[]>;
+  ListCursorModels?(): Promise<AgyModel[]>;
+  CursorCLIStatus?(): Promise<CursorCLIStatus>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
   SetNativeSkillEnabled?(name: string, enabled: boolean): Promise<void>;
   ListMCPServers?(workspace: string): Promise<MCPServerInfo[]>;

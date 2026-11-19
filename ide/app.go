@@ -536,6 +536,21 @@ func (a *App) ListOpenRouterModels() ([]modelx.OpenRouterModel, error) {
 	return modelx.OpenRouterModels(a.ctx)
 }
 
+// CursorCLIStatus reports the official Cursor CLI without revealing the API key.
+func (a *App) CursorCLIStatus() modelx.CursorStatus {
+	return modelx.ProbeCursor()
+}
+
+// ListCursorModels returns auto plus whatever `agent models` lists for this key.
+func (a *App) ListCursorModels() ([]modelx.AgyModel, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	models, _, err := modelx.ListCursorModels(ctx)
+	return models, err
+}
+
 // SaveTeamWizard creates or updates a team in .hivemind/team.yaml without altering .gitignore.
 func (a *App) SaveTeamWizard(workspace string, input idecore.WizardInput) (team.File, error) {
 	return idecore.BuildTeamFromWizard(workspace, input)

@@ -855,6 +855,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 }
 
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
+	ctx = modelx.WithAgentDir(ctx, root)
 	llm, err := r.modelFor(ctx, a)
 	if err != nil {
 		return nil, fmt.Errorf("modelo de %s (provedor %s): %w", a.Name, a.Provider, err)
@@ -1842,10 +1843,6 @@ func (r *Runner) resolveTriageChief() team.Agent {
 
 func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode, runMode string) (bool, string, error) {
 	chief := r.resolveTriageChief()
-	llm, err := r.modelFor(ctx, chief)
-	if err != nil {
-		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
-	}
 
 	sddDocs := runMode == "plan:sdd"
 	sddJira := runMode == "plan:sdd-jira"
@@ -1854,6 +1851,10 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	toolRoot := r.Workspace
 	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
 		toolRoot = r.ReviewRoot
+	}
+	llm, err := r.modelFor(modelx.WithAgentDir(ctx, toolRoot), chief)
+	if err != nil {
+		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}
 
 	// Triage Chief uses RoleProjectManager with DisableGitWrite=true so it never edits or commits on main workspace,
