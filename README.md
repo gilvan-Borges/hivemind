@@ -169,6 +169,9 @@ Um exemplo completo está em [examples/team.yaml](examples/team.yaml). Campos ú
 | `base_branch` | Branch base principal (`main`); merge em `main` pede permissão explícita ao usuário (salvo em `full_access`) |
 | `max_qa_loops` | Máximo de voltas desenvolvedor/QA |
 | `max_llm_calls` | Limite de chamadas de modelo. `0` usa o padrão do ADK (500). `-1` não limita |
+| `max_dev_calls` | Limite rígido de chamadas LLM por dev a cada rodada Dev↔QA (padrão `80`; estourar aborta a execução para economizar tokens) |
+| `max_dev_explore_calls` | Máximo de buscas/leituras seguidas sem editar nenhum arquivo (padrão `40`; detecta loop exploratório e aborta) |
+| `max_dev_input_tokens` | Orçamento de tokens de entrada por dev por rodada (padrão `1500000`; aborta ao estourar) |
 | `max_tokens` | Limite de tokens por execução (padrão `0` = sem limite). `hivemind run --max-tokens N` sobrescreve |
 | `shell_allowlist` | Executáveis que `run_shell` pode chamar (`full_access` libera todos) |
 | `confirm_shell` | Pede confirmação para comando destrutivo |

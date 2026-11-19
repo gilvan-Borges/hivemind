@@ -13,6 +13,9 @@ settings:
     - production
   require_main_merge_approval: true
   max_qa_loops: 3
+  max_dev_calls: 80            # aborta dev em loop de chamadas sem entregar
+  max_dev_explore_calls: 40    # aborta dev que só lê/busca sem editar nada
+  max_dev_input_tokens: 1500000 # orçamento de tokens de entrada por dev por rodada
   base_branch: main
   confirm_shell: true
   shell_allowlist:

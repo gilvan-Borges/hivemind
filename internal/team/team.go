@@ -122,6 +122,9 @@ type Settings struct {
 	MaxQALoops               int                `yaml:"max_qa_loops" json:"max_qa_loops"`
 	MaxDynamicDevs           int                `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
 	MaxLLMCalls              int                `yaml:"max_llm_calls" json:"max_llm_calls"`
+	MaxDevCalls              int                `yaml:"max_dev_calls,omitempty" json:"max_dev_calls,omitempty"`
+	MaxDevExploreCalls       int                `yaml:"max_dev_explore_calls,omitempty" json:"max_dev_explore_calls,omitempty"`
+	MaxDevInputTokens        int64              `yaml:"max_dev_input_tokens,omitempty" json:"max_dev_input_tokens,omitempty"`
 	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
 	ReviewModel              string             `yaml:"review_model,omitempty" json:"review_model,omitempty"`
@@ -150,6 +153,9 @@ func DefaultSettings() Settings {
 		RequireMainMergeApproval: &reqMain,
 		MaxQALoops:               3,
 		MaxDynamicDevs:           5,
+		MaxDevCalls:              80,
+		MaxDevExploreCalls:       40,
+		MaxDevInputTokens:        1_500_000,
 		BaseBranch:               "main",
 		ShellAllowlist:           append([]string(nil), DefaultAllowlist...),
 		ConfirmShell:             &confirm,
@@ -178,6 +184,53 @@ func (s Settings) EffectiveMaxDynamicDevs() int {
 		return 6
 	}
 	return s.MaxDynamicDevs
+}
+
+// EffectiveMaxDevCalls returns the hard per-round LLM call cap for a single
+// developer agent (default 80, range 20..300). The orchestrator aborts the run
+// with a clear error when a dev exceeds it without finishing, preventing
+// token-burning loops like endless read/search spirals.
+func (s Settings) EffectiveMaxDevCalls() int {
+	if s.MaxDevCalls <= 0 {
+		return 80
+	}
+	if s.MaxDevCalls < 20 {
+		return 20
+	}
+	if s.MaxDevCalls > 300 {
+		return 300
+	}
+	return s.MaxDevCalls
+}
+
+// EffectiveMaxDevExploreCalls returns the hard cap of consecutive read/search
+// calls a dev may make before editing ANY file (default 40, range 8..120).
+func (s Settings) EffectiveMaxDevExploreCalls() int {
+	if s.MaxDevExploreCalls <= 0 {
+		return 40
+	}
+	if s.MaxDevExploreCalls < 8 {
+		return 8
+	}
+	if s.MaxDevExploreCalls > 120 {
+		return 120
+	}
+	return s.MaxDevExploreCalls
+}
+
+// EffectiveMaxDevInputTokens returns the per-round input-token budget of a dev
+// (default 1,500,000, range 200,000..10,000,000).
+func (s Settings) EffectiveMaxDevInputTokens() int64 {
+	if s.MaxDevInputTokens <= 0 {
+		return 1_500_000
+	}
+	if s.MaxDevInputTokens < 200_000 {
+		return 200_000
+	}
+	if s.MaxDevInputTokens > 10_000_000 {
+		return 10_000_000
+	}
+	return s.MaxDevInputTokens
 }
 
 // EffectiveInTurnKeepToolResults returns how many recent tool outputs stay verbatim

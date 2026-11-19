@@ -86,23 +86,23 @@ type Runner struct {
 	EnableTriage       bool
 	EnableClosingChief bool
 	// ReviewRoot optionally isolates read/test tools during auto-review onto an ephemeral PR worktree.
-	ReviewRoot         string
-	autoReviewMode     bool
-	integration        string
-	deliveryRoot       string
-	deliveryBranch     string
-	issueKey           string
-	objectiveText      string
-	reviewRequested    bool
-	prNumber           int
-	prBranch           string
-	prReviewers        []string
-	devSlices          []string
-	chiefPlan          string
-	chiefContextBrief  string
-	pauseForApproval   bool
-	skills             []skillx.Skill
-	selectedSkills     []skillx.Skill
+	ReviewRoot        string
+	autoReviewMode    bool
+	integration       string
+	deliveryRoot      string
+	deliveryBranch    string
+	issueKey          string
+	objectiveText     string
+	reviewRequested   bool
+	prNumber          int
+	prBranch          string
+	prReviewers       []string
+	devSlices         []string
+	chiefPlan         string
+	chiefContextBrief string
+	pauseForApproval  bool
+	skills            []skillx.Skill
+	selectedSkills    []skillx.Skill
 	// NativeSkills é o catálogo nativo da IDE, preenchido pelo runner da IDE (CLI deixa vazio).
 	NativeSkills     []skillx.Skill
 	NativeSkillsRoot string
@@ -112,6 +112,91 @@ type Runner struct {
 	turnTotalTokens  int64
 	qaLastStatus     string
 	qaStallCount     int
+	devBudgets       map[string]*devTurnBudget
+}
+
+// devTurnBudget tracks, per developer agent and per Dev↔QA round, how many LLM
+// calls were made, how many were pure exploration (reads/searches), how many
+// files were edited, and how many input tokens were consumed. It feeds the
+// performance guard that aborts token-burning exploration spirals.
+type devTurnBudget struct {
+	calls       int
+	explore     int
+	writes      int
+	inputTokens int64
+}
+
+var devExploreTools = map[string]bool{
+	"read_file": true, "search_text": true, "find_files": true, "list_dir": true,
+	"git_status": true, "git_diff": true, "git_log": true,
+}
+
+var devWriteTools = map[string]bool{
+	"edit_file": true, "write_file": true, "write_doc": true,
+}
+
+func (r *Runner) resetDevBudgets() {
+	r.devBudgets = map[string]*devTurnBudget{}
+}
+
+// checkDevGuard enforces per-dev performance budgets on the event stream.
+// A dev that reads/searches too much without editing, exceeds its call cap or
+// its input-token budget aborts the run with an actionable error instead of
+// letting the model burn millions of tokens. Budgets reset when QA takes over.
+func (r *Runner) checkDevGuard(ev *session.Event, labels map[string]string) error {
+	if ev == nil || ev.Partial || ev.Author == "" {
+		return nil
+	}
+	label := labels[ev.Author]
+	stage := inferStage(ev.Author, label)
+	if stage == "qa" {
+		// A QA pass means the next dev invocation is a fresh round.
+		r.resetDevBudgets()
+		return nil
+	}
+	if stage != "dev" {
+		return nil
+	}
+	if r.devBudgets == nil {
+		r.devBudgets = map[string]*devTurnBudget{}
+	}
+	author := strings.ToLower(strings.TrimSpace(ev.Author))
+	b := r.devBudgets[author]
+	if b == nil {
+		b = &devTurnBudget{}
+		r.devBudgets[author] = b
+	}
+
+	if u := ev.LLMResponse.UsageMetadata; u != nil && u.PromptTokenCount > 0 {
+		b.inputTokens += int64(u.PromptTokenCount)
+	}
+	if ev.LLMResponse.Content != nil {
+		for _, part := range ev.LLMResponse.Content.Parts {
+			if part == nil || part.FunctionCall == nil {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(part.FunctionCall.Name))
+			b.calls++
+			if devExploreTools[name] {
+				b.explore++
+			}
+			if devWriteTools[name] {
+				b.writes++
+				b.explore = 0
+			}
+		}
+	}
+
+	if maxCalls := r.Project.Settings.EffectiveMaxDevCalls(); b.calls > maxCalls {
+		return fmt.Errorf("desempenho do dev %q: %d chamadas de LLM nesta rodada (limite %d) sem concluir a entrega — execução interrompida para economizar tokens. Divida a tarefa em fatias menores, detalhe os arquivos exatos no plano do Chefe ou use um modelo mais rápido para os devs.", ev.Author, b.calls, maxCalls)
+	}
+	if maxExplore := r.Project.Settings.EffectiveMaxDevExploreCalls(); b.explore >= maxExplore && b.writes == 0 {
+		return fmt.Errorf("desempenho do dev %q: %d buscas/leituras seguidas sem editar NENHUM arquivo — padrão de loop exploratório detectado; execução interrompida antes de queimar mais tokens. A fatia provavelmente está grande ou ambígua demais: reduza o escopo no dev_tasks ou especifique os arquivos/trechos exatos no plano do Chefe.", ev.Author, b.explore)
+	}
+	if maxInput := r.Project.Settings.EffectiveMaxDevInputTokens(); b.inputTokens > maxInput {
+		return fmt.Errorf("orçamento do dev %q: %d tokens de entrada nesta rodada (limite %d) sem concluir a entrega — execução interrompida. Reduza o escopo da fatia ou troque o modelo do dev por um mais barato/rápido.", ev.Author, b.inputTokens, maxInput)
+	}
+	return nil
 }
 
 // Request is one user turn.
@@ -230,6 +315,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.turnTotalTokens = 0
 	r.qaLastStatus = ""
 	r.qaStallCount = 0
+	r.resetDevBudgets()
 
 	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
 	if runMode == "plan:feature" {
@@ -381,6 +467,16 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			r.recordUsage(ev, labels)
 			if r.OnEvent != nil {
 				r.emitEvent(ev, labels)
+			}
+			if guardErr := r.checkDevGuard(ev, labels); guardErr != nil {
+				result.InputTokens = r.turnInputTokens
+				result.OutputTokens = r.turnOutputTokens
+				result.TotalTokens = r.turnTotalTokens
+				r.printUsageSummary(result, r.Err, "uso até a interrupção: ")
+				if r.OnEvent != nil {
+					r.OnEvent(Event{Kind: "error", Text: guardErr.Error()})
+				}
+				return result, guardErr
 			}
 			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
 				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
@@ -639,7 +735,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
+		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {
@@ -2057,7 +2153,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 - O time base tem 3 agentes (Chefe/Arquiteto, Dev e QA), sem quantidade fixa de devs.
 - Você decide quantos desenvolvedores disparar passando de 1 até %d itens em "dev_tasks":
   • Tarefa pequena/média ou concentrada nos mesmos arquivos: passe apenas 1 item em "dev_tasks" (dispara 1 dev, mais rápido e econômico).
-  • Tarefa grande com módulos/arquivos independentes: divida em 2, 3, 4 ou até %d itens em "dev_tasks" (cada item dispara um dev paralelo em sua própria worktree isolada, SEM sobreposição de arquivos).`, maxDevs, maxDevs, maxDevs)
+  • Tarefa grande com módulos/arquivos independentes: divida em 2, 3, 4 ou até %d itens em "dev_tasks" (cada item dispara um dev paralelo em sua própria worktree isolada, SEM sobreposição de arquivos).
+- CADA fatia deve caber em poucas edições: o dev tem orçamento rígido por rodada (%d chamadas e %d leituras/buscas antes da 1ª edição; estouro aborta a execução). Fatias ambíguas ou grandes demais fazem o dev girar em leitura sem editar e queimam milhões de tokens — prefira fatiar mais fino e listar os arquivos/caminhos exatos em cada dev_tasks.`, maxDevs, maxDevs, maxDevs, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 
 	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
