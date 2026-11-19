@@ -29,6 +29,7 @@ type FileNode struct {
 
 var ignoredDirs = map[string]bool{
 	".git":         true,
+	".worktrees":   true,
 	"node_modules": true,
 	"target":       true,
 	"dist":         true,

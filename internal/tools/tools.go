@@ -85,6 +85,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canList()); err != nil {
 			return nil, err
 		}
+		if err := add(deps.canSearchText()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canFindFiles()); err != nil {
+			return nil, err
+		}
 		if err := add(deps.gitStatus()); err != nil {
 			return nil, err
 		}
@@ -121,6 +127,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canList()); err != nil {
 			return nil, err
 		}
+		if err := add(deps.canSearchText()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canFindFiles()); err != nil {
+			return nil, err
+		}
 		if err := add(deps.gitStatus()); err != nil {
 			return nil, err
 		}
@@ -139,6 +151,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canSearchText()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canFindFiles()); err != nil {
 			return nil, err
 		}
 		if err := add(deps.canWrite()); err != nil {
@@ -173,6 +191,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canList()); err != nil {
 			return nil, err
 		}
+		if err := add(deps.canSearchText()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canFindFiles()); err != nil {
+			return nil, err
+		}
 		if err := add(deps.canWrite()); err != nil {
 			return nil, err
 		}
@@ -191,6 +215,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canSearchText()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canFindFiles()); err != nil {
 			return nil, err
 		}
 		if err := add(deps.canShell()); err != nil {
@@ -227,35 +257,100 @@ type pathArgs struct {
 	Path string `json:"path" jsonschema:"Caminho relativo ao diretório de trabalho do agente."`
 }
 
+type readFileArgs struct {
+	Path      string `json:"path" jsonschema:"Caminho relativo ao diretório de trabalho do agente."`
+	StartLine int    `json:"start_line,omitempty" jsonschema:"Linha inicial (1-based) opcional para ler apenas um trecho do arquivo."`
+	EndLine   int    `json:"end_line,omitempty" jsonschema:"Linha final inclusiva (1-based) opcional (máx. 400 linhas por chamada quando especificado)."`
+}
+
 func (d Deps) canRead() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "read_file",
-		Description: "Lê um arquivo de texto dentro do workspace do agente.",
-	}, func(_ agent.Context, args pathArgs) (textResult, error) {
-		path, err := workspace.ResolveWithOptions(d.Root, args.Path, workspace.Options{AllowMemoryRead: true})
+		Description: "Lê um arquivo de texto dentro do workspace do agente. Aceita start_line e end_line opcionais (1-based, até 400 linhas) para ler apenas o trecho relevante de arquivos grandes.",
+	}, func(_ agent.Context, args readFileArgs) (textResult, error) {
+		out, err := readFileRange(d.Root, args)
 		if err != nil {
 			return textResult{}, err
 		}
-		f, err := os.Open(path)
-		if err != nil {
-			return textResult{}, err
-		}
-		defer f.Close()
-		info, err := f.Stat()
-		if err != nil {
-			return textResult{}, err
-		}
-		if info.IsDir() {
-			return textResult{}, fmt.Errorf("%s é um diretório", args.Path)
-		}
-		const limit = 64 * 1024
+		return textResult{Text: out}, nil
+	})
+}
+
+func readFileRange(root string, args readFileArgs) (string, error) {
+	path, err := workspace.ResolveWithOptions(root, args.Path, workspace.Options{AllowMemoryRead: true})
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s é um diretório", args.Path)
+	}
+
+	const limit = 64 * 1024
+	if args.StartLine <= 0 && args.EndLine <= 0 {
 		data, err := io.ReadAll(io.LimitReader(f, limit+8))
 		if err != nil {
-			return textResult{}, err
+			return "", err
 		}
-		text := strx.TruncateBytes(string(data), limit, "\n…(arquivo truncado)")
-		return textResult{Text: text}, nil
-	})
+		text := strx.TruncateBytes(string(data), limit, "\n…(arquivo truncado; use start_line e end_line para ler trechos específicos)")
+		return text, nil
+	}
+
+	const maxRangeFileBytes = 2 * 1024 * 1024
+	const maxWindowLines = 400
+	data, err := io.ReadAll(io.LimitReader(f, maxRangeFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxRangeFileBytes {
+		return "", fmt.Errorf("%s excede o limite de 2 MiB para leitura por faixa de linhas", args.Path)
+	}
+
+	rawLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	// Drop a single trailing empty element produced by a final newline.
+	if len(rawLines) > 0 && rawLines[len(rawLines)-1] == "" {
+		rawLines = rawLines[:len(rawLines)-1]
+	}
+	totalLines := len(rawLines)
+	if totalLines == 0 {
+		return fmt.Sprintf("# %s (0 linhas — arquivo vazio)", args.Path), nil
+	}
+
+	start := args.StartLine
+	if start <= 0 {
+		start = 1
+	}
+	if start > totalLines {
+		return "", fmt.Errorf("start_line=%d excede o total de linhas de %s (%d linhas)", start, args.Path, totalLines)
+	}
+	end := args.EndLine
+	if end <= 0 {
+		end = start + 199
+	}
+	if end < start {
+		return "", fmt.Errorf("end_line=%d é menor que start_line=%d", end, start)
+	}
+	if end-start+1 > maxWindowLines {
+		end = start + maxWindowLines - 1
+	}
+	if end > totalLines {
+		end = totalLines
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s (linhas %d-%d de %d)\n", args.Path, start, end, totalLines)
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&b, "L%d: %s\n", i, rawLines[i-1])
+	}
+	return strx.TruncateBytes(strings.TrimRight(b.String(), "\n"), limit, "\n…(trecho truncado; reduza a faixa start_line..end_line)"), nil
 }
 
 func (d Deps) canList() (tool.Tool, error) {
@@ -280,7 +375,7 @@ func (d Deps) canList() (tool.Tool, error) {
 		out := make([]string, 0, len(entries))
 		for _, e := range entries {
 			name := e.Name()
-			if strings.EqualFold(name, ".git") || strings.EqualFold(name, ".hivemind") {
+			if strings.EqualFold(name, ".git") || strings.EqualFold(name, ".hivemind") || strings.EqualFold(name, ".worktrees") {
 				continue
 			}
 			if e.IsDir() {
@@ -558,6 +653,34 @@ func (d Deps) addGitHubRead(out *[]tool.Tool) error {
 	if err != nil {
 		return err
 	}
+	prFiles, err := functiontool.New(functiontool.Config{
+		Name:        "github_pr_files",
+		Description: "Lista apenas os caminhos e contagens (+add -del) dos arquivos alterados em um Pull Request sem trazer o patch completo. Ideal para mapear PRs grandes antes de filtrar github_pr_diff por arquivo.",
+	}, func(ctx agent.Context, args struct {
+		Number int `json:"number" jsonschema:"Número do pull request."`
+	}) (textResult, error) {
+		files, err := d.GitHub.ListPullRequestFiles(ctx, args.Number)
+		if err != nil {
+			return textResult{}, err
+		}
+		if len(files) == 0 {
+			return textResult{Text: fmt.Sprintf("Nenhum arquivo alterado encontrado no PR #%d.", args.Number)}, nil
+		}
+		var b strings.Builder
+		totalAdd, totalDel := 0, 0
+		for _, f := range files {
+			totalAdd += f.Additions
+			totalDel += f.Deletions
+		}
+		fmt.Fprintf(&b, "PR #%d — %d arquivo(s) alterado(s) (+%d -%d):\n", args.Number, len(files), totalAdd, totalDel)
+		for _, f := range files {
+			fmt.Fprintf(&b, "- %s [%s] (+%d -%d)\n", f.Filename, f.Status, f.Additions, f.Deletions)
+		}
+		return textResult{Text: strings.TrimRight(b.String(), "\n")}, nil
+	})
+	if err != nil {
+		return err
+	}
 	prDiff, err := functiontool.New(functiontool.Config{
 		Name:        "github_pr_diff",
 		Description: "Lista os arquivos modificados e os trechos de diff (patch) de um Pull Request no GitHub. Aceita filtro opcional por caminho de arquivo.",
@@ -685,7 +808,7 @@ func (d Deps) addGitHubRead(out *[]tool.Tool) error {
 	if err != nil {
 		return err
 	}
-	*out = append(*out, getPR, comments, prDiff, listPRs, getIssue, ci)
+	*out = append(*out, getPR, comments, prFiles, prDiff, listPRs, getIssue, ci)
 	return nil
 }
 

@@ -65,6 +65,8 @@ export interface TeamSettings {
   base_branch: string;
   max_dynamic_devs?: number;
   max_tokens?: number;
+  in_turn_keep_tool_results?: number;
+  review_model?: string;
   skill_assignments?: SkillAssignment[];
 }
 

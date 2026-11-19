@@ -139,11 +139,6 @@ func (fw *FileWatcher) loop() {
 }
 
 func (fw *FileWatcher) handle(ev fsnotify.Event) {
-	if ev.Has(fsnotify.Create) {
-		if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
-			go fw.watchTree(ev.Name)
-		}
-	}
 	rel, err := filepath.Rel(fw.root, ev.Name)
 	if err != nil {
 		return
@@ -151,6 +146,11 @@ func (fw *FileWatcher) handle(ev fsnotify.Event) {
 	rel = filepath.ToSlash(rel)
 	if rel == "." || isIgnoredRelPath(rel) {
 		return
+	}
+	if ev.Has(fsnotify.Create) {
+		if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
+			go fw.watchTree(ev.Name)
+		}
 	}
 	fw.mu.Lock()
 	fw.pend[rel] = true

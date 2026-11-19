@@ -1241,6 +1241,8 @@ export namespace team {
 	    max_dynamic_devs?: number;
 	    max_llm_calls: number;
 	    max_tokens?: number;
+	    in_turn_keep_tool_results?: number;
+	    review_model?: string;
 	    base_branch: string;
 	    shell_allowlist?: string[];
 	    confirm_shell?: boolean;
@@ -1265,6 +1267,8 @@ export namespace team {
 	        this.max_dynamic_devs = source["max_dynamic_devs"];
 	        this.max_llm_calls = source["max_llm_calls"];
 	        this.max_tokens = source["max_tokens"];
+	        this.in_turn_keep_tool_results = source["in_turn_keep_tool_results"];
+	        this.review_model = source["review_model"];
 	        this.base_branch = source["base_branch"];
 	        this.shell_allowlist = source["shell_allowlist"];
 	        this.confirm_shell = source["confirm_shell"];

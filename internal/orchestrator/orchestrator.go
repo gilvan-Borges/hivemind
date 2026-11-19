@@ -784,6 +784,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		DisallowTransferToPeers:  true,
 		Tools:                    roleTools,
 		OutputKey:                outputKey,
+		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
+			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+		},
 		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
 			var b strings.Builder
 			b.WriteString(instruction)
@@ -1460,6 +1463,40 @@ func summarizeToolArgs(name string, args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
+	switch name {
+	case "read_file":
+		if p, ok := args["path"]; ok && p != nil {
+			s := strings.TrimSpace(fmt.Sprint(p))
+			if s != "" {
+				start := parseIntArg(args["start_line"])
+				end := parseIntArg(args["end_line"])
+				if start > 0 && end > 0 {
+					s = fmt.Sprintf("%s:%d-%d", s, start, end)
+				} else if start > 0 {
+					s = fmt.Sprintf("%s:%d", s, start)
+				}
+				return strx.TruncateRunes(strings.ReplaceAll(s, "\n", " "), 120, "…")
+			}
+		}
+	case "search_text":
+		q := strings.TrimSpace(fmt.Sprint(args["query"]))
+		if q != "" && q != "<nil>" {
+			if g := strings.TrimSpace(fmt.Sprint(args["glob"])); g != "" && g != "<nil>" {
+				q += " (" + g + ")"
+			} else if p := strings.TrimSpace(fmt.Sprint(args["path"])); p != "" && p != "<nil>" {
+				q += " em " + p
+			}
+			return strx.TruncateRunes(strings.ReplaceAll(q, "\n", " "), 120, "…")
+		}
+	case "find_files":
+		pat := strings.TrimSpace(fmt.Sprint(args["pattern"]))
+		if pat != "" && pat != "<nil>" {
+			if p := strings.TrimSpace(fmt.Sprint(args["path"])); p != "" && p != "<nil>" {
+				pat += " em " + p
+			}
+			return strx.TruncateRunes(strings.ReplaceAll(pat, "\n", " "), 120, "…")
+		}
+	}
 	if strings.HasPrefix(name, "github_") {
 		if num, ok := args["number"]; ok && num != nil {
 			n := strings.TrimSpace(fmt.Sprint(num))
@@ -1471,7 +1508,7 @@ func summarizeToolArgs(name string, args map[string]any) string {
 			}
 		}
 	}
-	for _, key := range []string{"path", "command", "message", "title", "number", "key", "jql", "ref", "note", "notes"} {
+	for _, key := range []string{"path", "query", "pattern", "command", "message", "title", "number", "key", "jql", "ref", "note", "notes"} {
 		if v, ok := args[key]; ok && v != nil {
 			s := strings.TrimSpace(fmt.Sprint(v))
 			if s != "" {
@@ -1480,6 +1517,24 @@ func summarizeToolArgs(name string, args map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func parseIntArg(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		i, _ := strconv.Atoi(strings.TrimSpace(n))
+		return i
+	default:
+		return 0
+	}
 }
 
 func summarizeToolResult(res map[string]any) string {
@@ -1646,8 +1701,19 @@ type delegateResult struct {
 	Status string `json:"status"`
 }
 
-func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode, runMode string) (bool, string, error) {
+func (r *Runner) resolveTriageChief() team.Agent {
 	chief := r.primaryChief()
+	if r.reviewRequested {
+		if rm := strings.TrimSpace(r.Project.Settings.ReviewModel); rm != "" {
+			chief.Model = rm
+			chief.Provider = team.NormalizeProvider("", rm)
+		}
+	}
+	return chief
+}
+
+func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode, runMode string) (bool, string, error) {
+	chief := r.resolveTriageChief()
 	llm, err := r.modelFor(ctx, chief)
 	if err != nil {
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
@@ -1955,8 +2021,19 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
 - ANTES de opinar, comentar ou revisar qualquer PR, chame github_get_pr (o conector nativo GitHub retorna autoria, revisões formais, comentários inline no código e comentários gerais) e confira o campo "Papel neste PR":
   • Se o PR for NOSSO (autor = usuário autenticado): NUNCA atue como revisor nem emita parecer revisando o próprio PR. Leia todos os comentários gerais e inline deixados pelos revisores externos, faça a triagem técnica e despache para a equipe com delegate_to_squad informando pr_number, pr_branch e reviewers; ao terminar, o Chefe comita, responde ponto a ponto (github_comment_pr / github_reply_review_comment) e pede nova revisão (github_request_review).
-  • Se o PR for DE TERCEIRO: só aprove/revise/comente quando houver pedido de revisão; use github_pr_diff para inspecionar o diff completo e github_review_pr para enviar o parecer.
-- Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.`
+  • Se o PR for DE TERCEIRO: só aprove/revise/comente quando houver pedido de revisão; use github_pr_files/github_pr_diff para inspecionar o diff completo e github_review_pr para enviar o parecer.
+- Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.
+- INVESTIGAÇÃO ECONÔMICA NO PROJETO: prefira search_text e find_files em vez de múltiplas chamadas list_dir, e use read_file com start_line/end_line ao inspecionar arquivos grandes.`
+
+	if r.reviewRequested {
+		govRules += `
+
+PROTOCOLO DE REVISÃO PROFUNDA & ECONÔMICA DE PR:
+1. Comece por github_get_pr + github_pr_files (ou github_pr_diff) + github_ci_status em paralelo.
+2. Quando houver dúvida fora do diff (DTOs, rotas, permissões, contratos de API, catracas ou testes), investigue o projeto inteiro livremente — mas use search_text e find_files para localizar símbolos/arquivos em 1 chamada e read_file com start_line/end_line para ler apenas os trechos relevantes.
+3. Agrupe leituras independentes em chamadas paralelas no mesmo turno.
+4. Após cada bloco de leituras, sintetize em 1-2 linhas o que confirmou antes de seguir, preservando as conclusões mesmo quando leituras antigas forem compactadas automaticamente.`
+	}
 
 	var triageInstr string
 	switch runMode {
@@ -2068,6 +2145,9 @@ REGRA DE TRIAGEM:
 		DisallowTransferToPeers:  true,
 		Tools:                    allTools,
 		Instruction:              triageInstr,
+		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
+			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+		},
 	})
 	if err != nil {
 		return false, "", err

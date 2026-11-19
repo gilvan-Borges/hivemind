@@ -1064,3 +1064,52 @@ func TestSessionManagerCancelUnblocksAllPendingApprovals(t *testing.T) {
 		t.Fatalf("expected all canceled approvals to return false, got %+v", got)
 	}
 }
+
+func TestDetectStackMonorepoSubdirs(t *testing.T) {
+	dir := t.TempDir()
+	// Root has only Docker compose, no language manifests.
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("version: '3'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// First-level monorepo packages: api (Gradle) + web (React + TypeScript).
+	if err := os.MkdirAll(filepath.Join(dir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api", "build.gradle"), []byte("plugins {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "web", "package.json"), []byte(`{"dependencies":{"react":"19.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "web", "tsconfig.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// External agent worktree must be ignored both by DetectStack and ListFileTree.
+	if err := os.MkdirAll(filepath.Join(dir, ".worktrees", "other-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".worktrees", "Cargo.toml"), []byte("[package]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := DetectStack(dir)
+	if !strings.Contains(s.Summary, "Java / Gradle") || !strings.Contains(s.Summary, "React") || !strings.Contains(s.Summary, "TypeScript") {
+		t.Fatalf("expected monorepo Java / Gradle + React + TypeScript, got %+v", s)
+	}
+	if strings.Contains(s.Summary, "Rust") {
+		t.Fatalf(".worktrees must be ignored by DetectStack, got %+v", s)
+	}
+
+	tree, err := ListFileTree(dir, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range tree {
+		if node.Name == ".worktrees" {
+			t.Fatalf(".worktrees must be excluded from ListFileTree, got %+v", tree)
+		}
+	}
+}

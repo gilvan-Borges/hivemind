@@ -18,6 +18,8 @@ type ProjectStack struct {
 }
 
 // DetectStack inspects workspace marker files to identify the project's technology stack.
+// When the repository root has no language/framework manifests (common in monorepos),
+// it also scans immediate first-level subdirectories while skipping ignored/hidden dirs.
 func DetectStack(workspace string) ProjectStack {
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
@@ -28,10 +30,6 @@ func DetectStack(workspace string) ProjectStack {
 		Name: filepath.Base(abs),
 	}
 
-	has := func(rel string) bool {
-		_, err := os.Stat(filepath.Join(abs, rel))
-		return err == nil
-	}
 	addStack := func(s string) {
 		for _, ex := range ps.Stacks {
 			if ex == s {
@@ -48,32 +46,72 @@ func DetectStack(workspace string) ProjectStack {
 		}
 		ps.BuildTools = append(ps.BuildTools, b)
 	}
+	setTestHint := func(hint string) {
+		if ps.TestHint == "" && hint != "" {
+			ps.TestHint = hint
+		}
+	}
+
+	inspectStackDir(abs, "", addStack, addBuild, setTestHint)
+
+	// Monorepo fallback: if no primary stack was detected at the root, inspect
+	// first-level non-ignored subdirectories (e.g. api/, web/, backend/, frontend/).
+	if len(ps.Stacks) == 0 {
+		if entries, readErr := os.ReadDir(abs); readErr == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				if strings.HasPrefix(name, ".") || ignoredDirs[name] || name == "vendor" || name == "docs" || name == "specs" {
+					continue
+				}
+				inspectStackDir(filepath.Join(abs, name), name, addStack, addBuild, setTestHint)
+			}
+		}
+	}
+
+	if len(ps.Stacks) == 0 {
+		ps.Summary = "Stack genérica / não identificada"
+	} else {
+		ps.Summary = strings.Join(ps.Stacks, " + ")
+	}
+	return ps
+}
+
+func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func(string)) {
+	has := func(rel string) bool {
+		_, err := os.Stat(filepath.Join(dir, rel))
+		return err == nil
+	}
+	hintFor := func(cmd string) string {
+		if relPrefix == "" {
+			return cmd
+		}
+		return "cd " + relPrefix + " && " + cmd
+	}
 
 	if has("go.mod") {
 		addStack("Go")
 		addBuild("go")
-		ps.TestHint = "go test ./..."
+		setTestHint(hintFor("go test ./..."))
 	}
 	if has("pom.xml") {
 		addStack("Java / Maven")
 		addBuild("mvn")
-		if ps.TestHint == "" {
-			ps.TestHint = "mvn test"
-		}
+		setTestHint(hintFor("mvn test"))
 	}
 	if has("build.gradle") || has("build.gradle.kts") {
 		addStack("Java / Gradle")
 		addBuild("gradle")
-		if ps.TestHint == "" {
-			ps.TestHint = "./gradlew test"
-		}
+		setTestHint(hintFor("./gradlew test"))
 	}
 	if has("angular.json") {
 		addStack("Angular / TypeScript")
 		addBuild("ng / npm")
 	}
 	if has("package.json") {
-		pkg := readPackageJSONDeps(filepath.Join(abs, "package.json"))
+		pkg := readPackageJSONDeps(filepath.Join(dir, "package.json"))
 		switch {
 		case strings.Contains(pkg, "@angular/core"):
 			addStack("Angular / Node.js")
@@ -86,45 +124,32 @@ func DetectStack(workspace string) ProjectStack {
 		default:
 			addStack("Node.js")
 		}
-		if has("tsconfig.json") && !strings.Contains(strings.Join(ps.Stacks, ","), "TypeScript") {
+		if has("tsconfig.json") {
 			addStack("TypeScript")
 		}
 		addBuild("npm")
-		if ps.TestHint == "" {
-			ps.TestHint = "npm test"
-		}
+		setTestHint(hintFor("npm test"))
 	}
 	if has("pyproject.toml") || has("requirements.txt") {
 		addStack("Python")
 		addBuild("python / pytest")
-		if ps.TestHint == "" {
-			ps.TestHint = "pytest"
-		}
+		setTestHint(hintFor("pytest"))
 	}
 	if has("Cargo.toml") {
 		addStack("Rust")
 		addBuild("cargo")
-		if ps.TestHint == "" {
-			ps.TestHint = "cargo test"
-		}
+		setTestHint(hintFor("cargo test"))
 	}
-	if matches, _ := filepath.Glob(filepath.Join(abs, "*.sln")); len(matches) > 0 {
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.sln")); len(matches) > 0 {
 		addStack(".NET / C#")
 		addBuild("dotnet")
-	} else if matches, _ := filepath.Glob(filepath.Join(abs, "*.csproj")); len(matches) > 0 {
+	} else if matches, _ := filepath.Glob(filepath.Join(dir, "*.csproj")); len(matches) > 0 {
 		addStack(".NET / C#")
 		addBuild("dotnet")
 	}
 	if has("Dockerfile") || has("docker-compose.yml") || has("compose.yaml") {
 		addBuild("Docker")
 	}
-
-	if len(ps.Stacks) == 0 {
-		ps.Summary = "Stack genérica / não identificada"
-	} else {
-		ps.Summary = strings.Join(ps.Stacks, " + ")
-	}
-	return ps
 }
 
 // FormatForChief returns a concise context block injected into the Chief's prompt.

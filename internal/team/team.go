@@ -54,8 +54,10 @@ type Settings struct {
 	RequireMainMergeApproval *bool    `yaml:"require_main_merge_approval,omitempty" json:"require_main_merge_approval,omitempty"`
 	MaxQALoops               int      `yaml:"max_qa_loops" json:"max_qa_loops"`
 	MaxDynamicDevs           int      `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
-	MaxLLMCalls              int      `yaml:"max_llm_calls" json:"max_llm_calls"`
-	MaxTokens                int64    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	MaxLLMCalls              int               `yaml:"max_llm_calls" json:"max_llm_calls"`
+	MaxTokens                int64             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	InTurnKeepToolResults    int               `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
+	ReviewModel              string            `yaml:"review_model,omitempty" json:"review_model,omitempty"`
 	BaseBranch               string            `yaml:"base_branch" json:"base_branch"`
 	ShellAllowlist           []string          `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
 	ConfirmShell             *bool             `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
@@ -107,6 +109,22 @@ func (s Settings) EffectiveMaxDynamicDevs() int {
 		return 6
 	}
 	return s.MaxDynamicDevs
+}
+
+// EffectiveInTurnKeepToolResults returns how many recent tool outputs stay verbatim
+// inside the active turn before older large tool outputs are compacted on the fly
+// (default 6, range 2..20).
+func (s Settings) EffectiveInTurnKeepToolResults() int {
+	if s.InTurnKeepToolResults <= 0 {
+		return 6
+	}
+	if s.InTurnKeepToolResults < 2 {
+		return 2
+	}
+	if s.InTurnKeepToolResults > 20 {
+		return 20
+	}
+	return s.InTurnKeepToolResults
 }
 
 // EffectivePermissionMode returns the normalized permission mode (default "governed").

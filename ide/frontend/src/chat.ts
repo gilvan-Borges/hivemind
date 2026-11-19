@@ -320,6 +320,20 @@ export function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
       expandChevron: true,
     };
   }
+  if (name === "search_text") {
+    return {
+      verb: active ? "Buscando" : "Buscou",
+      targetText: `${rawArg || "código"}${countSuffix}`,
+      expandChevron: true,
+    };
+  }
+  if (name === "find_files") {
+    return {
+      verb: active ? "Localizando" : "Localizou",
+      targetText: `${rawArg || "arquivos"}${countSuffix}`,
+      expandChevron: true,
+    };
+  }
   if (name === "run_shell") {
     return {
       verb: active ? "Executando" : "Executou",
@@ -335,6 +349,7 @@ export function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
 
   if (name === "github_get_pr") return { verb: active ? "Inspecionando" : "Inspecionou", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
   if (name === "github_issue_comments") return { verb: active ? "Lendo" : "Leu", targetText: `comentários ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_pr_files") return { verb: active ? "Listando" : "Listou", targetText: `arquivos do PR ${rawArg || ""}`.trim(), expandChevron: true };
   if (name === "github_pr_diff") return { verb: active ? "Analisando" : "Analisou", targetText: `diff do PR ${rawArg || ""}`.trim(), expandChevron: true };
   if (name === "github_list_prs") return { verb: active ? "Listando" : "Listou", targetText: "Pull Requests", expandChevron: true };
   if (name === "github_get_issue") return { verb: active ? "Lendo" : "Leu", targetText: `Issue ${rawArg || ""}`.trim(), expandChevron: true };

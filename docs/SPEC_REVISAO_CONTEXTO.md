@@ -1,6 +1,6 @@
 # Spec — Ferramentas de Revisão Profunda & Compactação In-Turn (Custo/Contexto)
 
-**Status:** Proposta (pronta para implementação)  
+**Status:** Implementada  
 **Data:** 2026-11-19  
 **Origem:** Dogfooding real na IDE (`C:\ProjetosVibetex\IPG`, revisão do PR #716, sessão `af7795677497`)
 
