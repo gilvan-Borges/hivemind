@@ -1,0 +1,46 @@
+---
+description: Quais MCPs e skills do Cursor estão ligados neste repositório, e quando pedir para ligar os opcionais.
+alwaysApply: true
+---
+
+# Ferramentas de IA do Cursor (rascunho)
+
+Este repositório é o HiveMind: CLI e HiveMind IDE (`ide/`, binário `hivemind-ide`). A IDE não é outro repositório. O catálogo de skills do time da IDE lê só `.agents/skills/`. Skills e MCPs deste rascunho são do Cursor.
+
+Não copie skill nenhuma para `.agents/skills/` sem a pessoa pedir. O Chefe da HiveMind IDE vê esse catálogo e pode delegar a skill ao time.
+
+## Ponytail
+
+A skill `ponytail` em `.cursor/skills/ponytail/` vale para tarefas de código no Cursor. O modo padrão neste repositório é `lite`, e não o `full` descrito na skill.
+
+No `lite`, faça o que foi pedido. Nomeie a alternativa menor em uma linha e deixe a pessoa escolher. Não mude para `full` ou `ultra`, e não desligue o Ponytail, a menos que a pessoa peça (`/ponytail full`, `/ponytail ultra`, `stop ponytail` ou `normal mode`).
+
+## MCPs ligados
+
+O Cursor só carrega `.cursor/mcp.json`. Não há flag `disabled` nesse arquivo: servidor listado em `mcpServers` fica ligado. `.cursor/mcp.optional.json` não é lido.
+
+- `context7`: documentação atual de biblioteca (Go, Wails, Bubble Tea, ADK, npm do frontend). Use ao escrever código, setup ou API de dependência. Exige `CONTEXT7_API_KEY` no ambiente.
+- `code-review-graph`: grafo local e impacto da mudança (callers, dependentes, testes). Use em revisão e em “o que isso quebra”. Se o grafo não existir, rode `uvx code-review-graph build` na raiz do workspace. Não ligue `codebase-memory` enquanto este estiver ligado.
+
+## MCPs desligados
+
+Os blocos prontos estão em `.cursor/mcp.optional.json`. Só ligue quando a tarefa precisar, e pergunte antes. Para ligar, copie só o objeto daquele servidor para `mcpServers` em `.cursor/mcp.json`. Para desligar, apague esse objeto. Não ligue os dois lados de um par exclusivo.
+
+- `playwright`: testar ou automatizar a UI web (`ide/frontend`, bridge). Nunca junto com `chrome-devtools`.
+- `chrome-devtools`: depurar uma página já aberta no Chrome (console, performance). Nunca junto com `playwright`.
+- `toolbox`: consulta a Postgres só em `127.0.0.1`. Este repositório não tem banco de aplicação. Nunca use credencial de produção e não tire `POSTGRES_HOST` do loopback sem a pessoa confirmar que a instância é local de desenvolvimento.
+- `github`: issue, pull request ou API do GitHub além do `git` local. Toolsets já limitados a `repos,issues,pull_requests`. Token fino em `GITHUB_MCP_TOKEN`, separado de `GITHUB_TOKEN` do app.
+- `figma-context`: implementar um frame do Figma na UI. Exige `FIGMA_API_KEY`.
+- `codebase-memory`: alternativa ao `code-review-graph`. Nunca os dois ligados. Para trocar, remova `code-review-graph` de `mcp.json` e avise.
+
+## Skill desligada
+
+`untangle-codebase` está em `.cursor/optional-skills/untangle-codebase/`. Essa pasta não entra no Cursor. Só quando a pessoa pedir em palavras claras uma limpeza do repositório inteiro: copie a pasta para `.cursor/skills/untangle-codebase/`, revise o diff, e devolva a pasta para `optional-skills` ao terminar. Não comece essa limpeza por conta própria e não use `.agents/skills/`.
+
+## Segredos
+
+Não grave token, chave ou senha no Git. Os arquivos já usam `${env:NOME}`.
+
+## Fora deste rascunho
+
+Não proponha Mobile MCP, n8n-mcp, Desktop Commander, Serena, Windows MCP, Blender MCP nem Apify. O guia completo está em `docs/CURSOR.md`.

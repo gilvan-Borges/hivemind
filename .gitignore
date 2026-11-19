@@ -14,3 +14,7 @@ ide/cover
 ide/cover/
 *.coverprofile
 *hivemind-App*
+
+# Índices locais dos MCPs opcionais do Cursor. Não versionar.
+.code-review-graph/
+.codebase-memory/

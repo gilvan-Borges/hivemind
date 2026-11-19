@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
+    },
+    "toolbox": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@toolbox-sdk/server", "--prebuilt=postgres", "--stdio"],
+      "env": {
+        "POSTGRES_HOST": "127.0.0.1",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_DATABASE": "${env:HIVEMIND_DEV_DB_NAME}",
+        "POSTGRES_USER": "${env:HIVEMIND_DEV_DB_USER}",
+        "POSTGRES_PASSWORD": "${env:HIVEMIND_DEV_DB_PASSWORD}"
+      }
+    },
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${env:GITHUB_MCP_TOKEN}",
+        "X-MCP-Toolsets": "repos,issues,pull_requests"
+      }
+    },
+    "figma-context": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "${env:FIGMA_API_KEY}"
+      }
+    },
+    "codebase-memory": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "codebase-memory-mcp"]
+    }
+  }
+}

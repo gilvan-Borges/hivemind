@@ -265,6 +265,12 @@ O que o ADK entrega e o que esta CLI completa:
 - **Não há teto de concorrência.** Cada desenvolvedor é uma goroutine, como o `parallelagent` do ADK faz. Muitos desenvolvedores significam muitas chamadas de modelo ao mesmo tempo. A saída de ferramenta é truncada para a sessão não crescer sem limite, e só a sessão ativa fica na memória.
 - O nome de agente `user` é reservado pelo ADK. A CLI reescreve nomes para identificadores (`dev-back` vira `dev_back`).
 
+## Cursor (rascunho)
+
+Há uma proposta de MCPs e skills para o agente do Cursor em [`docs/CURSOR.md`](docs/CURSOR.md). Context7 e o Code Review Graph ficam ligados. Playwright, Chrome DevTools, Toolbox, GitHub, Figma, Codebase Memory e a skill `untangle-codebase` ficam de fora do que o Cursor carrega, com o bloco pronto para copiar quando a tarefa pedir.
+
+As skills novas estão em `.cursor/skills/`. Elas não entram em `.agents/skills/`, que é o catálogo que a HiveMind IDE mostra ao time. Isto ainda não foi adotado: a forma de integrar com a IDE pode mudar.
+
 ## Layout
 
 ```
