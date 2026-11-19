@@ -68,7 +68,7 @@ func newTeamCreate() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				provider, err = ask.text("Provedor (agy, gemini, vertex, anthropic, openai)", provider)
+				provider, err = ask.text("Provedor (agy, gemini, vertex, anthropic, openai, openrouter)", provider)
 				if err != nil {
 					return err
 				}
@@ -120,7 +120,7 @@ func newTeamCreate() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Nome do time")
 	cmd.Flags().StringVar(&description, "description", "", "Descrição")
 	cmd.Flags().StringVar(&model, "model", "", "Modelo. Vazio usa agy quando o CLI está no PATH e não há GOOGLE_API_KEY")
-	cmd.Flags().StringVar(&provider, "provider", "", "Provedor: agy, gemini, vertex, anthropic ou openai. Vazio segue o modelo")
+	cmd.Flags().StringVar(&provider, "provider", "", "Provedor: agy, gemini, vertex, anthropic, openai ou openrouter. Vazio segue o modelo")
 	cmd.Flags().IntVar(&devs, "devs", 1, "Quantidade de desenvolvedores")
 	cmd.Flags().BoolVar(&worktrees, "worktrees", true, "Trabalhar sempre em worktree separada")
 	cmd.Flags().StringVar(&permissionMode, "permission-mode", team.PermissionGoverned, "Modo de permissão: governed, auto_edit ou full_access")

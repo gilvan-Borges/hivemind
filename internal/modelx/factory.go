@@ -33,8 +33,10 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 		return newAnthropic(ctx, modelName)
 	case "openai", "openai-responses":
 		return newOpenAI(ctx, provider, modelName)
+	case "openrouter":
+		return newOpenRouter(ctx, modelName)
 	default:
-		return nil, fmt.Errorf("provedor %q não é suportado; use agy, opencode, gemini, vertex, anthropic ou openai", provider)
+		return nil, fmt.Errorf("provedor %q não é suportado; use agy, opencode, gemini, vertex, anthropic, openai ou openrouter", provider)
 	}
 }
 
@@ -106,6 +108,26 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 		APIKey:     key,
 		BaseURL:    base,
 		API:        api,
+		HTTPClient: retryHTTPClient(),
+	})
+}
+
+// newOpenRouter builds a chat-completions model against the OpenRouter gateway.
+// Model IDs follow the vendor format (e.g. "anthropic/claude-sonnet-4-5",
+// "openai/gpt-4.1", "google/gemini-2.5-pro", "deepseek/deepseek-chat").
+func newOpenRouter(ctx context.Context, modelName string) (model.LLM, error) {
+	key := firstEnv("OPENROUTER_API_KEY")
+	if key == "" {
+		return nil, fmt.Errorf("defina OPENROUTER_API_KEY para usar o OpenRouter (chave em https://openrouter.ai/keys); o modelo usa o formato fornecedor/modelo, ex.: anthropic/claude-sonnet-4-5")
+	}
+	base := strings.TrimSpace(os.Getenv("OPENROUTER_BASE_URL"))
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	return openaimodel.NewModel(ctx, modelName, &openaimodel.ClientConfig{
+		APIKey:     key,
+		BaseURL:    base,
+		API:        openaimodel.APIChatCompletions,
 		HTTPClient: retryHTTPClient(),
 	})
 }

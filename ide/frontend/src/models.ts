@@ -7,7 +7,7 @@ import { activeLane } from "./lanes";
 import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
-export type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai";
+export type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter";
 
 export function inferModelProvider(modelSpec: string, includeDefaultBlank = false): ModelProviderId {
   const cur = (modelSpec || "").trim();
@@ -16,6 +16,7 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
   if (low.startsWith("opencode:") || low.startsWith("opencode/") || low === "opencode") return "opencode";
   if (low === "agy" || low.startsWith("agy:") || state.models.some((m) => m.slug.toLowerCase() === low)) return "agy";
+  if (low.includes("/")) return "openrouter";
   if (low.startsWith("gemini")) return "gemini";
   if (low.startsWith("claude")) return "anthropic";
   if (low.startsWith("gpt") || low.startsWith("o1") || low.startsWith("o3") || low.startsWith("o4") || low.startsWith("grok")) {
@@ -43,6 +44,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
     { id: "gemini", label: "Google Gemini" },
     { id: "anthropic", label: "Anthropic (Claude)" },
     { id: "openai", label: "OpenAI / Grok (API)" },
+    { id: "openrouter", label: "OpenRouter (gateway)" },
   );
   return out;
 }
@@ -88,6 +90,15 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         { value: "gpt-4.1", label: "gpt-4.1" },
         { value: "o3", label: "o3" },
         { value: "grok-4", label: "grok-4 (OPENAI_BASE_URL)" },
+      ];
+      break;
+    case "openrouter":
+      items = [
+        { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5" },
+        { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
+        { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
+        { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
+        { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
       ];
       break;
   }

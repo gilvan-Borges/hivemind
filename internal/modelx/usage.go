@@ -149,6 +149,8 @@ func CanonicalUsageProvider(provider, modelSpec string) string {
 		return "anthropic"
 	case "openai", "openai-responses", "chatgpt":
 		return "openai"
+	case "openrouter":
+		return "openrouter"
 	default:
 		if strings.HasPrefix(m, "gemini") {
 			return "gemini"
@@ -158,6 +160,10 @@ func CanonicalUsageProvider(provider, modelSpec string) string {
 		}
 		if strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "grok") {
 			return "openai"
+		}
+		if strings.Contains(m, "/") {
+			// Vendor/model IDs (anthropic/claude-*, openai/gpt-*, ...) come from OpenRouter.
+			return "openrouter"
 		}
 		return "agy"
 	}
@@ -555,8 +561,9 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 		"gemini":      "Google Gemini",
 		"anthropic":   "Anthropic (Claude)",
 		"openai":      "OpenAI / Grok",
+		"openrouter":  "OpenRouter",
 	}
-	order := []string{"agy", "opencode-go", "opencode", "gemini", "anthropic", "openai"}
+	order := []string{"agy", "opencode-go", "opencode", "gemini", "anthropic", "openai", "openrouter"}
 	byProv := make(map[string]*AIProviderUsage, len(order))
 	for _, p := range order {
 		byProv[p] = &AIProviderUsage{

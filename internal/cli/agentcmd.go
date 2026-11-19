@@ -133,7 +133,7 @@ func newAgentAdd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Nome do agente")
 	cmd.Flags().StringVar(&role, "role", "", "Papel: pm, tech_lead, architect, dev ou qa")
 	cmd.Flags().StringVar(&model, "model", "", "Modelo deste agente")
-	cmd.Flags().StringVar(&provider, "provider", "", "Provedor: agy, gemini, vertex, anthropic, openai ou openai-responses")
+	cmd.Flags().StringVar(&provider, "provider", "", "Provedor: agy, gemini, vertex, anthropic, openai, openai-responses ou openrouter")
 	cmd.Flags().StringVar(&instructions, "instructions", "", "Instruções do agente")
 	return cmd
 }

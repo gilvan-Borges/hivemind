@@ -93,6 +93,7 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 
 	RecordAIUsage("agy", "agy:gemini-4-neon-high", 1200, 300, 1500)
 	RecordAIUsage("opencode", "opencode-go:glm-5.3", 2000, 500, 2500)
+	RecordAIUsage("openrouter", "anthropic/claude-sonnet-4-5", 100, 50, 150)
 	if err := SaveAIUsageLimits("agy", 500000, 2000000); err != nil {
 		t.Fatalf("SaveAIUsageLimits error: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	t.Setenv("OPENCODE_ZEN_API_KEY", "")
 	rep := GetAIUsageReport(context.Background())
 
-	var agyFound, goFound, zenFound *AIProviderUsage
+	var agyFound, goFound, zenFound, orFound *AIProviderUsage
 	for i := range rep.Providers {
 		p := &rep.Providers[i]
 		switch p.Provider {
@@ -111,6 +112,8 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 			goFound = p
 		case "opencode":
 			zenFound = p
+		case "openrouter":
+			orFound = p
 		}
 	}
 	if agyFound == nil || agyFound.Window5h.TotalTokens != 1500 || agyFound.Window5h.Calls != 1 {
@@ -124,5 +127,8 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	}
 	if zenFound != nil {
 		t.Fatalf("unused opencode (Zen) must not be shown when it has zero usage: %+v", zenFound)
+	}
+	if orFound == nil || orFound.Window5h.TotalTokens != 150 || orFound.Window5h.Calls != 1 {
+		t.Fatalf("unexpected openrouter usage: %+v", orFound)
 	}
 }

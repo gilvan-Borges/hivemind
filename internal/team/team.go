@@ -603,6 +603,8 @@ func NormalizeProvider(provider, model string) string {
 		return "openai"
 	case "openai-responses", "openai_responses":
 		return "openai-responses"
+	case "openrouter":
+		return "openrouter"
 	case "":
 		return inferProvider(model)
 	default:
@@ -620,6 +622,9 @@ func inferProvider(model string) string {
 		strings.HasPrefix(m, "opencode-go:") || strings.HasPrefix(m, "opencode-go/") ||
 		strings.HasPrefix(m, "zen:"):
 		return "opencode"
+	case strings.Contains(m, "/"):
+		// Vendor/model IDs like "anthropic/claude-sonnet-4-5" come from OpenRouter.
+		return "openrouter"
 	case strings.Contains(m, "claude"):
 		return "anthropic"
 	case strings.HasPrefix(m, "gpt-"), strings.HasPrefix(m, "gpt"), strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"), strings.HasPrefix(m, "chatgpt"):

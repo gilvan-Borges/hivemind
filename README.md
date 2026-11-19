@@ -116,6 +116,12 @@ $env:ANTHROPIC_API_KEY = "sua-chave"
 $env:OPENAI_API_KEY = "sua-chave"
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 
+# OpenRouter (gateway multi-modelo). O modelo usa o formato fornecedor/modelo,
+# ex.: anthropic/claude-sonnet-4-5, openai/gpt-4.1, google/gemini-2.5-pro.
+$env:OPENROUTER_API_KEY = "sua-chave"
+# opcional (padrão: https://openrouter.ai/api/v1)
+$env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 # Jira Cloud (variáveis OU Conector Jira Nativo salvo pela IDE em jira-connector.json)
 $env:JIRA_BASE_URL = "https://sua-empresa.atlassian.net"
 $env:JIRA_EMAIL = "voce@empresa.com"

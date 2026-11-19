@@ -13,6 +13,8 @@ func TestMissingCredentials(t *testing.T) {
 	t.Setenv("ANTHROPIC_BACKEND", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENROUTER_BASE_URL", "")
 	if _, err := New(context.Background(), "gemini", "gemini-flash-latest"); err == nil {
 		t.Fatal("gemini sem chave deveria falhar")
 	}
@@ -21,6 +23,9 @@ func TestMissingCredentials(t *testing.T) {
 	}
 	if _, err := New(context.Background(), "openai", "gpt-4.1"); err == nil {
 		t.Fatal("openai sem chave deveria falhar")
+	}
+	if _, err := New(context.Background(), "openrouter", "openai/gpt-4.1"); err == nil {
+		t.Fatal("openrouter sem chave deveria falhar")
 	}
 	if _, err := New(context.Background(), "desconhecido", "x"); err == nil {
 		t.Fatal("provedor desconhecido deveria falhar")
