@@ -677,6 +677,42 @@ func TestHasUserChangesIgnoresHivemind(t *testing.T) {
 	}
 }
 
+func TestHasUserChangesIgnoresHiveMindOnlyGitignore(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	if _, err := runGit(ctx, dir, "init", "-b", "main"); err != nil {
+		t.Skip("git indisponível")
+	}
+	_, _ = runGit(ctx, dir, "config", "user.name", "Test")
+	_, _ = runGit(ctx, dir, "config", "user.email", "test@local")
+	_, _ = runGit(ctx, dir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("bin/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = runGit(ctx, dir, "add", ".gitignore")
+	_, _ = runGit(ctx, dir, "commit", "-m", "init")
+
+	// HiveMind's EnsureHiveIgnore appends "# HiveMind\n.hivemind/\n": must NOT block sync.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("bin/\n\n# HiveMind\n.hivemind/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, err := runGit(ctx, dir, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasUserChangesInWorkspace(ctx, dir, status) {
+		t.Fatalf("HiveMind-only .gitignore edit must not be treated as dirty user work (status=%q)", status)
+	}
+
+	// User editing .gitignore with another entry MUST be treated as dirty.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("bin/\n*.secret\n\n# HiveMind\n.hivemind/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasUserChangesInWorkspace(ctx, dir, status) {
+		t.Fatal("user edit in .gitignore must be treated as dirty")
+	}
+}
+
 func TestParseGHPRList(t *testing.T) {
 	raw := []byte(`[
 		{

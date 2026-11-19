@@ -199,7 +199,7 @@ func WriteWorkspaceFile(root, relOrAbs, content string) error {
 	if !utf8.ValidString(content) {
 		return errors.New("conteúdo inválido: o texto não está em UTF-8")
 	}
-	mode := os.FileMode(0o644)
+	var mode os.FileMode
 	if info, statErr := os.Stat(target); statErr == nil {
 		mode = info.Mode().Perm()
 	}

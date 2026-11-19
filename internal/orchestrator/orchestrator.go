@@ -563,7 +563,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "team_memory", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
+	stateKeys := []string{"objective", "jira_key", "team_memory", "prior_session_context", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	qaRoot := r.Workspace
 	if r.deliveryRoot != "" {
@@ -786,6 +786,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
 			var b strings.Builder
 			b.WriteString(instruction)
+			if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
+				b.WriteString("\n\n[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.")
+			}
 			for _, k := range keys {
 				v, err := ctx.ReadonlyState().Get(k)
 				if err != nil || v == nil {
@@ -799,6 +802,20 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 			}
 			return b.String(), nil
 		},
+	}
+	if outputKey == "closing_summary" {
+		cfg.BeforeToolCallbacks = append(cfg.BeforeToolCallbacks, func(ctx agent.Context, tl tool.Tool, _ map[string]any) (map[string]any, error) {
+			if tl == nil || !isClosingPublishTool(tl.Name()) {
+				return nil, nil
+			}
+			if qaApprovedReadonly(ctx.ReadonlyState()) {
+				return nil, nil
+			}
+			return map[string]any{
+				"blocked": true,
+				"error":   "entrega NÃO aprovada pelo QA (qa_approve não foi chamado): operações de commit, push ou PR estão bloqueadas",
+			}, nil
+		})
 	}
 	if qa {
 		cfg.AfterToolCallbacks = []llmagent.AfterToolCallback{
@@ -960,10 +977,12 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
+		priorCtx := summarizePriorSessionContext(got.Session)
 		keepPlan := (consumePendingPlan && isPendingPlan && r.chiefPlan != "") ||
 			(runMode == "plan:sdd") ||
 			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
+			"prior_session_context": priorCtx,
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
@@ -999,6 +1018,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		State: map[string]any{
 			"objective":             objective,
 			"jira_key":              key,
+			"prior_session_context": "",
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
@@ -1137,13 +1157,93 @@ func qaApproved(sess session.Session) bool {
 	if sess == nil {
 		return false
 	}
-	if v, err := sess.State().Get("qa_approved"); err == nil && strings.TrimSpace(fmt.Sprint(v)) == "1" {
+	return qaApprovedReadonly(sess.State())
+}
+
+func qaApprovedReadonly(st session.ReadonlyState) bool {
+	if st == nil {
+		return false
+	}
+	if v, err := st.Get("qa_approved"); err == nil && strings.TrimSpace(fmt.Sprint(v)) == "1" {
 		return true
 	}
-	if v, err := sess.State().Get("qa_approval_note"); err == nil && strings.TrimSpace(fmt.Sprint(v)) != "" {
+	if v, err := st.Get("qa_approval_note"); err == nil && strings.TrimSpace(fmt.Sprint(v)) != "" {
 		return true
 	}
 	return false
+}
+
+func isClosingPublishTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "git_commit",
+		"git_push",
+		"github_open_pr",
+		"github_create_pr",
+		"github_comment_pr",
+		"github_reply_review_comment",
+		"github_request_review",
+		"github_merge_pr",
+		"github_review_pr":
+		return true
+	default:
+		return false
+	}
+}
+
+// summarizePriorSessionContext extracts a compact digest of prior user prompts and
+// final agent summaries from a resumed session so pipeline agents using
+// IncludeContentsNone still see earlier requirements and decisions without
+// replaying bulky tool-call history.
+func summarizePriorSessionContext(sess session.Session) string {
+	if sess == nil || sess.Events() == nil || sess.Events().Len() == 0 {
+		return ""
+	}
+	type entry struct {
+		who  string
+		text string
+	}
+	var items []entry
+	for ev := range sess.Events().All() {
+		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {
+			continue
+		}
+		var parts []string
+		for _, p := range ev.LLMResponse.Content.Parts {
+			if p == nil || p.Thought || strings.TrimSpace(p.Text) == "" {
+				continue
+			}
+			parts = append(parts, strings.TrimSpace(p.Text))
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		who := strings.TrimSpace(ev.Author)
+		if ev.LLMResponse.Content.Role == genai.RoleUser || who == "" || strings.EqualFold(who, "user") {
+			who = "Usuário"
+		}
+		joined := strings.Join(parts, "\n")
+		if len(joined) > 600 {
+			joined = joined[:600] + "…"
+		}
+		items = append(items, entry{who: who, text: joined})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	const maxItems = 8
+	if len(items) > maxItems {
+		items = items[len(items)-maxItems:]
+	}
+	var b strings.Builder
+	const maxTotal = 3600
+	for _, it := range items {
+		line := fmt.Sprintf("- %s: %s\n", it.who, it.text)
+		if b.Len()+len(line) > maxTotal {
+			break
+		}
+		b.WriteString(line)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func roleLabel(role string) string {

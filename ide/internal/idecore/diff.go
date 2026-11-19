@@ -3,6 +3,8 @@ package idecore
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -338,7 +340,7 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 	if err != nil {
 		return 0, err
 	}
-	if strings.TrimSpace(status) != "" && hasUserChanges(status) {
+	if strings.TrimSpace(status) != "" && hasUserChangesInWorkspace(ctx, workspaceDir, status) {
 		return 0, ErrWorkspaceDirty
 	}
 	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+gitx.IntegrationBranch)
@@ -434,18 +436,29 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 // it is expected to be untracked while the project has not committed the
 // recommended .gitignore entry, and must not block a safe integration sync.
 func hasUserChanges(porcelain string) bool {
+	return hasUserChangesInWorkspace(context.Background(), "", porcelain)
+}
+
+func hasUserChangesInWorkspace(ctx context.Context, workspaceDir, porcelain string) bool {
 	for _, line := range strings.Split(strings.ReplaceAll(porcelain, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) < 4 {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) < 4 {
 			continue
+		}
+		code := ""
+		if len(line) >= 2 {
+			code = line[:2]
 		}
 		path := strings.TrimSpace(line[3:])
 		if idx := strings.LastIndex(path, " -> "); idx >= 0 {
 			path = strings.TrimSpace(path[idx+4:])
 		}
-		path = strings.Trim(path, `"`)
+		path = gitx.UnquotePath(path)
 		path = filepath.ToSlash(path)
 		if path == ".hivemind" || strings.HasPrefix(path, ".hivemind/") {
+			continue
+		}
+		if path == ".gitignore" && workspaceDir != "" && isHiveMindOnlyGitignoreChange(ctx, workspaceDir, code == "??") {
 			continue
 		}
 		return true
@@ -453,18 +466,89 @@ func hasUserChanges(porcelain string) bool {
 	return false
 }
 
+func isHiveMindIgnoreLine(raw string) bool {
+	s := strings.TrimSpace(raw)
+	return s == "" || s == "# HiveMind" || s == ".hivemind/" || s == ".hivemind"
+}
+
+// isHiveMindOnlyGitignoreChange returns true when .gitignore only contains
+// HiveMind's own EnsureHiveIgnore addition ("# HiveMind\n.hivemind/\n"), so
+// prepareDevs adding .hivemind/ does not falsely block integration sync.
+func isHiveMindOnlyGitignoreChange(ctx context.Context, workspaceDir string, untracked bool) bool {
+	if untracked {
+		data, err := os.ReadFile(filepath.Join(workspaceDir, ".gitignore"))
+		if err != nil {
+			return false
+		}
+		sawEntry := false
+		for _, ln := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+			if !isHiveMindIgnoreLine(ln) {
+				return false
+			}
+			if strings.TrimSpace(ln) == ".hivemind/" || strings.TrimSpace(ln) == ".hivemind" {
+				sawEntry = true
+			}
+		}
+		return sawEntry
+	}
+	diffOut, err := runGit(ctx, workspaceDir, "diff", "HEAD", "--", ".gitignore")
+	if err != nil {
+		return false
+	}
+	sawChange := false
+	for _, ln := range strings.Split(strings.ReplaceAll(diffOut, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(ln, "+++") || strings.HasPrefix(ln, "---") || strings.HasPrefix(ln, "@@") || strings.HasPrefix(ln, "diff ") || strings.HasPrefix(ln, "index ") || strings.HasPrefix(ln, `\ No newline`) {
+			continue
+		}
+		if strings.HasPrefix(ln, "-") {
+			return false
+		}
+		if strings.HasPrefix(ln, "+") {
+			if !isHiveMindIgnoreLine(ln[1:]) {
+				return false
+			}
+			sawChange = true
+		}
+	}
+	return sawChange
+}
+
 // atomicWriteFile writes data to path through a temporary file in the same
 // directory, then renames it into place. A crash mid-write cannot truncate the
-// original file.
+// original file. When mode == 0 (new file), O_CREATE with 0o666 is used so the
+// OS process umask is respected rather than bypassed via Chmod(0644).
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	var (
+		tmp     *os.File
+		tmpName string
+		err     error
+	)
 	if mode == 0 {
-		mode = 0o644
+		for range 8 {
+			var rnd [6]byte
+			_, _ = rand.Read(rnd[:])
+			cand := filepath.Join(dir, "."+base+"."+hex.EncodeToString(rnd[:])+".tmp")
+			tmp, err = os.OpenFile(cand, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+			if err == nil {
+				tmpName = cand
+				break
+			}
+			if !os.IsExist(err) {
+				return err
+			}
+		}
+		if err != nil {
+			return err
+		}
+	} else {
+		tmp, err = os.CreateTemp(dir, "."+base+".*.tmp")
+		if err != nil {
+			return err
+		}
+		tmpName = tmp.Name()
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
@@ -473,8 +557,10 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return err
+	if mode != 0 {
+		if err := os.Chmod(tmpName, mode); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return err

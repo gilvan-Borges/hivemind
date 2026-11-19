@@ -1786,3 +1786,206 @@ func TestTeamMemorySnippetInjectsSharedMemory(t *testing.T) {
 		t.Fatalf("memória vazia deveria injetar nada; got = %q", got)
 	}
 }
+
+func TestClosingChiefBlockedWithoutQAApproval(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	ctx := context.Background()
+	repo := t.TempDir()
+	g := gitx.Local{}
+	mustGit(t, g, ctx, repo, "init", "-b", "main")
+	mustGit(t, g, ctx, repo, "config", "user.name", "Teste")
+	mustGit(t, g, ctx, repo, "config", "user.email", "teste@local")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, g, ctx, repo, "add", "README.md")
+	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
+
+	squad := team.DefaultTeam("principal", "", "scripted", "gemini", 1)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			AutoCommit: true,
+			AutoPR:     false,
+			MaxQALoops: 1,
+			BaseBranch: "main",
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	chiefCalls := 0
+	r := &Runner{
+		Workspace:          repo,
+		Project:            project,
+		Team:               squad,
+		Git:                g,
+		GitHub:             githubx.Disabled{Reason: "off"},
+		Jira:               jirax.Disabled{Reason: "off"},
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"chefe": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				chiefCalls++
+				switch chiefCalls {
+				case 1:
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan":      "Criar unapproved.txt",
+						"dev_tasks": []any{"Criar unapproved.txt"},
+					})
+				case 2:
+					// Triage finish text
+					return modelx.Text("delegado")
+				case 3:
+					// Closing chief attempts to commit even though QA never approved!
+					return modelx.FunctionCall("git_commit", "c1", map[string]any{
+						"message": "tentativa indevida sem QA",
+					})
+				default:
+					return modelx.Text("Resumo: QA não aprovou, commit bloqueado.")
+				}
+			}},
+			"dev": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "unapproved.txt", "content": "nao aprovado\n"})
+				}
+				return modelx.Text("dev pronto")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_request_changes", "q1", map[string]any{"notes": "faltam testes"})
+				}
+				return modelx.Text("reprovado")
+			}},
+		},
+	}
+
+	res, err := r.Run(ctx, Request{Objective: "criar unapproved.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.PendingQA {
+		t.Fatalf("expected PendingQA=true when QA rejects, got %+v", res)
+	}
+	logOut, err := g.Status(ctx, r.deliveryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logOut, "unapproved.txt") {
+		t.Fatalf("expected unapproved.txt to remain uncommitted in delivery worktree, git status=%q", logOut)
+	}
+}
+
+func TestResumedSessionPreservesPriorContext(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não instalado")
+	}
+	ctx := context.Background()
+	repo := t.TempDir()
+	g := gitx.Local{}
+	mustGit(t, g, ctx, repo, "init", "-b", "main")
+	mustGit(t, g, ctx, repo, "config", "user.name", "Teste")
+	mustGit(t, g, ctx, repo, "config", "user.email", "teste@local")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, g, ctx, repo, "add", "README.md")
+	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
+
+	squad := team.DefaultTeam("principal", "", "scripted", "gemini", 1)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			AutoCommit: false,
+			AutoPR:     false,
+			MaxQALoops: 1,
+			BaseBranch: "main",
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	extractSystem := func(req *model.LLMRequest) string {
+		if req == nil || req.Config == nil || req.Config.SystemInstruction == nil {
+			return ""
+		}
+		var sb strings.Builder
+		for _, p := range req.Config.SystemInstruction.Parts {
+			if p != nil {
+				sb.WriteString(p.Text)
+			}
+		}
+		return sb.String()
+	}
+
+	r1 := &Runner{
+		Workspace: repo,
+		Project:   project,
+		Team:      squad,
+		Git:       g,
+		GitHub:    githubx.Disabled{Reason: "off"},
+		Jira:      jirax.Disabled{Reason: "off"},
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"chefe": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("DECISAO_TURNO_1: usar padrão repository com cache LRU")
+			}},
+			"dev": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("dev turno 1 ok")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+				}
+				return modelx.Text("aprovado")
+			}},
+		},
+	}
+	res1, err := r1.Run(ctx, Request{Objective: "REQUISITO_TURNO_1: criar endpoint /v1/users"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var devTurn2System string
+	r2 := &Runner{
+		Workspace: repo,
+		Project:   project,
+		Team:      squad,
+		Git:       g,
+		GitHub:    githubx.Disabled{Reason: "off"},
+		Jira:      jirax.Disabled{Reason: "off"},
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"chefe": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("plano turno 2")
+			}},
+			"dev": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				devTurn2System = extractSystem(req)
+				return modelx.Text("dev turno 2 ok")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "q2", map[string]any{"note": "ok"})
+				}
+				return modelx.Text("aprovado")
+			}},
+		},
+	}
+	if _, err := r2.Run(ctx, Request{SessionID: res1.SessionID, Objective: "aplique o mesmo padrão no segundo endpoint"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(devTurn2System, "[prior_session_context]") || !strings.Contains(devTurn2System, "DECISAO_TURNO_1") {
+		t.Fatalf("expected resumed dev to receive prior_session_context with turn 1 decision, got: %q", devTurn2System)
+	}
+}
