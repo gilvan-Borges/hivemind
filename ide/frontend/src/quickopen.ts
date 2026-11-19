@@ -5,6 +5,7 @@ import { openFolderDialog, refreshSessions } from "./boot";
 import { renderComposerModeBar } from "./chat";
 import { openEditorFind, openFileInEditor, renderEditorBody } from "./editor";
 import { setProjectPermissionMode } from "./explorer";
+import { openInlineEdit, toggleGhostText } from "./inline-ai";
 import { openDoctorModal, openGitHubModal, openJiraModal, openOpenCodeModal } from "./modals";
 import { openSidebarView, updateStatusBar } from "./shell";
 import { api, state } from "./state";
@@ -27,6 +28,8 @@ export function getCommandActions(): CommandAction[] {
     { id: "memory", label: "Abrir Memória Compartilhada (.hivemind/MEMORY.md)", run: () => openTeamMemoryFile() },
     { id: "sessions", label: "Ver Sessões Salvas & Consumo de Tokens", run: () => { openSidebarView("sessions"); refreshSessions(); } },
     { id: "find-file", label: "Localizar e Substituir no Arquivo Atual", shortcut: "Ctrl+F / Ctrl+H", run: () => openEditorFind(true) },
+    { id: "inline-edit", label: "Editar Seleção Inline com IA (Ctrl+K)", shortcut: "Ctrl+K", run: () => openInlineEdit() },
+    { id: "toggle-ghost", label: `Ghost Text Inline (${state.ghostTextEnabled ? "Desativar" : "Ativar"})`, shortcut: "Tab", run: () => toggleGhostText() },
     { id: "diff-toggle", label: `Alternar Modo de Diff (${state.diffViewMode === "split" ? "Lado a Lado → Unificado" : "Unificado → Lado a Lado"})`, run: () => { state.diffViewMode = state.diffViewMode === "split" ? "unified" : "split"; renderEditorBody(); } },
     { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
     { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },

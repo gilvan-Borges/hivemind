@@ -9,6 +9,7 @@ import { renderProjectTabsBar, syncLayoutVisibility } from "./shell";
 import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
+import { closeInlineEdit, ghostButtonTitle, openInlineEdit, renderInlineEditBar, scheduleGhostText, syncEditorInlineReview, toggleGhostText } from "./inline-ai";
 
 export async function reloadCleanOpenTabs() {
   const backend = api();
@@ -31,6 +32,9 @@ export async function reloadCleanOpenTabs() {
   }
   if (activeChanged) {
     renderEditorBody();
+  } else if (state.activeEditorPath) {
+    const activeTab = state.editorTabs.find((t) => t.kind === "file" && t.relPath === state.activeEditorPath);
+    if (activeTab) void syncEditorInlineReview(activeTab.relPath);
   }
 }
 
@@ -164,6 +168,7 @@ export async function saveActiveEditor() {
     syncActiveTabDirtyUI(tab);
     setStatus(`Salvo: ${tab.relPath}`);
     refreshDiffs();
+    void syncEditorInlineReview(tab.relPath);
   } catch (err: any) {
     toastError("salvar o arquivo", err, () => { void saveActiveEditor(); });
   }
@@ -576,7 +581,9 @@ export function renderEditorBody() {
           <button id="welcome-memory">${icons.memory}<span>Memória do Time</span></button>
         </div>
         <div class="shortcut-grid">
-          <span class="dim">Paleta de comandos</span><span class="kbd">Ctrl + K</span>
+          <span class="dim">Editar código inline (IA)</span><span class="kbd">Ctrl + K</span>
+          <span class="dim">Aceitar Ghost Text</span><span class="kbd">Tab / Ctrl + →</span>
+          <span class="dim">Paleta de comandos</span><span class="kbd">Ctrl + Shift + P</span>
           <span class="dim">Quadro Multiagente</span><span class="kbd">Ctrl + Shift + A</span>
           <span class="dim">Busca rápida de arquivo</span><span class="kbd">Ctrl + P</span>
           <span class="dim">Busca global no código</span><span class="kbd">Ctrl + Shift + F</span>
@@ -751,11 +758,13 @@ export function renderEditorBody() {
       <div class="spacer"></div>
       ${isMdFile
         ? `<button class="mini" id="btn-md-preview" title="Voltar para a visualização renderizada">Visualização</button><button class="mini primary" id="btn-md-source" title="Editar o código-fonte do Markdown">Código</button>`
-        : `<button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar (Ctrl+F)</span></button><button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Enviar p/ Chefe (Ctrl+L)</span></button>`
+        : `<button class="mini" id="btn-inline-edit" title="Editar seleção ou inserir código com IA (Ctrl+K)">${icons.sparkle}<span>Editar IA (Ctrl+K)</span></button><button class="mini ${state.ghostTextEnabled ? "active" : ""}" id="btn-toggle-ghost" title="${escapeHtml(ghostButtonTitle())}">${icons.bolt}<span>Ghost</span></button><button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar</span></button><button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Chefe (Ctrl+L)</span></button>`
       }
       <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
     </div>
     <div class="editor-live-wrap">
+      <div id="editor-review-bar"></div>
+      <div id="editor-inline-ai-layer"></div>
       <div id="editor-find-layer"></div>
       <div id="cm-host" style="flex:1;min-width:0;height:100%;overflow:hidden"></div>
     </div>
@@ -764,14 +773,25 @@ export function renderEditorBody() {
   if (state.editorFind.open) {
     renderEditorFindBar();
   }
+  if (state.inlineEdit.open && state.inlineEdit.relPath !== activeTab.relPath) {
+    closeInlineEdit(false);
+  }
 
   const tab = activeTab;
   mountCodeMirror(document.getElementById("cm-host")!, tab.relPath, tab.content, tab.name, (text) => {
     tab.content = text;
     tab.dirty = true;
     syncActiveTabDirtyUI(tab);
+    scheduleGhostText(tab.relPath);
   });
 
+  if (state.inlineEdit.open && state.inlineEdit.relPath === tab.relPath) {
+    renderInlineEditBar();
+  }
+  void syncEditorInlineReview(tab.relPath);
+
+  document.getElementById("btn-inline-edit")?.addEventListener("click", () => openInlineEdit());
+  document.getElementById("btn-toggle-ghost")?.addEventListener("click", () => toggleGhostText());
   document.getElementById("btn-editor-find")?.addEventListener("click", () => openEditorFind(false));
   document.getElementById("btn-send-selection")?.addEventListener("click", sendEditorSelectionToChief);
   document.getElementById("btn-save-file")?.addEventListener("click", saveActiveEditor);

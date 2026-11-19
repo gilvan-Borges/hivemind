@@ -7,11 +7,15 @@ import {idecore} from '../models';
 import {jirax} from '../models';
 import {orchestrator} from '../models';
 
+export function ApplyHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
+
 export function BootstrapAgy(arg1:boolean):Promise<main.AgyBootstrap>;
 
 export function BootstrapOpenCode(arg1:boolean):Promise<main.OpenCodeBootstrap>;
 
 export function CancelCommand(arg1:string):Promise<boolean>;
+
+export function CancelInlineAI():Promise<void>;
 
 export function CancelRun(arg1:string):Promise<boolean>;
 
@@ -51,13 +55,21 @@ export function GetCommitDetail(arg1:string,arg2:string):Promise<idecore.CommitD
 
 export function GetDiff(arg1:string):Promise<Array<idecore.FileDiff>>;
 
+export function GetFileUnstagedDiff(arg1:string,arg2:string):Promise<idecore.FileDiff>;
+
 export function GetInitialState():Promise<main.InitialState>;
+
+export function GetInlineAIStatus(arg1:string):Promise<idecore.InlineAIStatus>;
 
 export function GetRecentProjects():Promise<Array<string>>;
 
 export function GitHubStatus(arg1:string):Promise<idecore.GitHubStatusInfo>;
 
 export function InitGit(arg1:string):Promise<void>;
+
+export function InlineComplete(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<idecore.InlineCompleteResponse>;
+
+export function InlineEdit(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number,arg6:number,arg7:string,arg8:string,arg9:string):Promise<idecore.InlineEditResponse>;
 
 export function InstallSkillToProject(arg1:string,arg2:string):Promise<void>;
 
@@ -128,6 +140,8 @@ export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSe
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
 export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function StageHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
 
 export function StartRun(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<orchestrator.Result>;
 

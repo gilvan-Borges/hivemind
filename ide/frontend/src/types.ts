@@ -67,6 +67,7 @@ export interface TeamSettings {
   max_tokens?: number;
   in_turn_keep_tool_results?: number;
   review_model?: string;
+  inline_model?: string;
   skill_assignments?: SkillAssignment[];
 }
 
@@ -516,6 +517,35 @@ export interface AIUsageReport {
   providers: AIProviderUsage[];
 }
 
+export interface InlineAIStatus {
+  ghostAvailable: boolean;
+  ghostProvider?: string;
+  ghostModel?: string;
+  ghostReason?: string;
+  editAvailable: boolean;
+  editProvider?: string;
+  editModel?: string;
+}
+
+export interface InlineCompleteResponse {
+  completion: string;
+  model?: string;
+  provider?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface InlineEditResponse {
+  replacement: string;
+  diffLines: DiffLine[];
+  added: number;
+  removed: number;
+  model?: string;
+  provider?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -550,6 +580,13 @@ export interface WailsBackendApp {
   ListGitGraph(workspace: string, limit: number, allBranches: boolean): Promise<GitGraphCommit[]>;
   GetCommitDetail(workspace: string, hash: string): Promise<CommitDetail>;
   RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
+  StageHunk?(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
+  ApplyHunk?(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
+  GetFileUnstagedDiff?(workspace: string, relPath: string): Promise<FileDiff | null>;
+  GetInlineAIStatus?(workspace: string): Promise<InlineAIStatus>;
+  InlineComplete?(workspace: string, relPath: string, prefix: string, suffix: string, model: string): Promise<InlineCompleteResponse>;
+  InlineEdit?(workspace: string, relPath: string, instruction: string, selectedText: string, startLine: number, endLine: number, beforeCtx: string, afterCtx: string, model: string): Promise<InlineEditResponse>;
+  CancelInlineAI?(): Promise<void>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   SaveGitHubConfig?(token: string, baseURL: string, workspace: string): Promise<GitHubStatus>;
   JiraStatus?(): Promise<JiraConnectorStatus>;

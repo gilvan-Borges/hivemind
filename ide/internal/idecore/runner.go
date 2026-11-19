@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -480,13 +481,37 @@ func expandAtFileMentions(workspaceRoot, userText string) string {
 		if j <= i+1 {
 			continue
 		}
-		// Skip Ctrl+L inline selection snippets (@file:L10-L20 followed by code fence).
+		candidate := strings.TrimRight(string(rs[i+1:j]), ".,")
+		startLine, endLine := 0, 0
+		endPos := j
+		// Optional line range suffix: @file.go:L10-L20, @file.go:10-20, @file.go:L42, @file.go:42
 		if j < len(rs) && rs[j] == ':' {
+			k := j + 1
+			for k < len(rs) {
+				c := rs[k]
+				if (c >= '0' && c <= '9') || c == 'L' || c == 'l' || c == '-' {
+					k++
+				} else {
+					break
+				}
+			}
+			spec := string(rs[j+1 : k])
+			if s, e, ok := parseAtLineRange(spec); ok {
+				startLine, endLine = s, e
+				endPos = k
+			} else {
+				// Non-line colon suffix (e.g. URL scheme or label): keep legacy skip.
+				i = j - 1
+				continue
+			}
+		}
+		i = endPos - 1
+		// Skip injection when Ctrl+L already pasted an inline fenced snippet immediately after @file:L10-L20.
+		if startLine > 0 && hasFollowingCodeFence(rs, endPos) {
 			continue
 		}
-		candidate := strings.TrimRight(string(rs[i+1:j]), ".,")
-		i = j - 1
-		if candidate == "" || seen[candidate] {
+		dedupKey := fmt.Sprintf("%s:%d-%d", candidate, startLine, endLine)
+		if candidate == "" || seen[dedupKey] {
 			continue
 		}
 		full, err := workspace.ResolveWithOptions(workspaceRoot, filepath.FromSlash(candidate), workspace.Options{AllowMemoryRead: true})
@@ -494,22 +519,118 @@ func expandAtFileMentions(workspaceRoot, userText string) string {
 			continue
 		}
 		info, err := os.Stat(full)
-		if err != nil || info.IsDir() || info.Size() > 512*1024 {
+		if err != nil || info.IsDir() || info.Size() > 1024*1024 {
 			continue
 		}
 		data, err := os.ReadFile(full)
 		if err != nil {
 			continue
 		}
-		seen[candidate] = true
-		snippet := strx.TruncateBytes(string(data), 16*1024, "\n…(arquivo truncado)")
-		fmt.Fprintf(&b, "\n[Arquivo anexado @%s]\n```\n%s\n```\n", filepath.ToSlash(candidate), snippet)
+		seen[dedupKey] = true
+		relSlash := filepath.ToSlash(candidate)
+		if startLine > 0 {
+			snippet, actualStart, actualEnd, total := sliceMentionLines(string(data), startLine, endLine)
+			if snippet == "" {
+				continue
+			}
+			label := fmt.Sprintf("@%s:L%d-L%d (de %d linhas)", relSlash, actualStart, actualEnd, total)
+			fmt.Fprintf(&b, "\n[Trecho anexado %s]\n```\n%s\n```\n", label, snippet)
+		} else {
+			if info.Size() > 512*1024 {
+				continue
+			}
+			snippet := strx.TruncateBytes(string(data), 16*1024, "\n…(arquivo truncado)")
+			fmt.Fprintf(&b, "\n[Arquivo anexado @%s]\n```\n%s\n```\n", relSlash, snippet)
+		}
 		count++
-		if count >= 4 {
+		if count >= 6 {
 			break
 		}
 	}
 	return b.String()
+}
+
+func parseAtLineRange(spec string) (start, end int, ok bool) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return 0, 0, false
+	}
+	parts := strings.Split(spec, "-")
+	if len(parts) > 2 {
+		return 0, 0, false
+	}
+	parseNum := func(s string) (int, bool) {
+		s = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(s), "L"), "l")
+		if s == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil || n <= 0 {
+			return 0, false
+		}
+		return n, true
+	}
+	s, ok := parseNum(parts[0])
+	if !ok {
+		return 0, 0, false
+	}
+	if len(parts) == 1 {
+		return s, 0, true
+	}
+	e, ok := parseNum(parts[1])
+	if !ok || e < s {
+		return 0, 0, false
+	}
+	return s, e, true
+}
+
+func hasFollowingCodeFence(rs []rune, pos int) bool {
+	k := pos
+	for k < len(rs) && (rs[k] == ' ' || rs[k] == '\t' || rs[k] == '\r' || rs[k] == '\n') {
+		k++
+	}
+	return k+2 < len(rs) && rs[k] == '`' && rs[k+1] == '`' && rs[k+2] == '`'
+}
+
+func sliceMentionLines(content string, startLine, endLine int) (snippet string, actualStart, actualEnd, total int) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	total = len(lines)
+	if total == 0 {
+		return "", 0, 0, 0
+	}
+	if endLine <= 0 {
+		// Single line reference (@file:L42): include +/- 10 lines of surrounding context.
+		actualStart = startLine - 10
+		actualEnd = startLine + 10
+	} else {
+		actualStart = startLine
+		actualEnd = endLine
+	}
+	if actualStart < 1 {
+		actualStart = 1
+	}
+	if actualStart > total {
+		actualStart = total
+	}
+	if actualEnd > total {
+		actualEnd = total
+	}
+	if actualEnd < actualStart {
+		actualEnd = actualStart
+	}
+	const maxLines = 400
+	if actualEnd-actualStart+1 > maxLines {
+		actualEnd = actualStart + maxLines - 1
+	}
+	var b strings.Builder
+	for i := actualStart; i <= actualEnd; i++ {
+		fmt.Fprintf(&b, "L%d: %s\n", i, lines[i-1])
+	}
+	snippet = strx.TruncateBytes(strings.TrimRight(b.String(), "\n"), 16*1024, "\n…(trecho truncado)")
+	return snippet, actualStart, actualEnd, total
 }
 
 // RunTurn executes one user objective on a specific lane (team) with stack context injected.

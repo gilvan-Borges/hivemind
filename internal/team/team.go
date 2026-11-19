@@ -58,6 +58,7 @@ type Settings struct {
 	MaxTokens                int64             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	InTurnKeepToolResults    int               `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
 	ReviewModel              string            `yaml:"review_model,omitempty" json:"review_model,omitempty"`
+	InlineModel              string            `yaml:"inline_model,omitempty" json:"inline_model,omitempty"`
 	BaseBranch               string            `yaml:"base_branch" json:"base_branch"`
 	ShellAllowlist           []string          `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
 	ConfirmShell             *bool             `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`

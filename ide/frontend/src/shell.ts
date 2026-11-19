@@ -6,6 +6,7 @@ import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./ch
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
+import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane } from "./lanes";
 import { openAIUsageModal, openDoctorModal, openOpenCodeModal, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
@@ -217,6 +218,7 @@ export function mountShell() {
         <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
         <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
         <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
+        <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
@@ -317,6 +319,7 @@ export function bindStaticShellEvents() {
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
   document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
   document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -438,7 +441,11 @@ export function bindStaticShellEvents() {
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      openCommandPalette();
+      if (isCodeEditorActive()) {
+        openInlineEdit();
+      } else {
+        openCommandPalette();
+      }
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "l") {
@@ -490,6 +497,8 @@ export function bindStaticShellEvents() {
       } else if (state.pathModal) {
         state.pathModal = null;
         renderModalLayer();
+      } else if (state.inlineEdit.open) {
+        closeInlineEdit(true);
       } else if (state.editorFind.open) {
         state.editorFind.open = false;
         renderEditorFindBar();
@@ -822,6 +831,25 @@ export function updateStatusBar() {
       ocEl.style.color = "var(--text-dim)";
       ocEl.title = `${oc.detail || "Clique para configurar OPENCODE_API_KEY"} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
     }
+  }
+  const ghostEl = document.getElementById("status-ghost");
+  if (ghostEl) {
+    const st = state.inlineAIStatus;
+    const accSuffix = state.ghostTextAccepted > 0 ? ` (${state.ghostTextAccepted})` : "";
+    if (!state.ghostTextEnabled) {
+      ghostEl.textContent = `ghost: off${accSuffix}`;
+      ghostEl.style.color = "var(--text-dim)";
+    } else if (st && st.ghostAvailable) {
+      ghostEl.textContent = `ghost: on${accSuffix}`;
+      ghostEl.style.color = "var(--green)";
+    } else if (st && !st.ghostAvailable) {
+      ghostEl.textContent = "ghost: sem http";
+      ghostEl.style.color = "var(--text-dim)";
+    } else {
+      ghostEl.textContent = "ghost: …";
+      ghostEl.style.color = "";
+    }
+    ghostEl.title = ghostButtonTitle();
   }
   if (envEl) {
     envEl.textContent = state.goVersion || "";

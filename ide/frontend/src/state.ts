@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, JiraConnectorStatus, OpenCodeStatus, PermissionMode, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, OpenCodeStatus, PermissionMode, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -153,6 +153,24 @@ export const state = {
     entries: [] as TerminalEntry[],
   },
   diffViewMode: "unified" as "unified" | "split",
+  ghostTextEnabled: true,
+  ghostTextAccepted: 0,
+  inlineAIStatus: null as InlineAIStatus | null,
+  inlineReviewEnabled: true,
+  inlineReviewDiff: null as FileDiff | null,
+  inlineEdit: {
+    open: false,
+    relPath: "",
+    from: 0,
+    to: 0,
+    startLine: 1,
+    endLine: 1,
+    selectedText: "",
+    instruction: "",
+    loading: false,
+    error: "",
+    result: null as InlineEditResponse | null,
+  },
   editorFind: {
     open: false,
     showReplace: false,

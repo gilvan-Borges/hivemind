@@ -572,14 +572,25 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
       </div>
       <div class="diff-summary-files">
         ${items.map((it) => `
-          <button class="diff-chip-btn" data-chat-diff-file="${escapeHtml(it.path)}">
-            <span>${escapeHtml(it.path)}</span>
-            <span style="color:var(--green)">+${it.added}</span>
-            <span style="color:var(--red)">-${it.removed}</span>
-          </button>
+          <span class="diff-chip-group">
+            <button class="diff-chip-btn" data-chat-review-file="${escapeHtml(it.path)}" title="Abrir ${escapeHtml(it.path)} no editor com revisão bloco a bloco (Aceitar/Rejeitar)">
+              <span>${escapeHtml(it.path)}</span>
+              <span style="color:var(--green)">+${it.added}</span>
+              <span style="color:var(--red)">-${it.removed}</span>
+            </button>
+            <button class="diff-chip-split" data-chat-diff-file="${escapeHtml(it.path)}" title="Abrir diff lado a lado">Diff</button>
+          </span>
         `).join("")}
       </div>
     `;
+    el.querySelectorAll("[data-chat-review-file]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const p = (btn as HTMLElement).dataset.chatReviewFile!;
+        const name = p.split("/").pop() || p;
+        state.inlineReviewEnabled = true;
+        void openFileInEditor(p, name);
+      });
+    });
     el.querySelectorAll("[data-chat-diff-file]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const p = (btn as HTMLElement).dataset.chatDiffFile!;

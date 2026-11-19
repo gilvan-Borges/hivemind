@@ -67,16 +67,16 @@ Pré-requisito: Fase 1 fechada (dogfooding validou o loop básico).
 
 **Critérios de saída:** abrir/navegar/editar/salvar fluido num projeto grande (≥ 5k arquivos, arquivos ≥ 40k chars sem debounce visível); zero regressão nos fluxos git/chat; testes de frontend cobrindo editor e explorer. → **Testes de frontend: FEITO** — Vitest, 30 testes (escapeHtml/formatTokens/runModeLabel incl. modos SDD, parseDiffHunks, diff unificado/split, contadores de linha, mapeador de linguagens). Os critérios de fluidez exigem uso real: rolar no cockpit (1c da Fase 1) junto com a validação desta fase.
 
-## Fase 3 — Paridade agentic (o coração, dado o posicionamento Cursor)
+## Fase 3 — Paridade agentic (o coração, dado o posicionamento Cursor) · **CONCLUÍDA (19/11/2026)**
 
 A fase que justifica o produto. Tudo construído sobre o CM6 da Fase 2:
 
-1. **Ghost text (inline completion)** — sugestão inline no editor, aceitar com Tab. Rota técnica: providers HTTP (OpenCode Zen / OpenAI-compat) têm caminho natural; **agy não entrega token-a-token — risco conhecido: ghost text pode exigir provider HTTP fixo para completions**, com agy mantido para orquestração.
-2. **Ctrl+K inline edit** — seleção + instrução → diff aplicado no buffer com aceitar/rejeitar, reutilizando o parser de unified diff que já existe em `idecore/diff.go`.
-3. **Diff-apply do agente no editor** — hoje o resultado do run chega como resumo no chat; passa a chegar como diff clicável por arquivo que aplica no buffer aberto (aceitar/rejeitar por hunk — o revert por hunk já existe, é estender para o lado de aplicação).
-4. Contexto de seleção aprimorado: `@arquivo` vira `@arquivo:L10-L20` com conteúdo injetado por linhas, não arquivo inteiro truncado.
+1. **Ghost text (inline completion)** — **FEITO (19/11/2026)**: extensão CM6 nativa (`cm-editor.ts`: `ghostTextField`, `GhostTextWidget`, prefix-trim ao digitar, `Tab` aceita tudo, `Ctrl+→` aceita palavra por palavra, `Esc` dispensa) + backend FIM em `idecore/inline_ai.go` (`CompleteInlineCode`, `ResolveInlineModel` exigindo provider HTTP como OpenCode/OpenAI/Anthropic/Gemini com cancelamento automático de requests em voo e toggle + contador de aceites na status bar).
+2. **Ctrl+K inline edit** — **FEITO (19/11/2026)**: atalho contextual (`Ctrl+K` no editor de código abre Inline Edit; `Ctrl+Shift+P` sempre abre a Paleta de Comandos), `idecore.GenerateInlineEdit` com `ComputeLineDiff` LCS, preview colorido de diff verde/vermelho, `Aceitar (Ctrl+Enter)` aplicando em 1 transação undoable no CM6 e `Rejeitar (Esc)`.
+3. **Diff-apply do agente no editor** — **FEITO (19/11/2026)**: `idecore.StageDiffHunk`, `ApplyDiffHunk` e `UnstagedFileDiff` + decorações CM6 inline (`inlineDiffField` + `InlineHunkWidget`) mostrando linhas removidas, destaque verde nas adicionadas e botões `✓ Aceitar` / `✕ Rejeitar` por hunk direto no buffer editável, além do banner de revisão no topo do arquivo e abertura direta pelo card de diff do chat.
+4. **Contexto de seleção aprimorado (`@arquivo:L10-L20`)** — **FEITO (19/11/2026)**: `expandAtFileMentions` em `idecore/runner.go` agora injeta apenas a faixa `[start..end]` numerada (ou janela ±10 linhas para `@arquivo:L42`) e evita duplicar trechos já colados com code fence via `Ctrl+L`.
 
-**Critérios de saída:** completar código com ghost text ≥ X aceites/dia em uso real; editar seleção via Ctrl+K sem tocar no chat; revisar e aceitar/rejeitar mudança do agente hunk-a-hunk dentro do editor.
+**Critérios de saída:** completar código com ghost text ≥ X aceites/dia em uso real; editar seleção via Ctrl+K sem tocar no chat; revisar e aceitar/rejeitar mudança do agente hunk-a-hunk dentro do editor. *(Código e testes unitários Go + Vitest prontos; validação em uso real junto ao próximo build do instalador.)*
 
 ## Fase 4 — Navegação e execução de verdade
 

@@ -753,25 +753,97 @@ func DiscardFileChanges(ctx context.Context, workspaceDir, relPath string) error
 // RevertDiffHunk reverses a single unified diff hunk on relPath using `git apply --reverse`.
 // If the hunk starts at -0,0 (entire untracked file), it falls back to DiscardFileChanges.
 func RevertDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader string, hunkLines []string) error {
-	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
-	if relClean == "" {
-		return fmt.Errorf("caminho de arquivo vazio")
-	}
-	if _, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean)); err != nil {
+	relClean, header, patch, err := buildSingleHunkPatch(workspaceDir, relPath, hunkHeader, hunkLines)
+	if err != nil {
 		return err
-	}
-	header := strings.TrimSpace(hunkHeader)
-	if !strings.HasPrefix(header, "@@") {
-		return fmt.Errorf("cabeçalho de hunk inválido: %s", header)
 	}
 	if strings.Contains(header, "@@ -0,0 ") {
 		return DiscardFileChanges(ctx, workspaceDir, relClean)
+	}
+	return runGitApplyPatch(ctx, workspaceDir, patch, "--reverse", "--recount", "--whitespace=nowarn")
+}
+
+// StageDiffHunk stages (accepts) a single unified diff hunk into the Git index
+// using `git apply --cached`, allowing hunk-by-hunk acceptance of agent edits.
+// For untracked files (@@ -0,0 ...), stages the whole new file.
+func StageDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader string, hunkLines []string) error {
+	relClean, header, patch, err := buildSingleHunkPatch(workspaceDir, relPath, hunkHeader, hunkLines)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(header, "@@ -0,0 ") {
+		return StageWorkspaceFile(ctx, workspaceDir, relClean, true)
+	}
+	return runGitApplyPatch(ctx, workspaceDir, patch, "--cached", "--recount", "--whitespace=nowarn")
+}
+
+// ApplyDiffHunk applies a single unified diff hunk onto relPath in the working tree
+// using `git apply`.
+func ApplyDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader string, hunkLines []string) error {
+	_, _, patch, err := buildSingleHunkPatch(workspaceDir, relPath, hunkHeader, hunkLines)
+	if err != nil {
+		return err
+	}
+	return runGitApplyPatch(ctx, workspaceDir, patch, "--recount", "--whitespace=nowarn")
+}
+
+// UnstagedFileDiff returns only the unstaged hunks (working tree vs Git index) for relPath,
+// or an untracked new-file diff if relPath is not tracked yet. Used by the editor's inline
+// hunk-by-hunk review bar so accepted (staged) hunks disappear immediately from pending review.
+func UnstagedFileDiff(ctx context.Context, workspaceDir, relPath string) (*FileDiff, error) {
+	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
+	if relClean == "" {
+		return nil, fmt.Errorf("caminho de arquivo vazio")
+	}
+	full, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean))
+	if err != nil {
+		return nil, err
+	}
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspaceDir) {
+		return nil, nil
+	}
+	raw, err := runGit(ctx, workspaceDir, "diff", "--no-color", "--", gitx.LiteralPathspec(relClean))
+	if err == nil && strings.TrimSpace(raw) != "" {
+		parsed := ParseUnifiedDiff(raw)
+		if len(parsed) > 0 {
+			parsed[0].Status = "M"
+			return &parsed[0], nil
+		}
+	}
+	// Check if file is untracked (new file not yet staged).
+	untracked, uErr := runGit(ctx, workspaceDir, "ls-files", "--others", "--exclude-standard", "--", gitx.LiteralPathspec(relClean))
+	if uErr == nil && strings.TrimSpace(untracked) != "" {
+		data, rErr := os.ReadFile(full)
+		if rErr == nil {
+			fd := buildUntrackedFileDiff(relClean, data)
+			fd.Status = "U"
+			return &fd, nil
+		}
+	}
+	return nil, nil
+}
+
+func buildSingleHunkPatch(workspaceDir, relPath, hunkHeader string, hunkLines []string) (relClean, header, patch string, err error) {
+	relClean = filepath.ToSlash(strings.TrimSpace(relPath))
+	if relClean == "" {
+		return "", "", "", fmt.Errorf("caminho de arquivo vazio")
+	}
+	if _, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relClean)); err != nil {
+		return "", "", "", err
+	}
+	header = strings.TrimSpace(hunkHeader)
+	if !strings.HasPrefix(header, "@@") {
+		return "", "", "", fmt.Errorf("cabeçalho de hunk inválido: %s", header)
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", relClean, relClean))
 	sb.WriteString(fmt.Sprintf("--- a/%s\n", relClean))
 	sb.WriteString(fmt.Sprintf("+++ b/%s\n", relClean))
 	sb.WriteString(header + "\n")
+	for len(hunkLines) > 0 && hunkLines[len(hunkLines)-1] == "" {
+		hunkLines = hunkLines[:len(hunkLines)-1]
+	}
 	for _, ln := range hunkLines {
 		if ln == "" {
 			sb.WriteString(" \n")
@@ -784,20 +856,25 @@ func RevertDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader strin
 			sb.WriteString(" " + ln + "\n")
 		}
 	}
+	return relClean, header, sb.String(), nil
+}
 
+func runGitApplyPatch(ctx context.Context, workspaceDir, patch string, flags ...string) error {
 	tmpFile, err := os.CreateTemp("", "hivemind-hunk-*.patch")
 	if err != nil {
 		return err
 	}
 	patchPath := tmpFile.Name()
 	defer os.Remove(patchPath)
-	if _, err := tmpFile.WriteString(sb.String()); err != nil {
+	if _, err := tmpFile.WriteString(patch); err != nil {
 		_ = tmpFile.Close()
 		return err
 	}
 	_ = tmpFile.Close()
 
-	_, err = runGit(ctx, workspaceDir, "apply", "--reverse", "--recount", "--whitespace=nowarn", patchPath)
+	args := append([]string{"apply"}, flags...)
+	args = append(args, patchPath)
+	_, err = runGit(ctx, workspaceDir, args...)
 	return err
 }
 

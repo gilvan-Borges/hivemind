@@ -37,6 +37,9 @@ type App struct {
 	openCodeCachedAt time.Time
 	termMu           sync.Mutex
 	termCancels      map[string]context.CancelFunc
+	inlineMu         sync.Mutex
+	ghostCancel      context.CancelFunc
+	editCancel       context.CancelFunc
 	watcherMu        sync.Mutex
 	watchers         map[string]*idecore.FileWatcher
 }
@@ -110,6 +113,7 @@ func (a *App) shutdown(_ context.Context) {
 	if a.sessions != nil {
 		a.sessions.CancelAll()
 	}
+	a.CancelInlineAI()
 	a.termMu.Lock()
 	for _, cancel := range a.termCancels {
 		if cancel != nil {
@@ -544,6 +548,101 @@ func (a *App) RevertHunk(workspace, relPath, hunkHeader string, hunkLines []stri
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return idecore.RevertDiffHunk(ctx, workspace, relPath, hunkHeader, hunkLines)
+}
+
+// StageHunk stages (accepts) a single unified diff hunk on relPath into the Git index.
+func (a *App) StageHunk(workspace, relPath, hunkHeader string, hunkLines []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.StageDiffHunk(ctx, workspace, relPath, hunkHeader, hunkLines)
+}
+
+// ApplyHunk applies a single unified diff hunk onto relPath in the working tree.
+func (a *App) ApplyHunk(workspace, relPath, hunkHeader string, hunkLines []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.ApplyDiffHunk(ctx, workspace, relPath, hunkHeader, hunkLines)
+}
+
+// GetFileUnstagedDiff returns only the unstaged hunks (working tree vs index) for relPath.
+func (a *App) GetFileUnstagedDiff(workspace, relPath string) (*idecore.FileDiff, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.UnstagedFileDiff(ctx, workspace, relPath)
+}
+
+// GetInlineAIStatus reports Ghost Text and Ctrl+K Inline Edit availability and models.
+func (a *App) GetInlineAIStatus(workspace string) idecore.InlineAIStatus {
+	return idecore.GetInlineAIStatus(workspace)
+}
+
+// InlineComplete generates a low-latency FIM ghost-text completion at the editor cursor,
+// cancelling any previous in-flight ghost-text request.
+func (a *App) InlineComplete(workspace, relPath, prefix, suffix, model string) (idecore.InlineCompleteResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	a.inlineMu.Lock()
+	if a.ghostCancel != nil {
+		a.ghostCancel()
+	}
+	a.ghostCancel = cancel
+	a.inlineMu.Unlock()
+	defer func() {
+		cancel()
+		a.inlineMu.Lock()
+		a.ghostCancel = nil
+		a.inlineMu.Unlock()
+	}()
+	return idecore.CompleteInlineCode(ctx, idecore.InlineCompleteRequest{
+		Workspace: workspace,
+		FilePath:  relPath,
+		Prefix:    prefix,
+		Suffix:    suffix,
+		Model:     model,
+	})
+}
+
+// InlineEdit generates a surgical replacement and line diff preview for Ctrl+K editing.
+func (a *App) InlineEdit(workspace, relPath, instruction, selectedText string, startLine, endLine int, beforeCtx, afterCtx, model string) (idecore.InlineEditResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	a.inlineMu.Lock()
+	if a.editCancel != nil {
+		a.editCancel()
+	}
+	a.editCancel = cancel
+	a.inlineMu.Unlock()
+	defer func() {
+		cancel()
+		a.inlineMu.Lock()
+		a.editCancel = nil
+		a.inlineMu.Unlock()
+	}()
+	return idecore.GenerateInlineEdit(ctx, idecore.InlineEditRequest{
+		Workspace:     workspace,
+		FilePath:      relPath,
+		Instruction:   instruction,
+		SelectedText:  selectedText,
+		StartLine:     startLine,
+		EndLine:       endLine,
+		BeforeContext: beforeCtx,
+		AfterContext:  afterCtx,
+		Model:         model,
+	})
+}
+
+// CancelInlineAI cancels any active Ghost Text or Ctrl+K Inline Edit request.
+func (a *App) CancelInlineAI() {
+	a.inlineMu.Lock()
+	g := a.ghostCancel
+	e := a.editCancel
+	a.ghostCancel = nil
+	a.editCancel = nil
+	a.inlineMu.Unlock()
+	if g != nil {
+		g()
+	}
+	if e != nil {
+		e()
+	}
 }
 
 // GitHubStatus returns the native GitHub connector / CLI authentication and workspace remote info.

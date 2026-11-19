@@ -4,6 +4,7 @@ import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
 import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
+import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { renderModalLayer } from "./modals";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
@@ -12,6 +13,7 @@ import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { renderTerminalDrawer } from "./terminal";
 
 export async function boot() {
+  initInlineAIHooks();
   mountShell();
   const backend = api();
   if (!backend) {
@@ -325,10 +327,13 @@ export function bootstrapAsync(rootDir?: string) {
     }
     updateStatusBar();
     updateMissionBoardIfOpen();
+    void refreshInlineAIStatus();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
     if (state.showOpenCodeModal) renderModalLayer();
   }).catch(() => {});
+
+  void refreshInlineAIStatus();
 
   if (rootDir) {
     const targetKey = normalizePathKey(rootDir);

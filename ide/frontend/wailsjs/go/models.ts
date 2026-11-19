@@ -247,6 +247,94 @@ export namespace idecore {
 	        this.dataBase64 = source["dataBase64"];
 	    }
 	}
+	export class InlineAIStatus {
+	    ghostAvailable: boolean;
+	    ghostProvider?: string;
+	    ghostModel?: string;
+	    ghostReason?: string;
+	    editAvailable: boolean;
+	    editProvider?: string;
+	    editModel?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InlineAIStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ghostAvailable = source["ghostAvailable"];
+	        this.ghostProvider = source["ghostProvider"];
+	        this.ghostModel = source["ghostModel"];
+	        this.ghostReason = source["ghostReason"];
+	        this.editAvailable = source["editAvailable"];
+	        this.editProvider = source["editProvider"];
+	        this.editModel = source["editModel"];
+	    }
+	}
+	export class InlineCompleteResponse {
+	    completion: string;
+	    model?: string;
+	    provider?: string;
+	    inputTokens?: number;
+	    outputTokens?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new InlineCompleteResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.completion = source["completion"];
+	        this.model = source["model"];
+	        this.provider = source["provider"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	    }
+	}
+	export class InlineEditResponse {
+	    replacement: string;
+	    diffLines: DiffLine[];
+	    added: number;
+	    removed: number;
+	    model?: string;
+	    provider?: string;
+	    inputTokens?: number;
+	    outputTokens?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new InlineEditResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.replacement = source["replacement"];
+	        this.diffLines = this.convertValues(source["diffLines"], DiffLine);
+	        this.added = source["added"];
+	        this.removed = source["removed"];
+	        this.model = source["model"];
+	        this.provider = source["provider"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProjectIssue {
 	    source: string;
 	    key: string;
@@ -1243,6 +1331,7 @@ export namespace team {
 	    max_tokens?: number;
 	    in_turn_keep_tool_results?: number;
 	    review_model?: string;
+	    inline_model?: string;
 	    base_branch: string;
 	    shell_allowlist?: string[];
 	    confirm_shell?: boolean;
@@ -1269,6 +1358,7 @@ export namespace team {
 	        this.max_tokens = source["max_tokens"];
 	        this.in_turn_keep_tool_results = source["in_turn_keep_tool_results"];
 	        this.review_model = source["review_model"];
+	        this.inline_model = source["inline_model"];
 	        this.base_branch = source["base_branch"];
 	        this.shell_allowlist = source["shell_allowlist"];
 	        this.confirm_shell = source["confirm_shell"];
