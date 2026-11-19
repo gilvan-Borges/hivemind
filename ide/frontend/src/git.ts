@@ -7,7 +7,25 @@ import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./
 import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
 import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
-import { api, askConfirm, setStatus, state, toast, toastError } from "./state";
+import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`Tempo limite (${Math.round(ms / 1000)}s) ao ${label}.`));
+    }, ms);
+    promise.then(
+      (val) => {
+        window.clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 export async function refreshDiffsAndSummarize(lane: TeamLane) {
   await refreshDiffs();
@@ -47,8 +65,16 @@ export function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<st
 export async function refreshDiffs() {
   const backend = api();
   if (!backend || !state.project) return;
+  const targetRoot = state.project.root;
+  const targetKey = normalizePathKey(targetRoot);
   try {
-    state.diffs = (await backend.GetDiff(state.project.root)) || [];
+    const diffs = (await backend.GetDiff(targetRoot)) || [];
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+    if (ctx) ctx.diffs = diffs;
+    if (!state.project || normalizePathKey(state.project.root) !== targetKey) {
+      return;
+    }
+    state.diffs = diffs;
     const badge = document.getElementById("git-badge");
     if (badge) {
       badge.textContent = String(state.diffs.length);
@@ -722,16 +748,24 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 export async function loadGitGraph() {
   const backend = api();
   if (!backend || !state.project || state.gitGraph.loading || !backend.ListGitGraph) return;
-  state.gitGraph.loading = true;
+  const targetRoot = state.project.root;
+  const targetKey = normalizePathKey(targetRoot);
+  const targetGraph = state.gitGraph;
+  const allBranches = targetGraph.allBranches;
+  targetGraph.loading = true;
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
-    state.gitGraph.commits = (await backend.ListGitGraph(state.project.root, 60, state.gitGraph.allBranches)) || [];
-    state.gitGraph.loadedOnce = true;
+    targetGraph.commits = (await withTimeout(backend.ListGitGraph(targetRoot, 60, allBranches), 20000, "carregar o Graph de commits")) || [];
+    targetGraph.loadedOnce = true;
   } catch (err: any) {
-    toastError("carregar o Graph de commits", err);
+    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+      toastError("carregar o Graph de commits", err);
+    }
   } finally {
-    state.gitGraph.loading = false;
-    if (state.sidebarView === "git") renderLeftSidebar();
+    targetGraph.loading = false;
+    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
+      renderLeftSidebar();
+    }
   }
 }
 
@@ -781,32 +815,46 @@ export async function runGitScmAction(action: string) {
 export async function loadGitHubPRs() {
   const backend = api();
   if (!backend || !state.project || state.prs.loading) return;
-  state.prs.loading = true;
+  const targetRoot = state.project.root;
+  const targetKey = normalizePathKey(targetRoot);
+  const targetPrs = state.prs;
+  targetPrs.loading = true;
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
-    state.prs.list = (await backend.ListPullRequests(state.project.root)) || [];
-    state.prs.loadedOnce = true;
+    targetPrs.list = (await withTimeout(backend.ListPullRequests(targetRoot), 20000, "buscar os Pull Requests")) || [];
+    targetPrs.loadedOnce = true;
   } catch (err: any) {
-    toastError("buscar os Pull Requests do repositório", err);
+    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+      toastError("buscar os Pull Requests do repositório", err);
+    }
   } finally {
-    state.prs.loading = false;
-    if (state.sidebarView === "git") renderLeftSidebar();
+    targetPrs.loading = false;
+    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
+      renderLeftSidebar();
+    }
   }
 }
 
 export async function loadProjectIssues() {
   const backend = api();
   if (!backend || !state.project || state.issues.loading) return;
-  state.issues.loading = true;
+  const targetRoot = state.project.root;
+  const targetKey = normalizePathKey(targetRoot);
+  const targetIssues = state.issues;
+  targetIssues.loading = true;
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
-    state.issues.list = (await backend.ListIssues(state.project.root)) || [];
-    state.issues.loadedOnce = true;
+    targetIssues.list = (await withTimeout(backend.ListIssues(targetRoot), 20000, "buscar as issues do GitHub")) || [];
+    targetIssues.loadedOnce = true;
   } catch (err: any) {
-    toastError("buscar as issues do GitHub", err);
+    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+      toastError("buscar as issues do GitHub", err);
+    }
   } finally {
-    state.issues.loading = false;
-    if (state.sidebarView === "git") renderLeftSidebar();
+    targetIssues.loading = false;
+    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
+      renderLeftSidebar();
+    }
   }
 }
 
