@@ -269,6 +269,20 @@ O que o ADK entrega e o que esta CLI completa:
 - **Não há teto de concorrência.** Cada desenvolvedor é uma goroutine, como o `parallelagent` do ADK faz. Muitos desenvolvedores significam muitas chamadas de modelo ao mesmo tempo. A saída de ferramenta é truncada para a sessão não crescer sem limite, e só a sessão ativa fica na memória.
 - O nome de agente `user` é reservado pelo ADK. A CLI reescreve nomes para identificadores (`dev-back` vira `dev_back`).
 
+## MCP e skills do time
+
+O HiveMind passa a hospedar servidores MCP e três skills de ferramenta, na CLI, na IDE e quando o app mobile manda a execução pelo Remote Bridge. A aprovação para ligar um servidor no meio da tarefa usa o mesmo pedido de permissão que o restante do produto, então o celular também responde.
+
+Nascem ligados: Context7 (documentação atual, `CONTEXT7_API_KEY`) e o Code Review Graph (grafo local, precisa de `uvx`). Nascem desligados, sem carregar o esquema das ferramentas no agente: Playwright, Chrome DevTools, Toolbox (Postgres só em `127.0.0.1`), GitHub MCP (toolsets `repos,issues,pull_requests`, token `GITHUB_MCP_TOKEN`), Figma e Codebase Memory. O guia está em [docs/MCP.md](docs/MCP.md).
+
+As skills `ponytail` (modo `lite`) e `improve-codebase-architecture` entram no catálogo nativo para o Chefe escolher ao delegar. `untangle-codebase` fica no disco e nasce desligada: só entra se alguém pedir a limpeza do repositório pelo nome.
+
+## Cursor (agente do editor)
+
+Quem edita este repositório no Cursor tem outra config, só para esse agente, em [`docs/CURSOR.md`](docs/CURSOR.md). Context7 e o Code Review Graph ficam ligados em `.cursor/mcp.json`. Playwright, Chrome DevTools, Toolbox, GitHub, Figma, Codebase Memory e a skill `untangle-codebase` ficam de fora do que o Cursor carrega.
+
+As cópias em `.cursor/skills/` são desse agente. Não as copie para `.agents/skills/`: o time da IDE já recebe `ponytail` e `improve-codebase-architecture` pelo catálogo nativo, e `.agents/skills/` continua só com `ide-dark-islands-ui` e `multi-agent-ide-patterns`.
+
 ## Layout
 
 ```

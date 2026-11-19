@@ -15,6 +15,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -460,6 +461,29 @@ func (a *App) InstallSkillToProject(workspace, name string) error {
 // RemoveProjectSkill removes a skill from the project's .agents/skills catalog.
 func (a *App) RemoveProjectSkill(workspace, name string) error {
 	return idecore.RemoveProjectSkill(name, workspace)
+}
+
+// SetNativeSkillEnabled liga ou desliga uma skill nativa (untangle-codebase nasce desligada).
+func (a *App) SetNativeSkillEnabled(name string, enabled bool) error {
+	return idecore.SetNativeSkillEnabled(name, enabled)
+}
+
+// ListMCPServers devolve o catálogo MCP efetivo (padrões + usuário + projeto), sem subir processos.
+func (a *App) ListMCPServers(workspace string) ([]mcpx.ServerView, error) {
+	cfg, err := mcpx.Load(workspace)
+	if err != nil {
+		return nil, err
+	}
+	return mcpx.Describe(cfg), nil
+}
+
+// SetMCPServerEnabled grava o interruptor. projectOnly limita a alteração a este projeto.
+func (a *App) SetMCPServerEnabled(workspace, name string, enabled, projectOnly bool) ([]mcpx.ServerView, error) {
+	cfg, err := mcpx.SetEnabled(workspace, name, enabled, projectOnly)
+	if err != nil {
+		return nil, err
+	}
+	return mcpx.Describe(cfg), nil
 }
 
 // ListFiles refreshes the shallow root explorer entries.

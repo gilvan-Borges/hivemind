@@ -442,7 +442,7 @@ export interface WizardInputPayload {
   skillAssignments?: SkillAssignment[];
 }
 
-export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions" | "skills";
+export type SidebarView = "explorer" | "search" | "team" | "git" | "sessions" | "skills" | "mcp";
 
 export interface ProjectWorkspaceContext {
   id: string;
@@ -511,6 +511,18 @@ export interface SkillInfo {
   path: string;
   updatedAt: string;
   sizeBytes: number;
+  enabled?: boolean;
+}
+
+export interface MCPServerInfo {
+  name: string;
+  description: string;
+  transport: string;
+  enabled: boolean;
+  builtin: boolean;
+  status: string;
+  detail?: string;
+  tools?: string[];
 }
 
 export interface UsageWindow {
@@ -815,6 +827,9 @@ export interface WailsBackendApp {
   SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
   ListOpenRouterModels?(): Promise<OpenRouterModelInfo[]>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
+  SetNativeSkillEnabled?(name: string, enabled: boolean): Promise<void>;
+  ListMCPServers?(workspace: string): Promise<MCPServerInfo[]>;
+  SetMCPServerEnabled?(workspace: string, name: string, enabled: boolean, projectOnly: boolean): Promise<MCPServerInfo[]>;
   ReadNativeSkill(name: string): Promise<string>;
   SaveNativeSkill(name: string, body: string): Promise<void>;
   DeleteNativeSkill(name: string): Promise<void>;

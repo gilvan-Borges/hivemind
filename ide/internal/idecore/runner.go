@@ -15,6 +15,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
@@ -733,7 +734,10 @@ func (m *SessionManager) RunTurnWithOptions(
 	}
 
 	nativeRoot := NativeSkillsDir()
+	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
+	mcpHost := mcpx.Start(ctx, workspace)
+	defer mcpHost.Close()
 
 	runner := &orchestrator.Runner{
 		Workspace:          workspace,
@@ -745,6 +749,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		Sessions:           store,
 		Confirm:            askApproval,
 		Approve:            askApproval,
+		MCP:                mcpHost,
 		Out:                io.Discard,
 		Err:                io.Discard,
 		EnableTriage:       normMode != "squad",
@@ -901,7 +906,10 @@ func (m *SessionManager) RunAutoReviewTurn(
 	denyDangerous := func(string) bool { return false }
 
 	nativeRoot := NativeSkillsDir()
+	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
+	mcpHost := mcpx.Start(ctx, workspaceDir)
+	defer mcpHost.Close()
 
 	runner := &orchestrator.Runner{
 		Workspace:          workspaceDir,
@@ -914,6 +922,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 		Sessions:           store,
 		Confirm:            denyDangerous,
 		Approve:            denyDangerous,
+		MCP:                mcpHost,
 		Out:                io.Discard,
 		Err:                io.Discard,
 		EnableTriage:       true,

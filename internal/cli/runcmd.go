@@ -12,8 +12,10 @@ import (
 	"google.golang.org/adk/v2/agent"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -74,16 +76,25 @@ func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string
 	}
 	confirm := confirmerWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
 	approve := approverWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
+	nativeRoot := skillx.UserSkillsDir()
+	if _, err := skillx.SeedProductSkills(nativeRoot); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "aviso: skills nativas: %v\n", err)
+	}
+	mcpHost := mcpx.Start(cmd.Context(), dir)
+	defer mcpHost.Close()
 	runner := &orchestrator.Runner{
-		Workspace: dir,
-		Project:   project,
-		Team:      squad,
-		Git:       gitx.Local{},
-		Confirm:   confirm,
-		Approve:   approve,
-		Out:       cmd.OutOrStdout(),
-		Err:       cmd.ErrOrStderr(),
-		Streaming: agent.StreamingModeSSE,
+		Workspace:        dir,
+		Project:          project,
+		Team:             squad,
+		Git:              gitx.Local{},
+		Confirm:          confirm,
+		Approve:          approve,
+		MCP:              mcpHost,
+		NativeSkills:     skillx.LoadNative(nativeRoot),
+		NativeSkillsRoot: nativeRoot,
+		Out:              cmd.OutOrStdout(),
+		Err:              cmd.ErrOrStderr(),
+		Streaming:        agent.StreamingModeSSE,
 	}
 	res, runErr := runner.Run(cmd.Context(), orchestrator.Request{
 		Objective: objective,

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 )
 
 // seedNativeSkills são as skills NATIVAS semeadas automaticamente no catálogo
@@ -129,6 +131,11 @@ Validação ponto a ponto da entrega SDD contra a spec: cada critério de aceite
 // uso, sem NUNCA sobrescrever edições do usuário (skill existente é preservada).
 func SeedNativeSkills() (seeded []string, err error) {
 	dir := NativeSkillsDir()
+	product, err := skillx.SeedProductSkills(dir)
+	if err != nil {
+		return nil, err
+	}
+	seeded = append(seeded, product...)
 	for name, body := range seedNativeSkills {
 		p := filepath.Join(dir, name, "SKILL.md")
 		if _, statErr := os.Stat(p); statErr == nil {
