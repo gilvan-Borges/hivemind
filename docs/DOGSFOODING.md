@@ -27,7 +27,7 @@ Escolha 3 tarefas REAIS (não demos) de complexidade crescente:
 
 ## Balanço final do dogfooding do motor (18/11/2026)
 
-**3 tarefas, 2 entregas verificadas e aprovadas por inspeção independente, 1 falha real que expôs os bugs mais valiosos da noite. Custo total: 3.561.181 tokens** (input 3.37M — o agy injeta ~14k por chamada e o contexto ADK cresce a cada turno; ~1,2M por run independentemente do tamanho da tarefa).
+**T1 ✅ PR #2 · T2 ✅ PR #3 · T3 ✘ (2 tentativas — vazamento de worktree e janela de quota; motivou os fixes 1a/1b abaixo).** 3 entregas verificadas por inspeção independente. Custo total: **3.681.000 tokens** (~1,2M por run, tamanho-independente — o agy injeta ~14k por chamada e o contexto ADK cresce a cada turno; o chefe/coodenação come ~44% do run).
 
 **O que funciona de verdade (verificado fora do run):** pipeline ponta-a-ponta, governança (devs nunca commitam; escopo limpo), QA que executa teste antes de aprovar, worktrees sem tocar no checkout do usuário, PRs reais abertos, instructions por agente respeitadas, sessões persistidas com telemetria por agente, triagem que escala devs.
 
@@ -35,17 +35,37 @@ Escolha 3 tarefas REAIS (não demos) de complexidade crescente:
 
 | # | Severidade | Achado |
 |---|---|---|
-| 6 | **trava (custo)** | ~1,2M tokens por run, tamanho-independente; chefe/coodenação ≈ 44% |
-| 9 | **trava (custo)** | — |
-| 11 | **trava (corretude)** | worktrees de dev/entrega **reutilizadas entre runs sem limpeza**: mudança suja de um run vaza para o próximo e é consolidada como entrega |
-| 12 | **trava (resiliência)** | quota 429 do agy mata o run inteiro sem checkpoint; o envelope `AGY_ERROR` do agy diz `"retryable":true` e o HiveMind ignora (provider agy não faz retry de 429) |
-| 13 | **irrita (custo)** | loop do QA gira (`qa_request_changes`×6) quando os devs não entregam — queima tokens sem backpressure |
-| 4 | **irrita (custo)** | fatiamento duplicado em tarefas pequenas |
-| 1, 2, 7, 8 | irrita/feio | probe ignora `AGY_MODEL`; mensagem de erro enganosa; `MEMORY.md` só na IDE; CLI não imprime tokens |
+| 6, 9 | **trava (custo)** | ~1,2M tokens por run independentemente do tamanho; o agente de coordenação (chefe) é o maior consumidor (~44%) |
+| 11 | **trava (corretude)** | worktrees de dev/entrega reutilizadas entre runs sem limpeza: mudança suja de um run vaza para o próximo e é consolidada como entrega → **corrigido (1a)** |
+| 12 | **trava (resiliência)** | quota 429 do agy matava o run inteiro sem checkpoint; o envelope `AGY_ERROR` diz `"retryable":true` e era ignorado → **corrigido (1b)** |
+| 14 | **trava p/ tarefas grandes** | **a janela de uso do agy não comporta um squad**: T1+T2 (2,3M) esgotaram; após ~40 min uma chamada isolada funciona, mas o burst do T3b estourou a janela em 2,5 min com 7 chamadas. Tarefa de tamanho T3 é inviável no agy sem esperar janela ou trocar de provider |
+| 13 | **irrita (custo)** | loop do QA gira (`qa_request_changes`×6) quando os devs não entregam — queima tokens sem backpressure → **corrigido (18/11/2026): 3ª reprovação consecutiva sem alteração nova na entrega encerra o loop com motivo** |
+| 4 | **irrita (custo)** | fatiamento duplicado em tarefas pequenas → **corrigido (18/11/2026): dedup mecânico de dev_tasks + reforço de prompt "1 item para tarefas pequenas" (incluído junto com os modos SDD)** |
+| 1, 2, 7, 8 | irrita/feio | probe ignora `AGY_MODEL` → **corrigido**; mensagem enganosa do agy → **corrigida**; `MEMORY.md` só na IDE → **corrigido: CLI injeta em todo run**; CLI não imprime resumo de tokens → **corrigido** |
 
-**Pendente:** o critério original da Fase 1 ("tarefa real sem abrir outro editor") exige o **cockpit** — 30 min suas na IDE com uma tarefa dessas. O motor está validado: funciona, e agora sabemos exatamente onde ele quebra. A quota do agy ficou exaurida (reset sozinho); as worktrees sujas em `.hivemind/worktrees/` ficaram como estavam (evidência) e não afetam seu checkout.
+### Correções derivadas — placar final (18/11/2026)
 
-## Correções derivadas do dogfooding (18/11/2026)
+| Achado | Status |
+|---|---|
+| #1, #2 (probe/AGY_MODEL, mensagem) | ✔ corrigido |
+| #4 (fatiamento duplicado) | ✔ corrigido (dedup mecânico + prompt SDD) |
+| #5 (wrappers `.bat` no Windows) | ✔ corrigido (`resolveLocalExecutable` no shellx) |
+| #7 (memory só na IDE) | ✔ corrigido (injeção em todo run do CLI, starter criado) |
+| #8 (tokens invisíveis no CLI) | ✔ corrigido (resumo no fim + uso até o erro) |
+| #11 (vazamento de worktree) | ✔ corrigido + validado em produção |
+| #12 (agy 429 mata o run) | ✔ corrigido + validado em produção |
+| #13 (loop do QA girando) | ✔ corrigido (backpressure: 3ª reprovação sem alterações encerra) |
+| #9 (custo do chefe ~44%) | aberto → Fase 5 (redesenho de prompt/coordenação; risco alto para mudança autônoma) |
+| #6, #14 (custo/janela do agy) | abertos → Fase 5 (compactação de contexto entre turnos, roteamento de provider) |
+
+**Fechamento:** o motor está validado no que importa — pipeline, governança, QA honesto, persistência, e agora limpeza de worktree e resiliência a 429. Os achados #6/#9/#14 (custo e janela) são limites do desenho atual: endereçar na Fase 5 com compactação de contexto entre turnos e roteamento/troca de provider ao detectar 429 persistente. **Restante da Fase 1: 1c — cockpit na IDE (seu, ~30 min).**
+
+### T3 — as duas tentativas
+
+- **1ª (21h20, 1,25M tokens):** morta por causa composta: worktree de dev carregou a implementação suja da T2 (`PlayerXp.kt` sem commit) e a integração consolidou esse lixo; o QA rejeitou certo, mas o loop girou 6× sem os devs entregarem; a quota estourou no meio (`429`), matando tudo sem checkpoint.
+- **2ª (22h03, com o binário corrigido, 115k tokens, ~4 min):** **validou os dois fixes em produção**: (a) a worktree de dev amanheceu **limpa** — o `M PlayerXp.kt` da T2 foi descartado pelo `reset --hard` do 1a; (b) o run morreu com a **mensagem acionável nova** ("agy esgotou a quota/créditos (429)… fixe um modelo mais leve ou troque de provedor") após exercitar os retries de 30s+60s do 1b, em vez do "exit 3" genérico. Confirmado: a cota do agy é **janela de uso**, não saldo.
+
+## Correções derivadas do dogfooding (18/11/2026) — VALIDADAS EM PRODUÇÃO
 
 | Achado | Correção | Onde |
 |---|---|---|
@@ -75,7 +95,11 @@ Time: `dogfood` (chefe=arquiteto, dev_1, dev_2, qa), provider `agy:gemini-3.8-fl
 | 5 | T1 | `run_shell` no Windows: `gradlew.bat` relativo e `cmd /c ...` (fora da allowlist) custaram ~6 tentativas + diagnóstico de JDK 25→21 (~436k tokens no dev_1) | **irrita (custo)** | shellx deveria executar `.bat`/wrapper do diretório de trabalho; e a allowlist recusa `cmd` |
 | 6 | T1 | Custo absoluto: 1,1M tokens (~14k de injeção própria do agy **por chamada** + contexto ADK crescente a cada turno) | **trava p/ uso diário** | compactar contexto entre turnos; considerar `gemini-3.8-flash-low`; default `max_tokens` por run |
 | 7 | T1 | `MEMORY.md` (recurso documentado como memória do time) é injetado **só na IDE** (`idecore/runner.go`); CLI `run` não lê — conhecimento caro descoberto num run não ajuda o próximo | **irrita** | injetar memory no orchestrator comum (CLI+IDE) |
-| 8 | T1 | Telemetria existe no `sessions/*.json` (`usageMetadata` por evento), mas o CLI `run` não imprime resumo de tokens ao final (só a IDE tem painel) | **feio** | resumo de uso no fim do `run` |
+| #8 | T1 | ~~CLI `run` não imprime resumo de tokens ao final~~ → **CORRIGIDO (18/11/2026):** `Runner.Run` imprime `Tokens: ↑N entrada · ↓N saída · N total` ao final (e `uso até o erro/parar:` no stderr quando o run morre no meio). TUI e IDE não são poluídas (`io.Discard`) | **feio → resolvido** | — |
+| 5 | T1 | ~~`run_shell` no Windows: `gradlew.bat` relativo e `cmd /c ...` (fora da allowlist) custaram ~6 tentativas~~ → **CORRIGIDO (18/11/2026):** `resolveLocalExecutable` no shellx executa wrappers do diretório de trabalho após a policy aprovar (Windows sonda `.bat/.cmd/.exe`) | **irrita → resolvido** | — |
+| 7 | T1 | ~~`MEMORY.md` injetado só na IDE~~ → **CORRIGIDO (18/11/2026):** `Runner.Run` injeta `.hivemind/MEMORY.md` (4 KiB) em todo run do CLI; cria starter no primeiro uso | **irrita → resolvido** | — |
+| 4 | T1 | ~~Triagem escalou 2 devs para tarefa de 1 dev e ambos escreveram `PlayerXpTest.kt`~~ → **CORRIGIDO (18/11/2026):** dedup mecânico de `dev_tasks` idênticas + prompt endurecido (1 item para tarefas pequenas) | **irrita → resolvido** | — |
+| 13 | T3 | ~~loop do QA gira sem os devs entregarem~~ → **CORRIGIDO (18/11/2026):** 3ª reprovação consecutiva sem alteração nova na entrega encerra o loop com motivo (state `qa_feedback` + stderr) | **irrita → resolvido** | — |
 | 9 | T2 | Custo por run não caiu com a fricção eliminada (1,21M vs 1,1M): migrou para o **chefe**, que sozinho queimou 535k (44% do run) em triagem+plano+fechamento. O agente de coordenação é o maior gargalo de tokens em todas as tarefas | **trava p/ uso diário** | medir se o plano do chefe pode ser reduzido (menos leitura de arquivos na triagem, plano reaproveitado entre tarefas do mesmo projeto) |
 | 10 | T2 | Instructions por agente no `team.yaml` são respeitadas no run e eliminaram a fricção de JDK/gradlew (correção por configuração); o recurso de memória que faltou no CLI (#7) pôde ser contornado com instructions | **informativo** | manter; ainda assim corrigir #7 (memory no CLI) |
 
@@ -108,6 +132,6 @@ Para cada tarefa, note SIM/NÃO/PARCIAL:
 Probe mínimo "responda apenas OK": **12.283 tokens de entrada** (agy injeta ~12k de contexto próprio) + 17 de saída. Um squad completo (chefe+devs+QA) multiplica isso por ~10-20 chamadas por run — dimensionar `max_llm_calls`/`max_tokens` com isso em mente.
 
 
-## Falha conhecida do ambiente de dev (não é da IDE)
+## ~~Falha conhecida do ambiente de dev~~ → RESOLVIDA (18/11/2026)
 
-Os testes `TestProbeAgy*`, `TestAgyAuthAndMissingBinary`, `TestStreamJSONDeltasStayOutOfArgv` (modelx) e `TestLocalEchoAndDeny` (shellx) **falham no Windows local** mesmo sem nenhuma mudança de código: gravam binários fake sem extensão `.exe` e invocam `echo` real. Passam no CI (Linux). Débito registrado no ROADMAP (transversais) — job de CI no Windows cobriria isso.
+Os testes que forjam o agy com script `/bin/sh` (`TestAgy*`, `TestPromptNeverInArgv`, `TestStreamJSONDeltas…`, `TestDoctorProbe`, `TestDefaultProviderModel`) pulam no Windows local com mensagem explícita e rodam no CI Linux; `TestLocalEchoAndDeny` foi reescrito cross-plataforma usando o wrapper local do achado #5. `go test ./...` agora fica verde de ponta a ponta no Windows — a suíte local voltou a ser sinal confiável.
