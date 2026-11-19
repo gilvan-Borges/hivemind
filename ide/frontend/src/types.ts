@@ -12,6 +12,14 @@ export interface AgyModel {
   name: string;
 }
 
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  contextLength?: number;
+  promptPrice?: number;
+  completionPrice?: number;
+}
+
 export interface AgyStatus {
   Found: boolean;
   Path: string;
@@ -662,6 +670,23 @@ export interface PTYEvent {
 
 export type BottomDrawerTab = "terminal" | "problems";
 
+export interface MobileBridgeStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  urls: string[];
+  host: string;
+  version: string;
+}
+
+export interface MobilePairing {
+  uri: string;
+  urls: string[];
+  token: string;
+  host: string;
+  qrDataUrl: string;
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -714,6 +739,10 @@ export interface WailsBackendApp {
   ListJiraProjects?(): Promise<JiraProject[]>;
   ListJiraProjectsForWorkspace?(workspace: string): Promise<JiraProject[]>;
   ImportJiraFromMCP?(workspace: string): Promise<JiraConnectorStatus>;
+  MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
+  SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
+  RotateMobileToken?(): Promise<MobileBridgeStatus>;
+  MobilePairing?(): Promise<MobilePairing>;
   SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;
@@ -757,6 +786,7 @@ export interface WailsBackendApp {
   SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
   GetAPIKeysStatus?(): Promise<Record<string, string>>;
   SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
+  ListOpenRouterModels?(): Promise<OpenRouterModelInfo[]>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
   ReadNativeSkill(name: string): Promise<string>;
   SaveNativeSkill(name: string, body: string): Promise<void>;

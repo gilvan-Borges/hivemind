@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, OpenCodeStatus, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -52,6 +52,7 @@ export const state = {
   agyStatus: null as AgyStatus | null,
   openCodeGoModels: [] as AgyModel[],
   openCodeModels: [] as AgyModel[],
+  openRouterModels: [] as OpenRouterModelInfo[],
   openCodeStatus: null as OpenCodeStatus | null,
   ghStatus: null as GitHubStatus | null,
   jiraStatus: null as JiraConnectorStatus | null,
@@ -82,6 +83,9 @@ export const state = {
   showGitHubModal: false,
   showJiraModal: false,
   showAPIKeysModal: false,
+  showMobileModal: false,
+  mobileStatus: null as MobileBridgeStatus | null,
+  mobilePairing: null as MobilePairing | null,
   aiUsageModal: {
     open: false,
     loading: false,

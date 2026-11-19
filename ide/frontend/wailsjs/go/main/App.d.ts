@@ -5,6 +5,7 @@ import {idecore} from '../models';
 import {team} from '../models';
 import {modelx} from '../models';
 import {jirax} from '../models';
+import {remote} from '../models';
 import {orchestrator} from '../models';
 
 export function ApplyHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
@@ -117,6 +118,8 @@ export function ListJiraProjectsForWorkspace(arg1:string):Promise<Array<jirax.Pr
 
 export function ListModels():Promise<Array<modelx.AgyModel>>;
 
+export function ListOpenRouterModels():Promise<Array<modelx.OpenRouterModel>>;
+
 export function ListPullRequests(arg1:string):Promise<Array<idecore.ProjectPullRequest>>;
 
 export function ListSessions(arg1:string):Promise<idecore.WorkspaceSessionsSummary>;
@@ -124,6 +127,10 @@ export function ListSessions(arg1:string):Promise<idecore.WorkspaceSessionsSumma
 export function ListSkills(arg1:string):Promise<Array<idecore.SkillInfo>>;
 
 export function LoadSession(arg1:string,arg2:string):Promise<idecore.SessionDetail>;
+
+export function MobileBridgeStatus():Promise<remote.StatusInfo>;
+
+export function MobilePairing():Promise<remote.PairingInfo>;
 
 export function OpenExternalURL(arg1:string):Promise<void>;
 
@@ -148,6 +155,8 @@ export function RespondApproval(arg1:string,arg2:boolean):Promise<boolean>;
 export function RestartPTY(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
 export function RevertHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
+
+export function RotateMobileToken():Promise<remote.StatusInfo>;
 
 export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutput>;
 
@@ -178,6 +187,8 @@ export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSe
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
 export function SetAutoReviewConfig(arg1:string,arg2:team.AutoReviewSettings):Promise<idecore.AutoReviewStatus>;
+
+export function SetMobileBridgeEnabled(arg1:boolean):Promise<remote.StatusInfo>;
 
 export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 

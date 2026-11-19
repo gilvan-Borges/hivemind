@@ -72,5 +72,9 @@ func QRDataURL(uri string, size int) (string, error) {
 
 // QRASCII renders the pairing URI as a terminal-friendly ASCII QR (`hivemind serve`).
 func QRASCII(uri string) (string, error) {
-	return qrcode.ToString(uri, qrcode.Medium, false)
+	q, err := qrcode.New(uri, qrcode.Medium)
+	if err != nil {
+		return "", err
+	}
+	return q.ToString(false), nil
 }

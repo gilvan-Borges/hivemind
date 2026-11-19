@@ -13,3 +13,4 @@ ide/frontend/dist/
 ide/cover
 ide/cover/
 *.coverprofile
+*hivemind-App*

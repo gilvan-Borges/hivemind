@@ -93,13 +93,15 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
       ];
       break;
     case "openrouter":
-      items = [
-        { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5" },
-        { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
-        { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
-        { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
-        { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
-      ];
+      items = state.openRouterModels.length > 0
+        ? state.openRouterModels.map((m) => ({ value: m.id, label: m.id }))
+        : [
+            { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5 (carregando catálogo…)" },
+            { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
+            { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
+            { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
+            { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
+          ];
       break;
   }
   const normalizedCur = cur.replace("/", ":");
@@ -170,6 +172,22 @@ export function bindModelPickerPairs(
   onModelChange?: (modelSelect: HTMLSelectElement, newValue: string) => void
 ) {
   if (!container) return;
+  const loadOpenRouterCatalog = async (modelSel: HTMLSelectElement) => {
+    const backend = api();
+    if (!backend?.ListOpenRouterModels) return;
+    if (state.openRouterModels.length === 0) {
+      try {
+        state.openRouterModels = (await backend.ListOpenRouterModels()) || [];
+      } catch {
+        return; // mantém a lista resumida de fallback
+      }
+    }
+    const current = modelSel.value;
+    modelSel.innerHTML = buildModelOptionsForProviderHtml("openrouter", current || "");
+    if (current && Array.from(modelSel.options).some((o) => o.value === current)) {
+      modelSel.value = current;
+    }
+  };
   container.querySelectorAll<HTMLSelectElement>("[data-mp-provider]").forEach((provSel) => {
     provSel.addEventListener("change", () => {
       const key = provSel.dataset.mpProvider!;
@@ -178,10 +196,16 @@ export function bindModelPickerPairs(
       const provId = provSel.value as ModelProviderId;
       modelSel.innerHTML = buildModelOptionsForProviderHtml(provId, "");
       modelSel.disabled = provId === "default" || provSel.disabled;
+      if (provId === "openrouter") void loadOpenRouterCatalog(modelSel);
       if (onModelChange) {
         onModelChange(modelSel, modelSel.value);
       }
     });
+    if (provSel.value === "openrouter") {
+      const key = provSel.dataset.mpProvider!;
+      const modelSel = container.querySelector<HTMLSelectElement>(`[data-mp-model="${CSS.escape(key)}"]`);
+      if (modelSel) void loadOpenRouterCatalog(modelSel);
+    }
   });
   if (onModelChange) {
     container.querySelectorAll<HTMLSelectElement>("[data-mp-model]").forEach((modelSel) => {

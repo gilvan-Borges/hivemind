@@ -240,6 +240,16 @@ export async function boot() {
         refreshDiffsAndSummarize(lane);
         refreshSessions();
       }
+    } else if (ev.kind === "approval_resolved") {
+      // Uma aprovação resolvida no celular (ou em outra aba) desaparece daqui também.
+      const target = lane.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
+      if (target) {
+        target.resolved = /recusada/.test(String(ev.text || "")) ? "denied" : "approved";
+        if (isActiveProject) {
+          renderRightPane();
+          updateStatusBar();
+        }
+      }
     }
 
     if (!isActiveProject) {
@@ -382,6 +392,11 @@ export function bootstrapAsync(rootDir?: string) {
 
   void refreshInlineAIStatus();
   void refreshJiraStatusAndProjects();
+
+  backend.MobileBridgeStatus?.().then((st) => {
+    state.mobileStatus = st;
+    updateStatusBar();
+  }).catch(() => {});
 
   if (rootDir) {
     const targetKey = normalizePathKey(rootDir);

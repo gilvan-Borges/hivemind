@@ -45,6 +45,7 @@ type App struct {
 	editCancel       context.CancelFunc
 	watcherMu        sync.Mutex
 	watchers         map[string]*idecore.FileWatcher
+	mobile           *mobileBridge
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -98,10 +99,16 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		if app.ctx != nil {
 			wailsrt.EventsEmit(app.ctx, "hivemind:lane-event", ev)
 		}
+		if app.mobile != nil {
+			app.mobile.hub.HandleLaneEvent(ev)
+		}
 	})
 	app.autoReview = idecore.NewAutoReviewManager(app.sessions, func(st idecore.AutoReviewStatus) {
 		if app.ctx != nil && !app.smokeCheck {
 			wailsrt.EventsEmit(app.ctx, "hivemind:autoreview-status", st)
+		}
+		if app.mobile != nil {
+			app.mobile.hub.HandleAutoReviewStatus(st)
 		}
 	})
 	app.pty = idecore.NewPTYManager(func(ev idecore.PTYEvent) {
@@ -114,6 +121,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			wailsrt.EventsEmit(app.ctx, "hivemind:lsp-diagnostics", ev)
 		}
 	})
+	app.mobile = newMobileBridge(app.sessions, app.autoReview)
 	return app
 }
 
@@ -124,6 +132,9 @@ func (a *App) startup(ctx context.Context) {
 	// sem sobrescrever edições do usuário feitas no painel de Skills.
 	if _, err := idecore.SeedNativeSkills(); err != nil {
 		log.Printf("aviso: falha ao semear skills nativas: %v", err)
+	}
+	if a.mobile != nil {
+		a.mobile.start()
 	}
 }
 
@@ -136,6 +147,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.autoReview != nil {
 		a.autoReview.StopAll()
+	}
+	if a.mobile != nil {
+		a.mobile.stop()
 	}
 	if a.sessions != nil {
 		a.sessions.CancelAll()
@@ -326,6 +340,13 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		proj.HasTeam = true
 		proj.TeamConfig = cfg
 	}
+	if a.mobile != nil {
+		activeTeam := ""
+		if proj.HasTeam {
+			activeTeam = proj.TeamConfig.Active
+		}
+		a.mobile.hub.RegisterProject(abs, proj.Name, proj.Branch, proj.Stack.Summary, activeTeam)
+	}
 	files, _ := idecore.ListDir(abs, "")
 	proj.Files = files
 	if a.fileIndex != nil {
@@ -484,6 +505,11 @@ func (a *App) GetAPIKeysStatus() map[string]string {
 // (outside the repo) and returns the new masked status. Empty values clear.
 func (a *App) SaveAPIKeys(entries map[string]string) (map[string]string, error) {
 	return modelx.SaveStoredAPIKeys(entries)
+}
+
+// ListOpenRouterModels returns the full public OpenRouter catalog (cached ~30min).
+func (a *App) ListOpenRouterModels() ([]modelx.OpenRouterModel, error) {
+	return modelx.OpenRouterModels(a.ctx)
 }
 
 // SaveTeamWizard creates or updates a team in .hivemind/team.yaml without altering .gitignore.
@@ -817,6 +843,9 @@ func (a *App) StartRunWithOptions(
 	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
 	images []idecore.ImageInput,
 ) (orchestrator.Result, error) {
+	if a.mobile != nil {
+		a.mobile.hub.RegisterRun(laneID, workspace, teamName, objective, sessionID, runMode)
+	}
 	baseCtx := a.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -842,7 +871,11 @@ func (a *App) UpdatePermissionMode(workspace, permissionMode string) (team.File,
 
 // RespondApproval delivers the user's decision on a pending approval gate (identified by approvalID or laneID).
 func (a *App) RespondApproval(approvalID string, approved bool) bool {
-	return a.sessions.ResolveApproval(approvalID, approved)
+	ok := a.sessions.ResolveApproval(approvalID, approved)
+	if ok && a.mobile != nil {
+		a.mobile.hub.MarkApprovalResolved(approvalID, approved)
+	}
+	return ok
 }
 
 // EnsureTeamMemory creates .hivemind/MEMORY.md if absent and returns its relative path for the editor.
@@ -852,6 +885,9 @@ func (a *App) EnsureTeamMemory(workspace string) (string, error) {
 
 // CancelRun cancels an active run on laneID.
 func (a *App) CancelRun(laneID string) bool {
+	if a.mobile != nil {
+		a.mobile.hub.MarkCancel(laneID)
+	}
 	return a.sessions.Cancel(laneID)
 }
 

@@ -8,7 +8,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openOpenCodeModal, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -223,6 +223,7 @@ export function mountShell() {
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
+        <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
@@ -335,6 +336,7 @@ export function bindStaticShellEvents() {
     void refreshLSPStatus();
     openProblemsPanel();
   });
+  document.getElementById("status-mobile")?.addEventListener("click", () => void openMobileModal());
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -541,6 +543,9 @@ export function bindStaticShellEvents() {
         renderModalLayer();
       } else if (state.showAPIKeysModal) {
         state.showAPIKeysModal = false;
+        renderModalLayer();
+      } else if (state.showMobileModal) {
+        state.showMobileModal = false;
         renderModalLayer();
       } else if (state.showJiraModal) {
         state.showJiraModal = false;
@@ -938,6 +943,22 @@ export function updateStatusBar() {
       lspEl.textContent = "lsp: off";
       lspEl.style.color = "var(--text-dim)";
       lspEl.title = ls.error || "gopls não encontrado no PATH";
+    }
+  }
+  const mbEl = document.getElementById("status-mobile");
+  if (mbEl) {
+    const mb = state.mobileStatus;
+    if (!mb) {
+      mbEl.textContent = "mobile: …";
+      mbEl.style.color = "var(--text-dim)";
+    } else if (mb.running) {
+      mbEl.textContent = `mobile: on${mb.urls.length ? ` (${mb.urls.length})` : ""}`;
+      mbEl.style.color = "var(--green)";
+      mbEl.title = `App Mobile ativo na porta ${mb.port} — clique para abrir o QR de pareamento`;
+    } else {
+      mbEl.textContent = "mobile: off";
+      mbEl.style.color = "var(--text-dim)";
+      mbEl.title = "App Mobile desligado — clique para ligar e parear seu celular";
     }
   }
   const probEl = document.getElementById("status-problems");

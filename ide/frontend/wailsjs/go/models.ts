@@ -1419,6 +1419,26 @@ export namespace modelx {
 	        this.detail = source["detail"];
 	    }
 	}
+	export class OpenRouterModel {
+	    id: string;
+	    name: string;
+	    contextLength?: number;
+	    promptPrice?: number;
+	    completionPrice?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenRouterModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.contextLength = source["contextLength"];
+	        this.promptPrice = source["promptPrice"];
+	        this.completionPrice = source["completionPrice"];
+	    }
+	}
 	
 	
 
@@ -1471,6 +1491,53 @@ export namespace orchestrator {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace remote {
+	
+	export class PairingInfo {
+	    uri: string;
+	    urls: string[];
+	    token: string;
+	    host: string;
+	    qrDataUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PairingInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uri = source["uri"];
+	        this.urls = source["urls"];
+	        this.token = source["token"];
+	        this.host = source["host"];
+	        this.qrDataUrl = source["qrDataUrl"];
+	    }
+	}
+	export class StatusInfo {
+	    enabled: boolean;
+	    running: boolean;
+	    port: number;
+	    urls: string[];
+	    host: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatusInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.running = source["running"];
+	        this.port = source["port"];
+	        this.urls = source["urls"];
+	        this.host = source["host"];
+	        this.version = source["version"];
+	    }
 	}
 
 }

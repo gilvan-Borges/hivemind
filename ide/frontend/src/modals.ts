@@ -116,6 +116,36 @@ export async function openAPIKeysModal() {
   }
 }
 
+export async function openMobileModal() {
+  state.showMobileModal = true;
+  renderModalLayer();
+  const backend = api();
+  if (!backend?.MobileBridgeStatus) return;
+  try {
+    state.mobileStatus = await backend.MobileBridgeStatus();
+    updateStatusBar();
+    renderModalLayer();
+    await refreshMobilePairing();
+  } catch {
+    // mantém o modal aberto sem status
+  }
+}
+
+async function refreshMobilePairing() {
+  const backend = api();
+  if (!backend?.MobilePairing || !state.mobileStatus?.running) {
+    state.mobilePairing = null;
+    renderModalLayer();
+    return;
+  }
+  try {
+    state.mobilePairing = await backend.MobilePairing();
+  } catch {
+    state.mobilePairing = null;
+  }
+  renderModalLayer();
+}
+
 export function renderModalLayer() {
   const layer = document.getElementById("modal-layer");
   if (!layer) return;
@@ -384,6 +414,108 @@ export function renderModalLayer() {
           errEl.textContent = `Falha ao salvar: ${err?.message || String(err)}`;
           errEl.style.display = "block";
         }
+      }
+    });
+    return;
+  }
+
+  if (state.showMobileModal) {
+    const mb = state.mobileStatus;
+    const pr = state.mobilePairing;
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="mb-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:580px">
+          <h3 class="modal-title">App Mobile — Continuar Trabalhos no Celular</h3>
+          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px;line-height:1.5">
+            Pareie o <strong>HiveMind Mobile</strong> (Android) para acompanhar equipes em tempo real, responder
+            aprovações, ver diffs e o Fluxo de PRs/Jira pelo celular. O motor continua 100% no seu PC — via
+            <strong>Tailscale</strong> (funciona do 4G/5G) ou <strong>Wi-Fi</strong>.
+          </p>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <span style="font-weight:600">Estado:</span>
+            <span style="color:${mb?.running ? "var(--green)" : "var(--text-dim)"}">${mb?.running ? `ativo · porta ${mb.port}` : "desligado"}</span>
+            <div class="spacer"></div>
+            <button id="mb-toggle" class="${mb?.running ? "danger mini" : "primary mini"}">${mb?.running ? "Desligar Bridge" : "Ligar Bridge"}</button>
+          </div>
+          ${mb?.running && pr?.qrDataUrl ? `
+            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+              <div style="background:#fff;padding:8px;border-radius:8px">
+                <img src="${escapeHtml(pr.qrDataUrl)}" alt="QR de pareamento" style="width:208px;height:208px;image-rendering:pixelated" />
+              </div>
+              <div style="flex:1;min-width:220px">
+                <label style="font-size:11px;color:var(--text-dim)">URLs (Tailscale primeiro):</label>
+                <div class="dim" style="font-family:var(--mono);font-size:11px;margin:4px 0 10px;word-break:break-all">
+                  ${(pr.urls || []).map((u) => `<div>• ${escapeHtml(u)}</div>`).join("") || "—"}
+                </div>
+                <label style="font-size:11px;color:var(--text-dim)">Token (pareamento manual):</label>
+                <div style="display:flex;gap:6px;align-items:center;margin:4px 0 10px">
+                  <code style="font-size:11px;word-break:break-all">${escapeHtml(pr.token)}</code>
+                  <button id="mb-copy" class="mini">Copiar</button>
+                </div>
+                <button id="mb-rotate" class="mini" title="Invalida todas as conexões ativas">Rotacionar Token / Desconectar Celulares</button>
+              </div>
+            </div>
+          ` : `
+            <div class="dim" style="font-size:12px;padding:12px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+              ${mb?.running ? "Gerando QR…" : "Ligue o Bridge para exibir o QR de pareamento."}
+            </div>
+          `}
+          <div id="mb-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          <div class="modal-footer">
+            <button id="mb-close">Fechar</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const closeMb = () => {
+      state.showMobileModal = false;
+      renderModalLayer();
+    };
+    document.getElementById("mb-close")?.addEventListener("click", closeMb);
+    document.getElementById("mb-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement)?.id === "mb-modal-backdrop") closeMb();
+    });
+    document.getElementById("mb-toggle")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SetMobileBridgeEnabled) return;
+      const next = !(state.mobileStatus?.running);
+      try {
+        state.mobileStatus = await backend.SetMobileBridgeEnabled(next);
+        updateStatusBar();
+        await refreshMobilePairing();
+      } catch (err: any) {
+        const errEl = document.getElementById("mb-modal-err");
+        if (errEl) {
+          errEl.textContent = `Falha: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+      }
+    });
+    document.getElementById("mb-rotate")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RotateMobileToken) return;
+      try {
+        state.mobileStatus = await backend.RotateMobileToken();
+        updateStatusBar();
+        await refreshMobilePairing();
+        toast("Token rotacionado — todos os celulares foram desconectados.", "success");
+      } catch (err: any) {
+        const errEl = document.getElementById("mb-modal-err");
+        if (errEl) {
+          errEl.textContent = `Falha: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+      }
+    });
+    document.getElementById("mb-copy")?.addEventListener("click", async () => {
+      const tok = state.mobilePairing?.token;
+      if (!tok) return;
+      try {
+        await navigator.clipboard.writeText(tok);
+        toast("Token copiado.", "success");
+      } catch {
+        // clipboard indisponível
       }
     });
     return;

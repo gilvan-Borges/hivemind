@@ -5,6 +5,7 @@ go 1.26.10
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gilvan-Borges/HiveMind v0.0.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/wailsapp/wails/v2 v2.17.1
 	golang.org/x/sys v0.49.0
 	google.golang.org/adk/v2 v2.8.0
@@ -53,7 +54,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect

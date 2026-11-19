@@ -1,0 +1,487 @@
+package remote
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+)
+
+// maxBodyBytes caps request bodies (base64 image attachments can be large).
+const maxBodyBytes = 32 << 20 // 32 MiB
+
+// Server is the authenticated HTTP + SSE bridge (see
+// docs/SPEC_APP_MOBILE_NATIVO.md §5 for the API contract).
+type Server struct {
+	hub  *Hub
+	deps Deps
+
+	mu      sync.Mutex
+	cfg     Config
+	srv     *http.Server
+	port    int
+	urls    []string
+	host    string
+	version string
+}
+
+// NewServer builds the bridge (not yet listening).
+func NewServer(hub *Hub, deps Deps, cfg Config) *Server {
+	host, _ := os.Hostname()
+	return &Server{
+		hub:     hub,
+		deps:    deps,
+		cfg:     cfg,
+		host:    host,
+		version: BridgeVersion,
+	}
+}
+
+// Start binds 0.0.0.0:<cfg.Port> and serves in the background.
+func (s *Server) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.srv != nil {
+		return nil
+	}
+	port := s.cfg.Port
+	if port <= 0 || port > 65535 {
+		port = DefaultPort
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return fmt.Errorf("iniciando o bridge na porta %d: %w", port, err)
+	}
+	s.port = ln.Addr().(*net.TCPAddr).Port
+	s.urls = joinURLs(DetectAddrs(), s.port)
+	s.srv = &http.Server{
+		Handler:           s.handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	go func() {
+		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("remote bridge: %v", err)
+		}
+	}()
+	return nil
+}
+
+// Stop shuts the server down and drops all SSE clients.
+func (s *Server) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	srv := s.srv
+	s.srv = nil
+	s.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}
+
+// SetToken replaces the accepted bearer token (used after rotation while the
+// server is running; all previously paired devices are rejected immediately).
+func (s *Server) SetToken(token string) {
+	s.mu.Lock()
+	s.cfg.Token = token
+	s.mu.Unlock()
+}
+
+// StatusInfo describes the bridge for the IDE status bar and modal.
+type StatusInfo struct {
+	Enabled bool     `json:"enabled"`
+	Running bool     `json:"running"`
+	Port    int      `json:"port"`
+	URLs    []string `json:"urls"`
+	Host    string   `json:"host"`
+	Version string   `json:"version"`
+}
+
+// Status snapshots the current bridge state.
+func (s *Server) Status() StatusInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	running := s.srv != nil
+	port := s.cfg.Port
+	if port <= 0 || port > 65535 {
+		port = DefaultPort
+	}
+	urls := s.urls
+	if running {
+		urls = joinURLs(DetectAddrs(), s.port)
+	}
+	return StatusInfo{
+		Enabled: s.cfg.Enabled,
+		Running: running,
+		Port:    port,
+		URLs:    urls,
+		Host:    s.host,
+		Version: s.version,
+	}
+}
+
+// Pairing builds the QR pairing payload for the IDE modal.
+func (s *Server) Pairing() (PairingInfo, error) {
+	st := s.Status()
+	uri := BuildPairURI(st.URLs, s.cfg.Token, st.Host)
+	dataURL, err := QRDataURL(uri, 320)
+	if err != nil {
+		return PairingInfo{}, err
+	}
+	return PairingInfo{
+		URI:       uri,
+		URLs:      st.URLs,
+		Token:     s.cfg.Token,
+		Host:      st.Host,
+		QRDataURL: dataURL,
+	}, nil
+}
+
+func (s *Server) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	mux.HandleFunc("GET /api/v1/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/v1/lanes", s.handleLanes)
+	mux.HandleFunc("GET /api/v1/sessions", s.handleSessions)
+	mux.HandleFunc("GET /api/v1/session", s.handleSession)
+	mux.HandleFunc("POST /api/v1/runs/start", s.handleRunStart)
+	mux.HandleFunc("POST /api/v1/runs/cancel", s.handleRunCancel)
+	mux.HandleFunc("POST /api/v1/runs/redirect", s.handleRunRedirect)
+	mux.HandleFunc("POST /api/v1/approvals/resolve", s.handleApprovalResolve)
+	mux.HandleFunc("GET /api/v1/git/diffs", s.handleDiffs)
+	mux.HandleFunc("GET /api/v1/git/prs", s.handlePRs)
+	mux.HandleFunc("GET /api/v1/git/issues", s.handleIssues)
+	mux.HandleFunc("GET /api/v1/autoreview/status", s.handleAutoReviewStatus)
+	mux.HandleFunc("POST /api/v1/autoreview/poll", s.handleAutoReviewPoll)
+	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+	return s.auth(mux)
+}
+
+// Handler exposes the composed http.Handler (tests use httptest).
+func (s *Server) Handler() http.Handler {
+	return s.handler()
+}
+
+func (s *Server) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.tokenOK(bearerToken(r)) {
+			writeErr(w, http.StatusUnauthorized, "não autorizado: token Bearer inválido")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) tokenOK(tok string) bool {
+	s.mu.Lock()
+	want := s.cfg.Token
+	s.mu.Unlock()
+	if tok == "" || want == "" {
+		return false
+	}
+	// Hash both sides so the comparison is constant-time regardless of length.
+	a := sha256.Sum256([]byte(tok))
+	b := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+}
+
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
+		return strings.TrimSpace(h[7:])
+	}
+	return ""
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeErr(w, http.StatusBadRequest, "corpo JSON inválido: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// --- Handlers ---
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"hostName": s.host,
+		"version":  s.version,
+		"time":     time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"projects": s.hub.Projects()})
+}
+
+func (s *Server) handleLanes(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	writeJSON(w, http.StatusOK, map[string]any{"lanes": s.hub.Snapshots(ws)})
+}
+
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	res, err := s.deps.ListSessions(r.Context(), ws)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	id := r.URL.Query().Get("id")
+	if ws == "" || id == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetros ?workspace= e ?id= obrigatórios")
+		return
+	}
+	res, err := s.deps.LoadSession(r.Context(), ws, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// runStartRequest is the POST /api/v1/runs/start and /runs/redirect payload.
+type runStartRequest struct {
+	LaneID    string                `json:"laneId"`
+	Workspace string                `json:"workspace"`
+	Team      string                `json:"team,omitempty"`
+	Objective string                `json:"objective,omitempty"`
+	JiraKey   string                `json:"jiraKey,omitempty"`
+	SessionID string                `json:"sessionId,omitempty"`
+	RunMode   string                `json:"runMode,omitempty"`
+	Images    []idecore.ImageInput  `json:"images,omitempty"`
+}
+
+func (req *runStartRequest) validate() string {
+	if strings.TrimSpace(req.LaneID) == "" {
+		return "laneId obrigatório"
+	}
+	if strings.TrimSpace(req.Workspace) == "" {
+		return "workspace obrigatório"
+	}
+	if strings.TrimSpace(req.Objective) == "" && len(req.Images) == 0 {
+		return "objective (ou images) obrigatório"
+	}
+	for _, img := range req.Images {
+		if strings.TrimSpace(img.DataBase64) == "" {
+			return "cada image precisa de dataBase64"
+		}
+	}
+	return ""
+}
+
+func (s *Server) handleRunStart(w http.ResponseWriter, r *http.Request) {
+	var req runStartRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if msg := req.validate(); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
+	if err := s.deps.RunStart(r.Context(), req.LaneID, req.Workspace, req.Team, req.Objective, req.JiraKey, req.SessionID, req.RunMode, req.Images); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted":  true,
+		"laneId":    req.LaneID,
+		"workspace": req.Workspace,
+	})
+}
+
+func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LaneID string `json:"laneId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.LaneID) == "" {
+		writeErr(w, http.StatusBadRequest, "laneId obrigatório")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": s.deps.RunCancel(req.LaneID)})
+}
+
+func (s *Server) handleRunRedirect(w http.ResponseWriter, r *http.Request) {
+	var req runStartRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if msg := req.validate(); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
+	s.deps.RunCancel(req.LaneID)
+	if err := s.deps.RunStart(r.Context(), req.LaneID, req.Workspace, req.Team, req.Objective, req.JiraKey, req.SessionID, req.RunMode, req.Images); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted":  true,
+		"laneId":    req.LaneID,
+		"workspace": req.Workspace,
+	})
+}
+
+func (s *Server) handleApprovalResolve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ApprovalID string `json:"approvalId"`
+		Approved   bool   `json:"approved"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ApprovalID) == "" {
+		writeErr(w, http.StatusBadRequest, "approvalId obrigatório")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"resolved": s.deps.ApprovalResolve(req.ApprovalID, req.Approved)})
+}
+
+func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	files, err := s.deps.Diff(r.Context(), ws)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+}
+
+func (s *Server) handlePRs(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	prs, err := s.deps.ListPRs(r.Context(), ws)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"prs": prs})
+}
+
+func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	issues, err := s.deps.ListIssues(r.Context(), ws)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issues": issues})
+}
+
+func (s *Server) handleAutoReviewStatus(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.AutoReviewStatus(ws))
+}
+
+func (s *Server) handleAutoReviewPoll(w http.ResponseWriter, r *http.Request) {
+	ws := r.URL.Query().Get("workspace")
+	if ws == "" {
+		var req struct {
+			Workspace string `json:"workspace"`
+		}
+		if !decodeBody(w, r, &req) {
+			return
+		}
+		ws = req.Workspace
+	}
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "parâmetro ?workspace= obrigatório")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.AutoReviewPoll(ws))
+}
+
+// handleEvents streams SSE events (lane_event, autoreview_status,
+// approval_resolved, ping) with automatic keep-alive.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "streaming não suportado")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch, unsub := s.hub.Subscribe()
+	defer unsub()
+
+	ioW := w.(interface{ Write([]byte) (int, error) })
+	_, _ = fmt.Fprintf(ioW, "event: connected\ndata: {\"ok\":true}\n\n")
+	fl.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			buf, _ := json.Marshal(ev)
+			_, _ = fmt.Fprintf(ioW, "event: %s\ndata: %s\n\n", ev.Type, buf)
+			fl.Flush()
+		case <-ticker.C:
+			_, _ = fmt.Fprint(ioW, ": ping\n\n")
+			fl.Flush()
+		}
+	}
+}

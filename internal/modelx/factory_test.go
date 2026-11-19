@@ -15,6 +15,9 @@ func TestMissingCredentials(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OPENROUTER_BASE_URL", "")
+	prevPath := keysFilePathFn
+	keysFilePathFn = func() (string, error) { return t.TempDir() + "/api-keys.json", nil }
+	t.Cleanup(func() { keysFilePathFn = prevPath })
 	if _, err := New(context.Background(), "gemini", "gemini-flash-latest"); err == nil {
 		t.Fatal("gemini sem chave deveria falhar")
 	}

@@ -222,6 +222,10 @@ export function ListModels() {
   return window['go']['main']['App']['ListModels']();
 }
 
+export function ListOpenRouterModels() {
+  return window['go']['main']['App']['ListOpenRouterModels']();
+}
+
 export function ListPullRequests(arg1) {
   return window['go']['main']['App']['ListPullRequests'](arg1);
 }
@@ -236,6 +240,14 @@ export function ListSkills(arg1) {
 
 export function LoadSession(arg1, arg2) {
   return window['go']['main']['App']['LoadSession'](arg1, arg2);
+}
+
+export function MobileBridgeStatus() {
+  return window['go']['main']['App']['MobileBridgeStatus']();
+}
+
+export function MobilePairing() {
+  return window['go']['main']['App']['MobilePairing']();
 }
 
 export function OpenExternalURL(arg1) {
@@ -284,6 +296,10 @@ export function RestartPTY(arg1, arg2, arg3, arg4) {
 
 export function RevertHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['RevertHunk'](arg1, arg2, arg3, arg4);
+}
+
+export function RotateMobileToken() {
+  return window['go']['main']['App']['RotateMobileToken']();
 }
 
 export function RunCommand(arg1, arg2) {
@@ -344,6 +360,10 @@ export function SetActiveTeam(arg1, arg2) {
 
 export function SetAutoReviewConfig(arg1, arg2) {
   return window['go']['main']['App']['SetAutoReviewConfig'](arg1, arg2);
+}
+
+export function SetMobileBridgeEnabled(arg1) {
+  return window['go']['main']['App']['SetMobileBridgeEnabled'](arg1);
 }
 
 export function StageFile(arg1, arg2, arg3) {
