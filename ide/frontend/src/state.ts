@@ -117,6 +117,8 @@ export const state = {
     loading: false,
     loadedOnce: false,
   },
+  issuesFilterQuery: "",
+  issuesStatusFilter: "",
   prs: {
     list: [] as ProjectPullRequest[],
     loading: false,

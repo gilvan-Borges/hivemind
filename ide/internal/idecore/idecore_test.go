@@ -1124,3 +1124,17 @@ func TestDetectStackMonorepoSubdirs(t *testing.T) {
 		t.Fatalf("expected consolidated Angular / TypeScript summary, got %q", ngStack.Summary)
 	}
 }
+
+
+func TestBuildMyJiraIssuesJQL(t *testing.T) {
+	gotProj := buildMyJiraIssuesJQL("ipg")
+	wantProj := `project = "IPG" AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`
+	if gotProj != wantProj {
+		t.Fatalf("buildMyJiraIssuesJQL(ipg) = %q, want %q", gotProj, wantProj)
+	}
+	gotEmpty := buildMyJiraIssuesJQL("")
+	wantEmpty := `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`
+	if gotEmpty != wantEmpty {
+		t.Fatalf("buildMyJiraIssuesJQL(\"\") = %q, want %q", gotEmpty, wantEmpty)
+	}
+}

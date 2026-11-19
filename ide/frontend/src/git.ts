@@ -406,7 +406,7 @@ export function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
       <div class="pr-card-top" style="justify-content:space-between">
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
-          ${iss.isMine ? `<span class="flow-pill mine">Minha</span>` : ""}
+          ${isGH && iss.isMine ? `<span class="flow-pill mine">Minha</span>` : ""}
         </div>
         ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
       </div>
@@ -618,19 +618,50 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       </div>
 
       <div class="git-section" style="padding:10px">
-        <div class="git-section-head">
-          <span>Issues abertas (${state.issues.list.length})</span>
-        </div>
-        <div id="git-issues-list">
-          ${state.issues.loading && !state.issues.loadedOnce
-            ? `<div class="dim">${icons.spinner} Carregando issues…</div>`
-            : !state.issues.loadedOnce
-              ? `<div class="dim">Aguardando carregamento…</div>`
-              : state.issues.list.length === 0
-                ? `<div class="dim">Nenhuma issue aberta encontrada.</div>`
-                : state.issues.list.map((iss, idx) => renderIssueCardHtml(iss, idx)).join("")
-          }
-        </div>
+        ${(() => {
+          const allIssues = state.issues.list.map((iss, idx) => ({ iss, idx }));
+          const statuses = Array.from(new Set(allIssues.map((x) => (x.iss.status || "").trim()).filter(Boolean)));
+          const activeStatus = statuses.includes(state.issuesStatusFilter) ? state.issuesStatusFilter : "";
+          const q = (state.issuesFilterQuery || "").trim().toLowerCase();
+          const filtered = allIssues.filter(({ iss }) => {
+            if (activeStatus && (iss.status || "").trim() !== activeStatus) return false;
+            if (q && !(`${iss.key} ${iss.title} ${iss.status || ""}`.toLowerCase().includes(q))) return false;
+            return true;
+          });
+          const countLabel = filtered.length !== allIssues.length
+            ? `${filtered.length}/${allIssues.length}`
+            : `${allIssues.length}`;
+          return `
+            <div class="git-section-head">
+              <span>Minhas tasks & issues (${countLabel})</span>
+            </div>
+            ${allIssues.length > 0 ? `
+              <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+                <input id="issues-filter-input" value="${escapeHtml(state.issuesFilterQuery)}" placeholder="Filtrar por chave ou título…" style="width:100%;font-size:11.5px;padding:4px 8px" />
+                ${statuses.length > 1 ? `
+                  <div style="display:flex;gap:4px;flex-wrap:wrap">
+                    <button type="button" class="mini ${activeStatus === "" ? "primary" : "ghost"}" data-issue-status="">Todas</button>
+                    ${statuses.map((st) => `
+                      <button type="button" class="mini ${activeStatus === st ? "primary" : "ghost"}" data-issue-status="${escapeHtml(st)}">${escapeHtml(st)}</button>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </div>
+            ` : ""}
+            <div id="git-issues-list">
+              ${state.issues.loading && !state.issues.loadedOnce
+                ? `<div class="dim">${icons.spinner} Carregando suas tasks…</div>`
+                : !state.issues.loadedOnce
+                  ? `<div class="dim">Aguardando carregamento…</div>`
+                  : allIssues.length === 0
+                    ? `<div class="dim">Nenhuma task atribuída a você encontrada.</div>`
+                    : filtered.length === 0
+                      ? `<div class="dim">Nenhuma task corresponde ao filtro atual.</div>`
+                      : filtered.map(({ iss, idx }) => renderIssueCardHtml(iss, idx)).join("")
+              }
+            </div>
+          `;
+        })()}
       </div>
     `;
   } else {
@@ -1108,6 +1139,24 @@ export function bindGitSidebarEvents() {
     void loadProjectIssues();
   });
   document.getElementById("btn-load-flow")?.addEventListener("click", () => void loadGitHubPRs());
+
+  const issuesFilterEl = document.getElementById("issues-filter-input") as HTMLInputElement | null;
+  issuesFilterEl?.addEventListener("input", () => {
+    const pos = issuesFilterEl.selectionStart ?? issuesFilterEl.value.length;
+    state.issuesFilterQuery = issuesFilterEl.value;
+    renderLeftSidebar();
+    const nextEl = document.getElementById("issues-filter-input") as HTMLInputElement | null;
+    if (nextEl) {
+      nextEl.focus();
+      nextEl.setSelectionRange(pos, pos);
+    }
+  });
+  document.querySelectorAll("[data-issue-status]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.issuesStatusFilter = (btn as HTMLElement).dataset.issueStatus || "";
+      renderLeftSidebar();
+    });
+  });
 
   const saveAutoReviewFromUI = async (overrideEnabled?: boolean) => {
     const backend = api();

@@ -1025,26 +1025,43 @@ type ProjectIssue struct {
 	IsMine bool   `json:"isMine,omitempty"`
 }
 
-// ListProjectIssues fetches open Jira and/or GitHub issues for one-click squad execution.
+func buildMyJiraIssuesJQL(projectKey string) string {
+	projKey := strings.ToUpper(sanitizeJiraProjectKey(projectKey))
+	if projKey != "" {
+		return fmt.Sprintf(`project = "%s" AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`, projKey)
+	}
+	return "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+}
+
+// ListProjectIssues fetches open Jira tasks assigned to the current user and/or open GitHub issues for one-click squad execution.
 func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, error) {
 	var issues []ProjectIssue
 
-	// 1. Jira issues if enabled and configured
+	// 1. Jira issues if enabled and configured (only tasks assigned to currentUser() and not Done)
 	if cfg, err := team.Load(workspace); err == nil && cfg.Settings.JiraEnabled {
 		jc := jirax.FromWorkspace(workspace)
 		if jc.Enabled() {
-			jql := "resolution = Unresolved ORDER BY updated DESC"
-			if projKey := sanitizeJiraProjectKey(cfg.Settings.JiraProject); projKey != "" {
-				jql = fmt.Sprintf(`project = "%s" AND resolution = Unresolved ORDER BY updated DESC`, projKey)
+			jiraBaseURL, _, _, defProj, _ := jirax.LoadCredentialsForWorkspace(workspace)
+			projKey := sanitizeJiraProjectKey(cfg.Settings.JiraProject)
+			if projKey == "" {
+				projKey = sanitizeJiraProjectKey(defProj)
 			}
-			if list, err := jc.Search(ctx, jql, 15); err == nil {
+			jql := buildMyJiraIssuesJQL(projKey)
+			if list, err := jc.Search(ctx, jql, 50); err == nil {
+				base := strings.TrimRight(strings.TrimSpace(jiraBaseURL), "/")
 				for _, it := range list {
+					browseURL := ""
+					if base != "" && it.Key != "" {
+						browseURL = base + "/browse/" + url.PathEscape(it.Key)
+					}
 					issues = append(issues, ProjectIssue{
 						Source: "jira",
 						Key:    it.Key,
 						Title:  it.Summary,
 						Body:   it.Description,
 						Status: it.Status,
+						URL:    browseURL,
+						IsMine: true,
 					})
 				}
 			}
