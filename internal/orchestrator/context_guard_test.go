@@ -242,3 +242,72 @@ func TestInTurnCompactionTrimsOldWriteAndEditArgs(t *testing.T) {
 		t.Fatalf("most recent edit_file call should remain intact")
 	}
 }
+
+
+type stubNamedTool struct{ name string }
+
+func (s stubNamedTool) Name() string        { return s.name }
+func (s stubNamedTool) Description() string { return s.name }
+func (s stubNamedTool) IsLongRunning() bool { return false }
+
+func TestInTurnCompactionNeverCompactsLatestParallelBatch(t *testing.T) {
+	// Reproduz exatamente o bug da T010: o Dev chama 8 read_file em paralelo no mesmo turno
+	// com keepRecent=4; TODAS as 8 respostas da última mensagem de ferramenta devem ficar
+	// 100% íntegras para o modelo realmente ler o que acabou de pedir!
+	parts := make([]*genai.Part, 0, 8)
+	bodies := make([]string, 8)
+	for i := 0; i < 8; i++ {
+		bodies[i] = strings.Repeat(fmt.Sprintf("regra RN-%02d importante\n", i), 50)
+		parts = append(parts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:       fmt.Sprintf("p%d", i),
+				Name:     "read_file",
+				Response: map[string]any{"text": bodies[i]},
+			},
+		})
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Implemente a task"}}},
+			{Role: genai.RoleUser, Parts: parts},
+		},
+	}
+
+	compacted, saved := compactLLMRequestInTurn(req, 4)
+	if compacted != 0 || saved != 0 {
+		t.Fatalf("latest parallel batch must NEVER be compacted, got compacted=%d saved=%d", compacted, saved)
+	}
+	for i := 0; i < 8; i++ {
+		got := req.Contents[1].Parts[i].FunctionResponse.Response["text"].(string)
+		if got != bodies[i] {
+			t.Fatalf("parallel read #%d was corrupted/compacted", i)
+		}
+	}
+}
+
+func TestRepeatReadGuardBlocksThirdIdenticalReadAndResetsOnEdit(t *testing.T) {
+	cb := newRepeatReadGuardCallback()
+	readTool := stubNamedTool{name: "read_file"}
+	editTool := stubNamedTool{name: "edit_file"}
+	args := map[string]any{"path": "specs/017/spec.md", "start_line": 1, "end_line": 100}
+
+	// 1st and 2nd reads pass through (nil override).
+	if res, err := cb(nil, readTool, args); err != nil || res != nil {
+		t.Fatalf("1st read should pass, got res=%v err=%v", res, err)
+	}
+	if res, err := cb(nil, readTool, args); err != nil || res != nil {
+		t.Fatalf("2nd read should pass, got res=%v err=%v", res, err)
+	}
+	// 3rd identical read triggers anti-loop short-circuit!
+	res, err := cb(nil, readTool, args)
+	if err != nil || res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("3rd identical read should trigger anti-loop notice, got res=%v err=%v", res, err)
+	}
+	// Editing that file resets the counter so subsequent read works again.
+	if _, err := cb(nil, editTool, map[string]any{"path": "specs/017/spec.md"}); err != nil {
+		t.Fatalf("edit_file reset failed: %v", err)
+	}
+	if res2, err := cb(nil, readTool, args); err != nil || res2 != nil {
+		t.Fatalf("read after edit_file should pass again, got res=%v err=%v", res2, err)
+	}
+}

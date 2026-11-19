@@ -2,18 +2,21 @@ package orchestrator
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 const (
-	defaultInTurnKeepToolResults = 6
+	defaultInTurnKeepToolResults = 8
 	inTurnCompactThresholdBytes  = 600
 	inTurnPreviewBytes           = 240
 )
@@ -72,6 +75,8 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 	callTargets := make(map[string]string)
 	var responses []toolRespLoc
 	var calls []toolRespLoc
+	lastRespContentIdx := -1
+	lastCallContentIdx := -1
 	for ci, content := range req.Contents {
 		if content == nil {
 			continue
@@ -85,9 +90,11 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 					callTargets[part.FunctionCall.ID] = formatCompactTarget(part.FunctionCall.Name, part.FunctionCall.Args)
 				}
 				calls = append(calls, toolRespLoc{contentIdx: ci, partIdx: pi})
+				lastCallContentIdx = ci
 			}
 			if part.FunctionResponse != nil {
 				responses = append(responses, toolRespLoc{contentIdx: ci, partIdx: pi})
+				lastRespContentIdx = ci
 			}
 		}
 	}
@@ -99,6 +106,12 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 	if len(responses) > keepRecent {
 		cutoff := len(responses) - keepRecent
 		for _, loc := range responses[:cutoff] {
+			// NEVER compact any response from the latest tool-response message:
+			// a parallel batch of 7-10 read_file calls must be seen in full by
+			// the model on the very next turn, or it enters a re-read loop.
+			if loc.contentIdx == lastRespContentIdx {
+				continue
+			}
 			if toCompactResp[loc.contentIdx] == nil {
 				toCompactResp[loc.contentIdx] = make(map[int]bool)
 			}
@@ -109,6 +122,9 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 	if len(calls) > keepRecent {
 		cutoff := len(calls) - keepRecent
 		for _, loc := range calls[:cutoff] {
+			if loc.contentIdx == lastCallContentIdx {
+				continue
+			}
 			if toCompactCall[loc.contentIdx] == nil {
 				toCompactCall[loc.contentIdx] = make(map[int]bool)
 			}
@@ -298,13 +314,13 @@ func buildCompactNotice(toolName, label, raw string) string {
 	lines := strings.Count(raw, "\n") + 1
 	sizeLabel := formatCompactSize(len(raw))
 	preview := strx.TruncateBytes(strings.TrimSpace(raw), inTurnPreviewBytes, "…")
-	hint := "chame novamente se precisar reler"
+	hint := "NÃO releia sem necessidade; use as conclusões já obtidas"
 	if toolName == "read_file" {
-		hint = "chame novamente com start_line/end_line se precisar reler"
+		hint = "já lido neste turno; NÃO releia o mesmo trecho — avance na tarefa ou leia outra faixa start_line/end_line só se realmente faltar um detalhe"
 	} else if toolName == "github_pr_diff" {
-		hint = "chame novamente com o parâmetro file se precisar reler um arquivo específico"
+		hint = "chame novamente com o parâmetro file apenas se precisar inspecionar um arquivo específico"
 	}
-	return fmt.Sprintf("%s\n[saída anterior de %s compactada: %d linhas / %s — já analisada neste turno; %s]", preview, label, lines, sizeLabel, hint)
+	return fmt.Sprintf("%s\n[saída anterior de %s compactada: %d linhas / %s — %s]", preview, label, lines, sizeLabel, hint)
 }
 
 func formatCompactSize(bytesLen int) string {
@@ -323,4 +339,65 @@ func formatCompactTarget(name string, args map[string]any) string {
 		return name
 	}
 	return fmt.Sprintf("%s(%q)", name, detail)
+}
+
+
+// newRepeatReadGuardCallback returns a BeforeToolCallback that prevents an agent
+// from entering a re-read death spiral (calling read_file on the exact same
+// file/range 3+ times without modifying the file in between). Any edit_file or
+// write_file on that path resets its read counter immediately.
+func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
+	var mu sync.Mutex
+	reads := make(map[string]int)
+
+	normPath := func(raw any) string {
+		s := strings.TrimSpace(fmt.Sprint(raw))
+		if s == "" || s == "<nil>" {
+			return ""
+		}
+		return strings.ToLower(filepath.ToSlash(filepath.Clean(s)))
+	}
+
+	return func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
+		if tl == nil || len(args) == 0 {
+			return nil, nil
+		}
+		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		switch name {
+		case "edit_file", "write_file", "write_doc":
+			p := normPath(args["path"])
+			if p != "" {
+				mu.Lock()
+				prefix := p + "::"
+				for k := range reads {
+					if strings.HasPrefix(k, prefix) {
+						delete(reads, k)
+					}
+				}
+				mu.Unlock()
+			}
+			return nil, nil
+
+		case "read_file":
+			p := normPath(args["path"])
+			if p == "" {
+				return nil, nil
+			}
+			start := parseIntArg(args["start_line"])
+			end := parseIntArg(args["end_line"])
+			key := fmt.Sprintf("%s::%d-%d", p, start, end)
+
+			mu.Lock()
+			reads[key]++
+			n := reads[key]
+			mu.Unlock()
+
+			if n >= 3 {
+				return map[string]any{
+					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já leu exatamente este mesmo trecho de %s (%d-%d) %d vezes neste turno sem editar o arquivo. NÃO releia novamente — use as informações já obtidas (e o dossiê [chief_context_brief] / [chief_plan]) e avance agora para edit_file/write_file ou conclua a tarefa.", args["path"], start, end, n-1),
+				}, nil
+			}
+		}
+		return nil, nil
+	}
 }

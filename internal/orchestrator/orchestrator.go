@@ -99,6 +99,7 @@ type Runner struct {
 	prReviewers        []string
 	devSlices          []string
 	chiefPlan          string
+	chiefContextBrief  string
 	pauseForApproval   bool
 	skills             []skillx.Skill
 	selectedSkills     []skillx.Skill
@@ -220,6 +221,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.prReviewers = nil
 	r.devSlices = nil
 	r.chiefPlan = ""
+	r.chiefContextBrief = ""
 	r.skills = skillx.Load(r.Workspace)
 	r.selectedSkills = nil
 	r.selectedNative = nil
@@ -277,6 +279,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			}
 			_ = sessionx.UpdateState(sess, map[string]any{
 				"chief_plan":            planBody,
+				"chief_context_brief":   strings.TrimSpace(r.chiefContextBrief),
 				"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
 				"pr_number":             strconv.Itoa(r.prNumber),
 				"pr_branch":             r.prBranch,
@@ -300,6 +303,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			if runMode == "plan:sdd-jira" && delegated && r.chiefPlan != "" {
 				_ = sessionx.UpdateState(sess, map[string]any{
 					"chief_plan":            r.chiefPlan,
+					"chief_context_brief":   strings.TrimSpace(r.chiefContextBrief),
 					"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
 					"plan_pending_approval": "1",
 				})
@@ -572,7 +576,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "team_memory", "prior_session_context", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
+	stateKeys := []string{"objective", "jira_key", "team_memory", "prior_session_context", "chief_plan", "chief_context_brief", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	qaRoot := r.Workspace
 	if r.deliveryRoot != "" {
@@ -635,7 +639,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
+		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {
@@ -794,6 +798,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		OutputKey:                outputKey,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
 			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+		},
+		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
+			newRepeatReadGuardCallback(),
 		},
 		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
 			var b strings.Builder
@@ -959,6 +966,9 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			if prevPlan, err := got.Session.State().Get("chief_plan"); err == nil && prevPlan != nil {
 				r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
 			}
+			if prevBrief, err := got.Session.State().Get("chief_context_brief"); err == nil && prevBrief != nil {
+				r.chiefContextBrief = strings.TrimSpace(fmt.Sprint(prevBrief))
+			}
 			if prevSlices, err := got.Session.State().Get("dev_slices_joined"); err == nil && prevSlices != nil {
 				if raw := strings.TrimSpace(fmt.Sprint(prevSlices)); raw != "" {
 					r.devSlices = strings.Split(raw, "\n|||\n")
@@ -1017,6 +1027,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		}
 		if !keepPlan {
 			resetMap["chief_plan"] = ""
+			resetMap["chief_context_brief"] = ""
 			resetMap["selected_skills"] = ""
 			resetMap["selected_native_skills"] = ""
 		}
@@ -1037,6 +1048,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			"qa_approved":           "",
 			"integrate_status":      "",
 			"chief_plan":            "",
+			"chief_context_brief":   "",
 			"dev_slices_joined":     "",
 			"pr_number":             "",
 			"pr_branch":             "",
@@ -1696,6 +1708,7 @@ func (r *Runner) primaryChief() team.Agent {
 
 type delegateArgs struct {
 	Plan             string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	ContextBrief     string   `json:"context_brief,omitempty" jsonschema:"Dossiê técnico com os pontos importantes que você JÁ leu (regras RN exatas, assinaturas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, rotas, caminhos de arquivos e faixas de linha) para o Dev e o QA consultarem direto sem reler spec.md/plan.md/tasks.md inteiros."`
 	DevTasks         []string `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos. Cada item dispara 1 desenvolvedor paralelo em worktree isolada (use 1 item para tarefas pequenas/focadas, ou 2 a 5 itens para entregas grandes e paralelizáveis)."`
 	PRNumber         int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
 	PRBranch         string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
@@ -1864,6 +1877,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
 			delegated = true
 			r.chiefPlan = strings.TrimSpace(args.Plan)
+			r.chiefContextBrief = strings.TrimSpace(args.ContextBrief)
 			if args.PauseForApproval && (runMode == "" || runMode == "auto") {
 				r.pauseForApproval = true
 			}
@@ -1951,6 +1965,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			nativeNames := skillx.Names(r.selectedNative)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
+			_ = tctx.State().Set("chief_context_brief", r.chiefContextBrief)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
 			_ = tctx.State().Set("selected_skills", strings.Join(skillNames, "\n"))
 			_ = tctx.State().Set("selected_native_skills", strings.Join(nativeNames, "\n"))
@@ -1959,10 +1974,12 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 					actions.StateDelta = map[string]any{}
 				}
 				actions.StateDelta["chief_plan"] = r.chiefPlan
+				actions.StateDelta["chief_context_brief"] = r.chiefContextBrief
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
 				actions.StateDelta["selected_skills"] = strings.Join(skillNames, "\n")
 				actions.StateDelta["selected_native_skills"] = strings.Join(nativeNames, "\n")
 			}
+			r.writeHandoffDossier(sess.ID())
 
 			resolved := r.resolveDynamicDevs()
 			if r.OnEvent != nil {
@@ -2048,7 +2065,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
   • Se o PR for NOSSO (autor = usuário autenticado): NUNCA atue como revisor nem emita parecer revisando o próprio PR. Leia todos os comentários gerais e inline deixados pelos revisores externos, faça a triagem técnica e despache para a equipe com delegate_to_squad informando pr_number, pr_branch e reviewers; ao terminar, o Chefe comita, responde ponto a ponto (github_comment_pr / github_reply_review_comment) e pede nova revisão (github_request_review).
   • Se o PR for DE TERCEIRO: só aprove/revise/comente quando houver pedido de revisão; use github_pr_files/github_pr_diff para inspecionar o diff completo e github_review_pr para enviar o parecer.
 - Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.
-- INVESTIGAÇÃO ECONÔMICA NO PROJETO: prefira search_text e find_files em vez de múltiplas chamadas list_dir, e use read_file com start_line/end_line ao inspecionar arquivos grandes.`
+- INVESTIGAÇÃO ECONÔMICA NO PROJETO: prefira search_text e find_files em vez de múltiplas chamadas list_dir, e use read_file com start_line/end_line ao inspecionar arquivos grandes.
+- DOSSIÊ DE HANDOFF PARA O DEV (context_brief): sempre que chamar delegate_to_squad, preencha OBRIGATORIAMENTE "context_brief" com os fatos concretos que você JÁ leu (assinaturas exatas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, regras RN críticas e caminhos de arquivos). Esse dossiê é salvo em .hivemind/handoff/ e entregue direto ao Dev e ao QA para evitar que eles releiam a spec/plano inteiros.`
 
 	if r.reviewRequested {
 		govRules += `
@@ -2194,6 +2212,9 @@ REGRA DE TRIAGEM:
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
 			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
 		},
+		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
+			newRepeatReadGuardCallback(),
+		},
 	})
 	if err != nil {
 		return false, "", err
@@ -2248,6 +2269,9 @@ REGRA DE TRIAGEM:
 	if delegated && r.chiefPlan != "" {
 		_ = sess.State().Set("chief_plan", r.chiefPlan)
 	}
+	if delegated && r.chiefContextBrief != "" {
+		_ = sess.State().Set("chief_context_brief", r.chiefContextBrief)
+	}
 	if runMode == "plan" && !planCardEmitted && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
 		r.OnEvent(Event{
 			Kind:   "plan_ready",
@@ -2258,4 +2282,50 @@ REGRA DE TRIAGEM:
 		})
 	}
 	return delegated, summary, nil
+}
+
+// writeHandoffDossier persists the Chief's extracted contracts, plan, and task slices
+// under .hivemind/handoff/ (already gitignored) so Devs, QA, and the user have a single
+// durable reference without forcing Devs to re-read entire spec/plan files from scratch.
+func (r *Runner) writeHandoffDossier(sessionID string) {
+	if strings.TrimSpace(r.Workspace) == "" || (r.chiefPlan == "" && r.chiefContextBrief == "") {
+		return
+	}
+	dir := filepath.Join(r.Workspace, ".hivemind", "handoff")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("# Dossiê de Handoff do Chefe\n\n")
+	if sessionID != "" {
+		fmt.Fprintf(&b, "- **Sessão:** `%s`\n", sessionID)
+	}
+	if r.issueKey != "" {
+		fmt.Fprintf(&b, "- **Issue Jira:** `%s`\n", r.issueKey)
+	}
+	fmt.Fprintf(&b, "- **Gerado em:** %s\n\n", time.Now().Format(time.RFC3339))
+	if r.chiefPlan != "" {
+		b.WriteString("## Plano Técnico\n\n")
+		b.WriteString(r.chiefPlan)
+		b.WriteString("\n\n")
+	}
+	if r.chiefContextBrief != "" {
+		b.WriteString("## Contratos & Pontos Importantes (Context Brief)\n\n")
+		b.WriteString(r.chiefContextBrief)
+		b.WriteString("\n\n")
+	}
+	if len(r.devSlices) > 0 {
+		b.WriteString("## Subtarefas do Squad\n\n")
+		for i, sl := range r.devSlices {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, strings.TrimSpace(sl))
+		}
+		b.WriteString("\n")
+	}
+	payload := []byte(b.String())
+	_ = os.WriteFile(filepath.Join(dir, "latest.md"), payload, 0o644)
+	if safeID := strings.TrimSpace(sessionID); safeID != "" {
+		safeID = strings.ReplaceAll(safeID, "/", "_")
+		safeID = strings.ReplaceAll(safeID, "\\", "_")
+		_ = os.WriteFile(filepath.Join(dir, safeID+".md"), payload, 0o644)
+	}
 }

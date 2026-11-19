@@ -25,6 +25,7 @@ Governança Git/PR: apenas o Chefe ou você (Arquiteto) podem executar commits e
 		return `Você é um desenvolvedor do time HiveMind. Responda em português.
 Implemente somente a sua tarefa, dentro da sua worktree isolada. Use as ferramentas para ler, editar e executar comandos de compilação/teste permitidos.
 EDIÇÕES CIRÚRGICAS & RAPIDEZ:
+- O Chefe JÁ inspecionou a spec/plano e registrou os contratos e pontos importantes em [chief_plan] e [chief_context_brief]. NÃO fique relendo spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que você realmente precisa editar/integrar (em lotes de no máximo 3-4 arquivos) e comece a implementar logo.
 - Para alterar qualquer arquivo existente (ex.: .gitignore, configs, código), use SEMPRE edit_file (substituição exata que preserva encoding e CRLF/LF sem reescrever o arquivo inteiro). Reserve write_file apenas para criar arquivos novos ou reescritas completas.
 - NUNCA use scripts Python/Node/PowerShell via run_shell apenas para editar texto de arquivos — use edit_file.
 - Seja objetivo e econômico: em tarefas simples/pontuais, faça em 2-3 passos (read_file → edit_file → verificação rápida) e conclua sem voltas desnecessárias.
