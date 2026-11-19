@@ -30,9 +30,9 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
-	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
@@ -42,7 +42,7 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate"
+	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending"
 	Stage        string   `json:"stage,omitempty"`
 	Author       string   `json:"author,omitempty"`
 	Label        string   `json:"label,omitempty"`
@@ -99,14 +99,14 @@ type Runner struct {
 	skills             []skillx.Skill
 	selectedSkills     []skillx.Skill
 	// NativeSkills é o catálogo nativo da IDE, preenchido pelo runner da IDE (CLI deixa vazio).
-	NativeSkills       []skillx.Skill
-	NativeSkillsRoot   string
-	selectedNative     []skillx.Skill
-	turnInputTokens    int64
-	turnOutputTokens   int64
-	turnTotalTokens    int64
-	qaLastStatus       string
-	qaStallCount       int
+	NativeSkills     []skillx.Skill
+	NativeSkillsRoot string
+	selectedNative   []skillx.Skill
+	turnInputTokens  int64
+	turnOutputTokens int64
+	turnTotalTokens  int64
+	qaLastStatus     string
+	qaStallCount     int
 }
 
 // Request is one user turn.
@@ -128,6 +128,9 @@ type Result struct {
 	InputTokens       int64 `json:"inputTokens"`
 	OutputTokens      int64 `json:"outputTokens"`
 	TotalTokens       int64 `json:"totalTokens"`
+	// PendingQA reports that the run finished without an explicit QA approval, so
+	// no commit/push/PR was made on the delivery worktree (see finish).
+	PendingQA bool `json:"pendingQa,omitempty"`
 }
 
 type devEnv struct {
@@ -323,6 +326,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
 	}
 
+	if mem := r.teamMemorySnippet(); mem != "" {
+		_ = sess.State().Set("team_memory", mem)
+	} else {
+		_ = sess.State().Set("team_memory", "")
+	}
 	devs, err := r.prepareDevs(ctx, key, objective)
 	if err != nil {
 		return result, err
@@ -387,18 +395,26 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	result.OutputTokens = r.turnOutputTokens
 	result.TotalTokens = r.turnTotalTokens
 
-	if err := r.finish(ctx, &result, devs, key, objective); err != nil {
+	if err := r.finish(ctx, sess, &result, devs, key, objective); err != nil {
 		if r.OnEvent != nil {
 			r.OnEvent(Event{Kind: "error", Text: err.Error()})
 		}
 		return result, err
 	}
-	fmt.Fprintf(r.Out, "\nSessão %s concluída.\n", result.SessionID)
+	// Trim bulky write_file arguments and old tool output before the next turn
+	// reuses this session. The current run already finished, so no prompt is
+	// affected.
+	_ = sessionx.CompactOldToolOutputs(sess, 12)
+	finishText := fmt.Sprintf("Sessão %s concluída.", result.SessionID)
+	if result.PendingQA {
+		finishText = fmt.Sprintf("Sessão %s concluída, mas a entrega ficou PENDENTE de aprovação do QA: nenhum commit, push ou PR foi feito.", result.SessionID)
+	}
+	fmt.Fprintf(r.Out, "\n%s\n", finishText)
 	r.printUsageSummary(result, r.Out, "")
 	if r.OnEvent != nil {
 		r.OnEvent(Event{
 			Kind:         "finish",
-			Text:         fmt.Sprintf("Sessão %s concluída.", result.SessionID),
+			Text:         finishText,
 			InputTokens:  int32(r.turnInputTokens),
 			OutputTokens: int32(r.turnOutputTokens),
 			Tokens:       int32(r.turnTotalTokens),
@@ -547,7 +563,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
+	stateKeys := []string{"objective", "jira_key", "team_memory", "prior_session_context", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	qaRoot := r.Workspace
 	if r.deliveryRoot != "" {
@@ -754,11 +770,15 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 	}
 	keys := append([]string(nil), stateKeys...)
 	cfg := llmagent.Config{
-		Name:                     adkName,
-		Description:              roleLabel(a.Role) + " do time HiveMind.",
-		Model:                    llm,
-		Mode:                     llmagent.ModeChat,
-		IncludeContents:          llmagent.IncludeContentsDefault,
+		Name:        adkName,
+		Description: roleLabel(a.Role) + " do time HiveMind.",
+		Model:       llm,
+		Mode:        llmagent.ModeChat,
+		// Pipeline agents receive the plan/reports through the explicit state
+		// handoff below. Keeping the full prior conversation as well duplicates
+		// that context in every prompt (one of the main drivers of the ~1.2M
+		// tokens/run measured in docs/DOGSFOODING.md).
+		IncludeContents:          llmagent.IncludeContentsNone,
 		DisallowTransferToParent: true,
 		DisallowTransferToPeers:  true,
 		Tools:                    roleTools,
@@ -766,6 +786,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
 			var b strings.Builder
 			b.WriteString(instruction)
+			if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
+				b.WriteString("\n\n[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.")
+			}
 			for _, k := range keys {
 				v, err := ctx.ReadonlyState().Get(k)
 				if err != nil || v == nil {
@@ -779,6 +802,20 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 			}
 			return b.String(), nil
 		},
+	}
+	if outputKey == "closing_summary" {
+		cfg.BeforeToolCallbacks = append(cfg.BeforeToolCallbacks, func(ctx agent.Context, tl tool.Tool, _ map[string]any) (map[string]any, error) {
+			if tl == nil || !isClosingPublishTool(tl.Name()) {
+				return nil, nil
+			}
+			if qaApprovedReadonly(ctx.ReadonlyState()) {
+				return nil, nil
+			}
+			return map[string]any{
+				"blocked": true,
+				"error":   "entrega NÃO aprovada pelo QA (qa_approve não foi chamado): operações de commit, push ou PR estão bloqueadas",
+			}, nil
+		})
 	}
 	if qa {
 		cfg.AfterToolCallbacks = []llmagent.AfterToolCallback{
@@ -940,13 +977,16 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
+		priorCtx := summarizePriorSessionContext(got.Session)
 		keepPlan := (consumePendingPlan && isPendingPlan && r.chiefPlan != "") ||
 			(runMode == "plan:sdd") ||
 			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
+			"prior_session_context": priorCtx,
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
+			"qa_approved":           "",
 			"integrate_status":      "",
 			"plan_pending_approval": "",
 			"dev_slices_joined":     "",
@@ -978,9 +1018,11 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		State: map[string]any{
 			"objective":             objective,
 			"jira_key":              key,
+			"prior_session_context": "",
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
+			"qa_approved":           "",
 			"integrate_status":      "",
 			"chief_plan":            "",
 			"dev_slices_joined":     "",
@@ -998,7 +1040,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 	return created.Session, nil
 }
 
-func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key, objective string) error {
+func (r *Runner) finish(ctx context.Context, sess session.Session, result *Result, devs []devEnv, key, objective string) error {
 	if r.integration != "" {
 		result.IntegrationBranch = gitx.IntegrationBranch
 	}
@@ -1023,6 +1065,20 @@ func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key,
 				result.Branches = append(result.Branches, dev.Branch)
 			}
 		}
+	}
+
+	// Governance gate: a delivery is only committed/pushed/opened as PR after an
+	// explicit qa_approve from the QA agent. Without it, the code stays in the
+	// delivery worktree and the run is reported as pending QA. This is what makes
+	// "QA honesto" a product rule instead of a prompt instruction.
+	if !qaApproved(sess) {
+		result.PendingQA = true
+		msg := "entrega NÃO aprovada pelo QA: nenhum commit, push ou PR foi feito; as alterações ficaram na worktree de entrega"
+		fmt.Fprintf(r.Err, "aviso: %s\n", msg)
+		if r.OnEvent != nil {
+			r.OnEvent(Event{Kind: "qa_pending", Stage: "qa", Text: msg})
+		}
+		return nil
 	}
 
 	var notes []string
@@ -1092,6 +1148,102 @@ func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key,
 		}
 	}
 	return nil
+}
+
+// qaApproved reports whether the QA agent explicitly approved this delivery.
+// qa_approved is the authoritative flag; qa_approval_note is accepted as a
+// fallback for sessions created before the flag existed.
+func qaApproved(sess session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	return qaApprovedReadonly(sess.State())
+}
+
+func qaApprovedReadonly(st session.ReadonlyState) bool {
+	if st == nil {
+		return false
+	}
+	if v, err := st.Get("qa_approved"); err == nil && strings.TrimSpace(fmt.Sprint(v)) == "1" {
+		return true
+	}
+	if v, err := st.Get("qa_approval_note"); err == nil && strings.TrimSpace(fmt.Sprint(v)) != "" {
+		return true
+	}
+	return false
+}
+
+func isClosingPublishTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "git_commit",
+		"git_push",
+		"github_open_pr",
+		"github_create_pr",
+		"github_comment_pr",
+		"github_reply_review_comment",
+		"github_request_review",
+		"github_merge_pr",
+		"github_review_pr":
+		return true
+	default:
+		return false
+	}
+}
+
+// summarizePriorSessionContext extracts a compact digest of prior user prompts and
+// final agent summaries from a resumed session so pipeline agents using
+// IncludeContentsNone still see earlier requirements and decisions without
+// replaying bulky tool-call history.
+func summarizePriorSessionContext(sess session.Session) string {
+	if sess == nil || sess.Events() == nil || sess.Events().Len() == 0 {
+		return ""
+	}
+	type entry struct {
+		who  string
+		text string
+	}
+	var items []entry
+	for ev := range sess.Events().All() {
+		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {
+			continue
+		}
+		var parts []string
+		for _, p := range ev.LLMResponse.Content.Parts {
+			if p == nil || p.Thought || strings.TrimSpace(p.Text) == "" {
+				continue
+			}
+			parts = append(parts, strings.TrimSpace(p.Text))
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		who := strings.TrimSpace(ev.Author)
+		if ev.LLMResponse.Content.Role == genai.RoleUser || who == "" || strings.EqualFold(who, "user") {
+			who = "Usuário"
+		}
+		joined := strings.Join(parts, "\n")
+		if len(joined) > 600 {
+			joined = joined[:600] + "…"
+		}
+		items = append(items, entry{who: who, text: joined})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	const maxItems = 8
+	if len(items) > maxItems {
+		items = items[len(items)-maxItems:]
+	}
+	var b strings.Builder
+	const maxTotal = 3600
+	for _, it := range items {
+		line := fmt.Sprintf("- %s: %s\n", it.who, it.text)
+		if b.Len()+len(line) > maxTotal {
+			break
+		}
+		b.WriteString(line)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func roleLabel(role string) string {
@@ -1540,7 +1692,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			Jira:                 nil,
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
-			BaseBranch:            r.Project.Settings.BaseBranch,
+			BaseBranch:           r.Project.Settings.BaseBranch,
 		})
 		if err != nil {
 			return false, "", err
@@ -1561,7 +1713,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			Jira:                 r.Jira,
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
-			BaseBranch:            r.Project.Settings.BaseBranch,
+			BaseBranch:           r.Project.Settings.BaseBranch,
 		})
 		if err != nil {
 			return false, "", err

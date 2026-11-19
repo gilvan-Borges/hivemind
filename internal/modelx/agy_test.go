@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,8 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/model"
+
+	"github.com/gilvan-Borges/HiveMind/internal/testutil/fakeagy"
 )
 
 func TestParseAgySpec(t *testing.T) {
@@ -223,16 +224,18 @@ func TestAgyCmdWrapper(t *testing.T) {
 
 func TestDefaultProviderModel(t *testing.T) {
 	dir := t.TempDir()
+	writeFakeAgy(t, dir)
+	emptyPath := t.TempDir()
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
-	t.Setenv("PATH", dir)
+	t.Setenv("PATH", emptyPath)
 	t.Setenv("HIVEMIND_AGY_PATH", "")
 	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "sem-local"))
 	provider, modelName := DefaultProviderModel()
 	if provider != "gemini" || modelName != "gemini-flash-latest" {
 		t.Fatalf("sem agy: %s %s", provider, modelName)
 	}
-	writeFakeAgy(t, dir)
+	t.Setenv("PATH", dir)
 	provider, modelName = DefaultProviderModel()
 	if provider != "agy" || modelName != "agy" {
 		t.Fatalf("com agy: %s %s", provider, modelName)
@@ -255,10 +258,10 @@ func TestDefaultProviderModel(t *testing.T) {
 
 func TestProbeAgyPrompt(t *testing.T) {
 	dir := t.TempDir()
+	writeFakeAgy(t, dir)
 	t.Setenv("PATH", dir)
 	t.Setenv("HIVEMIND_AGY_PATH", "")
 	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "sem-local"))
-	writeFakeAgy(t, dir)
 	t.Setenv("AGY_FAKE_MODE", "probe")
 	text, err := ProbeAgyPrompt(context.Background())
 	if err != nil || !strings.Contains(text, "OK") {
@@ -277,14 +280,16 @@ func TestProbeAgyPrompt(t *testing.T) {
 
 func TestProbeAgy(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PATH", dir)
+	writeFakeAgy(t, dir)
+	emptyPath := t.TempDir()
+	t.Setenv("PATH", emptyPath)
 	t.Setenv("HIVEMIND_AGY_PATH", "")
 	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "sem-local"))
 	absent := ProbeAgy(context.Background())
 	if absent.Found {
 		t.Fatal("não deveria achar agy")
 	}
-	writeFakeAgy(t, dir)
+	t.Setenv("PATH", dir)
 	t.Setenv("AGY_FAKE_MODE", "models-ok")
 	ok := ProbeAgy(context.Background())
 	if !ok.Found || !ok.LoggedIn {
@@ -299,67 +304,12 @@ func TestProbeAgy(t *testing.T) {
 
 func writeFakeAgy(t *testing.T, dir string) string {
 	t.Helper()
-	// O fake é um script /bin/sh: só executa no CI Linux. No Windows local os
-	// testes pulam em vez de falhar (ruído documentado no DOGSFOODING).
-	if runtime.GOOS == "windows" {
-		t.Skip("fake agy é script sh; coberto no CI Linux")
-	}
-	path := filepath.Join(dir, "agy")
-	script := `#!/bin/sh
-printf '%s\n' "$@" > "` + dir + `/args"
-pwd > "` + dir + `/pwd"
-mode="${AGY_FAKE_MODE:-text}"
-if [ "$1" = "models" ]; then
-  if [ "$mode" = "auth" ]; then
-    echo "authentication required" >&2
-    exit 1
-  fi
-  echo "gemini-3.8-flash-medium"
-  exit 0
-fi
-if [ "$mode" = "early" ]; then
-  echo "opção recusada pelo agy" >&2
-  exit 2
-fi
-if [ "$mode" = "quota-once" ] || [ "$mode" = "quota-always" ]; then
-  if [ "$mode" = "quota-always" ] || [ ! -f "$AGY_FAKE_DIR/quota-hit" ]; then
-    touch "$AGY_FAKE_DIR/quota-hit"
-    echo 'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"t1"}' >&2
-    printf '%s\n' '{"status":"ERROR","response":"","error":"Your AI credits balance is too low to continue."}'
-    exit 3
-  fi
-  printf '%s\n' '{"status":"SUCCESS","response":"depois da quota","structured_output":{"text":"depois da quota","tool_calls":[]}}'
-  exit 0
-fi
-/bin/cat > "` + dir + `/stdin"
-prev=
-for a in "$@"; do
-  if [ "$prev" = "--json-schema" ]; then
-    /bin/cp "$a" "` + dir + `/schema-body"
-  fi
-  prev=$a
-done
-case "$mode" in
-  probe)
-    printf '%s\n' '{"status":"SUCCESS","response":"OK","structured_output":{"text":"OK","tool_calls":[]}}'
-    ;;
-  tool)
-    printf '%s\n' '{"status":"SUCCESS","response":"{\"text\":\"\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"oi\"}}]}","structured_output":{"text":"","tool_calls":[{"id":"c1","name":"write_file","arguments":{"path":"a.txt","content":"oi"}}]},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}'
-    ;;
-  auth)
-    echo "authentication required" >&2
-    printf '%s\n' '{"status":"ERROR","response":"","error":"authentication required"}'
-    exit 1
-    ;;
-  *)
-    printf '%s\n' '{"status":"SUCCESS","response":"plano pronto","structured_output":{"text":"plano pronto","tool_calls":[]}}'
-    ;;
-esac
-`
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	// The quota retry tests point Agy.Dir at <dir>/work; create it so the fake
+	// process has a valid working directory.
+	if err := os.MkdirAll(filepath.Join(dir, "work"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return fakeagy.Write(t, dir)
 }
 
 func assertPromptOnlyOnStdin(t *testing.T, args, stdin, marker string) {

@@ -276,6 +276,7 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 		keepRecentEvents = 8
 	}
 	const maxOldToolOutputBytes = 420
+	const maxOldToolArgBytes = 240
 	fs.mu.Lock()
 	cutoff := len(fs.events) - keepRecentEvents
 	if cutoff <= 0 {
@@ -289,7 +290,23 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 			continue
 		}
 		for _, part := range ev.LLMResponse.Content.Parts {
-			if part == nil || part.FunctionResponse == nil || part.FunctionResponse.Response == nil {
+			if part == nil {
+				continue
+			}
+			// A write_file/write_doc call carries the entire file body in its
+			// arguments. Replaying that content in every later prompt is one of
+			// the largest avoidable costs of a multi-agent run; the file itself
+			// is already in the worktree.
+			if part.FunctionCall != nil && len(part.FunctionCall.Args) > 0 {
+				switch part.FunctionCall.Name {
+				case "write_file", "write_doc":
+					if content, ok := part.FunctionCall.Args["content"].(string); ok && len(content) > maxOldToolArgBytes {
+						part.FunctionCall.Args["content"] = fmt.Sprintf("…(conteúdo de %d bytes compactado; arquivo já gravado na worktree)", len(content))
+						changed = true
+					}
+				}
+			}
+			if part.FunctionResponse == nil || part.FunctionResponse.Response == nil {
 				continue
 			}
 			for k, val := range part.FunctionResponse.Response {

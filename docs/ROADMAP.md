@@ -96,7 +96,7 @@ Sem data; entra o que o dogfooding contínuo apontar, em ordem provável:
 2. Blame, merge conflict resolution, history de arquivo no painel git.
 3. Settings de IDE (fonte, keybindings), segundo tema (light).
 4. Debugger (DAP, breakpoints) — só se o uso real pedir; posicionamento Cursor não exige cedo.
-5. Observabilidade do CLI (logs estruturados, métricas por run), CI rodando testes do CLI no Windows.
+5. Observabilidade do CLI (logs estruturados, métricas por run); CI rodando testes do CLI no Windows **feito**.
 6. Blame/pr-quality: QA loop com verificação executável (hoje o QA pode aprovar sem rodar teste — é só instrução de prompt).
 
 ---
@@ -106,7 +106,7 @@ Sem data; entra o que o dogfooding contínuo apontar, em ordem provável:
 | Débito | Onde | Ação |
 |---|---|---|
 | Streaming fake com agy (provider default) | `modelx/agy.go` vs `modelx/stream.go` | Decidir em Fase 5 ou quando doer no dogfooding |
-| CI não testa o CLI no Windows | `.github/workflows/ci.yml` | Adicionar job windows quando tocar CI. Evidência (nov/2026): `TestProbeAgy*`, `TestAgyAuthAndMissingBinary`, `TestStreamJSONDeltasStayOutOfArgv` e `TestLocalEchoAndDeny` falham localmente no Windows (binários fake sem `.exe` e `echo` inexistente) |
+| ~~CI não testa o CLI no Windows~~ | `.github/workflows/ci.yml` | **FEITO (18/11/2026)**: job `test-cli-windows` roda `go vet` + `go test ./...`; fixtures portáveis em `internal/testutil/fakeagy` e testes de PATH corrigidos |
 | Versão hardcoded `0.1.0` | `internal/cli/root.go` | Injetar via `-ldflags` ao tocar release |
 | `ignore_io.go` indireção inútil | `internal/gitx` | Remover ao tocar o pacote |
 | Allowlist duplicada (código vs `examples/team.yaml`) | `internal/team` + examples | Single source ao tocar governança |

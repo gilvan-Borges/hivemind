@@ -3,6 +3,7 @@ package idecore
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,18 +25,18 @@ import (
 
 // WizardInput holds the interactive team builder choices from the IDE.
 type WizardInput struct {
-	TeamName       string            `json:"teamName"`
-	ChiefRole      string            `json:"chiefRole"` // "architect" or "project_manager"
-	DevCount       int               `json:"devCount"`
-	MaxDynamicDevs int               `json:"maxDynamicDevs,omitempty"`
-	DefaultModel   string            `json:"defaultModel"`
-	AgentModels    map[string]string `json:"agentModels,omitempty"`
-	PermissionMode string            `json:"permissionMode,omitempty"` // "governed", "auto_edit", "full_access"
-	Worktrees      bool              `json:"worktrees"`
-	AutoCommit     bool              `json:"autoCommit"`
-	AutoPR         bool              `json:"autoPR"`
-	JiraEnabled    bool              `json:"jiraEnabled"`
-	JiraProject    string            `json:"jiraProject"`
+	TeamName         string                 `json:"teamName"`
+	ChiefRole        string                 `json:"chiefRole"` // "architect" or "project_manager"
+	DevCount         int                    `json:"devCount"`
+	MaxDynamicDevs   int                    `json:"maxDynamicDevs,omitempty"`
+	DefaultModel     string                 `json:"defaultModel"`
+	AgentModels      map[string]string      `json:"agentModels,omitempty"`
+	PermissionMode   string                 `json:"permissionMode,omitempty"` // "governed", "auto_edit", "full_access"
+	Worktrees        bool                   `json:"worktrees"`
+	AutoCommit       bool                   `json:"autoCommit"`
+	AutoPR           bool                   `json:"autoPR"`
+	JiraEnabled      bool                   `json:"jiraEnabled"`
+	JiraProject      string                 `json:"jiraProject"`
 	BaseBranch       string                 `json:"baseBranch"`
 	HomologBranch    string                 `json:"homologBranch,omitempty"`
 	MaxTokens        int64                  `json:"maxTokens"`
@@ -198,8 +199,8 @@ func UpdateProjectPermissionMode(workspace, permissionMode string) (team.File, e
 
 // LaneEvent wraps an orchestrator.Event with the IDE lane ID and team name.
 type LaneEvent struct {
-	LaneID string `json:"laneId"`
-	Team   string `json:"team"`
+	LaneID string             `json:"laneId"`
+	Team   string             `json:"team"`
 	Event  orchestrator.Event `json:"event"`
 }
 
@@ -585,8 +586,36 @@ func (m *SessionManager) RunTurnWithOptions(
 		RunMode:     normMode,
 		Attachments: attachments,
 	})
-	if runErr == nil && res.IntegrationBranch != "" {
-		_, _ = SyncIntegrationToWorkspace(ctx, workspace)
+	if runErr == nil && res.IntegrationBranch != "" && !res.PendingQA {
+		// Never copy integration output over uncommitted user work. A dirty
+		// workspace makes SyncIntegrationToWorkspace return ErrWorkspaceDirty
+		// without touching a single file; the user is told what happened.
+		n, syncErr := SyncIntegrationToWorkspace(ctx, workspace)
+		if m.Emit != nil {
+			switch {
+			case syncErr == nil && n > 0:
+				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: orchestrator.Event{
+					Kind:  "handoff",
+					Stage: "chief",
+					Label: "Integração sincronizada",
+					Text:  fmt.Sprintf("%d arquivo(s) da integração foram trazidos para o workspace.", n),
+				}})
+			case errors.Is(syncErr, ErrWorkspaceDirty):
+				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: orchestrator.Event{
+					Kind:  "handoff",
+					Stage: "chief",
+					Label: "Integração não sincronizada",
+					Text:  "O workspace tem alterações locais não commitadas; para não sobrescrever seu trabalho, a integração não foi trazida. Faça commit/stash e sincronize manualmente.",
+				}})
+			case syncErr != nil:
+				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: orchestrator.Event{
+					Kind:  "error",
+					Stage: "chief",
+					Label: "Falha ao sincronizar a integração",
+					Text:  syncErr.Error(),
+				}})
+			}
+		}
 	}
 	return res, runErr
 }

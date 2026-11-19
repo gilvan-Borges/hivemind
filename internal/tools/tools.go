@@ -1136,12 +1136,14 @@ func (d Deps) qaApprove() (tool.Tool, error) {
 	}) (textResult, error) {
 		_ = ctx.State().Set("qa_approval_note", args.Note)
 		_ = ctx.State().Set("qa_feedback", "")
+		_ = ctx.State().Set("qa_approved", "1")
 		if actions := ctx.Actions(); actions != nil {
 			if actions.StateDelta == nil {
 				actions.StateDelta = map[string]any{}
 			}
 			actions.StateDelta["qa_approval_note"] = args.Note
 			actions.StateDelta["qa_feedback"] = ""
+			actions.StateDelta["qa_approved"] = "1"
 			actions.Escalate = true
 		}
 		return textResult{Text: "aprovado: " + args.Note}, nil
@@ -1158,11 +1160,13 @@ func (d Deps) qaChanges() (tool.Tool, error) {
 		if err := ctx.State().Set("qa_feedback", args.Notes); err != nil {
 			return textResult{}, err
 		}
+		_ = ctx.State().Set("qa_approved", "")
 		if actions := ctx.Actions(); actions != nil {
 			if actions.StateDelta == nil {
 				actions.StateDelta = map[string]any{}
 			}
 			actions.StateDelta["qa_feedback"] = args.Notes
+			actions.StateDelta["qa_approved"] = ""
 		}
 		return textResult{Text: "ajustes pedidos: " + args.Notes}, nil
 	})

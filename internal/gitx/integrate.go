@@ -42,6 +42,9 @@ func (g Local) Integrate(ctx context.Context, repo string, branches []string) (m
 		if branch == "" || branch == integrationBranch {
 			continue
 		}
+		if err := ValidateBranchName(branch); err != nil {
+			return merged, wt, err
+		}
 		if !g.BranchExists(ctx, repo, branch) {
 			continue
 		}
@@ -94,6 +97,9 @@ func PrepareDeliveryWorktree(ctx context.Context, g Git, repo, targetBranch stri
 	branch := strings.TrimSpace(targetBranch)
 	if branch == "" {
 		branch = IntegrationBranch
+	}
+	if err := ValidateBranchName(branch); err != nil {
+		return "", "", err
 	}
 	// Avoid checking out a branch that is currently checked out in the main repo working tree.
 	if cur, err := g.CurrentBranch(ctx, repo); err == nil && cur != "" && cur == branch {
@@ -181,6 +187,9 @@ func SyncUncommittedToDelivery(ctx context.Context, g Git, devRoots []string, de
 			if len(parts) < 2 {
 				continue
 			}
+			for i := range parts {
+				parts[i] = UnquotePath(parts[i])
+			}
 			code := parts[0]
 			switch {
 			case strings.HasPrefix(code, "R") && len(parts) >= 3:
@@ -199,7 +208,7 @@ func SyncUncommittedToDelivery(ctx context.Context, g Git, devRoots []string, de
 		}
 		untrackedRaw, _ := g.Run(ctx, devRoot, "ls-files", "--others", "--exclude-standard")
 		for _, line := range strings.Split(strings.ReplaceAll(untrackedRaw, "\r\n", "\n"), "\n") {
-			rel := strings.TrimSpace(line)
+			rel := UnquotePath(strings.TrimSpace(line))
 			if rel == "" || rel == ".hivemind" || strings.HasPrefix(rel, ".hivemind/") {
 				continue
 			}

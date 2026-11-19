@@ -3,7 +3,10 @@ package idecore
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,15 +104,52 @@ func ParseUnifiedDiff(raw string) []FileDiff {
 
 func parseDiffGitPath(header string) string {
 	// Format: diff --git a/path b/path
-	idx := strings.LastIndex(header, " b/")
-	if idx >= 0 {
-		return strings.TrimSpace(header[idx+3:])
+	rest := strings.TrimPrefix(header, "diff --git ")
+	if strings.HasPrefix(rest, `"`) {
+		if _, second, ok := splitGitPathPair(rest); ok {
+			return strings.TrimPrefix(gitx.UnquotePath(second), "b/")
+		}
 	}
-	fields := strings.Fields(header)
-	if len(fields) >= 4 {
-		return strings.TrimPrefix(fields[3], "b/")
+	if idx := strings.LastIndex(rest, " b/"); idx >= 0 {
+		return gitx.UnquotePath(strings.TrimSpace(rest[idx+3:]))
 	}
-	return header
+	if fields := strings.Fields(rest); len(fields) >= 2 {
+		return strings.TrimPrefix(gitx.UnquotePath(fields[len(fields)-1]), "b/")
+	}
+	return gitx.UnquotePath(header)
+}
+
+// splitGitPathPair splits the two quoted paths of a "diff --git" header.
+func splitGitPathPair(s string) (first, second string, ok bool) {
+	i := 0
+	read := func() (string, bool) {
+		for i < len(s) && s[i] == ' ' {
+			i++
+		}
+		if i >= len(s) || s[i] != '"' {
+			return "", false
+		}
+		start := i
+		i++
+		for i < len(s) {
+			if s[i] == '\\' && i+1 < len(s) {
+				i += 2
+				continue
+			}
+			if s[i] == '"' {
+				i++
+				return s[start:i], true
+			}
+			i++
+		}
+		return "", false
+	}
+	a, okA := read()
+	b, okB := read()
+	if !okA || !okB {
+		return "", "", false
+	}
+	return a, b, true
 }
 
 // WorkspaceDiff returns parsed unified diffs (staged, unstaged, and untracked new files) for workspace.
@@ -134,7 +174,7 @@ func WorkspaceDiff(ctx context.Context, workspaceDir string) ([]FileDiff, error)
 
 	if untrackedRaw, uErr := runGit(ctx, workspaceDir, "ls-files", "--others", "--exclude-standard"); uErr == nil {
 		for _, line := range strings.Split(strings.ReplaceAll(untrackedRaw, "\r\n", "\n"), "\n") {
-			rel := strings.TrimSpace(line)
+			rel := gitx.UnquotePath(strings.TrimSpace(line))
 			if rel == "" || seen[rel] || rel == ".hivemind" || strings.HasPrefix(rel, ".hivemind/") {
 				continue
 			}
@@ -189,7 +229,7 @@ func parsePorcelainStatus(raw string) (map[string]string, map[string]bool) {
 		if idx := strings.LastIndex(pathPart, " -> "); idx >= 0 {
 			pathPart = strings.TrimSpace(pathPart[idx+4:])
 		}
-		pathPart = strings.Trim(pathPart, `"`)
+		pathPart = gitx.UnquotePath(pathPart)
 		pathPart = filepath.ToSlash(pathPart)
 		if pathPart == "" {
 			continue
@@ -223,15 +263,15 @@ func StageWorkspaceFile(ctx context.Context, workspaceDir, relPath string, stage
 		return err
 	}
 	if stage {
-		_, err := runGit(ctx, workspaceDir, "add", "--", relClean)
+		_, err := runGit(ctx, workspaceDir, "add", "--", gitx.LiteralPathspec(relClean))
 		return err
 	}
 	g := gitx.Local{}
 	if g.HasCommit(ctx, workspaceDir) {
-		_, err := runGit(ctx, workspaceDir, "reset", "HEAD", "--", relClean)
+		_, err := runGit(ctx, workspaceDir, "reset", "HEAD", "--", gitx.LiteralPathspec(relClean))
 		return err
 	}
-	_, err := runGit(ctx, workspaceDir, "rm", "--cached", "--", relClean)
+	_, err := runGit(ctx, workspaceDir, "rm", "--cached", "--", gitx.LiteralPathspec(relClean))
 	return err
 }
 
@@ -272,9 +312,18 @@ func buildUntrackedFileDiff(relSlash string, data []byte) FileDiff {
 	return fd
 }
 
+// ErrWorkspaceDirty is returned by SyncIntegrationToWorkspace when the user's
+// working tree has local changes. Sync refuses to run in that case: copying the
+// integration output over uncommitted work would destroy it (the IDE used to do
+// this automatically after every successful run).
+var ErrWorkspaceDirty = errors.New("workspace tem alterações locais não commitadas")
+
 // SyncIntegrationToWorkspace copies added/modified/renamed/deleted files from the
 // hivemind/integracao worktree into the user's open workspace working tree without
 // switching branches or creating automatic commits on the user's branch.
+//
+// It is a no-op when the integration branch has nothing new. When the user's
+// working tree is not clean it returns ErrWorkspaceDirty and changes nothing.
 func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspaceDir) || !g.HasCommit(ctx, workspaceDir) {
@@ -286,6 +335,13 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 	intWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
 	if info, err := os.Stat(intWT); err != nil || !info.IsDir() {
 		return 0, nil
+	}
+	status, err := runGit(ctx, workspaceDir, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(status) != "" && hasUserChangesInWorkspace(ctx, workspaceDir, status) {
+		return 0, ErrWorkspaceDirty
 	}
 	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+gitx.IntegrationBranch)
 	if err != nil || strings.TrimSpace(raw) == "" {
@@ -313,16 +369,22 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, info.Mode().Perm())
+		return atomicWriteFile(dst, data, info.Mode().Perm())
 	}
 
-	removeInWorkspace := func(relSlash string) {
-		if dst, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relSlash)); err == nil {
-			_ = os.Remove(dst)
+	removeInWorkspace := func(relSlash string) error {
+		dst, err := workspace.Resolve(workspaceDir, filepath.FromSlash(relSlash))
+		if err != nil {
+			return err
 		}
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 
 	synced := 0
+	var failures []string
 	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -332,23 +394,178 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 		if len(parts) < 2 {
 			continue
 		}
+		for i := range parts {
+			parts[i] = gitx.UnquotePath(parts[i])
+		}
 		code := parts[0]
 		switch {
 		case strings.HasPrefix(code, "R") && len(parts) >= 3:
-			removeInWorkspace(parts[1])
-			if copyFromWT(parts[2]) == nil {
-				synced++
+			// Copy the new path before removing the old one so a failed copy
+			// never loses the user's file.
+			if err := copyFromWT(parts[2]); err != nil {
+				failures = append(failures, parts[2]+": "+err.Error())
+				continue
 			}
+			if err := removeInWorkspace(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
+			}
+			synced++
 		case code == "D":
-			removeInWorkspace(parts[1])
+			if err := removeInWorkspace(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
+			}
 			synced++
 		default:
-			if copyFromWT(parts[1]) == nil {
-				synced++
+			if err := copyFromWT(parts[1]); err != nil {
+				failures = append(failures, parts[1]+": "+err.Error())
+				continue
 			}
+			synced++
 		}
 	}
+	if len(failures) > 0 {
+		return synced, fmt.Errorf("falha ao sincronizar %d arquivo(s): %s", len(failures), strings.Join(failures, "; "))
+	}
 	return synced, nil
+}
+
+// hasUserChanges reports whether git status --porcelain contains changes that
+// are not HiveMind's own bookkeeping. .hivemind/ holds sessions and worktrees;
+// it is expected to be untracked while the project has not committed the
+// recommended .gitignore entry, and must not block a safe integration sync.
+func hasUserChanges(porcelain string) bool {
+	return hasUserChangesInWorkspace(context.Background(), "", porcelain)
+}
+
+func hasUserChangesInWorkspace(ctx context.Context, workspaceDir, porcelain string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(porcelain, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) < 4 {
+			continue
+		}
+		code := ""
+		if len(line) >= 2 {
+			code = line[:2]
+		}
+		path := strings.TrimSpace(line[3:])
+		if idx := strings.LastIndex(path, " -> "); idx >= 0 {
+			path = strings.TrimSpace(path[idx+4:])
+		}
+		path = gitx.UnquotePath(path)
+		path = filepath.ToSlash(path)
+		if path == ".hivemind" || strings.HasPrefix(path, ".hivemind/") {
+			continue
+		}
+		if path == ".gitignore" && workspaceDir != "" && isHiveMindOnlyGitignoreChange(ctx, workspaceDir, code == "??") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isHiveMindIgnoreLine(raw string) bool {
+	s := strings.TrimSpace(raw)
+	return s == "" || s == "# HiveMind" || s == ".hivemind/" || s == ".hivemind"
+}
+
+// isHiveMindOnlyGitignoreChange returns true when .gitignore only contains
+// HiveMind's own EnsureHiveIgnore addition ("# HiveMind\n.hivemind/\n"), so
+// prepareDevs adding .hivemind/ does not falsely block integration sync.
+func isHiveMindOnlyGitignoreChange(ctx context.Context, workspaceDir string, untracked bool) bool {
+	if untracked {
+		data, err := os.ReadFile(filepath.Join(workspaceDir, ".gitignore"))
+		if err != nil {
+			return false
+		}
+		sawEntry := false
+		for _, ln := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+			if !isHiveMindIgnoreLine(ln) {
+				return false
+			}
+			if strings.TrimSpace(ln) == ".hivemind/" || strings.TrimSpace(ln) == ".hivemind" {
+				sawEntry = true
+			}
+		}
+		return sawEntry
+	}
+	diffOut, err := runGit(ctx, workspaceDir, "diff", "HEAD", "--", ".gitignore")
+	if err != nil {
+		return false
+	}
+	sawChange := false
+	for _, ln := range strings.Split(strings.ReplaceAll(diffOut, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(ln, "+++") || strings.HasPrefix(ln, "---") || strings.HasPrefix(ln, "@@") || strings.HasPrefix(ln, "diff ") || strings.HasPrefix(ln, "index ") || strings.HasPrefix(ln, `\ No newline`) {
+			continue
+		}
+		if strings.HasPrefix(ln, "-") {
+			return false
+		}
+		if strings.HasPrefix(ln, "+") {
+			if !isHiveMindIgnoreLine(ln[1:]) {
+				return false
+			}
+			sawChange = true
+		}
+	}
+	return sawChange
+}
+
+// atomicWriteFile writes data to path through a temporary file in the same
+// directory, then renames it into place. A crash mid-write cannot truncate the
+// original file. When mode == 0 (new file), O_CREATE with 0o666 is used so the
+// OS process umask is respected rather than bypassed via Chmod(0644).
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	var (
+		tmp     *os.File
+		tmpName string
+		err     error
+	)
+	if mode == 0 {
+		for range 8 {
+			var rnd [6]byte
+			_, _ = rand.Read(rnd[:])
+			cand := filepath.Join(dir, "."+base+"."+hex.EncodeToString(rnd[:])+".tmp")
+			tmp, err = os.OpenFile(cand, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+			if err == nil {
+				tmpName = cand
+				break
+			}
+			if !os.IsExist(err) {
+				return err
+			}
+		}
+		if err != nil {
+			return err
+		}
+	} else {
+		tmp, err = os.CreateTemp(dir, "."+base+".*.tmp")
+		if err != nil {
+			return err
+		}
+		tmpName = tmp.Name()
+	}
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if mode != 0 {
+		if err := os.Chmod(tmpName, mode); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FastCurrentBranch reads <workspace>/.git/HEAD directly without spawning git.
@@ -708,8 +925,8 @@ func ListGitBranches(ctx context.Context, workspace string) ([]string, error) {
 // CheckoutGitBranch switches to an existing branch or creates a new one when create is true.
 func CheckoutGitBranch(ctx context.Context, workspace, branch string, create bool) error {
 	name := strings.TrimSpace(branch)
-	if name == "" {
-		return fmt.Errorf("informe o nome da branch")
+	if err := gitx.ValidateBranchName(name); err != nil {
+		return err
 	}
 	if create {
 		_, err := runGit(ctx, workspace, "checkout", "-b", name)

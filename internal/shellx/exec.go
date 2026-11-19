@@ -9,9 +9,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
+)
+
+// DefaultTimeout bounds a single shell command when the caller's context has no
+// deadline. Without it, a hung build or a command waiting for input blocks the
+// whole team run (and its parallel developers) indefinitely.
+const DefaultTimeout = 20 * time.Minute
+
+const (
+	maxCapturedOutput = 1 << 20 // keep at most 1 MiB in memory
+	maxReturnedOutput = 16 << 10
 )
 
 // Runner executes a command line inside dir after the policy check.
@@ -23,7 +35,8 @@ type Runner interface {
 type Local struct{}
 
 // Run executes command. Unknown binaries are refused. Dangerous commands run
-// only when confirm returns true.
+// only when confirm returns true. The child process receives a sanitized
+// environment (no provider/Jira/GitHub credentials) and a bounded runtime.
 func (Local) Run(ctx context.Context, dir, command string, allowlist []string, confirm Confirmer) (string, error) {
 	dec := Evaluate(command, allowlist)
 	if !dec.Allowed {
@@ -34,29 +47,78 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 			return "", fmt.Errorf("comando perigoso recusado: %s", dec.Reason)
 		}
 	}
+
+	runCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, DefaultTimeout)
+		defer cancel()
+	}
+
 	var cmd *exec.Cmd
 	if dec.UseShell {
 		if runtime.GOOS == "windows" {
-			cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+			cmd = exec.CommandContext(runCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 		} else {
-			cmd = exec.CommandContext(ctx, "sh", "-c", command)
+			cmd = exec.CommandContext(runCtx, "sh", "-c", command)
 		}
 	} else {
 		argv := append([]string(nil), dec.Argv...)
 		argv[0] = resolveLocalExecutable(dir, argv[0])
-		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd = exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	}
 	cmd.Dir = dir
+	cmd.Env = SanitizedEnv()
 	procx.ConfigureContext(cmd)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+
+	out := &cappedBuffer{limit: maxCapturedOutput}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	err := cmd.Run()
-	out := strx.TruncateBytes(buf.String(), 16*1024, "\n…(saída truncada)")
-	if err != nil {
-		return out, fmt.Errorf("%s: %w", strings.TrimSpace(out), err)
+	text := strx.TruncateBytes(out.String(), maxReturnedOutput, "\n…(saída truncada)")
+	if runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		return text, fmt.Errorf("comando excedeu o tempo limite de %s: %s", DefaultTimeout, strings.TrimSpace(text))
 	}
-	return out, nil
+	if err != nil {
+		return text, fmt.Errorf("%s: %w", strings.TrimSpace(text), err)
+	}
+	return text, nil
+}
+
+// cappedBuffer is an io.Writer safe for the concurrent stdout/stderr writers
+// used by os/exec. It keeps at most limit bytes so a command that prints
+// gigabytes cannot exhaust the process memory.
+type cappedBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	remaining := c.limit - c.buf.Len()
+	if remaining <= 0 {
+		c.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = c.buf.Write(p[:remaining])
+		c.truncated = true
+		return len(p), nil
+	}
+	_, _ = c.buf.Write(p)
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.truncated {
+		return c.buf.String() + "\n…(saída excedeu o limite de captura)"
+	}
+	return c.buf.String()
 }
 
 // resolveLocalExecutable lets an allowlisted bare name (ex.: gradlew.bat,

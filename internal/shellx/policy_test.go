@@ -93,4 +93,16 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	if blocked, _ := IsCommitOrPRCommand(`git status --short`); blocked {
 		t.Fatal("git status must remain allowed for all roles")
 	}
+	if blocked, _ := IsCommitOrPRCommand(`git -c alias.c=commit c -m wip`); !blocked {
+		t.Fatal("git -c alias de commit deve ser detectado como commit")
+	}
+	if blocked, _ := IsCommitOrPRCommand(`git -calias.p=push p origin main`); !blocked {
+		t.Fatal("git -calias de push deve ser detectado como push")
+	}
+	if blocked, _ := IsCommitOrPRCommand(`git update-ref refs/heads/main HEAD`); !blocked {
+		t.Fatal("git update-ref deve ser detectado")
+	}
+	if blocked, _ := IsCommitOrPRCommand(`git -c core.pager=cat log --oneline`); blocked {
+		t.Fatal("git -c benigno não é commit/push")
+	}
 }

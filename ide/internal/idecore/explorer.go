@@ -2,6 +2,7 @@ package idecore
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -140,6 +142,9 @@ func readDirNodes(root, dir string, depth, maxDepth int) ([]FileNode, error) {
 }
 
 // ReadWorkspaceFile reads a UTF-8 text file inside root (capped at 1 MiB).
+// Files that are not valid UTF-8 are rejected instead of being lossily converted:
+// the IDE sends the text through a JSON bridge, which would replace invalid bytes
+// with U+FFFD and silently corrupt the file on the next save.
 func ReadWorkspaceFile(root, relOrAbs string) (string, error) {
 	target, err := ResolveSafe(root, relOrAbs)
 	if err != nil {
@@ -153,22 +158,55 @@ func ReadWorkspaceFile(root, relOrAbs string) (string, error) {
 		return "", fmt.Errorf("%s é um diretório", relOrAbs)
 	}
 	if info.Size() > 1<<20 {
-		return "", fmt.Errorf("arquivo muito grande (%d bytes)", info.Size())
+		return "", fmt.Errorf("arquivo muito grande (%d bytes; limite de 1 MiB)", info.Size())
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return "", err
 	}
+	if err := validateTextFile(data); err != nil {
+		return "", fmt.Errorf("%s: %w", relOrAbs, err)
+	}
 	return string(data), nil
 }
 
-// WriteWorkspaceFile writes content to a file inside root.
+// validateTextFile rejects binary/UTF-16 content and invalid UTF-8 so the
+// editor never opens a file it would corrupt when saving.
+func validateTextFile(data []byte) error {
+	if len(data) >= 2 {
+		switch {
+		case data[0] == 0xFF && data[1] == 0xFE, data[0] == 0xFE && data[1] == 0xFF:
+			return errors.New("arquivo em UTF-16 não é suportado; converta para UTF-8 antes de abrir")
+		}
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return errors.New("arquivo binário (contém bytes NUL); abra apenas arquivos de texto UTF-8")
+	}
+	if !utf8.Valid(data) {
+		return errors.New("arquivo não está em UTF-8 válido; salvar pelo editor corromperia os acentos (converta para UTF-8)")
+	}
+	return nil
+}
+
+// WriteWorkspaceFile writes content to a file inside root. Writes are atomic
+// (temp file + rename) so a crash or a concurrent reader never sees a truncated
+// file. The original permission bits are preserved when the file exists.
 func WriteWorkspaceFile(root, relOrAbs, content string) error {
 	target, err := ResolveSafe(root, relOrAbs)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(target, []byte(content), 0o644)
+	if !utf8.ValidString(content) {
+		return errors.New("conteúdo inválido: o texto não está em UTF-8")
+	}
+	var mode os.FileMode
+	if info, statErr := os.Stat(target); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return atomicWriteFile(target, []byte(content), mode)
 }
 
 // SearchFiles returns up to limit relative file paths matching query (for @mention autocomplete).
@@ -214,8 +252,8 @@ const maxIndexedFiles = 20000
 // per project root for sub-millisecond @arquivo and Ctrl+P Quick Open searches
 // across multiple simultaneously open project tabs.
 type FileIndex struct {
-	mu      sync.RWMutex
-	byRoot  map[string][]string
+	mu     sync.RWMutex
+	byRoot map[string][]string
 }
 
 // NewFileIndex constructs an empty FileIndex.

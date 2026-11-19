@@ -8,4 +8,8 @@
 ide/build/
 ide/frontend/node_modules/
 ide/frontend/dist/
+/bin/*.exe
+/bin/*.log
+ide/cover
 ide/cover/
+*.coverprofile
