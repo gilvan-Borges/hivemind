@@ -315,6 +315,16 @@ if [ "$mode" = "early" ]; then
   echo "opção recusada pelo agy" >&2
   exit 2
 fi
+if [ "$mode" = "quota-once" ] || [ "$mode" = "quota-always" ]; then
+  if [ "$mode" = "quota-always" ] || [ ! -f "$AGY_FAKE_DIR/quota-hit" ]; then
+    touch "$AGY_FAKE_DIR/quota-hit"
+    echo 'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"t1"}' >&2
+    printf '%s\n' '{"status":"ERROR","response":"","error":"Your AI credits balance is too low to continue."}'
+    exit 3
+  fi
+  printf '%s\n' '{"status":"SUCCESS","response":"depois da quota","structured_output":{"text":"depois da quota","tool_calls":[]}}'
+  exit 0
+fi
 /bin/cat > "` + dir + `/stdin"
 prev=
 for a in "$@"; do

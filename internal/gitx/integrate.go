@@ -129,14 +129,31 @@ func PrepareDeliveryWorktree(ctx context.Context, g Git, repo, targetBranch stri
 
 // AlignDeveloperWorktree resets or creates a developer worktree aligned to baseRef
 // so stale uncommitted edits from previous runs do not leak into a new task.
+// Plain `git checkout -B` KEEPS modifications to tracked files and `clean -fd`
+// only removes untracked ones, so the reset must discard tracked edits explicitly
+// before switching (dogfooding achado #11: dirty state from run N-1 was
+// consolidated as the delivery of run N).
 func AlignDeveloperWorktree(ctx context.Context, g Git, repo, agentADK, branch, baseRef string) (string, error) {
 	wt, err := g.EnsureWorktree(ctx, repo, agentADK, branch)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(baseRef) != "" {
-		_, _ = g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(baseRef))
-		_, _ = g.Run(ctx, wt, "clean", "-fd")
+	base := strings.TrimSpace(baseRef)
+	if base == "" {
+		sha, shaErr := g.Run(ctx, repo, "rev-parse", "HEAD")
+		if shaErr != nil {
+			return "", shaErr
+		}
+		base = strings.TrimSpace(sha)
+	}
+	if _, err := g.Run(ctx, wt, "reset", "--hard"); err != nil {
+		return "", err
+	}
+	if _, err := g.Run(ctx, wt, "checkout", "-f", "-B", branch, base); err != nil {
+		return "", err
+	}
+	if _, err := g.Run(ctx, wt, "clean", "-fd"); err != nil {
+		return "", err
 	}
 	return wt, nil
 }

@@ -251,6 +251,23 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
 		}
 	}
+	// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
+	// envelope printed by agy carries "retryable":true (dogfooding achado #12) —
+	// back off and retry instead of killing the whole multi-agent run.
+	for attempt := 0; attempt < len(agyRetryDelays); attempt++ {
+		if runCtx.Err() != nil {
+			break
+		}
+		transient := parseAgyError(stderr)
+		if transient == nil || !transient.Retryable {
+			break
+		}
+		select {
+		case <-runCtx.Done():
+		case <-time.After(agyRetryDelays[attempt]):
+			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+		}
+	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("agy excedeu o tempo (%s). Confira o login com `agy` ou aumente o contexto", formatAgyTimeout(timeout))
 	}
@@ -265,6 +282,11 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		}
 		if errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err) {
 			return nil, fmt.Errorf("não foi possível executar o agy em %s: %s", a.Bin, err)
+		}
+		if quota := parseAgyError(stderr); quota != nil && (quota.ErrorCode == 429 || strings.EqualFold(quota.Status, "RESOURCE_EXHAUSTED")) {
+			return nil, fmt.Errorf(
+				"agy esgotou a quota/créditos (429 %s). Aguarde a janela de uso reabrir, fixe um modelo mais leve (ex.: agy:gemini-3.8-flash-low) ou troque de provedor. %s",
+				quota.Status, truncateText(firstNonEmpty(env.Error, quota.ShortError), 300))
 		}
 		return nil, fmt.Errorf("agy encerrou com código %d: %s", code, truncateText(firstNonEmpty(detail, errString(err)), 500))
 	}
@@ -294,6 +316,48 @@ type agyEnvelope struct {
 		Output int32 `json:"output_tokens"`
 		Total  int32 `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+// agyRetryDelays backs off transient agy failures (429/quota, 5xx) that the
+// AGY_ERROR envelope marks retryable. Package var so tests can speed it up.
+var agyRetryDelays = []time.Duration{30 * time.Second, 60 * time.Second}
+
+// agyErrorEnvelope is the JSON agy prints after the AGY_ERROR: marker on
+// stderr when a provider call fails, e.g. quota exhaustion:
+//
+//	AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): ...","status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"..."}
+type agyErrorEnvelope struct {
+	ShortError string `json:"short_error"`
+	Status     string `json:"status"`
+	ErrorCode  int    `json:"error_code"`
+	CodeKind   string `json:"code_kind"`
+	Retryable  bool   `json:"retryable"`
+	ErrorID    string `json:"error_id"`
+}
+
+// parseAgyError extracts the AGY_ERROR envelope from agy stderr, or nil.
+func parseAgyError(stderr string) *agyErrorEnvelope {
+	const marker = "AGY_ERROR:"
+	idx := strings.Index(stderr, marker)
+	if idx < 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(stderr[idx+len(marker):])
+	if raw == "" {
+		return nil
+	}
+	var env agyErrorEnvelope
+	if err := json.Unmarshal([]byte(raw), &env); err == nil {
+		return &env
+	}
+	// The envelope may be followed by other log lines; retry with the first line only.
+	if nl := strings.IndexByte(raw, '\n'); nl >= 0 {
+		first := strings.TrimSpace(raw[:nl])
+		if first != "" && json.Unmarshal([]byte(first), &env) == nil {
+			return &env
+		}
+	}
+	return nil
 }
 
 type agyDecision struct {
@@ -745,14 +809,21 @@ func invokeAgy(ctx context.Context, bin, dir string, args []string, stdinText st
 
 // ProbeAgyPrompt runs `hivemind doctor --probe` through the same headless
 // path as a real turn: UTF-8 prompt on stdin and --json-schema as a file.
+// It honors AGY_MODEL/AGY_EFFORT (dogfooding achado #1: probing the agy
+// default model produced a false "sem créditos" while slugs worked).
 func ProbeAgyPrompt(ctx context.Context) (string, error) {
 	bin, err := LookAgy()
 	if err != nil {
 		return "", err
 	}
+	a, err := NewAgy(bin, "")
+	if err != nil {
+		return "", err
+	}
+	a.Timeout = 45 * time.Second
 	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	resp, err := (&Agy{Bin: bin, Timeout: 45 * time.Second}).generate(probeCtx, &model.LLMRequest{
+	resp, err := a.generate(probeCtx, &model.LLMRequest{
 		Contents: []*genai.Content{{
 			Role:  "user",
 			Parts: []*genai.Part{{Text: "responda apenas OK"}},

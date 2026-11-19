@@ -3502,7 +3502,7 @@ function renderGitGraphSectionHtml(): string {
   `;
 }
 
-function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { showResponseBadge?: boolean; showMineBadge?: boolean }): string {
+function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { showResponseBadge?: boolean; showMineBadge?: boolean; showWaitingBadge?: boolean }): string {
   const showResp = Boolean((opts?.showResponseBadge || (!pr.isMine && pr.needsAttention)) && pr.myResponse);
   const respPill = showResp
     ? pr.myResponse === "approved"
@@ -3511,12 +3511,19 @@ function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { showResp
         ? `<span class="flow-pill changes">Reprovado</span>`
         : `<span class="flow-pill commented">Comentado</span>`
     : "";
+  const attentionCls = pr.attentionReason === "Pronto p/ merge"
+    ? "approved"
+    : pr.attentionReason === "Ajustes"
+      ? "changes"
+      : "pending";
   const attentionPill = pr.needsAttention
-    ? `<span class="flow-pill pending">${escapeHtml(pr.attentionReason || "Sua revisão")}</span>`
+    ? `<span class="flow-pill ${attentionCls}">${escapeHtml(pr.attentionReason || "Sua revisão")}</span>`
     : pr.reviewRequested && !pr.isMine && !pr.myResponse
       ? `<span class="flow-pill pending">Sua revisão</span>`
-      : "";
-  const decisionPill = pr.isMine && pr.reviewDecision
+      : pr.isMine && opts?.showWaitingBadge && !pr.needsAttention
+        ? `<span class="flow-pill commented">Aguardando revisor</span>`
+        : "";
+  const decisionPill = pr.isMine && pr.reviewDecision && !pr.needsAttention && !opts?.showWaitingBadge
     ? pr.reviewDecision === "APPROVED"
       ? `<span class="flow-pill approved">Aprovado</span>`
       : pr.reviewDecision === "CHANGES_REQUESTED"
@@ -3581,8 +3588,10 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 
   const indexedPrs = state.prs.list.map((pr, idx) => ({ pr, idx }));
   const pendingReviews = indexedPrs.filter(({ pr }) => !pr.isMine && (pr.needsAttention || (pr.reviewRequested && !pr.myResponse)));
-  const myPrs = indexedPrs.filter(({ pr }) => pr.isMine);
-  const respondedPrs = indexedPrs.filter(({ pr }) => !pr.isMine && Boolean(pr.myResponse) && !pr.needsAttention);
+  const myPrs = indexedPrs.filter(({ pr }) => pr.isMine && Boolean(pr.needsAttention));
+  const respondedPrs = indexedPrs.filter(({ pr }) =>
+    (pr.isMine && !pr.needsAttention) || (!pr.isMine && Boolean(pr.myResponse) && !pr.needsAttention)
+  );
 
   const prsIssuesTotal = state.prs.loadedOnce || state.issues.loadedOnce
     ? ` (${state.prs.list.length + state.issues.list.length})`
@@ -3710,7 +3719,7 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           ${!state.prs.loadedOnce
             ? `<div class="dim">Carregando…</div>`
             : myPrs.length === 0
-              ? `<div class="dim">Você não tem PRs abertos neste repositório.</div>`
+              ? `<div class="dim">Nenhum PR seu aguardando ação sua.</div>`
               : myPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showMineBadge: false })).join("")
           }
         </div>
@@ -3720,15 +3729,15 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         <div class="git-section-head">
           <button type="button" class="scm-collapse-btn" id="btn-toggle-flow-responded" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
             ${state.showFlowResponded ? icons.chevronDown : icons.chevronRight}
-            <span>Já respondidos (${respondedPrs.length})</span>
+            <span>Aguardando / Respondidos (${respondedPrs.length})</span>
           </button>
-          <span class="dim" style="font-size:10px">comentados / aprovados / reprovados</span>
+          <span class="dim" style="font-size:10px">aguardando revisor · respondidos</span>
         </div>
         ${state.showFlowResponded ? `
           <div>
             ${respondedPrs.length === 0
-              ? `<div class="dim">Nenhum PR respondido ainda.</div>`
-              : respondedPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showResponseBadge: true, showMineBadge: false })).join("")
+              ? `<div class="dim">Nenhum PR aguardando ou respondido ainda.</div>`
+              : respondedPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showResponseBadge: true, showMineBadge: pr.isMine, showWaitingBadge: pr.isMine })).join("")
             }
           </div>
         ` : ""}

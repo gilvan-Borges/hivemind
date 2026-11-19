@@ -23,7 +23,37 @@ Escolha 3 tarefas REAIS (não demos) de complexidade crescente:
 - **T2 (CONCLUÍDA ✅ 18/11/2026, ~11,5 min):** multiplicador de sequência de vitórias. **PR #3** (+134/-2: `PlayerXp.kt` +29/-2 com `WinStreakXpConfig` data class, teste +76, doc de decisão +29). Valores em config conforme regra do projeto; defaults retrocompatíveis. **Verificação independente: `:core:test` exit 0.** Custo: **1.214.159 tokens** (input 1.15M / output 61k, 30 chamadas; **chefe 535k**, dev_2 260k, qa 214k, dev_1 205k).
   - **Instructions por agente funcionam:** com a dica do JDK 21 no `team.yaml`, ambos os devs acertaram o gradle na **primeira** tentativa (6 `run_shell` no run todo, vs ~12+ na T1). Fricção da quebra #5 eliminada por configuração — a correção de produto (executar `.bat` no Windows / memory no CLI) continua pendente.
   - **Custo não caiu, migrou:** total 1,21M (vs 1,1M na T1), agora dominado pelo **chefe (44%)** — triagem + plano + fechamento. Achado #9 abaixo.
-- **T3 (planejada):** conquistas básicas — `core/Achievements.kt` com testes (dev 1) + contagem no `ProfileScreen` com componentes de design existentes (dev 2), em paralelo com worktrees. Objetivo **sem** dividir as fatias explicitamente — medir se a triagem fatia sozinha sem sobreposição.
+- **T3 (FALHOU ✘ 18/11/2026, ~11 min, 1.245.144 tokens):** conquistas — morte por causa composta: **(a)** worktree de dev reutilizada entre runs carregou a implementação suja da T2 (`PlayerXp.kt` +29/-2 não commitado) e a integração da T3 consolidou esse lixo de estado; **(b)** o QA rejeitou certo ("apenas alteração não relacionada em PlayerXp.kt"), mas o loop girou ~6 `qa_request_changes` sem os devs conseguirem entregar; **(c)** a quota do agy estourou no meio do run (`429 RESOURCE_EXHAUSTED`) e matou tudo sem checkpoint. Sem PR. Sessão `9c62bd8220e5` registrada.
+
+## Balanço final do dogfooding do motor (18/11/2026)
+
+**3 tarefas, 2 entregas verificadas e aprovadas por inspeção independente, 1 falha real que expôs os bugs mais valiosos da noite. Custo total: 3.561.181 tokens** (input 3.37M — o agy injeta ~14k por chamada e o contexto ADK cresce a cada turno; ~1,2M por run independentemente do tamanho da tarefa).
+
+**O que funciona de verdade (verificado fora do run):** pipeline ponta-a-ponta, governança (devs nunca commitam; escopo limpo), QA que executa teste antes de aprovar, worktrees sem tocar no checkout do usuário, PRs reais abertos, instructions por agente respeitadas, sessões persistidas com telemetria por agente, triagem que escala devs.
+
+**O que quebra (por severidade):**
+
+| # | Severidade | Achado |
+|---|---|---|
+| 6 | **trava (custo)** | ~1,2M tokens por run, tamanho-independente; chefe/coodenação ≈ 44% |
+| 9 | **trava (custo)** | — |
+| 11 | **trava (corretude)** | worktrees de dev/entrega **reutilizadas entre runs sem limpeza**: mudança suja de um run vaza para o próximo e é consolidada como entrega |
+| 12 | **trava (resiliência)** | quota 429 do agy mata o run inteiro sem checkpoint; o envelope `AGY_ERROR` do agy diz `"retryable":true` e o HiveMind ignora (provider agy não faz retry de 429) |
+| 13 | **irrita (custo)** | loop do QA gira (`qa_request_changes`×6) quando os devs não entregam — queima tokens sem backpressure |
+| 4 | **irrita (custo)** | fatiamento duplicado em tarefas pequenas |
+| 1, 2, 7, 8 | irrita/feio | probe ignora `AGY_MODEL`; mensagem de erro enganosa; `MEMORY.md` só na IDE; CLI não imprime tokens |
+
+**Pendente:** o critério original da Fase 1 ("tarefa real sem abrir outro editor") exige o **cockpit** — 30 min suas na IDE com uma tarefa dessas. O motor está validado: funciona, e agora sabemos exatamente onde ele quebra. A quota do agy ficou exaurida (reset sozinho); as worktrees sujas em `.hivemind/worktrees/` ficaram como estavam (evidência) e não afetam seu checkout.
+
+## Correções derivadas do dogfooding (18/11/2026)
+
+| Achado | Correção | Onde |
+|---|---|---|
+| #11 worktree suja entre runs | `AlignDeveloperWorktree` agora faz `reset --hard` + `checkout -f -B` + `clean -fd` (o `checkout -B` simples **preserva** modificações em arquivos tracked — raiz do vazamento). Regressão: `TestAlignDeveloperWorktreeDiscardsStaleEdits` (falha no código antigo, passa no novo; verificada com stash) | `internal/gitx/integrate.go` |
+| #12 agy 429 mata o run | `generate()` parseia o envelope `AGY_ERROR` (`"retryable":true`) e faz retry com backoff (30s, 60s, cancelável); quota esgotada vira mensagem acionável ("429 … fixe agy:gemini-3.8-flash-low ou troque de provedor") em vez de "exit 3" genérico | `internal/modelx/agy.go` |
+| #1 probe ignora `AGY_MODEL` | `ProbeAgyPrompt` constrói o agy via `NewAgy` — respeita `AGY_MODEL`/`AGY_EFFORT` | `internal/modelx/agy.go` |
+
+Testes: `TestParseAgyError` (envelope real capturado na falha da T3) + `TestAgyRetriesQuota429`/`TestAgyQuotaErrorAfterRetries` (fake agy com modos `quota-once`/`quota-always`; skip no Windows local, cobertos no CI Linux junto com os demais fake-binary). Binário `bin/hivemind-dogfood.exe` rebuildado com as correções — **o próximo run contra o Block-Trail limpa as worktrees sujas automaticamente** (a própria correção fazendo o trabalho).
 
 Time: `dogfood` (chefe=arquiteto, dev_1, dev_2, qa), provider `agy:gemini-3.8-flash-medium`, governed, worktrees ON, auto_commit ON, auto_pr ON (escolha do dono), allowlist com `gradlew`/`gradlew.bat`.
 

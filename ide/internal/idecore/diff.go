@@ -927,13 +927,16 @@ func isBotLogin(login string) bool {
 // - Third-party PRs return to "Para revisar" when review is requested (or re-requested),
 //   when another human comments/replies after currentUser's last review/comment (unless already approved),
 //   or when a new commit is pushed after CHANGES_REQUESTED.
-// - Own PRs flag NeedsAttention when a reviewer comments/reviews after the author's last comment or commit.
-func computePRFlowState(me string, isMine, reviewRequested bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
+// - Own PRs appear in active "Meus PRs" ONLY when action is needed from the author:
+//   (1) an external reviewer approved and the PR is ready to merge, or
+//   (2) another human commented/requested changes after the author's last comment or commit.
+//   Otherwise (author pushed/commented last and is waiting for reviewer), it moves to "Aguardando / Já respondidos".
+func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
 	me = strings.TrimSpace(me)
 	if me == "" {
 		return "", false, ""
 	}
-	var myLastAt, otherLastAt time.Time
+	var myLastAt, otherLastAt, otherChangesAt time.Time
 	recordMy := func(ts time.Time) {
 		if ts.After(myLastAt) {
 			myLastAt = ts
@@ -949,11 +952,14 @@ func computePRFlowState(me string, isMine, reviewRequested bool, reviews []prAct
 		}
 	}
 
+	extLatestState := map[string]string{}
 	for _, rv := range reviews {
-		if strings.EqualFold(strings.TrimSpace(rv.Author), me) {
+		author := strings.TrimSpace(rv.Author)
+		st := strings.ToUpper(strings.TrimSpace(rv.State))
+		if strings.EqualFold(author, me) {
 			recordMy(rv.SubmittedAt)
 			if !isMine {
-				switch strings.ToUpper(strings.TrimSpace(rv.State)) {
+				switch st {
 				case "APPROVED":
 					myResp = "approved"
 				case "CHANGES_REQUESTED":
@@ -965,7 +971,19 @@ func computePRFlowState(me string, isMine, reviewRequested bool, reviews []prAct
 				}
 			}
 		} else {
-			recordOther(rv.Author, rv.SubmittedAt)
+			recordOther(author, rv.SubmittedAt)
+			if author != "" && !isBotLogin(author) {
+				low := strings.ToLower(author)
+				switch st {
+				case "APPROVED", "CHANGES_REQUESTED":
+					extLatestState[low] = st
+					if st == "CHANGES_REQUESTED" && rv.SubmittedAt.After(otherChangesAt) {
+						otherChangesAt = rv.SubmittedAt
+					}
+				case "DISMISSED":
+					delete(extLatestState, low)
+				}
+			}
 		}
 	}
 
@@ -985,7 +1003,24 @@ func computePRFlowState(me string, isMine, reviewRequested bool, reviews []prAct
 		if latestCommitAt.After(authorLast) {
 			authorLast = latestCommitAt
 		}
+		approvedCount := 0
+		changesCount := 0
+		for _, st := range extLatestState {
+			if st == "APPROVED" {
+				approvedCount++
+			} else if st == "CHANGES_REQUESTED" {
+				changesCount++
+			}
+		}
+		// Ready to merge once at least one external reviewer approved with no pending re-review or changes requested.
+		if !hasPendingReviewers && approvedCount > 0 && changesCount == 0 {
+			return "", true, "Pronto p/ merge"
+		}
+		// Needs author's reply/fix if an external human commented or reviewed AFTER the author's last comment/commit.
 		if !otherLastAt.IsZero() && (authorLast.IsZero() || otherLastAt.After(authorLast)) {
+			if !otherChangesAt.IsZero() && (authorLast.IsZero() || otherChangesAt.After(authorLast)) {
+				return "", true, "Ajustes"
+			}
 			return "", true, "Nova resposta"
 		}
 		return "", false, ""
@@ -1090,7 +1125,7 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 				CreatedAt:       parseGHTime(cm.CreatedAt),
 			})
 		}
-		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, revs, cmts, time.Time{})
+		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, len(reqs) > 0, revs, cmts, time.Time{})
 
 		out = append(out, ProjectPullRequest{
 			Number:             item.Number,
@@ -1472,7 +1507,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 			}
 		}
 
-		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, revs, cmts, latestCommitAt)
+		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, len(reqs) > 0, revs, cmts, latestCommitAt)
 
 		out = append(out, ProjectPullRequest{
 			Number:             n.Number,

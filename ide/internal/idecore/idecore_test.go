@@ -619,7 +619,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 1 (exact PR #700 scenario): gilvan reproved at t1, joao commented after at t2 -> MUST return to "Para revisar" ("Nova resposta").
 	resp, need, reason := computePRFlowState(
-		"gilvan-Borges", false, false,
+		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
 		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
 		time.Time{},
@@ -630,7 +630,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 2: gilvan replies at t3 (after joao's t2) -> goes back to "Já respondidos".
 	resp, need, reason = computePRFlowState(
-		"gilvan-Borges", false, false,
+		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
 		[]prActivityComment{
 			{Author: "joaomarqu3ss", CreatedAt: t2},
@@ -644,7 +644,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 3: bot comment after gilvan's review must NOT falsely bounce PR back.
 	_, need, _ = computePRFlowState(
-		"gilvan-Borges", false, false,
+		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
 		[]prActivityComment{{Author: "github-actions[bot]", CreatedAt: t2}},
 		time.Time{},
@@ -655,7 +655,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 4: new commit pushed after CHANGES_REQUESTED -> "Novo commit".
 	resp, need, reason = computePRFlowState(
-		"gilvan-Borges", false, false,
+		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
 		nil,
 		t2,
@@ -666,7 +666,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 5: already approved -> casual comment does NOT bounce back unless reviewRequested is true.
 	resp, need, _ = computePRFlowState(
-		"gilvan-Borges", false, false,
+		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
 		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
 		time.Time{},
@@ -675,7 +675,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		t.Fatalf("approved PR without re-review request should stay in Já respondidos, got resp=%q need=%v", resp, need)
 	}
 	resp, need, reason = computePRFlowState(
-		"gilvan-Borges", false, true,
+		"gilvan-Borges", false, true, true,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
 		nil,
 		time.Time{},
@@ -686,13 +686,38 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 
 	// Case 6: own PR (#699) receives reviewer comment after author's last commit -> Nova resposta.
 	_, need, reason = computePRFlowState(
-		"gilvan-Borges", true, false,
+		"gilvan-Borges", true, false, false,
 		nil,
 		[]prActivityComment{{Author: "marcusrdrigues", CreatedAt: t2}},
 		t1,
 	)
 	if !need || reason != "Nova resposta" {
 		t.Fatalf("own PR with newer reviewer comment should flag Nova resposta, got need=%v reason=%q", need, reason)
+	}
+
+	// Case 7 (exact PR #699 waiting on Marcus): author committed & commented LAST -> leaves active Fluxo!
+	_, need, reason = computePRFlowState(
+		"gilvan-Borges", true, false, false,
+		nil,
+		[]prActivityComment{
+			{Author: "marcusrdrigues", CreatedAt: t1},
+			{Author: "gilvan-Borges", CreatedAt: t3},
+		},
+		t2,
+	)
+	if need {
+		t.Fatalf("own PR where author replied last and is waiting for reviewer must leave active Fluxo, got need=%v reason=%q", need, reason)
+	}
+
+	// Case 8: own PR approved by Marcus with no pending re-review -> pops back as "Pronto p/ merge"!
+	_, need, reason = computePRFlowState(
+		"gilvan-Borges", true, false, false,
+		[]prActivityReview{{Author: "marcusrdrigues", State: "APPROVED", SubmittedAt: t3}},
+		[]prActivityComment{{Author: "gilvan-Borges", CreatedAt: t2}},
+		t1,
+	)
+	if !need || reason != "Pronto p/ merge" {
+		t.Fatalf("own PR approved by reviewer should return as Pronto p/ merge, got need=%v reason=%q", need, reason)
 	}
 }
 

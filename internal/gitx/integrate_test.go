@@ -88,3 +88,62 @@ func TestSyncUncommittedToDeliveryWithoutDevCommit(t *testing.T) {
 		t.Fatalf("dev worktree should not have committed: count=%q err=%v", cnt, err)
 	}
 }
+
+// TestAlignDeveloperWorktreeDiscardsStaleEdits reproduces dogfooding achado #11:
+// a tracked file left dirty (uncommitted) by a previous run must NOT survive the
+// alignment of the next run — otherwise it leaks into the new delivery.
+func TestAlignDeveloperWorktreeDiscardsStaleEdits(t *testing.T) {
+	repo := gitInit(t)
+	g := Local{}
+	ctx := context.Background()
+
+	first, deliveryBranch, err := PrepareDeliveryWorktree(ctx, g, repo, "hivemind/run-1/entrega", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first
+	devWT, err := AlignDeveloperWorktree(ctx, g, repo, "dev_1", "hivemind/run-1/dev_1", deliveryBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 1 leaves a TRACKED file dirty and an untracked leftover behind.
+	readme := filepath.Join(devWT, "README.md")
+	if err := os.WriteFile(readme, []byte("versão suja do run 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(devWT, "sobrando.txt"), []byte("lixo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 2 aligns the same dev worktree to a fresh delivery branch.
+	_, run2Branch, err := PrepareDeliveryWorktree(ctx, g, repo, "hivemind/run-2/entrega", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devWT2, err := AlignDeveloperWorktree(ctx, g, repo, "dev_1", "hivemind/run-2/dev_1", run2Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devWT2 != devWT {
+		t.Fatalf("worktree mudou de path: %q -> %q", devWT, devWT2)
+	}
+
+	status, err := g.Run(ctx, devWT, "status", "--porcelain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("worktree de dev deve estar limpa entre runs; status = %q", status)
+	}
+	data, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "run 1") {
+		t.Fatalf("edição suja do run anterior vazou para o novo run: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(devWT, "sobrando.txt")); err == nil {
+		t.Fatal("arquivo não rastreado do run anterior deveria ter sido removido")
+	}
+}
