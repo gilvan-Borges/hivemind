@@ -80,9 +80,13 @@ func IsCommitOrPRCommand(command string) (bool, string) {
 		base := strings.ToLower(strings.TrimSuffix(filepath.Base(argv[0]), ".exe"))
 		switch base {
 		case "git":
+			if gitConfigAliasMutates(argv[1:]) {
+				return true, "git -c alias executa commit/push/update-ref"
+			}
 			sub := firstSubcommand(argv[1:])
 			switch sub {
-			case "commit", "push", "merge", "rebase", "cherry-pick", "tag":
+			case "commit", "push", "merge", "rebase", "cherry-pick", "tag",
+				"update-ref", "symbolic-ref", "reflog", "filter-branch", "fast-import":
 				return true, "git " + sub
 			}
 		case "gh":
@@ -104,8 +108,40 @@ func IsCommitOrPRCommand(command string) (bool, string) {
 	return false, ""
 }
 
-func firstSubcommand(args []string) string {
+// gitConfigAliasMutates detects `git -c alias.X=commit` style aliases, which
+// bypass a top-level subcommand check: the actual subcommand is the alias name.
+func gitConfigAliasMutates(args []string) bool {
 	for i := 0; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		low := strings.ToLower(raw)
+		if low == "-c" && i+1 < len(args) {
+			if aliasValueMutates(args[i+1]) {
+				return true
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(low, "-c") && len(raw) > 2 && aliasValueMutates(raw[2:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func aliasValueMutates(value string) bool {
+	low := strings.ToLower(strings.TrimSpace(value))
+	if !strings.HasPrefix(low, "alias.") {
+		return false
+	}
+	for _, verb := range []string{"commit", "push", "merge", "rebase", "cherry-pick", "tag", "update-ref", "symbolic-ref", "filter-branch", "fast-import"} {
+		if strings.Contains(low, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstSubcommand(args []string) string {	for i := 0; i < len(args); i++ {
 		tok := strings.TrimSpace(args[i])
 		if tok == "" {
 			continue

@@ -9,20 +9,20 @@ import (
 func TestLocalEchoAndDeny(t *testing.T) {
 	dir := t.TempDir()
 	var ran bool
-	out, err := (Local{}).Run(context.Background(), dir, "echo hivemind", []string{"echo"}, func(string) bool {
+	out, err := (Local{}).Run(context.Background(), dir, "go env GOVERSION", []string{"go"}, func(string) bool {
 		ran = true
 		return true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "hivemind") {
+	if !strings.Contains(out, "go") {
 		t.Fatalf("out = %q", out)
 	}
 	if ran {
-		t.Fatal("echo should not ask for confirmation")
+		t.Fatal("go env should not ask for confirmation")
 	}
-	_, err = (Local{}).Run(context.Background(), dir, "rm -rf .", []string{"echo"}, func(string) bool { return true })
+	_, err = (Local{}).Run(context.Background(), dir, "rm -rf .", []string{"go"}, func(string) bool { return true })
 	if err == nil || !strings.Contains(err.Error(), "recusado") {
 		t.Fatalf("expected refusal, got %v", err)
 	}
