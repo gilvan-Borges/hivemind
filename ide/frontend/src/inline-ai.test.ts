@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { ghostTextField, nextGhostWord, setGhostTextEffect } from "./cm-editor";
 import { buildInlineDiffDecorations } from "./inline-ai";
 import { renderAutoReviewCardHtml } from "./git";
+import { applyLaneLabel, createLane, laneDisplayName } from "./lanes";
 import type { AutoReviewStatus, FileDiff } from "./types";
 
 describe("Fase 3 — Ghost Text StateField (CodeMirror 6)", () => {
@@ -94,5 +95,22 @@ describe("Auto-Review Fluxo — renderAutoReviewCardHtml", () => {
     expect(html).toContain("Parar #723");
     expect(html).toContain("#722");
     expect(html).toContain("docs: FT-159");
+  });
+});
+
+describe("Abas de Equipe Paralela — renomear inline", () => {
+  it("atualiza label visual sem alterar teamName enviado ao backend", () => {
+    const lane = createLane("principal");
+
+    expect(laneDisplayName(lane)).toBe("principal");
+    applyLaneLabel(lane, "  PR #723 · E2E  ");
+    expect(lane.teamName).toBe("principal");
+    expect(lane.label).toBe("PR #723 · E2E");
+    expect(laneDisplayName(lane)).toBe("PR #723 · E2E");
+
+    // Limpar ou voltar ao nome original remove label customizado.
+    applyLaneLabel(lane, "   ");
+    expect(lane.label).toBeUndefined();
+    expect(laneDisplayName(lane)).toBe("principal");
   });
 });

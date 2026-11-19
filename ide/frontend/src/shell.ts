@@ -7,7 +7,7 @@ import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFind
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
-import { activeLane } from "./lanes";
+import { activeLane, laneDisplayName } from "./lanes";
 import { openAIUsageModal, openDoctorModal, openOpenCodeModal, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
@@ -797,8 +797,9 @@ export function updateStatusBar() {
   }
   const perm = proj?.teamConfig?.settings?.permission_mode || "governed";
   if (teamEl) {
-    teamEl.textContent = `${lane?.teamName || "-"} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
-    teamEl.title = `Equipe: ${lane?.teamName || "-"} (${lane?.agents.length || 0}) · Modo: ${runModeLabel(state.runMode)} · Permissão: ${permissionModeLabel(perm)}`;
+    const label = laneDisplayName(lane);
+    teamEl.textContent = `${label} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
+    teamEl.title = `Equipe: ${label} (${lane?.teamName || "-"} · ${lane?.agents.length || 0}) · Modo: ${runModeLabel(state.runMode)} · Permissão: ${permissionModeLabel(perm)}`;
   }
   if (tokEl) {
     const sessTok = lane?.sessionTotalTokens || 0;

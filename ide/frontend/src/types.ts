@@ -225,6 +225,7 @@ export interface AgentRuntime {
 export interface TeamLane {
   id: string;
   teamName: string;
+  label?: string;
   sessionId: string;
   running: boolean;
   canceledByUser?: boolean;

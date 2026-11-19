@@ -45,9 +45,17 @@ export function createLane(teamName: string): TeamLane {
   };
 }
 
+export function laneDisplayName(lane?: TeamLane | null): string {
+  if (!lane) return "-";
+  const custom = (lane.label || "").trim();
+  return custom || lane.teamName;
+}
+
 export function activeLane(): TeamLane | undefined {
   return state.lanes.find((l) => l.id === state.activeLaneId) ?? state.lanes[0];
 }
+
+let editingLaneId: string | null = null;
 
 export let thinkingTickTimer = 0;
 
@@ -228,9 +236,10 @@ export function confirmDeleteSavedTeam(teamName: string) {
 export function confirmCloseParallelLane(laneId: string) {
   const target = state.lanes.find((l) => l.id === laneId);
   if (!target) return;
+  const targetLabel = laneDisplayName(target);
   const isOnlyLane = state.lanes.length <= 1;
   askConfirm({
-    title: isOnlyLane ? `Encerrar e limpar equipe "${target.teamName}"` : `Excluir equipe paralela "${target.teamName}"`,
+    title: isOnlyLane ? `Encerrar e limpar equipe "${targetLabel}"` : `Excluir equipe paralela "${targetLabel}"`,
     body: target.running
       ? `Esta equipe está executando tarefas agora. Excluir vai parar imediatamente todos os serviços e agentes desta aba. Deseja continuar?`
       : isOnlyLane
@@ -267,27 +276,93 @@ export function confirmCloseParallelLane(laneId: string) {
       if ((state.sidebarView === "team" || state.sidebarView === "sessions") && state.showLeftSidebar) {
         renderLeftSidebar();
       }
-      toast(`Serviços da equipe "${target.teamName}" parados e aba excluída.`, "info");
-      setStatus(`Equipe "${target.teamName}" excluída.`);
+      toast(`Serviços da equipe "${targetLabel}" parados e aba excluída.`, "info");
+      setStatus(`Equipe "${targetLabel}" excluída.`);
     },
   });
+}
+
+export function startRenameLane(laneId: string) {
+  if (!state.lanes.some((l) => l.id === laneId)) return;
+  editingLaneId = laneId;
+  renderLaneBarOnly();
+  const input = document.getElementById("lane-rename-input") as HTMLInputElement | null;
+  if (input) {
+    input.focus();
+    input.select();
+  }
+}
+
+export function applyLaneLabel(lane: TeamLane, rawValue: string): void {
+  const trimmed = rawValue.trim();
+  lane.label = trimmed && trimmed !== lane.teamName ? trimmed : undefined;
+}
+
+export function commitRenameLane(laneId: string, rawValue: string) {
+  const target = state.lanes.find((l) => l.id === laneId);
+  editingLaneId = null;
+  if (target) {
+    applyLaneLabel(target, rawValue);
+  }
+  renderLaneBarOnly();
+  updateStatusBar();
+  updateMissionBoardIfOpen();
 }
 
 export function renderLaneBarOnly() {
   const bar = document.getElementById("lane-bar");
   const lane = activeLane();
   if (bar) {
-    bar.innerHTML = state.lanes.map((l) => `
-      <div class="lane-pill ${l.id === lane?.id ? "active" : ""}" data-lane="${l.id}" role="tab" aria-selected="${l.id === lane?.id ? "true" : "false"}">
+    bar.innerHTML = state.lanes.map((l) => {
+      const display = laneDisplayName(l);
+      const isEditing = editingLaneId === l.id;
+      return `
+      <div class="lane-pill ${l.id === lane?.id ? "active" : ""} ${isEditing ? "editing" : ""}" data-lane="${l.id}" role="tab" aria-selected="${l.id === lane?.id ? "true" : "false"}">
         ${l.running ? `<span class="lane-dot"></span>` : ""}
-        <span class="lane-pill-name">${escapeHtml(l.teamName)}</span>
-        ${l.sessionTotalTokens > 0 ? `<span class="dim" style="font-size:10px">${formatTokens(l.sessionTotalTokens)}</span>` : ""}
-        <button type="button" class="lane-close-x" data-close-lane="${l.id}" title="Excluir equipe e parar todos os serviços" aria-label="Excluir equipe ${escapeHtml(l.teamName)}">${icons.closeSmall}</button>
+        ${isEditing
+          ? `<input type="text" class="lane-rename-input" id="lane-rename-input" value="${escapeHtml(display)}" maxlength="40" aria-label="Novo nome da aba" />`
+          : `<span class="lane-pill-name" data-dbl-rename="${l.id}" title="Duplo clique para renomear (${escapeHtml(l.teamName)})">${escapeHtml(display)}</span>`
+        }
+        ${!isEditing && l.sessionTotalTokens > 0 ? `<span class="dim" style="font-size:10px">${formatTokens(l.sessionTotalTokens)}</span>` : ""}
+        ${!isEditing ? `<button type="button" class="lane-edit-btn" data-rename-lane="${l.id}" title="Renomear aba desta equipe" aria-label="Renomear ${escapeHtml(display)}">${icons.editPen}</button>` : ""}
+        <button type="button" class="lane-close-x" data-close-lane="${l.id}" title="Excluir equipe e parar todos os serviços" aria-label="Excluir equipe ${escapeHtml(display)}">${icons.closeSmall}</button>
       </div>
-    `).join("");
+    `;
+    }).join("");
+
+    if (editingLaneId) {
+      const activeEditId = editingLaneId;
+      const input = document.getElementById("lane-rename-input") as HTMLInputElement | null;
+      let finished = false;
+      const finish = (save: boolean) => {
+        if (finished) return;
+        finished = true;
+        if (save) {
+          commitRenameLane(activeEditId, input?.value ?? "");
+        } else {
+          editingLaneId = null;
+          renderLaneBarOnly();
+        }
+      };
+      input?.addEventListener("click", (ev) => ev.stopPropagation());
+      input?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(true);
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(false);
+        }
+      });
+      input?.addEventListener("blur", () => finish(true));
+    }
+
     bar.querySelectorAll("[data-lane]").forEach((el) => {
       el.addEventListener("click", (ev) => {
-        if ((ev.target as HTMLElement)?.closest("[data-close-lane]")) return;
+        const tgt = ev.target as HTMLElement | null;
+        if (tgt?.closest("[data-close-lane]") || tgt?.closest("[data-rename-lane]") || tgt?.closest("#lane-rename-input")) return;
         state.activeLaneId = (el as HTMLElement).dataset.lane!;
         renderLaneBarOnly();
         renderPipelineBar();
@@ -301,6 +376,20 @@ export function renderLaneBarOnly() {
         }
       });
     });
+    bar.querySelectorAll("[data-dbl-rename]").forEach((el) => {
+      el.addEventListener("dblclick", (ev) => {
+        ev.stopPropagation();
+        const id = (el as HTMLElement).dataset.dblRename!;
+        startRenameLane(id);
+      });
+    });
+    bar.querySelectorAll("[data-rename-lane]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const id = (btn as HTMLElement).dataset.renameLane!;
+        startRenameLane(id);
+      });
+    });
     bar.querySelectorAll("[data-close-lane]").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -311,7 +400,8 @@ export function renderLaneBarOnly() {
   }
   const teamLbl = document.getElementById("composer-team-label");
   if (teamLbl && lane) {
-    teamLbl.textContent = lane.teamName;
+    const custom = (lane.label || "").trim();
+    teamLbl.textContent = custom ? `${custom} (${lane.teamName})` : lane.teamName;
   }
 }
 
