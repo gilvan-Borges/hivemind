@@ -1601,6 +1601,15 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	mustGit(t, g, ctx, repo, "add", ".")
 	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
 
+	// Shared team memory must reach the pipeline agents through the state
+	// handoff (IncludeContentsNone), not only the triage Chief.
+	if err := os.MkdirAll(filepath.Join(repo, ".hivemind"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".hivemind", "MEMORY.md"), []byte("# Mem\n\nMEMORIA_MARCADOR: use JDK 21.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	squad := team.Team{
 		Name: "principal",
 		Agents: []team.Agent{
@@ -1700,6 +1709,9 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	}
 	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") {
 		t.Fatalf("did not expect chief-only or dev-only in qa instruction")
+	}
+	if !strings.Contains(devInst, "MEMORIA_MARCADOR") || !strings.Contains(qaInst, "MEMORIA_MARCADOR") {
+		t.Fatalf("team memory should reach dev and QA through state, dev=%q qa=%q", devInst, qaInst)
 	}
 }
 

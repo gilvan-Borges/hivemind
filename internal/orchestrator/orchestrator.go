@@ -326,6 +326,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
 	}
 
+	if mem := r.teamMemorySnippet(); mem != "" {
+		_ = sess.State().Set("team_memory", mem)
+	} else {
+		_ = sess.State().Set("team_memory", "")
+	}
 	devs, err := r.prepareDevs(ctx, key, objective)
 	if err != nil {
 		return result, err
@@ -558,7 +563,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
+	stateKeys := []string{"objective", "jira_key", "team_memory", "chief_plan", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	qaRoot := r.Workspace
 	if r.deliveryRoot != "" {
