@@ -285,3 +285,83 @@ func waitUntil(t *testing.T, d time.Duration, ok func() bool) {
 	}
 	t.Fatal("timeout de espera")
 }
+
+func TestRingSignalsTruncation(t *testing.T) {
+	r := newRing()
+	for i := 0; i < ringCap+3; i++ {
+		r.add(remote.StreamEvent{Type: "lane_event"})
+	}
+	items, gap := r.drain()
+	if !gap || len(items) != ringCap {
+		t.Fatalf("gap=%v len=%d", gap, len(items))
+	}
+	items, gap = r.drain()
+	if gap || len(items) != 0 {
+		t.Fatalf("segundo drain gap=%v len=%d", gap, len(items))
+	}
+}
+
+func TestConcurrentRefreshRotatesOnce(t *testing.T) {
+	var mu sync.Mutex
+	current := "hmr_rt_seed"
+	refreshes := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RefreshToken string `json:"refreshToken"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		defer mu.Unlock()
+		if body.RefreshToken != current {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"reuso"}}`))
+			return
+		}
+		refreshes++
+		current = "hmr_rt_next"
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken":  "hmr_at_next",
+			"refreshToken": current,
+			"expiresIn":    900,
+			"account":      map[string]string{"email": "owner@example.com"},
+		})
+	}))
+	defer ts.Close()
+
+	path := filepath.Join(t.TempDir(), "relay.json")
+	c, err := Load(Options{ConfigPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.cfg.BaseURL = ts.URL
+	c.cfg.RefreshToken = "hmr_rt_seed"
+	c.cfg.Email = "owner@example.com"
+	if err := save(path, c.cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := c.accessToken(context.Background())
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshes != 1 {
+		t.Fatalf("refresh rodou %d vezes", refreshes)
+	}
+}

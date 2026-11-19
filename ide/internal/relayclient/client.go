@@ -26,6 +26,9 @@ type Options struct {
 	Handler    http.Handler
 	Bearer     func() string
 	Subscribe  func() (<-chan remote.StreamEvent, func())
+	// Snapshot is the live lane state. It is sent inside a relay_gap event
+	// when the local backlog had to drop events while the relay was down.
+	Snapshot func() []remote.LaneSnapshot
 }
 
 // Status is the view shown in the IDE. It contains no secrets.
@@ -65,10 +68,11 @@ type Client struct {
 	online   bool
 	lastErr  string
 
-	started bool
-	cancel  context.CancelFunc
-	ring    *eventRing
-	http    *http.Client
+	started   bool
+	cancel    context.CancelFunc
+	ring      *eventRing
+	http      *http.Client
+	refreshMu sync.Mutex
 }
 
 // Load reads the config and prepares the client. It does not dial the network.
@@ -625,7 +629,18 @@ func (c *Client) flush(ctx context.Context, send chan []byte) {
 	if _, _, ok := c.crypto(); !ok {
 		return
 	}
-	for _, ev := range c.ring.drain() {
+	items, gap := c.ring.drain()
+	if gap {
+		body := map[string]any{"reason": "backlog_truncated"}
+		if c.opt.Snapshot != nil {
+			body["lanes"] = c.opt.Snapshot()
+		}
+		raw, err := json.Marshal(body)
+		if err == nil {
+			c.sendEvent(ctx, send, remote.StreamEvent{Type: "relay_gap", Data: raw})
+		}
+	}
+	for _, ev := range items {
 		if ctx.Err() != nil {
 			return
 		}
@@ -755,6 +770,23 @@ func (c *Client) accessToken(ctx context.Context) (string, string, error) {
 	refresh := c.cfg.RefreshToken
 	access := c.access
 	exp := c.accessAt
+	c.mu.Unlock()
+	if base == "" || refresh == "" {
+		return "", "", errors.New("entre na conta do relay")
+	}
+	if access != "" && time.Until(exp) > 30*time.Second {
+		return access, base, nil
+	}
+	// One refresh at a time. The relay revokes the session if an already
+	// rotated refresh token is presented again, so concurrent callers must
+	// share the token produced by the first one.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.mu.Lock()
+	base = c.cfg.BaseURL
+	refresh = c.cfg.RefreshToken
+	access = c.access
+	exp = c.accessAt
 	c.mu.Unlock()
 	if base == "" || refresh == "" {
 		return "", "", errors.New("entre na conta do relay")
@@ -976,10 +1008,13 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, send <-chan []byte) er
 	}
 }
 
+const ringCap = 512
+
 type eventRing struct {
-	mu     sync.Mutex
-	items  []remote.StreamEvent
-	notify chan struct{}
+	mu        sync.Mutex
+	items     []remote.StreamEvent
+	notify    chan struct{}
+	truncated bool
 }
 
 func newRing() *eventRing {
@@ -989,8 +1024,9 @@ func newRing() *eventRing {
 func (r *eventRing) add(ev remote.StreamEvent) {
 	r.mu.Lock()
 	r.items = append(r.items, ev)
-	if len(r.items) > 128 {
-		r.items = r.items[len(r.items)-128:]
+	if len(r.items) > ringCap {
+		r.items = r.items[len(r.items)-ringCap:]
+		r.truncated = true
 	}
 	r.mu.Unlock()
 	select {
@@ -999,10 +1035,12 @@ func (r *eventRing) add(ev remote.StreamEvent) {
 	}
 }
 
-func (r *eventRing) drain() []remote.StreamEvent {
+func (r *eventRing) drain() ([]remote.StreamEvent, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := r.items
+	gap := r.truncated
 	r.items = nil
-	return out
+	r.truncated = false
+	return out, gap
 }

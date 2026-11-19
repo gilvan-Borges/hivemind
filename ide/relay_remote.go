@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
+	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
 )
 
 func newRelayClient(a *App) *relayclient.Client {
@@ -17,6 +18,7 @@ func newRelayClient(a *App) *relayclient.Client {
 		Handler:   a.mobile.server.Handler(),
 		Bearer:    a.mobile.server.Bearer,
 		Subscribe: a.mobile.hub.Subscribe,
+		Snapshot:  func() []remote.LaneSnapshot { return a.mobile.hub.Snapshots("") },
 	})
 	if err != nil {
 		log.Printf("aviso: relay: %v", err)

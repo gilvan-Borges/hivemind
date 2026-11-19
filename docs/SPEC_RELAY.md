@@ -403,6 +403,14 @@ Payload decifrado = o mesmo JSON do SSE (`remote.StreamEvent`):
 
 `type` do **evento** (dentro da caixa) é `lane_event`, `autoreview_status`, `approval_resolved` ou o que o bridge já emite. Não confundir com o `type` do quadro, que é sempre `"event"`.
 
+Se a IDE ficou sem relay por tempo bastante para o buffer local (512 eventos) transbordar, o primeiro evento depois da reconexão é `relay_gap`:
+
+```json
+{ "type": "relay_gap", "data": { "reason": "backlog_truncated", "lanes": [] } }
+```
+
+`lanes` é o snapshot vivo (`GET /api/v1/lanes`, todos os workspaces). Ao receber `relay_gap`, descarte a suposição de que o fluxo entre o último `seq` e este está completo: aplique `lanes` (aprovações pendentes inclusive) e, se precisar do texto que faltou, releia a sessão com `GET /api/v1/session`.
+
 O relay atribui `seq` monotônico por IDE (começa em 1), grava o quadro já com `seq` e `enc`, e entrega a todos os apps daquela IDE. A janela guarda os últimos **400** eventos. Não dá para distinguir uma aprovação de outro evento, porque o corpo é opaco: a fila inteira é o que sobrevive à queda do app.
 
 Retomada: ao reconectar, `resumeAfter` = último `seq` aplicado. O app também deve chamar `GET /api/v1/lanes` no início; as aprovações pendentes estão no snapshot mesmo se um evento antigo saiu da janela.
