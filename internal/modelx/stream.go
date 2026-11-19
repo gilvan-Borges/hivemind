@@ -113,8 +113,12 @@ func streamInvoke(ctx context.Context, bin, dir string, args []string, prompt st
 	} else if cerr != nil && !isBrokenPipe(cerr) && werr == nil {
 		_ = cmd.Process.Kill()
 	}
-	waitErr := cmd.Wait()
+	// Read stdout to EOF before Wait: cmd.Wait closes the StdoutPipe, and
+	// calling it first can drop events the process already wrote (flaky when
+	// the child is fast, e.g. the Go test fake). darwin/Linux pipes deliver
+	// EOF when the process exits, so this cannot deadlock.
 	<-done
+	waitErr := cmd.Wait()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
