@@ -28,7 +28,22 @@ jobs:
       - name: Análise estática (go vet)
         run: go vet ./...
       - name: Testes unitários do CLI (com race detector)
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
+
+  test-cli-windows:
+    name: Testes CLI (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - name: Análise estática (go vet)
+        run: go vet ./...
+      - name: Testes unitários do CLI no Windows
+        run: go test -count=1 ./...
 
   test-ide:
     name: Testes IDE (${{ matrix.os }})

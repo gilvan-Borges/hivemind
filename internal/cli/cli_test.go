@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/testutil/fakeagy"
 )
 
 func TestHelpAndTeamLifecycle(t *testing.T) {
@@ -131,14 +132,7 @@ func TestHelpAndTeamLifecycle(t *testing.T) {
 func TestDoctorProbe(t *testing.T) {
 	dir := t.TempDir()
 	binDir := t.TempDir()
-	script := `#!/bin/sh
-if [ "$1" = "models" ]; then echo gemini-3.8-flash-medium; exit 0; fi
-if [ "$AGY_FAKE_MODE" = "early" ]; then echo "opção recusada pelo agy" >&2; exit 2; fi
-printf '%s\n' '{"status":"SUCCESS","response":"OK","structured_output":{"text":"OK","tool_calls":[]}}'
-`
-	if err := os.WriteFile(filepath.Join(binDir, "agy"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fakeagy.Write(t, binDir)
 	t.Setenv("PATH", binDir)
 	t.Setenv("HIVEMIND_AGY_PATH", "")
 	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "sem-local"))
