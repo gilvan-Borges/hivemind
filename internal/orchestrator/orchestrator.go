@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -104,6 +105,8 @@ type Runner struct {
 	turnInputTokens    int64
 	turnOutputTokens   int64
 	turnTotalTokens    int64
+	qaLastStatus       string
+	qaStallCount       int
 }
 
 // Request is one user turn.
@@ -216,6 +219,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.turnInputTokens = 0
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
+	r.qaLastStatus = ""
+	r.qaStallCount = 0
 
 	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
 	if runMode == "plan:feature" {
@@ -778,14 +783,58 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 	if qa {
 		cfg.AfterToolCallbacks = []llmagent.AfterToolCallback{
 			func(ctx agent.Context, tl tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
-				if err == nil && tl != nil && tl.Name() == "qa_approve" && ctx.Actions() != nil {
+				if err != nil || tl == nil || ctx.Actions() == nil {
+					return nil, nil
+				}
+				switch tl.Name() {
+				case "qa_approve":
 					ctx.Actions().Escalate = true
+				case "qa_request_changes":
+					// dogfooding achado #13: QA girando com a entrega imutável
+					// queimava tokens sem backpressure (6 reprovações na T3).
+					if msg := r.recordQAStall(); msg != "" {
+						ctx.Actions().Escalate = true
+						if ctx.Actions().StateDelta == nil {
+							ctx.Actions().StateDelta = map[string]any{}
+						}
+						ctx.Actions().StateDelta["qa_feedback"] = msg
+						if r.Out != nil {
+							fmt.Fprintf(r.Err, "aviso: %s\n", msg)
+						}
+					}
 				}
 				return nil, nil
 			},
 		}
 	}
 	return llmagent.New(cfg)
+}
+
+// recordQAStall conta reprovações consecutivas do QA sem nenhuma alteração na
+// entrega desde a reprovação anterior. Na terceira reprovação com a entrega
+// imutável, devolve a mensagem que encerra o loop Dev→QA (o Chefe de fecho
+// recebe via state qa_feedback e o CLI imprime no stderr).
+func (r *Runner) recordQAStall() string {
+	if r.Git == nil || r.deliveryRoot == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	status, err := r.Git.Status(ctx, r.deliveryRoot)
+	if err != nil {
+		return ""
+	}
+	defer func() { r.qaLastStatus = status }()
+	if status != r.qaLastStatus {
+		r.qaStallCount = 0
+		return ""
+	}
+	r.qaStallCount++
+	if r.qaStallCount < 2 {
+		return ""
+	}
+	r.qaStallCount = 0
+	return "O QA reprovou de novo sem nenhuma alteração nova na entrega desde a reprovação anterior; o ciclo Dev→QA foi interrompido para não queimar mais chamadas. Revise manualmente o feedback do QA e o estado da entrega."
 }
 
 func (r *Runner) newIntegrateAgent(devs []devEnv) (agent.Agent, error) {
@@ -1576,10 +1625,20 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			}
 
 			cleaned := make([]string, 0, len(args.DevTasks))
+			seenTasks := make(map[string]bool, len(args.DevTasks))
 			for _, s := range args.DevTasks {
-				if trimmed := strings.TrimSpace(s); trimmed != "" {
-					cleaned = append(cleaned, trimmed)
+				trimmed := strings.TrimSpace(s)
+				if trimmed == "" {
+					continue
 				}
+				// dogfooding achado #4: fatias idênticas disparavam 2 devs na MESMA
+				// tarefa (~261k tokens desperdiçados na T1). Duplicatas exatas caem.
+				key := strings.ToLower(trimmed)
+				if seenTasks[key] {
+					continue
+				}
+				seenTasks[key] = true
+				cleaned = append(cleaned, trimmed)
 			}
 			if len(cleaned) > maxDevs && maxDevs > 0 {
 				tail := strings.Join(cleaned[maxDevs-1:], "\n")
