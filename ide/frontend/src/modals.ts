@@ -78,6 +78,14 @@ export async function openOpenCodeModal() {
   state.showOpenCodeModal = true;
   renderModalLayer();
   const backend = api();
+  if (backend?.GetAPIKeysStatus) {
+    try {
+      state.apiKeysStatus = await backend.GetAPIKeysStatus();
+      renderModalLayer();
+    } catch {
+      // mantém status anterior
+    }
+  }
   if (!backend?.BootstrapOpenCode) return;
   try {
     const res = await backend.BootstrapOpenCode(true);
@@ -92,6 +100,19 @@ export async function openOpenCodeModal() {
     renderModalLayer();
   } catch {
     // keep modal open for token entry
+  }
+}
+
+export async function openAPIKeysModal() {
+  state.showAPIKeysModal = true;
+  renderModalLayer();
+  const backend = api();
+  if (!backend?.GetAPIKeysStatus) return;
+  try {
+    state.apiKeysStatus = await backend.GetAPIKeysStatus();
+    renderModalLayer();
+  } catch {
+    // mantém o modal aberto sem status
   }
 }
 
@@ -284,6 +305,8 @@ export function renderModalLayer() {
             ${state.models.length === 0 ? "Nenhum modelo carregado." : state.models.map((m) => `<div>${escapeHtml(m.slug)} — <span class="dim">${escapeHtml(m.name)}</span></div>`).join("")}
           </div>
           <div class="modal-footer">
+            <button id="doc-api-keys">${icons.settings}<span>Chaves de API (Provedores LLM)…</span></button>
+            <div class="spacer"></div>
             <button class="primary" id="doc-close">Fechar</button>
           </div>
         </div>
@@ -292,6 +315,76 @@ export function renderModalLayer() {
     document.getElementById("doc-close")?.addEventListener("click", () => {
       state.doctorModal = null;
       renderModalLayer();
+    });
+    document.getElementById("doc-api-keys")?.addEventListener("click", () => {
+      state.doctorModal = null;
+      void openAPIKeysModal();
+    });
+    return;
+  }
+
+  if (state.showAPIKeysModal) {
+    const saved = state.apiKeysStatus || {};
+    const field = (id: string, label: string, placeholder: string, savedMask?: string) => `
+      <label for="${id}">${escapeHtml(label)}${savedMask ? ` <span class="dim" style="font-weight:500">(salvo: ${escapeHtml(savedMask)})</span>` : ""}</label>
+      <input id="${id}" type="${id.includes("KEY") ? "password" : "text"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+    `;
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="ak-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:560px">
+          <h3 class="modal-title">Chaves de API — Provedores LLM</h3>
+          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px;line-height:1.5">
+            Salve aqui as chaves dos provedores (arquivo <code>api-keys.json</code> em <code>%APPDATA%\\HiveMind</code>, fora do repositório).
+            Variáveis de ambiente sempre têm prioridade sobre o que está salvo. Deixar o campo vazio remove o valor salvo.
+          </p>
+          <div class="form-grid">
+            ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-… (chave em https://openrouter.ai/keys)", saved["OPENROUTER_API_KEY"])}
+            ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
+            ${field("ak-OPENAI_API_KEY", "OpenAI API Key:", "sk-…", saved["OPENAI_API_KEY"])}
+            ${field("ak-OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
+            ${field("ak-ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
+            ${field("ak-GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
+            ${field("ak-GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
+            ${field("ak-GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
+          </div>
+          <div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          <div class="modal-footer">
+            <button id="ak-close">Fechar</button>
+            <div class="spacer"></div>
+            <button class="primary" id="ak-save">${icons.check}<span>Salvar Chaves</span></button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const closeAk = () => {
+      state.showAPIKeysModal = false;
+      renderModalLayer();
+    };
+    document.getElementById("ak-close")?.addEventListener("click", closeAk);
+    document.getElementById("ak-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement)?.id === "ak-modal-backdrop") closeAk();
+    });
+    document.getElementById("ak-save")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SaveAPIKeys) return;
+      const entries: Record<string, string> = {};
+      for (const name of ["OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
+        const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
+        entries[name] = el?.value?.trim() || "";
+      }
+      try {
+        state.apiKeysStatus = await backend.SaveAPIKeys(entries);
+        toast("Chaves de API salvas (variáveis de ambiente continuam com prioridade).", "success");
+        setStatus("Chaves de API atualizadas.");
+        renderModalLayer();
+      } catch (err: any) {
+        const errEl = document.getElementById("ak-modal-err");
+        if (errEl) {
+          errEl.textContent = `Falha ao salvar: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+      }
     });
     return;
   }
@@ -604,6 +697,25 @@ export function renderModalLayer() {
             <label>Base URL:</label>
             <input id="oc-base-url" value="${escapeHtml(baseUrl)}" placeholder="https://opencode.ai/zen/v1" />
           </div>
+          <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+            <div class="dim" style="font-size:11.5px;margin-bottom:6px;font-weight:600;color:var(--text-dim)">
+              ${icons.bolt} OpenRouter — Chave de API (modelos <code>fornecedor/modelo</code>)
+              ${state.apiKeysStatus?.["OPENROUTER_API_KEY"] ? `<span style="color:var(--green)">(salvo: ${escapeHtml(state.apiKeysStatus["OPENROUTER_API_KEY"])})</span>` : `<span style="color:var(--amber)">(não salvo)</span>`}
+            </div>
+            <div class="form-grid">
+              <label>OpenRouter API Key:</label>
+              <input id="or-api-key" type="password" placeholder="sk-or-v1-… (chave em https://openrouter.ai/keys)" autocomplete="off" />
+
+              <label>OpenRouter Base URL:</label>
+              <input id="or-base-url" placeholder="https://openrouter.ai/api/v1" />
+            </div>
+            <div id="or-modal-err" style="color:var(--red);font-size:12px;margin-top:6px;display:none"></div>
+            <div class="modal-footer" style="padding:8px 0 0 0">
+              ${state.apiKeysStatus?.["OPENROUTER_API_KEY"] ? `<button class="danger mini" id="or-clear-key">Remover Chave Salva</button>` : ""}
+              <div class="spacer"></div>
+              <button class="primary mini" id="or-save">Salvar Chave OpenRouter</button>
+            </div>
+          </div>
           <div style="margin-top:10px">
             <div class="dim" style="font-size:11.5px;margin-bottom:4px">
               Catálogo OpenCode Go (${state.openCodeGoModels.length}) + OpenCode Zen (${state.openCodeModels.length}) — use <code>opencode-go:&lt;id&gt;</code> ou <code>opencode:&lt;id&gt;</code>:
@@ -699,6 +811,42 @@ export function renderModalLayer() {
           errEl.style.display = "block";
         }
       }
+    });
+
+    const saveOpenRouterKey = async (key: string, baseURL: string) => {
+      const backend = api();
+      if (!backend?.SaveAPIKeys) return;
+      try {
+        state.apiKeysStatus = await backend.SaveAPIKeys({
+          OPENROUTER_API_KEY: key,
+          OPENROUTER_BASE_URL: baseURL,
+        });
+        toast(key ? "Chave do OpenRouter salva." : "Chave do OpenRouter removida.", "success");
+        setStatus("OpenRouter atualizado.");
+        renderModalLayer();
+      } catch (err: any) {
+        const errEl = document.getElementById("or-modal-err");
+        if (errEl) {
+          errEl.textContent = `Falha ao salvar a chave do OpenRouter: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+      }
+    };
+    document.getElementById("or-save")?.addEventListener("click", () => {
+      const keyIn = (document.getElementById("or-api-key") as HTMLInputElement | null)?.value.trim() || "";
+      const urlIn = (document.getElementById("or-base-url") as HTMLInputElement | null)?.value.trim() || "";
+      if (!keyIn && !state.apiKeysStatus?.["OPENROUTER_API_KEY"]) {
+        const errEl = document.getElementById("or-modal-err");
+        if (errEl) {
+          errEl.textContent = "Cole sua chave OpenRouter (sk-or-v1-…) antes de salvar.";
+          errEl.style.display = "block";
+        }
+        return;
+      }
+      void saveOpenRouterKey(keyIn, urlIn);
+    });
+    document.getElementById("or-clear-key")?.addEventListener("click", () => {
+      void saveOpenRouterKey("", "");
     });
     return;
   }

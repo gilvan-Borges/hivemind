@@ -474,6 +474,18 @@ func (a *App) DoctorAgy() modelx.AgyStatus {
 	return a.BootstrapAgy(true).Status
 }
 
+// GetAPIKeysStatus returns the masked persisted LLM API keys/settings
+// (env vars always take precedence at call time; this shows the saved store).
+func (a *App) GetAPIKeysStatus() map[string]string {
+	return modelx.StoredAPIKeysStatus()
+}
+
+// SaveAPIKeys persists LLM API keys/settings in the user config dir
+// (outside the repo) and returns the new masked status. Empty values clear.
+func (a *App) SaveAPIKeys(entries map[string]string) (map[string]string, error) {
+	return modelx.SaveStoredAPIKeys(entries)
+}
+
 // SaveTeamWizard creates or updates a team in .hivemind/team.yaml without altering .gitignore.
 func (a *App) SaveTeamWizard(workspace string, input idecore.WizardInput) (team.File, error) {
 	return idecore.BuildTeamFromWizard(workspace, input)
@@ -1015,7 +1027,6 @@ func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens in
 	}
 	return a.GetAIUsage(), nil
 }
-
 
 // StartPTY ensures an interactive PTY shell (ConPTY on Windows) is running for termID in workspace,
 // returning any buffered scrollback if the session was already active.

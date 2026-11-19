@@ -55,6 +55,8 @@ export function EnsureTeamMemory(arg1:string):Promise<string>;
 
 export function GetAIUsage():Promise<modelx.AIUsageReport>;
 
+export function GetAPIKeysStatus():Promise<Record<string, string>>;
+
 export function GetAutoReviewStatus(arg1:string):Promise<idecore.AutoReviewStatus>;
 
 export function GetCommitDetail(arg1:string,arg2:string):Promise<idecore.CommitDetail>;
@@ -152,6 +154,8 @@ export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutpu
 export function RunGitAction(arg1:string,arg2:string):Promise<string>;
 
 export function SaveAIUsageLimits(arg1:string,arg2:number,arg3:number):Promise<modelx.AIUsageReport>;
+
+export function SaveAPIKeys(arg1:Record<string, string>):Promise<Record<string, string>>;
 
 export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 

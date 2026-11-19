@@ -8,7 +8,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAIUsageModal, openDoctorModal, openJiraModal, openOpenCodeModal, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openOpenCodeModal, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -539,6 +539,9 @@ export function bindStaticShellEvents() {
       } else if (state.showGitHubModal) {
         state.showGitHubModal = false;
         renderModalLayer();
+      } else if (state.showAPIKeysModal) {
+        state.showAPIKeysModal = false;
+        renderModalLayer();
       } else if (state.showJiraModal) {
         state.showJiraModal = false;
         renderModalLayer();
@@ -719,6 +722,7 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
     <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
     <button class="dropdown-item" id="menu-opencode">${icons.bolt}<span>Token OpenCode Zen (API portátil)…</span></button>
+    <button class="dropdown-item" id="menu-api-keys">${icons.settings}<span>Chaves de API (OpenRouter, OpenAI, …)…</span></button>
     <button class="dropdown-item" id="menu-doctor">${icons.bolt}<span>Doctor — Antigravity CLI (agy)</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
@@ -750,6 +754,11 @@ export function renderFileMenu() {
     state.showFileMenu = false;
     renderFileMenu();
     openOpenCodeModal();
+  });
+  menu.querySelector("#menu-api-keys")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    void openAPIKeysModal();
   });
   menu.querySelector("#menu-doctor")?.addEventListener("click", () => {
     state.showFileMenu = false;

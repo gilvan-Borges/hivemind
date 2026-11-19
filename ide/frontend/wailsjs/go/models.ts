@@ -1586,6 +1586,9 @@ export namespace team {
 	    max_qa_loops: number;
 	    max_dynamic_devs?: number;
 	    max_llm_calls: number;
+	    max_dev_calls?: number;
+	    max_dev_explore_calls?: number;
+	    max_dev_input_tokens?: number;
 	    max_tokens?: number;
 	    in_turn_keep_tool_results?: number;
 	    review_model?: string;
@@ -1614,6 +1617,9 @@ export namespace team {
 	        this.max_qa_loops = source["max_qa_loops"];
 	        this.max_dynamic_devs = source["max_dynamic_devs"];
 	        this.max_llm_calls = source["max_llm_calls"];
+	        this.max_dev_calls = source["max_dev_calls"];
+	        this.max_dev_explore_calls = source["max_dev_explore_calls"];
+	        this.max_dev_input_tokens = source["max_dev_input_tokens"];
 	        this.max_tokens = source["max_tokens"];
 	        this.in_turn_keep_tool_results = source["in_turn_keep_tool_results"];
 	        this.review_model = source["review_model"];

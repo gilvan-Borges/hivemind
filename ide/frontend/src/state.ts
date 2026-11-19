@@ -81,6 +81,7 @@ export const state = {
   showOpenCodeModal: false,
   showGitHubModal: false,
   showJiraModal: false,
+  showAPIKeysModal: false,
   aiUsageModal: {
     open: false,
     loading: false,
@@ -88,6 +89,7 @@ export const state = {
     editingProvider: "",
   },
   doctorModal: null as AgyStatus | null,
+  apiKeysStatus: {} as Record<string, string>,
   confirmModal: null as ConfirmDialogState | null,
   pathModal: null as null | {
     mode: "newFile" | "newDir" | "rename" | "delete";

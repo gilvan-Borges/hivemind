@@ -98,6 +98,10 @@ export function GetAIUsage() {
   return window['go']['main']['App']['GetAIUsage']();
 }
 
+export function GetAPIKeysStatus() {
+  return window['go']['main']['App']['GetAPIKeysStatus']();
+}
+
 export function GetAutoReviewStatus(arg1) {
   return window['go']['main']['App']['GetAutoReviewStatus'](arg1);
 }
@@ -292,6 +296,10 @@ export function RunGitAction(arg1, arg2) {
 
 export function SaveAIUsageLimits(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAIUsageLimits'](arg1, arg2, arg3);
+}
+
+export function SaveAPIKeys(arg1) {
+  return window['go']['main']['App']['SaveAPIKeys'](arg1);
 }
 
 export function SaveFile(arg1, arg2, arg3) {

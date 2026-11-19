@@ -755,6 +755,8 @@ export interface WailsBackendApp {
   OpenExternalURL(rawURL: string): Promise<void>;
   GetAIUsage(): Promise<AIUsageReport>;
   SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
+  GetAPIKeysStatus?(): Promise<Record<string, string>>;
+  SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
   ReadNativeSkill(name: string): Promise<string>;
   SaveNativeSkill(name: string, body: string): Promise<void>;
