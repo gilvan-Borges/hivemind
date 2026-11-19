@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -91,33 +90,7 @@ func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string
 		JiraKey:   jiraKey,
 		SessionID: sessionID,
 	})
-	if res.TotalTokens > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "Uso: %s tokens (entrada %s / saída %s)\n",
-			formatTokenCount(res.TotalTokens), formatTokenCount(res.InputTokens), formatTokenCount(res.OutputTokens))
-	}
 	return res, runErr
-}
-
-// formatTokenCount formats 1234567 as 1.234.567 (pt-BR thousands separator).
-func formatTokenCount(n int64) string {
-	if n < 0 {
-		n = 0
-	}
-	s := strconv.FormatInt(n, 10)
-	if len(s) <= 3 {
-		return s
-	}
-	var b strings.Builder
-	first := len(s) % 3
-	if first == 0 {
-		first = 3
-	}
-	b.WriteString(s[:first])
-	for i := first; i < len(s); i += 3 {
-		b.WriteByte('.')
-		b.WriteString(s[i : i+3])
-	}
-	return b.String()
 }
 
 func approverWithReader(cmd *cobra.Command, settings team.Settings, yes bool, sharedReader *bufio.Reader, sharedMu *sync.Mutex) func(string) bool {
