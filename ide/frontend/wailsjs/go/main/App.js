@@ -26,6 +26,10 @@ export function CancelRun(arg1) {
   return window['go']['main']['App']['CancelRun'](arg1);
 }
 
+export function CheckWorkspaceProblems(arg1, arg2) {
+  return window['go']['main']['App']['CheckWorkspaceProblems'](arg1, arg2);
+}
+
 export function CheckoutBranch(arg1, arg2, arg3) {
   return window['go']['main']['App']['CheckoutBranch'](arg1, arg2, arg3);
 }
@@ -36,6 +40,10 @@ export function ChooseDirectory() {
 
 export function CloseOwnGitHubItem(arg1, arg2, arg3) {
   return window['go']['main']['App']['CloseOwnGitHubItem'](arg1, arg2, arg3);
+}
+
+export function ClosePTY(arg1) {
+  return window['go']['main']['App']['ClosePTY'](arg1);
 }
 
 export function CommentJira(arg1, arg2, arg3) {
@@ -150,6 +158,34 @@ export function JiraStatusForWorkspace(arg1) {
   return window['go']['main']['App']['JiraStatusForWorkspace'](arg1);
 }
 
+export function LSPDefinition(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['LSPDefinition'](arg1, arg2, arg3, arg4);
+}
+
+export function LSPDidChange(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LSPDidChange'](arg1, arg2, arg3);
+}
+
+export function LSPDidClose(arg1, arg2) {
+  return window['go']['main']['App']['LSPDidClose'](arg1, arg2);
+}
+
+export function LSPDidOpen(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LSPDidOpen'](arg1, arg2, arg3);
+}
+
+export function LSPDidSave(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LSPDidSave'](arg1, arg2, arg3);
+}
+
+export function LSPHover(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['LSPHover'](arg1, arg2, arg3, arg4);
+}
+
+export function LSPStatus(arg1) {
+  return window['go']['main']['App']['LSPStatus'](arg1);
+}
+
 export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
@@ -210,6 +246,10 @@ export function OpenProject(arg1) {
   return window['go']['main']['App']['OpenProject'](arg1);
 }
 
+export function ParseOutputProblems(arg1, arg2) {
+  return window['go']['main']['App']['ParseOutputProblems'](arg1, arg2);
+}
+
 export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
 }
@@ -226,8 +266,16 @@ export function RenamePath(arg1, arg2, arg3) {
   return window['go']['main']['App']['RenamePath'](arg1, arg2, arg3);
 }
 
+export function ResizePTY(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ResizePTY'](arg1, arg2, arg3);
+}
+
 export function RespondApproval(arg1, arg2) {
   return window['go']['main']['App']['RespondApproval'](arg1, arg2);
+}
+
+export function RestartPTY(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RestartPTY'](arg1, arg2, arg3, arg4);
 }
 
 export function RevertHunk(arg1, arg2, arg3, arg4) {
@@ -298,6 +346,10 @@ export function StageHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['StageHunk'](arg1, arg2, arg3, arg4);
 }
 
+export function StartPTY(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartPTY'](arg1, arg2, arg3, arg4);
+}
+
 export function StartRun(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['StartRun'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -340,4 +392,8 @@ export function WindowMinimize() {
 
 export function WindowToggleMaximize() {
   return window['go']['main']['App']['WindowToggleMaximize']();
+}
+
+export function WritePTY(arg1, arg2) {
+  return window['go']['main']['App']['WritePTY'](arg1, arg2);
 }

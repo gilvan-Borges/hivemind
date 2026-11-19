@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gilvan-Borges/HiveMind v0.0.0
 	github.com/wailsapp/wails/v2 v2.17.1
+	golang.org/x/sys v0.49.0
 	google.golang.org/adk/v2 v2.8.0
 	google.golang.org/genai v1.77.0
 )
@@ -73,7 +74,6 @@ require (
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/api v0.310.0 // indirect

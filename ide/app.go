@@ -27,6 +27,8 @@ type App struct {
 	smokeCheck       bool
 	sessions         *idecore.SessionManager
 	autoReview       *idecore.AutoReviewManager
+	pty              *idecore.PTYManager
+	lsp              *idecore.LSPManager
 	fileIndex        *idecore.FileIndex
 	mu               sync.Mutex
 	agyStatus        modelx.AgyStatus
@@ -102,6 +104,16 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			wailsrt.EventsEmit(app.ctx, "hivemind:autoreview-status", st)
 		}
 	})
+	app.pty = idecore.NewPTYManager(func(ev idecore.PTYEvent) {
+		if app.ctx != nil && !app.smokeCheck {
+			wailsrt.EventsEmit(app.ctx, "hivemind:pty-output", ev)
+		}
+	})
+	app.lsp = idecore.NewLSPManager(func(ev idecore.LSPDiagnosticsEvent) {
+		if app.ctx != nil && !app.smokeCheck {
+			wailsrt.EventsEmit(app.ctx, "hivemind:lsp-diagnostics", ev)
+		}
+	})
 	return app
 }
 
@@ -116,6 +128,12 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(_ context.Context) {
+	if a.pty != nil {
+		a.pty.CloseAll()
+	}
+	if a.lsp != nil {
+		a.lsp.CloseAll()
+	}
 	if a.autoReview != nil {
 		a.autoReview.StopAll()
 	}
@@ -996,4 +1014,123 @@ func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens in
 		return modelx.AIUsageReport{}, err
 	}
 	return a.GetAIUsage(), nil
+}
+
+
+// StartPTY ensures an interactive PTY shell (ConPTY on Windows) is running for termID in workspace,
+// returning any buffered scrollback if the session was already active.
+func (a *App) StartPTY(termID, workspace string, cols, rows int) (string, error) {
+	if a.pty == nil {
+		return "", fmt.Errorf("gerenciador PTY não inicializado")
+	}
+	return a.pty.Start(termID, workspace, cols, rows)
+}
+
+// WritePTY sends keystrokes, commands, or control bytes (e.g. Ctrl+C) to a running PTY session.
+func (a *App) WritePTY(termID, data string) error {
+	if a.pty == nil {
+		return fmt.Errorf("gerenciador PTY não inicializado")
+	}
+	return a.pty.Write(termID, data)
+}
+
+// ResizePTY updates the rows/cols dimensions of a running PTY session.
+func (a *App) ResizePTY(termID string, cols, rows int) error {
+	if a.pty == nil {
+		return nil
+	}
+	return a.pty.Resize(termID, cols, rows)
+}
+
+// RestartPTY terminates the current PTY shell and spawns a clean shell in workspace.
+func (a *App) RestartPTY(termID, workspace string, cols, rows int) error {
+	if a.pty == nil {
+		return fmt.Errorf("gerenciador PTY não inicializado")
+	}
+	return a.pty.Restart(termID, workspace, cols, rows)
+}
+
+// ClosePTY terminates a single PTY session cleanly.
+func (a *App) ClosePTY(termID string) {
+	if a.pty != nil {
+		a.pty.Close(termID)
+	}
+}
+
+// LSPStatus reports whether gopls is available and running for workspace.
+func (a *App) LSPStatus(workspace string) idecore.LSPStatus {
+	if a.lsp == nil {
+		return idecore.LSPStatus{Server: "gopls"}
+	}
+	return a.lsp.Status(workspace)
+}
+
+// LSPDidOpen registers an open Go file with gopls for diagnostics, hover, and go-to-definition.
+func (a *App) LSPDidOpen(workspace, relPath, text string) error {
+	if a.lsp == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return a.lsp.DidOpen(ctx, workspace, relPath, text)
+}
+
+// LSPDidChange sends updated buffer content for an open Go file to gopls.
+func (a *App) LSPDidChange(workspace, relPath, text string) error {
+	if a.lsp == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return a.lsp.DidChange(ctx, workspace, relPath, text)
+}
+
+// LSPDidSave notifies gopls that a Go file was saved.
+func (a *App) LSPDidSave(workspace, relPath, text string) error {
+	if a.lsp == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return a.lsp.DidSave(ctx, workspace, relPath, text)
+}
+
+// LSPDidClose unregisters a closed Go tab from gopls.
+func (a *App) LSPDidClose(workspace, relPath string) error {
+	if a.lsp == nil {
+		return nil
+	}
+	return a.lsp.DidClose(workspace, relPath)
+}
+
+// LSPDefinition resolves 1-based Go-to-Definition targets via gopls.
+func (a *App) LSPDefinition(workspace, relPath string, line, col int) ([]idecore.LSPLocation, error) {
+	if a.lsp == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return a.lsp.Definition(ctx, workspace, relPath, line, col)
+}
+
+// LSPHover returns 1-based symbol signature and documentation via gopls.
+func (a *App) LSPHover(workspace, relPath string, line, col int) (idecore.LSPHover, error) {
+	if a.lsp == nil {
+		return idecore.LSPHover{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return a.lsp.Hover(ctx, workspace, relPath, line, col)
+}
+
+// CheckWorkspaceProblems executes the project's build/vet/test check and returns parsed clickable problems.
+func (a *App) CheckWorkspaceProblems(workspace, customCmd string) (idecore.ProblemsCheckResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	return idecore.CheckWorkspaceProblems(ctx, workspace, customCmd)
+}
+
+// ParseOutputProblems extracts clickable ProblemItem diagnostics from arbitrary terminal/build text.
+func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.ProblemItem {
+	return idecore.ParseBuildProblems(rawOutput, workspace)
 }

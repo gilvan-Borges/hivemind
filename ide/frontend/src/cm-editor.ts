@@ -4,9 +4,10 @@
 // Fase 3 do ROADMAP: Ghost Text inline (Tab / Ctrl+→ / Esc), Ctrl+K range apply
 // e decorações de revisão hunk-a-hunk diretamente no buffer editável.
 import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, WidgetType, crosshairCursor, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection, scrollPastEnd } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, WidgetType, crosshairCursor, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection, scrollPastEnd, type Tooltip } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { StreamLanguage, bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
+import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { go } from "@codemirror/lang-go";
@@ -332,6 +333,80 @@ export const inlineDiffField = StateField.define<DecorationSet>({
 });
 
 // ========================
+// Fase 4: LSP (Diagnostics, Go-to-Definition, Hover)
+// ========================
+
+export interface LSPCallbacks {
+  onDefinition?: (line: number, col: number) => void;
+  onHover?: (line: number, col: number) => Promise<string | null>;
+}
+
+let lspCallbacks: LSPCallbacks = {};
+
+export function setLSPCallbacks(cbs: LSPCallbacks): void {
+  lspCallbacks = cbs;
+}
+
+/** Aplica diagnósticos (gopls / build) diretamente no editor ativo via @codemirror/lint. */
+export function setEditorDiagnostics(diags: Diagnostic[]): void {
+  if (!view) return;
+  view.dispatch(setDiagnostics(view.state, diags));
+}
+
+const lspHoverExtension = hoverTooltip(
+  async (targetView, pos): Promise<Tooltip | null> => {
+    if (!lspCallbacks.onHover) return null;
+    const lineObj = targetView.state.doc.lineAt(pos);
+    const line = lineObj.number;
+    const col = pos - lineObj.from + 1;
+    const text = await lspCallbacks.onHover(line, col);
+    if (!text) return null;
+    return {
+      pos,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "cm-lsp-hover";
+        const pre = document.createElement("pre");
+        pre.textContent = text;
+        dom.appendChild(pre);
+        return { dom };
+      },
+    };
+  },
+  { hoverTime: 380 }
+);
+
+const lspNavigationKeymap = Prec.high(
+  keymap.of([
+    {
+      key: "F12",
+      run: (target) => {
+        if (!lspCallbacks.onDefinition) return false;
+        const pos = target.state.selection.main.head;
+        const lineObj = target.state.doc.lineAt(pos);
+        lspCallbacks.onDefinition(lineObj.number, pos - lineObj.from + 1);
+        return true;
+      },
+    },
+  ])
+);
+
+const lspCtrlClickHandler = EditorView.domEventHandlers({
+  mousedown(event, target) {
+    if (!(event.ctrlKey || event.metaKey) || event.button !== 0 || !lspCallbacks.onDefinition) {
+      return false;
+    }
+    const pos = target.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (pos == null) return false;
+    const lineObj = target.state.doc.lineAt(pos);
+    event.preventDefault();
+    lspCallbacks.onDefinition(lineObj.number, pos - lineObj.from + 1);
+    return true;
+  },
+});
+
+// ========================
 // Ciclo de Vida do Editor
 // ========================
 
@@ -366,6 +441,7 @@ export function languageExtensionFor(fileName: string): Extension {
 export function createBaseExtensions(onDocChange: CmDocChange, fileName: string): Extension[] {
   return [
     lineNumbers(),
+    lintGutter(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
     history(),
@@ -385,6 +461,9 @@ export function createBaseExtensions(onDocChange: CmDocChange, fileName: string)
     ghostTextField,
     ghostTextKeymap,
     inlineDiffField,
+    lspHoverExtension,
+    lspNavigationKeymap,
+    lspCtrlClickHandler,
     keymap.of([
       ...searchKeymap,
       ...foldKeymap,

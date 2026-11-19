@@ -421,6 +421,136 @@ export namespace idecore {
 		    return a;
 		}
 	}
+	export class LSPHover {
+	    contents: string;
+	    line?: number;
+	    col?: number;
+	    endLine?: number;
+	    endCol?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPHover(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.contents = source["contents"];
+	        this.line = source["line"];
+	        this.col = source["col"];
+	        this.endLine = source["endLine"];
+	        this.endCol = source["endCol"];
+	    }
+	}
+	export class LSPLocation {
+	    relPath: string;
+	    absPath: string;
+	    line: number;
+	    col: number;
+	    endLine?: number;
+	    endCol?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPLocation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.relPath = source["relPath"];
+	        this.absPath = source["absPath"];
+	        this.line = source["line"];
+	        this.col = source["col"];
+	        this.endLine = source["endLine"];
+	        this.endCol = source["endCol"];
+	    }
+	}
+	export class LSPStatus {
+	    available: boolean;
+	    running: boolean;
+	    server: string;
+	    binary?: string;
+	    root?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.running = source["running"];
+	        this.server = source["server"];
+	        this.binary = source["binary"];
+	        this.root = source["root"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ProblemItem {
+	    source: string;
+	    severity: string;
+	    file: string;
+	    line: number;
+	    col: number;
+	    endLine?: number;
+	    endCol?: number;
+	    code?: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProblemItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.severity = source["severity"];
+	        this.file = source["file"];
+	        this.line = source["line"];
+	        this.col = source["col"];
+	        this.endLine = source["endLine"];
+	        this.endCol = source["endCol"];
+	        this.code = source["code"];
+	        this.message = source["message"];
+	    }
+	}
+	export class ProblemsCheckResult {
+	    command: string;
+	    exitCode: number;
+	    durationMs: number;
+	    output: string;
+	    problems: ProblemItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProblemsCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.exitCode = source["exitCode"];
+	        this.durationMs = source["durationMs"];
+	        this.output = source["output"];
+	        this.problems = this.convertValues(source["problems"], ProblemItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProjectIssue {
 	    source: string;
 	    key: string;

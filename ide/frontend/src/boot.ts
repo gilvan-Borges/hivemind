@@ -10,10 +10,12 @@ import { refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
-import { renderTerminalDrawer } from "./terminal";
+import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
+import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
 
 export async function boot() {
   initInlineAIHooks();
+  initLSPHooks();
   mountShell();
   const backend = api();
   if (!backend) {
@@ -289,6 +291,14 @@ export async function boot() {
     queueFileSystemRefresh(wsKey, changed, Boolean(payload?.overflow));
   });
 
+  window.runtime?.EventsOn("hivemind:pty-output", (payload: any) => {
+    handlePTYOutputEvent(payload);
+  });
+
+  window.runtime?.EventsOn("hivemind:lsp-diagnostics", (payload: any) => {
+    handleLSPDiagnosticsEvent(payload);
+  });
+
   window.runtime?.EventsOn("hivemind:autoreview-status", (payload: any) => {
     const wsKey = normalizePathKey(payload?.workspace || "");
     if (!wsKey) return;
@@ -386,6 +396,7 @@ export function bootstrapAsync(rootDir?: string) {
     }).catch(() => {});
 
     refreshSessions(rootDir);
+    void refreshLSPStatus(rootDir);
 
     backend.GetAutoReviewStatus?.(rootDir).then((ar) => {
       const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);

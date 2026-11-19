@@ -10,6 +10,7 @@ import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
 import { closeInlineEdit, ghostButtonTitle, openInlineEdit, renderInlineEditBar, scheduleGhostText, syncEditorInlineReview, toggleGhostText } from "./inline-ai";
+import { applyDiagnosticsToActiveEditor, notifyLSPDidClose, notifyLSPDidOpen, notifyLSPDidSave, scheduleLSPDidChange } from "./lsp";
 
 export async function reloadCleanOpenTabs() {
   const backend = api();
@@ -60,17 +61,22 @@ export function promptDiscardChanges() {
   });
 }
 
-export function jumpEditorToLine(targetLine?: number) {
+export function jumpEditorToLine(targetLine?: number, targetCol?: number) {
   if (!targetLine || targetLine <= 0) return;
   const view = activeEditorView();
   if (!view) return;
   const doc = view.state.doc;
   const clamped = Math.min(targetLine, doc.lines);
   const line = doc.line(clamped);
+  if (targetCol && targetCol > 1) {
+    const pos = Math.min(line.from + targetCol - 1, line.to);
+    selectRange(pos, pos);
+    return;
+  }
   selectRange(line.from, line.to);
 }
 
-export async function openFileInEditor(relPath: string, name: string, targetLine?: number) {
+export async function openFileInEditor(relPath: string, name: string, targetLine?: number, targetCol?: number) {
   const existing = state.editorTabs.find((t) => t.kind === "file" && t.relPath === relPath);
   if (existing) {
     if (targetLine && /\.md$/i.test(existing.name)) existing.mdView = "source";
@@ -78,7 +84,7 @@ export async function openFileInEditor(relPath: string, name: string, targetLine
     renderEditorTabs();
     renderEditorBody();
     highlightActiveTreeRow();
-    jumpEditorToLine(targetLine);
+    jumpEditorToLine(targetLine, targetCol);
     return;
   }
   const backend = api();
@@ -97,7 +103,7 @@ export async function openFileInEditor(relPath: string, name: string, targetLine
     renderEditorTabs();
     renderEditorBody();
     highlightActiveTreeRow();
-    jumpEditorToLine(targetLine);
+    jumpEditorToLine(targetLine, targetCol);
   } catch (err: any) {
     toastError(`abrir o arquivo ${relPath}`, err);
   }
@@ -167,6 +173,7 @@ export async function saveActiveEditor() {
     tab.dirty = false;
     syncActiveTabDirtyUI(tab);
     setStatus(`Salvo: ${tab.relPath}`);
+    notifyLSPDidSave(tab.relPath, tab.content);
     refreshDiffs();
     void syncEditorInlineReview(tab.relPath);
   } catch (err: any) {
@@ -211,7 +218,10 @@ export function renderEditorTabs() {
       const closing = state.editorTabs.find((t) => t.relPath === path);
       const doClose = () => {
         state.editorTabs = state.editorTabs.filter((t) => t.relPath !== path);
-        if (closing?.kind === "file") forgetTabState(path);
+        if (closing?.kind === "file") {
+          forgetTabState(path);
+          notifyLSPDidClose(path);
+        }
         if (state.activeEditorPath === path) {
           state.activeEditorPath = state.editorTabs[0]?.relPath || "";
         }
@@ -783,7 +793,10 @@ export function renderEditorBody() {
     tab.dirty = true;
     syncActiveTabDirtyUI(tab);
     scheduleGhostText(tab.relPath);
+    scheduleLSPDidChange(tab.relPath, text);
   });
+  notifyLSPDidOpen(tab.relPath, tab.content);
+  applyDiagnosticsToActiveEditor(tab.relPath);
 
   if (state.inlineEdit.open && state.inlineEdit.relPath === tab.relPath) {
     renderInlineEditBar();

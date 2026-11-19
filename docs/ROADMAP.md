@@ -78,15 +78,15 @@ A fase que justifica o produto. Tudo construído sobre o CM6 da Fase 2:
 
 **Critérios de saída:** completar código com ghost text ≥ X aceites/dia em uso real; editar seleção via Ctrl+K sem tocar no chat; revisar e aceitar/rejeitar mudança do agente hunk-a-hunk dentro do editor. *(Código e testes unitários Go + Vitest prontos; validação em uso real junto ao próximo build do instalador.)*
 
-## Fase 4 — Navegação e execução de verdade
+## Fase 4 — Navegação e execução de verdade · **CONCLUÍDA (19/11/2026)**
 
 Com o editor e o agente integrados, o que mais dói no dia a dia:
 
-1. **LSP pontual: gopls primeiro** (o projeto em si é Go; maior ROI imediato). Bridge Go ↔ LSP client sobre stdin/stdout, diagnostics no editor (squiggles), go-to-definition, hover. Depois, por demanda real: TypeScript/JAVA só quando o dogfooding pedir.
-2. **Terminal PTY: ConPTY + xterm.js** — substituir o command runner one-shot por shell persistente e interativo (`cd` persiste, watchers, REPLs, servidores de dev, ANSI rendering). O runner atual continua como fallback não-interativo.
-3. **Problem panel** — saída de build/teste parseada em lista clicável (integra com os TestHints de stack que já existem).
+1. **LSP pontual: `gopls` primeiro** — **FEITO (19/11/2026)**: cliente LSP JSON-RPC 2.0 sobre stdio (`ide/internal/idecore/lsp.go`: `LSPManager` lazy por módulo `go.mod`, `initialize`/`didOpen`/`didChange`/`didSave`/`didClose`, `publishDiagnostics` via evento `hivemind:lsp-diagnostics`, `definition` e `hover`) + integração no CodeMirror 6 (`@codemirror/lint` squiggles/gutter, `hoverTooltip`, `F12` e `Ctrl+Click` Go-to-Definition) + chip `lsp: gopls` na status bar.
+2. **Terminal PTY: ConPTY + `xterm.js`** — **FEITO (19/11/2026)**: ConPTY nativo Windows sem CGO (`ide/internal/idecore/pty_windows.go`, `pty_manager.go`: `CreatePseudoConsole`, `ResizePseudoConsole`, `powershell.exe -NoLogo`, scrollback 32 KB, limpeza limpa no shutdown) + `@xterm/xterm` + `@xterm/addon-fit` persistente por aba de projeto com `ResizeObserver`, cores ANSI, `cd` persistente, `Ctrl+C`, `Reiniciar` e atalhos de stack injetados no shell vivo (runner one-shot mantido como fallback).
+3. **Problem panel (Painel de Problemas)** — **FEITO (19/11/2026)**: gaveta inferior unificada com abas `Terminal` | `Problemas (N)`, parser multi-stack (`ide/internal/idecore/problems.go`: Go, TypeScript/Angular/Vite, Java/Maven, Python/pytest e Rust/Cargo) combinado aos diagnósticos ao vivo do `gopls`, filtros `Todos/Erros/Avisos`, botão `Verificar Projeto`, chip clicável `✕ E · ▲ W` na status bar (`Ctrl+Shift+M`) e clique saltando direto para `arquivo:linha:coluna` no editor.
 
-**Critérios de saída:** navegar um repo Go grande sem sair da IDE (go-to-def + diagnostics); rodar `npm run dev` interativo no terminal integrado; erros de `go build` clicáveis que abrem a linha.
+**Critérios de saída:** navegar um repo Go grande sem sair da IDE (go-to-def + diagnostics); rodar `npm run dev` interativo no terminal integrado; erros de `go build` clicáveis que abrem a linha. *(Implementado e validado com testes reais de ConPTY, `gopls` end-to-end, parser multi-stack e Vitest.)*
 
 ## Fase 5 — Maturação (sem pressa, guiada pelo uso)
 

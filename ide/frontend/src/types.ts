@@ -490,6 +490,9 @@ export interface ProjectWorkspaceContext {
     cmdInput: string;
     entries: TerminalEntry[];
   };
+  lspStatus?: LSPStatus | null;
+  lspDiagnostics?: Record<string, ProblemItem[]>;
+  buildProblems?: ProblemItem[];
 }
 
 export interface SkillInfo {
@@ -596,6 +599,68 @@ export interface InlineEditResponse {
   outputTokens?: number;
 }
 
+export interface ProblemItem {
+  source: string;
+  severity: "error" | "warning" | "info" | string;
+  file: string;
+  line: number;
+  col: number;
+  endLine?: number;
+  endCol?: number;
+  code?: string;
+  message: string;
+}
+
+export interface ProblemsCheckResult {
+  command: string;
+  exitCode: number;
+  durationMs: number;
+  output: string;
+  problems: ProblemItem[];
+}
+
+export interface LSPStatus {
+  available: boolean;
+  running: boolean;
+  server: string;
+  binary?: string;
+  root?: string;
+  error?: string;
+}
+
+export interface LSPDiagnosticsEvent {
+  workspace: string;
+  relPath: string;
+  diagnostics: ProblemItem[];
+}
+
+export interface LSPLocation {
+  relPath: string;
+  absPath: string;
+  line: number;
+  col: number;
+  endLine?: number;
+  endCol?: number;
+}
+
+export interface LSPHover {
+  contents: string;
+  line?: number;
+  col?: number;
+  endLine?: number;
+  endCol?: number;
+}
+
+export interface PTYEvent {
+  termId: string;
+  workspace: string;
+  data?: string;
+  exited?: boolean;
+  exitCode?: number;
+}
+
+export type BottomDrawerTab = "terminal" | "problems";
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -659,6 +724,20 @@ export interface WailsBackendApp {
   CancelRun(laneID: string): Promise<boolean>;
   RunCommand(workspace: string, command: string): Promise<{ command: string; output: string; exitCode: number; durationMs: number }>;
   CancelCommand(workspace: string): Promise<boolean>;
+  StartPTY?(termID: string, workspace: string, cols: number, rows: number): Promise<string>;
+  WritePTY?(termID: string, data: string): Promise<void>;
+  ResizePTY?(termID: string, cols: number, rows: number): Promise<void>;
+  RestartPTY?(termID: string, workspace: string, cols: number, rows: number): Promise<void>;
+  ClosePTY?(termID: string): Promise<void>;
+  LSPStatus?(workspace: string): Promise<LSPStatus>;
+  LSPDidOpen?(workspace: string, relPath: string, text: string): Promise<void>;
+  LSPDidChange?(workspace: string, relPath: string, text: string): Promise<void>;
+  LSPDidSave?(workspace: string, relPath: string, text: string): Promise<void>;
+  LSPDidClose?(workspace: string, relPath: string): Promise<void>;
+  LSPDefinition?(workspace: string, relPath: string, line: number, col: number): Promise<LSPLocation[]>;
+  LSPHover?(workspace: string, relPath: string, line: number, col: number): Promise<LSPHover>;
+  CheckWorkspaceProblems?(workspace: string, customCmd: string): Promise<ProblemsCheckResult>;
+  ParseOutputProblems?(workspace: string, rawOutput: string): Promise<ProblemItem[]>;
   ListSessions(workspace: string): Promise<WorkspaceSessionsSummary>;
   LoadSession(workspace: string, sessionID: string): Promise<SessionDetail>;
   DeleteSession(workspace: string, sessionID: string): Promise<void>;

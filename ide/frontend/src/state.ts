@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, OpenCodeStatus, PermissionMode, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, OpenCodeStatus, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -158,6 +158,13 @@ export const state = {
     cmdInput: "",
     entries: [] as TerminalEntry[],
   },
+  bottomTab: "terminal" as BottomDrawerTab,
+  lspStatus: null as LSPStatus | null,
+  lspDiagnostics: {} as Record<string, ProblemItem[]>,
+  buildProblems: [] as ProblemItem[],
+  problemsFilter: "all" as "all" | "error" | "warning",
+  problemsChecking: false,
+  problemsLastCmd: "",
   diffViewMode: "unified" as "unified" | "split",
   ghostTextEnabled: true,
   ghostTextAccepted: 0,
@@ -243,6 +250,9 @@ export function saveActiveToProjectContext() {
   ctx.jiraKeyInput = state.jiraKeyInput;
   ctx.commitMsgInput = state.commitMsgInput;
   ctx.terminal = state.terminal;
+  ctx.lspStatus = state.lspStatus;
+  ctx.lspDiagnostics = state.lspDiagnostics;
+  ctx.buildProblems = state.buildProblems;
 }
 
 export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
@@ -272,6 +282,9 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.jiraKeyInput = ctx.jiraKeyInput;
   state.commitMsgInput = ctx.commitMsgInput;
   state.terminal = ctx.terminal;
+  state.lspStatus = ctx.lspStatus ?? null;
+  state.lspDiagnostics = ctx.lspDiagnostics ?? {};
+  state.buildProblems = ctx.buildProblems ?? [];
   state.mentionResults = [];
   state.branchPopover.open = false;
 }

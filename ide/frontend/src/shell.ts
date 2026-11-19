@@ -13,7 +13,8 @@ import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
-import { renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
+import { countProblems, refreshLSPStatus } from "./lsp";
+import { openProblemsPanel, renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
 
 export function switchProjectTab(projectId: string) {
   if (projectId === state.activeProjectId) return;
@@ -221,6 +222,8 @@ export function mountShell() {
         <button type="button" id="status-jira" class="dim plain-chip" title="Clique para conectar ao Jira Cloud">jira: …</button>
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
+        <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
+        <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
@@ -326,6 +329,11 @@ export function bindStaticShellEvents() {
   document.getElementById("status-autoreview")?.addEventListener("click", () => {
     state.gitTab = "flow";
     openSidebarView("git");
+  });
+  document.getElementById("status-problems")?.addEventListener("click", () => openProblemsPanel());
+  document.getElementById("status-lsp")?.addEventListener("click", () => {
+    void refreshLSPStatus();
+    openProblemsPanel();
   });
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
@@ -471,6 +479,11 @@ export function bindStaticShellEvents() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j") {
       e.preventDefault();
       toggleTerminal();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      openProblemsPanel();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
@@ -897,6 +910,33 @@ export function updateStatusBar() {
       arEl.style.color = "var(--green)";
       arEl.title = `Revisão Automática ativa (Sem Merge) · ${ar.reviewedLastHour}/h — clique para abrir Git → Fluxo`;
     }
+  }
+  const lspEl = document.getElementById("status-lsp");
+  if (lspEl) {
+    const ls = state.lspStatus;
+    if (!ls) {
+      lspEl.textContent = "lsp: …";
+      lspEl.style.color = "var(--text-dim)";
+    } else if (ls.running) {
+      lspEl.textContent = `lsp: ${ls.server}`;
+      lspEl.style.color = "var(--green)";
+      lspEl.title = `${ls.server} ativo (${ls.root || ""}) — F12/Ctrl+Clique: definição, hover e diagnósticos`;
+    } else if (ls.available) {
+      lspEl.textContent = `lsp: pronto`;
+      lspEl.style.color = "var(--text-dim)";
+      lspEl.title = `${ls.server} disponível (${ls.binary || ""}) — inicia automaticamente ao abrir um arquivo .go`;
+    } else {
+      lspEl.textContent = "lsp: off";
+      lspEl.style.color = "var(--text-dim)";
+      lspEl.title = ls.error || "gopls não encontrado no PATH";
+    }
+  }
+  const probEl = document.getElementById("status-problems");
+  if (probEl) {
+    const c = countProblems();
+    probEl.textContent = `✕ ${c.errors} · ▲ ${c.warnings}`;
+    probEl.style.color = c.errors > 0 ? "var(--red)" : c.warnings > 0 ? "var(--amber)" : "";
+    probEl.title = `${c.errors} erro(s), ${c.warnings} aviso(s) — clique para abrir Problemas (Ctrl+Shift+M)`;
   }
   if (envEl) {
     envEl.textContent = state.goVersion || "";
