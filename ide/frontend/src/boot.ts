@@ -88,6 +88,7 @@ export async function boot() {
         kind: "approval",
         label: ev.label || "Permissão Solicitada pelo Chefe",
         text: ev.text || "",
+        approvalId: ev.approvalId || "",
       });
     } else if (ev.kind === "devs_scaled") {
       if (Array.isArray(ev.devs) && ev.devs.length > 0) {
@@ -180,12 +181,18 @@ export async function boot() {
     } else if (ev.kind === "error") {
       markToolsDone(lane);
       markThinkingDone(lane);
-      lane.messages.push({
-        id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        kind: "error",
-        label: "Erro",
-        text: ev.text || "Erro desconhecido",
-      });
+      const errText = String(ev.text || "Erro desconhecido");
+      const isUserCancel = Boolean(lane.canceledByUser) && /context canceled|canceled/i.test(errText);
+      const prevMsg = lane.messages[lane.messages.length - 1];
+      const isDuplicate = prevMsg && prevMsg.kind === "error" && prevMsg.text === errText;
+      if (!isUserCancel && !isDuplicate) {
+        lane.messages.push({
+          id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "error",
+          label: "Erro",
+          text: errText,
+        });
+      }
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
       markThinkingDone(lane);

@@ -152,6 +152,7 @@ export interface ChatMessage {
   solo?: boolean;
   approved?: boolean;
   resolved?: "approved" | "denied";
+  approvalId?: string;
   gate?: "docs" | "jira";
   images?: string[];
   diffItems?: DiffSummaryItem[];
@@ -181,6 +182,7 @@ export interface TeamLane {
   teamName: string;
   sessionId: string;
   running: boolean;
+  canceledByUser?: boolean;
   stage: "" | "chief" | "dev" | "qa" | "closing";
   doneStages: string[];
   messages: ChatMessage[];
@@ -533,7 +535,7 @@ export interface WailsBackendApp {
   DeleteTeam(workspace: string, teamName: string): Promise<TeamFile>;
   UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
   UpdatePermissionMode(workspace: string, permissionMode: string): Promise<TeamFile>;
-  RespondApproval(laneID: string, approved: boolean): Promise<boolean>;
+  RespondApproval(approvalID: string, approved: boolean): Promise<boolean>;
   EnsureTeamMemory(workspace: string): Promise<string>;
   GetDiff(workspace: string): Promise<FileDiff[]>;
   CommitChanges(workspace: string, message: string, push: boolean): Promise<string>;

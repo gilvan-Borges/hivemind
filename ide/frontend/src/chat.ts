@@ -518,17 +518,18 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
       <div class="msg-body">${escapeHtml(m.text)}</div>
     `;
     const lane = activeLane();
+    const targetId = m.approvalId || lane?.id || "";
     el.querySelector("[data-approve-gate]")?.addEventListener("click", async () => {
-      if (m.resolved || !lane) return;
+      if (m.resolved || !targetId) return;
       m.resolved = "approved";
       updateMessageElement(el, m);
-      await api()?.RespondApproval(lane.id, true);
+      await api()?.RespondApproval(targetId, true);
     });
     el.querySelector("[data-deny-gate]")?.addEventListener("click", async () => {
-      if (m.resolved || !lane) return;
+      if (m.resolved || !targetId) return;
       m.resolved = "denied";
       updateMessageElement(el, m);
-      await api()?.RespondApproval(lane.id, false);
+      await api()?.RespondApproval(targetId, false);
     });
     return;
   }
@@ -932,6 +933,7 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   const runProjectId = state.activeProjectId;
   const runProjectRoot = state.project.root;
   lane.running = true;
+  lane.canceledByUser = false;
   lane.stage = effectiveMode === "squad" ? "dev" : "chief";
   lane.doneStages = [];
   lane.turnInTokens = 0;
@@ -973,15 +975,24 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
     if (sid) lane.sessionId = sid;
     setStatus(`Equipe "${lane.teamName}" concluída.`);
   } catch (err: any) {
-    lane.messages.push({
-      id: `err-${Date.now()}`,
-      kind: "error",
-      label: "Erro",
-      text: err?.message || String(err),
-    });
-    toastError("executar a tarefa com a equipe", err);
+    const errText = err?.message || String(err);
+    const isUserCancel = Boolean(lane.canceledByUser) && /context canceled|canceled/i.test(errText);
+    if (!isUserCancel) {
+      const prevMsg = lane.messages[lane.messages.length - 1];
+      const alreadyShown = prevMsg && prevMsg.kind === "error" && prevMsg.text === errText;
+      if (!alreadyShown) {
+        lane.messages.push({
+          id: `err-${Date.now()}`,
+          kind: "error",
+          label: "Erro",
+          text: errText,
+        });
+      }
+      toastError("executar a tarefa com a equipe", err);
+    }
   } finally {
     lane.running = false;
+    lane.canceledByUser = false;
     lane.stage = "";
     markToolsDone(lane);
     markThinkingDone(lane);
@@ -1002,6 +1013,12 @@ export async function cancelActiveLane() {
   const lane = activeLane();
   const backend = api();
   if (!lane || !backend || !lane.running) return;
+  lane.canceledByUser = true;
+  for (const m of lane.messages) {
+    if (m.kind === "approval" && !m.resolved) {
+      m.resolved = "denied";
+    }
+  }
   await backend.CancelRun(lane.id);
   markToolsDone(lane);
   markThinkingDone(lane);

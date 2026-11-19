@@ -204,40 +204,119 @@ type LaneEvent struct {
 	Event  orchestrator.Event `json:"event"`
 }
 
+type pendingApproval struct {
+	laneID string
+	seq    uint64
+	ch     chan bool
+}
+
 // SessionManager tracks concurrent team runs across parallel IDE lanes.
 type SessionManager struct {
-	mu        sync.Mutex
-	cancels   map[string]context.CancelFunc
-	approvals map[string]chan bool
-	Emit      func(LaneEvent)
+	mu          sync.Mutex
+	cancels     map[string]context.CancelFunc
+	approvals   map[string]pendingApproval
+	approvalSeq uint64
+	Emit        func(LaneEvent)
 }
 
 // NewSessionManager creates a SessionManager.
 func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	return &SessionManager{
 		cancels:   make(map[string]context.CancelFunc),
-		approvals: make(map[string]chan bool),
+		approvals: make(map[string]pendingApproval),
 		Emit:      emit,
 	}
 }
 
-// ResolveApproval delivers the user's yes/no decision to a pending lane approval gate
-// (such as merging an approved PR into main or running a protected command).
-func (m *SessionManager) ResolveApproval(laneID string, approved bool) bool {
+// RequestApproval emits an approval_required event with a unique approvalId and
+// blocks until the user responds for that specific approvalId or ctx is canceled.
+// Safe for concurrent tool calls on the same lane: each request gets its own slot.
+func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, prompt string) bool {
+	if m.Emit == nil {
+		return false
+	}
+	reply := make(chan bool, 1)
 	m.mu.Lock()
-	ch, ok := m.approvals[laneID]
-	if ok {
-		delete(m.approvals, laneID)
+	m.approvalSeq++
+	seq := m.approvalSeq
+	approvalID := fmt.Sprintf("%s:appr:%d", laneID, seq)
+	m.approvals[approvalID] = pendingApproval{
+		laneID: laneID,
+		seq:    seq,
+		ch:     reply,
 	}
 	m.mu.Unlock()
-	if ok && ch != nil {
+
+	defer func() {
+		m.mu.Lock()
+		delete(m.approvals, approvalID)
+		m.mu.Unlock()
+	}()
+
+	m.Emit(LaneEvent{
+		LaneID: laneID,
+		Team:   teamName,
+		Event: orchestrator.Event{
+			Kind:       "approval_required",
+			Stage:      "chief",
+			Author:     "chefe",
+			Label:      "Permissão Necessária",
+			Text:       prompt,
+			ApprovalID: approvalID,
+		},
+	})
+	select {
+	case ok := <-reply:
+		return ok
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// ResolveApproval delivers the user's yes/no decision to a pending approval gate.
+// id may be the unique approvalId emitted in the approval_required event, or (for
+// backwards compatibility) a laneID, in which case the oldest pending approval
+// for that lane is resolved.
+func (m *SessionManager) ResolveApproval(id string, approved bool) bool {
+	m.mu.Lock()
+	p, ok := m.approvals[id]
+	targetKey := id
+	if !ok {
+		var oldestSeq uint64
+		for k, cand := range m.approvals {
+			if cand.laneID == id && (!ok || cand.seq < oldestSeq) {
+				p = cand
+				targetKey = k
+				oldestSeq = cand.seq
+				ok = true
+			}
+		}
+	}
+	if ok {
+		delete(m.approvals, targetKey)
+	}
+	m.mu.Unlock()
+	if ok && p.ch != nil {
 		select {
-		case ch <- approved:
+		case p.ch <- approved:
 		default:
 		}
 		return true
 	}
 	return false
+}
+
+func (m *SessionManager) denyLaneApprovalsLocked(laneID string) []chan bool {
+	var channels []chan bool
+	for k, p := range m.approvals {
+		if laneID == "" || p.laneID == laneID {
+			if p.ch != nil {
+				channels = append(channels, p.ch)
+			}
+			delete(m.approvals, k)
+		}
+	}
+	return channels
 }
 
 // ImageInput carries a base64 or data-URL encoded image from the IDE chat.
@@ -492,8 +571,14 @@ func (m *SessionManager) RunTurnWithOptions(
 		cancel()
 		m.mu.Lock()
 		delete(m.cancels, laneID)
-		delete(m.approvals, laneID)
+		pending := m.denyLaneApprovalsLocked(laneID)
 		m.mu.Unlock()
+		for _, ch := range pending {
+			select {
+			case ch <- false:
+			default:
+			}
+		}
 	}()
 
 	store, err := sessionx.Open(workspace)
@@ -523,31 +608,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		if cfg.Settings.IsFullAccess() {
 			return true
 		}
-		if m.Emit == nil {
-			return false
-		}
-		reply := make(chan bool, 1)
-		m.mu.Lock()
-		m.approvals[laneID] = reply
-		m.mu.Unlock()
-
-		m.Emit(LaneEvent{
-			LaneID: laneID,
-			Team:   selected.Name,
-			Event: orchestrator.Event{
-				Kind:   "approval_required",
-				Stage:  "chief",
-				Author: "chefe",
-				Label:  "Permissão Necessária",
-				Text:   prompt,
-			},
-		})
-		select {
-		case ok := <-reply:
-			return ok
-		case <-ctx.Done():
-			return false
-		}
+		return m.RequestApproval(ctx, laneID, selected.Name, prompt)
 	}
 
 	nativeRoot := NativeSkillsDir()
@@ -655,26 +716,39 @@ func resolveAgentProviderModel(t team.Team, author string) (provider, modelSpec 
 
 // Cancel stops the active run on laneID (cancelling only child processes started by that lane).
 func (m *SessionManager) Cancel(laneID string) bool {
-	m.ResolveApproval(laneID, false)
 	m.mu.Lock()
+	pending := m.denyLaneApprovalsLocked(laneID)
 	cancel, ok := m.cancels[laneID]
 	m.mu.Unlock()
+	for _, ch := range pending {
+		select {
+		case ch <- false:
+		default:
+		}
+	}
 	if ok && cancel != nil {
 		cancel()
 		return true
 	}
-	return false
+	return len(pending) > 0
 }
 
 // CancelAll cancels all active lanes (used on IDE shutdown).
 func (m *SessionManager) CancelAll() {
 	m.mu.Lock()
+	pending := m.denyLaneApprovalsLocked("")
 	list := make([]context.CancelFunc, 0, len(m.cancels))
 	for _, c := range m.cancels {
 		list = append(list, c)
 	}
 	m.cancels = make(map[string]context.CancelFunc)
 	m.mu.Unlock()
+	for _, ch := range pending {
+		select {
+		case ch <- false:
+		default:
+		}
+	}
 	for _, c := range list {
 		c()
 	}

@@ -50,7 +50,8 @@ type Event struct {
 	ToolName     string   `json:"toolName,omitempty"`
 	Detail       string   `json:"detail,omitempty"`
 	Devs         []string `json:"devs,omitempty"`
-	Gate         string   `json:"gate,omitempty"` // "docs" | "jira" — gates SDD exibidos como cards de aprovação no chat
+	Gate         string   `json:"gate,omitempty"`       // "docs" | "jira" — gates SDD exibidos como cards de aprovação no chat
+	ApprovalID   string   `json:"approvalId,omitempty"` // identificador único da aprovação pendente (permite aprovações concorrentes na mesma lane)
 	Partial      bool     `json:"partial,omitempty"`
 	Thought      bool     `json:"thought,omitempty"`
 	InputTokens  int32    `json:"inputTokens,omitempty"`

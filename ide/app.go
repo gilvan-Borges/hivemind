@@ -626,9 +626,9 @@ func (a *App) UpdatePermissionMode(workspace, permissionMode string) (team.File,
 	return idecore.UpdateProjectPermissionMode(workspace, permissionMode)
 }
 
-// RespondApproval delivers the user's decision on a pending approval gate (e.g. merging PR into main).
-func (a *App) RespondApproval(laneID string, approved bool) bool {
-	return a.sessions.ResolveApproval(laneID, approved)
+// RespondApproval delivers the user's decision on a pending approval gate (identified by approvalID or laneID).
+func (a *App) RespondApproval(approvalID string, approved bool) bool {
+	return a.sessions.ResolveApproval(approvalID, approved)
 }
 
 // EnsureTeamMemory creates .hivemind/MEMORY.md if absent and returns its relative path for the editor.

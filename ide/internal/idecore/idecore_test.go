@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -937,5 +938,129 @@ func TestDeleteTeam(t *testing.T) {
 	}
 	if len(cfg.Teams) != 0 || cfg.Active != "" {
 		t.Fatalf("expected 0 teams and empty Active, got active=%q teams=%d", cfg.Active, len(cfg.Teams))
+	}
+}
+
+func TestSessionManagerConcurrentApprovalsSameLane(t *testing.T) {
+	emitted := make(chan LaneEvent, 16)
+	sm := NewSessionManager(func(ev LaneEvent) {
+		emitted <- ev
+	})
+
+	ctx := context.Background()
+	prompts := []string{
+		"git show origin/homolog:a.md | head -n 15",
+		"git show HEAD:a.md | head -n 15",
+		"git show origin/main:b.md | head -n 15",
+	}
+	results := make(map[string]bool)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, p := range prompts {
+		wg.Add(1)
+		go func(prompt string) {
+			defer wg.Done()
+			ok := sm.RequestApproval(ctx, "lane-1", "principal", prompt)
+			mu.Lock()
+			results[prompt] = ok
+			mu.Unlock()
+		}(p)
+	}
+
+	// Collect all 3 emitted approval events and verify unique approvalIds.
+	idByPrompt := make(map[string]string, len(prompts))
+	seenIDs := make(map[string]bool, len(prompts))
+	for i := 0; i < len(prompts); i++ {
+		select {
+		case ev := <-emitted:
+			if ev.Event.Kind != "approval_required" {
+				t.Fatalf("unexpected event kind %q", ev.Event.Kind)
+			}
+			id := ev.Event.ApprovalID
+			if id == "" {
+				t.Fatal("expected non-empty ApprovalID on approval_required event")
+			}
+			if seenIDs[id] {
+				t.Fatalf("duplicate ApprovalID %q", id)
+			}
+			seenIDs[id] = true
+			idByPrompt[ev.Event.Text] = id
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for approval event %d", i+1)
+		}
+	}
+
+	// Resolve out of order: #2 denied, #3 approved, #1 approved.
+	if !sm.ResolveApproval(idByPrompt[prompts[1]], false) {
+		t.Fatal("failed to resolve second approval")
+	}
+	if !sm.ResolveApproval(idByPrompt[prompts[2]], true) {
+		t.Fatal("failed to resolve third approval")
+	}
+	if !sm.ResolveApproval(idByPrompt[prompts[0]], true) {
+		t.Fatal("failed to resolve first approval")
+	}
+	// Resolving an already-resolved approvalId must return false.
+	if sm.ResolveApproval(idByPrompt[prompts[0]], true) {
+		t.Fatal("duplicate ResolveApproval should return false")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: concurrent approvals on same lane did not all unblock")
+	}
+
+	if !results[prompts[0]] || results[prompts[1]] || !results[prompts[2]] {
+		t.Fatalf("unexpected approval results: %+v", results)
+	}
+}
+
+func TestSessionManagerCancelUnblocksAllPendingApprovals(t *testing.T) {
+	emitted := make(chan LaneEvent, 8)
+	sm := NewSessionManager(func(ev LaneEvent) {
+		emitted <- ev
+	})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var got [2]bool
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			got[idx] = sm.RequestApproval(ctx, "lane-cancel", "principal", "cmd")
+		}(i)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-emitted:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for event %d", i+1)
+		}
+	}
+
+	if !sm.Cancel("lane-cancel") {
+		t.Fatal("expected Cancel to return true when pending approvals exist")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Cancel did not unblock all concurrent approvals")
+	}
+	if got[0] || got[1] {
+		t.Fatalf("expected all canceled approvals to return false, got %+v", got)
 	}
 }
