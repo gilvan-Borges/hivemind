@@ -8,3 +8,4 @@
 ide/build/
 ide/frontend/node_modules/
 ide/frontend/dist/
+ide/cover/

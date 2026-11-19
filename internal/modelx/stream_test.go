@@ -4,12 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestStreamJSONDeltasStayOutOfArgv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake agy é script sh; coberto no CI Linux")
+	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "agy")
 	script := `#!/bin/sh

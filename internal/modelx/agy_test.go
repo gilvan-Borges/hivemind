@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +299,11 @@ func TestProbeAgy(t *testing.T) {
 
 func writeFakeAgy(t *testing.T, dir string) string {
 	t.Helper()
+	// O fake é um script /bin/sh: só executa no CI Linux. No Windows local os
+	// testes pulam em vez de falhar (ruído documentado no DOGSFOODING).
+	if runtime.GOOS == "windows" {
+		t.Skip("fake agy é script sh; coberto no CI Linux")
+	}
 	path := filepath.Join(dir, "agy")
 	script := `#!/bin/sh
 printf '%s\n' "$@" > "` + dir + `/args"

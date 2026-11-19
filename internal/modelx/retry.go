@@ -60,7 +60,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var err error
 	for attempt := 0; ; attempt++ {
 		resp, err = base.RoundTrip(req)
-		if req.Context().Err() != nil || attempt >= retryMaxAttempts-1 || !shouldRetry(resp, err) {
+		if ctxErr := req.Context().Err(); ctxErr != nil {
+			drainClose(resp)
+			return nil, ctxErr
+		}
+		if attempt >= retryMaxAttempts-1 || !shouldRetry(resp, err) {
 			return resp, err
 		}
 		delay := t.delayFor(attempt, resp)

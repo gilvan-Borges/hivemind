@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -129,6 +130,9 @@ func TestHelpAndTeamLifecycle(t *testing.T) {
 }
 
 func TestDoctorProbe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake agy é script sh; coberto no CI Linux")
+	}
 	dir := t.TempDir()
 	binDir := t.TempDir()
 	script := `#!/bin/sh
