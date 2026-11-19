@@ -71,6 +71,7 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 
 	callTargets := make(map[string]string)
 	var responses []toolRespLoc
+	var calls []toolRespLoc
 	for ci, content := range req.Contents {
 		if content == nil {
 			continue
@@ -79,65 +80,109 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 			if part == nil {
 				continue
 			}
-			if part.FunctionCall != nil && part.FunctionCall.ID != "" {
-				callTargets[part.FunctionCall.ID] = formatCompactTarget(part.FunctionCall.Name, part.FunctionCall.Args)
+			if part.FunctionCall != nil {
+				if part.FunctionCall.ID != "" {
+					callTargets[part.FunctionCall.ID] = formatCompactTarget(part.FunctionCall.Name, part.FunctionCall.Args)
+				}
+				calls = append(calls, toolRespLoc{contentIdx: ci, partIdx: pi})
 			}
 			if part.FunctionResponse != nil {
 				responses = append(responses, toolRespLoc{contentIdx: ci, partIdx: pi})
 			}
 		}
 	}
-	if len(responses) <= keepRecent {
+	if len(responses) <= keepRecent && len(calls) <= keepRecent {
 		return 0, 0
 	}
 
-	cutoff := len(responses) - keepRecent
-	toCompact := make(map[int]map[int]bool)
-	for _, loc := range responses[:cutoff] {
-		if toCompact[loc.contentIdx] == nil {
-			toCompact[loc.contentIdx] = make(map[int]bool)
+	toCompactResp := make(map[int]map[int]bool)
+	if len(responses) > keepRecent {
+		cutoff := len(responses) - keepRecent
+		for _, loc := range responses[:cutoff] {
+			if toCompactResp[loc.contentIdx] == nil {
+				toCompactResp[loc.contentIdx] = make(map[int]bool)
+			}
+			toCompactResp[loc.contentIdx][loc.partIdx] = true
 		}
-		toCompact[loc.contentIdx][loc.partIdx] = true
+	}
+	toCompactCall := make(map[int]map[int]bool)
+	if len(calls) > keepRecent {
+		cutoff := len(calls) - keepRecent
+		for _, loc := range calls[:cutoff] {
+			if toCompactCall[loc.contentIdx] == nil {
+				toCompactCall[loc.contentIdx] = make(map[int]bool)
+			}
+			toCompactCall[loc.contentIdx][loc.partIdx] = true
+		}
+	}
+
+	affectedContents := make(map[int]bool, len(toCompactResp)+len(toCompactCall))
+	for ci := range toCompactResp {
+		affectedContents[ci] = true
+	}
+	for ci := range toCompactCall {
+		affectedContents[ci] = true
 	}
 
 	clonedSlice := false
-	for ci, partSet := range toCompact {
+	for ci := range affectedContents {
 		origContent := req.Contents[ci]
 		if origContent == nil {
 			continue
 		}
+		respSet := toCompactResp[ci]
+		callSet := toCompactCall[ci]
 		var newParts []*genai.Part
 		contentChanged := false
 
 		for pi, origPart := range origContent.Parts {
-			if !partSet[pi] || origPart == nil || origPart.FunctionResponse == nil {
+			if origPart == nil {
 				if contentChanged {
 					newParts = append(newParts, origPart)
 				}
 				continue
 			}
-			fr := origPart.FunctionResponse
-			newResp, saved, ok := compactFunctionResponseMap(fr, callTargets[fr.ID])
-			if !ok {
-				if contentChanged {
-					newParts = append(newParts, origPart)
+			if respSet[pi] && origPart.FunctionResponse != nil {
+				fr := origPart.FunctionResponse
+				newResp, saved, ok := compactFunctionResponseMap(fr, callTargets[fr.ID])
+				if ok {
+					if !contentChanged {
+						newParts = make([]*genai.Part, 0, len(origContent.Parts))
+						newParts = append(newParts, origContent.Parts[:pi]...)
+						contentChanged = true
+					}
+					partCopy := *origPart
+					frCopy := *fr
+					frCopy.Response = newResp
+					partCopy.FunctionResponse = &frCopy
+					newParts = append(newParts, &partCopy)
+					compactedCount++
+					bytesSaved += saved
+					continue
 				}
-				continue
 			}
-
-			if !contentChanged {
-				newParts = make([]*genai.Part, 0, len(origContent.Parts))
-				newParts = append(newParts, origContent.Parts[:pi]...)
-				contentChanged = true
+			if callSet[pi] && origPart.FunctionCall != nil {
+				fc := origPart.FunctionCall
+				newArgs, saved, ok := compactFunctionCallArgs(fc)
+				if ok {
+					if !contentChanged {
+						newParts = make([]*genai.Part, 0, len(origContent.Parts))
+						newParts = append(newParts, origContent.Parts[:pi]...)
+						contentChanged = true
+					}
+					partCopy := *origPart
+					fcCopy := *fc
+					fcCopy.Args = newArgs
+					partCopy.FunctionCall = &fcCopy
+					newParts = append(newParts, &partCopy)
+					compactedCount++
+					bytesSaved += saved
+					continue
+				}
 			}
-			partCopy := *origPart
-			frCopy := *fr
-			frCopy.Response = newResp
-			partCopy.FunctionResponse = &frCopy
-			newParts = append(newParts, &partCopy)
-
-			compactedCount++
-			bytesSaved += saved
+			if contentChanged {
+				newParts = append(newParts, origPart)
+			}
 		}
 
 		if contentChanged {
@@ -154,6 +199,45 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 	}
 
 	return compactedCount, bytesSaved
+}
+
+func compactFunctionCallArgs(fc *genai.FunctionCall) (map[string]any, int, bool) {
+	if fc == nil || len(fc.Args) == 0 {
+		return nil, 0, false
+	}
+	var fields []string
+	switch strings.ToLower(strings.TrimSpace(fc.Name)) {
+	case "write_file", "write_doc":
+		fields = []string{"content"}
+	case "edit_file":
+		fields = []string{"old_text", "new_text"}
+	default:
+		return nil, 0, false
+	}
+	var cloned map[string]any
+	saved := 0
+	for _, field := range fields {
+		raw, ok := fc.Args[field].(string)
+		if !ok || len(raw) <= inTurnCompactThresholdBytes {
+			continue
+		}
+		note := fmt.Sprintf("[argumento %s de %s compactado: %s já aplicado no arquivo]", field, fc.Name, formatCompactSize(len(raw)))
+		if len(note) >= len(raw) {
+			continue
+		}
+		if cloned == nil {
+			cloned = make(map[string]any, len(fc.Args))
+			for k, v := range fc.Args {
+				cloned[k] = v
+			}
+		}
+		cloned[field] = note
+		saved += len(raw) - len(note)
+	}
+	if cloned == nil {
+		return nil, 0, false
+	}
+	return cloned, saved, true
 }
 
 func compactFunctionResponseMap(fr *genai.FunctionResponse, callTarget string) (map[string]any, int, bool) {

@@ -16,6 +16,43 @@ export let chatFlushRaf = 0;
 
 export let mentionTimer = 0;
 
+const laneIdleWaiters = new Map<string, Array<() => void>>();
+const laneRedirecting = new Set<string>();
+
+function notifyLaneIdle(laneId: string) {
+  const list = laneIdleWaiters.get(laneId);
+  if (!list || list.length === 0) return;
+  laneIdleWaiters.delete(laneId);
+  for (const resolve of list) {
+    try {
+      resolve();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function waitForLaneIdle(laneId: string, timeoutMs = 3000): Promise<void> {
+  return new Promise((resolve) => {
+    const lane = state.lanes.find((l) => l.id === laneId);
+    if (!lane || !lane.running) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    const list = laneIdleWaiters.get(laneId) || [];
+    list.push(finish);
+    laneIdleWaiters.set(laneId, list);
+  });
+}
+
 export function renderRightPane() {
   const right = document.getElementById("right-pane");
   if (!right) return;
@@ -48,7 +85,7 @@ export function renderRightPane() {
           <span class="dim" id="composer-team-label"></span>
           <div class="spacer"></div>
           <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
-          <button class="primary composer-send" id="btn-send-run" ${lane?.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+          <button class="primary composer-send" id="btn-send-run" title="${lane?.running ? "Interrompe a execução atual imediatamente e envia sua nova instrução" : "Enviar tarefa para a equipe (Enter)"}">${icons.send}<span>${lane?.running ? "Redirecionar" : "Enviar"}</span></button>
         </div>
       </div>
     </div>
@@ -309,9 +346,13 @@ export function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
     const f = splitFileTarget(rawArg);
     return { verb: active ? "Analisando" : "Analisou", ...f, expandChevron: false };
   }
-  if (name === "write_file" && rawArg) {
+  if (name === "edit_file" && rawArg) {
     const f = splitFileTarget(rawArg);
     return { verb: active ? "Editando" : "Editou", ...f, expandChevron: false };
+  }
+  if (name === "write_file" && rawArg) {
+    const f = splitFileTarget(rawArg);
+    return { verb: active ? "Gravando" : "Gravou", ...f, expandChevron: false };
   }
   if (name === "list_dir") {
     return {
@@ -689,10 +730,25 @@ export function flushChatUpdates() {
 
 export function syncComposerButtons() {
   const lane = activeLane();
+  const running = Boolean(lane?.running);
   const cancelBtn = document.getElementById("btn-cancel-run") as HTMLButtonElement | null;
   const sendBtn = document.getElementById("btn-send-run") as HTMLButtonElement | null;
-  if (cancelBtn) cancelBtn.disabled = !lane?.running;
-  if (sendBtn) sendBtn.disabled = !!lane?.running;
+  const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+  if (cancelBtn) cancelBtn.disabled = !running;
+  if (sendBtn) {
+    sendBtn.disabled = false;
+    sendBtn.innerHTML = running
+      ? `${icons.send}<span>Redirecionar</span>`
+      : `${icons.send}<span>Enviar</span>`;
+    sendBtn.title = running
+      ? "Interrompe a execução atual imediatamente e envia sua nova instrução"
+      : "Enviar tarefa para a equipe (Enter)";
+  }
+  if (chatInput) {
+    chatInput.placeholder = running
+      ? "Equipe trabalhando… digite para interromper e redirecionar, ou clique em Parar"
+      : "Descreva a tarefa para a equipe… (Ctrl+V cola print, Ctrl+L envia seleção, @arquivo, /ajuda)";
+  }
 }
 
 export function syncScrollBottomBtn() {
@@ -893,7 +949,7 @@ export function bindRightStaticEvents() {
   });
 
   document.getElementById("btn-send-run")?.addEventListener("click", () => sendToChief());
-  document.getElementById("btn-cancel-run")?.addEventListener("click", cancelActiveLane);
+  document.getElementById("btn-cancel-run")?.addEventListener("click", () => void cancelActiveLane(false));
 }
 
 export async function executeApprovedPlan() {
@@ -905,12 +961,27 @@ export async function executeApprovedPlan() {
 export async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
   const lane = activeLane();
   const backend = api();
-  if (!lane || !backend || !state.project || lane.running) return;
+  if (!lane || !backend || !state.project) return;
   const isOverride = typeof overrideText === "string";
   const text = (isOverride ? overrideText : state.draftObjective).trim();
   const attached = isOverride ? [] : [...state.draftImages];
   const effectiveMode = overrideMode || state.runMode;
   if (!text && attached.length === 0) return;
+
+  if (lane.running) {
+    if (laneRedirecting.has(lane.id)) return;
+    laneRedirecting.add(lane.id);
+    try {
+      await cancelActiveLane(true);
+      await waitForLaneIdle(lane.id, 3500);
+    } finally {
+      laneRedirecting.delete(lane.id);
+    }
+    if (lane.running) {
+      setStatus("Aguardando encerramento da execução anterior…");
+      return;
+    }
+  }
 
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
 
@@ -1022,6 +1093,7 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
     lane.stage = "";
     markToolsDone(lane);
     markThinkingDone(lane);
+    notifyLaneIdle(lane.id);
     renderProjectTabsBar();
     await refreshSessions(runProjectRoot);
     if (state.activeProjectId === runProjectId) {
@@ -1035,7 +1107,7 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   }
 }
 
-export async function cancelActiveLane() {
+export async function cancelActiveLane(forRedirect = false) {
   const lane = activeLane();
   const backend = api();
   if (!lane || !backend || !lane.running) return;
@@ -1052,8 +1124,10 @@ export async function cancelActiveLane() {
     id: `sys-${Date.now()}`,
     kind: "system",
     label: "Sistema",
-    text: "Execução interrompida pelo usuário.",
+    text: forRedirect
+      ? "Execução anterior interrompida — aplicando nova instrução do usuário."
+      : "Execução interrompida pelo usuário.",
   });
-  setStatus("Execução interrompida.");
+  setStatus(forRedirect ? "Redirecionando equipe…" : "Execução interrompida.");
   flushChatUpdates();
 }

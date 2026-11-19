@@ -164,7 +164,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	if r.Jira == nil {
 		if r.Project.Settings.JiraEnabled {
-			r.Jira = jirax.FromEnv()
+			r.Jira = jirax.FromWorkspace(r.Workspace)
 		} else {
 			r.Jira = jirax.Disabled{Reason: "Jira está desativado na configuração do time"}
 		}
@@ -635,7 +635,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
+		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch)
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {

@@ -179,3 +179,66 @@ func TestReviewModelOverrideUsedOnlyOnPRReview(t *testing.T) {
 		t.Fatalf("auto-review turn must prefer auto_review.model, got %+v", gotAuto)
 	}
 }
+
+
+func TestInTurnCompactionTrimsOldWriteAndEditArgs(t *testing.T) {
+	bigBody := strings.Repeat("linha de código relevante\n", 120)
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: genai.RoleModel,
+				Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{ID: "c1", Name: "write_file", Args: map[string]any{"path": "a.go", "content": bigBody}}},
+				},
+			},
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{ID: "c1", Name: "write_file", Response: map[string]any{"text": "arquivo gravado: a.go"}}},
+				},
+			},
+			{
+				Role: genai.RoleModel,
+				Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{ID: "c2", Name: "edit_file", Args: map[string]any{"path": "b.go", "old_text": bigBody, "new_text": bigBody}}},
+				},
+			},
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{ID: "c2", Name: "edit_file", Response: map[string]any{"text": "arquivo editado cirurgicamente: b.go"}}},
+				},
+			},
+			{
+				Role: genai.RoleModel,
+				Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{ID: "c3", Name: "edit_file", Args: map[string]any{"path": "c.go", "old_text": bigBody, "new_text": bigBody}}},
+				},
+			},
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{ID: "c3", Name: "edit_file", Response: map[string]any{"text": "arquivo editado cirurgicamente: c.go"}}},
+				},
+			},
+		},
+	}
+
+	origWriteContent := req.Contents[0].Parts[0].FunctionCall.Args["content"].(string)
+	compacted, saved := compactLLMRequestInTurn(req, 1)
+	if compacted != 2 || saved <= 0 {
+		t.Fatalf("expected 2 old call args compacted, got compacted=%d saved=%d", compacted, saved)
+	}
+	gotWrite := req.Contents[0].Parts[0].FunctionCall.Args["content"].(string)
+	if !strings.Contains(gotWrite, "compactado") || len(gotWrite) >= len(origWriteContent) {
+		t.Fatalf("old write_file content was not compacted: %q", gotWrite)
+	}
+	gotOldEdit := req.Contents[2].Parts[0].FunctionCall.Args["old_text"].(string)
+	if !strings.Contains(gotOldEdit, "compactado") {
+		t.Fatalf("old edit_file old_text was not compacted: %q", gotOldEdit)
+	}
+	gotRecentEdit := req.Contents[4].Parts[0].FunctionCall.Args["old_text"].(string)
+	if gotRecentEdit != bigBody {
+		t.Fatalf("most recent edit_file call should remain intact")
+	}
+}

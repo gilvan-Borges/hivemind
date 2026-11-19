@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,7 +20,7 @@ func TestRoleToolSets(t *testing.T) {
 	for _, tl := range devs {
 		names[tl.Name()] = true
 	}
-	for _, want := range []string{"read_file", "list_dir", "write_file", "run_shell", "git_status", "git_diff"} {
+	for _, want := range []string{"read_file", "list_dir", "write_file", "edit_file", "run_shell", "git_status", "git_diff"} {
 		if !names[want] {
 			t.Fatalf("desenvolvedor sem %s em %v", want, names)
 		}
@@ -107,5 +110,66 @@ func TestChiefDocsOnlyToolSet(t *testing.T) {
 	}
 	if names["git_commit"] || names["git_push"] {
 		t.Fatalf("Chefe em fase SDD n�o deveria ter git_commit/git_push: %v", names)
+	}
+}
+
+
+func TestEditFileSurgicalPreservesBytesAndCRLF(t *testing.T) {
+	root := t.TempDir()
+	// Simula um .gitignore Windows (CRLF) com bytes Latin-1 / acentos na linha final que NÃO devem ser tocados.
+	untouchedTail := []byte("# Se\xe7\xe3o legada \x97 n\xe3o alterar\r\n*.log\r\n")
+	orig := append([]byte("# Environment / secrets\r\n.env\r\n\r\n"), untouchedTail...)
+	giPath := filepath.Join(root, ".gitignore")
+	if err := os.WriteFile(giPath, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// O modelo envia LF (\n) no old_text/new_text, como é padrão de LLMs.
+	msg, err := editFileSurgical(root, editArgs{
+		Path:    ".gitignore",
+		OldText: "# Environment / secrets\n.env",
+		NewText: "# Environment / secrets\n.env\n# Credenciais locais MCP\nmcp_config.json",
+	})
+	if err != nil {
+		t.Fatalf("editFileSurgical falhou: %v", err)
+	}
+	if !strings.Contains(msg, "linha L1") || !strings.Contains(msg, "+2") {
+		t.Fatalf("mensagem inesperada: %s", msg)
+	}
+
+	got, err := os.ReadFile(giPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(got, untouchedTail) {
+		t.Fatalf("edit_file alterou bytes não relacionados no fim do arquivo!\nesperado sufixo: %x\nobtido: %x", untouchedTail, got)
+	}
+	if !bytes.Contains(got, []byte(".env\r\n# Credenciais locais MCP\r\nmcp_config.json\r\n")) {
+		t.Fatalf("edit_file não preservou CRLF no trecho inserido: %q", string(got))
+	}
+}
+
+func TestEditFileSurgicalErrorsAndReplaceAll(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "app.txt")
+	if err := os.WriteFile(p, []byte("foo\nbar\nfoo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := editFileSurgical(root, editArgs{Path: "app.txt", OldText: "nao_existe", NewText: "x"}); err == nil {
+		t.Fatal("esperava erro quando old_text não existe")
+	}
+	if _, err := editFileSurgical(root, editArgs{Path: "app.txt", OldText: "foo", NewText: "baz"}); err == nil || !strings.Contains(err.Error(), "L1, L3") {
+		t.Fatalf("esperava erro de ambiguidade citando L1, L3; obtido: %v", err)
+	}
+	if _, err := editFileSurgical(root, editArgs{Path: "app.txt", OldText: "foo", NewText: "baz", ReplaceAll: true}); err != nil {
+		t.Fatalf("replace_all deveria suceder: %v", err)
+	}
+	got, _ := os.ReadFile(p)
+	if string(got) != "baz\nbar\nbaz\n" {
+		t.Fatalf("conteúdo inesperado: %q", string(got))
+	}
+	if _, err := editFileSurgical(root, editArgs{Path: "../fora.txt", OldText: "a", NewText: "b"}); err == nil {
+		t.Fatal("esperava bloqueio de path traversal")
 	}
 }

@@ -304,6 +304,13 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 						part.FunctionCall.Args["content"] = fmt.Sprintf("…(conteúdo de %d bytes compactado; arquivo já gravado na worktree)", len(content))
 						changed = true
 					}
+				case "edit_file":
+					for _, field := range []string{"old_text", "new_text"} {
+						if txt, ok := part.FunctionCall.Args[field].(string); ok && len(txt) > maxOldToolArgBytes {
+							part.FunctionCall.Args[field] = fmt.Sprintf("…(trecho de %d bytes compactado; edição já aplicada na worktree)", len(txt))
+							changed = true
+						}
+					}
 				}
 			}
 			if part.FunctionResponse == nil || part.FunctionResponse.Response == nil {

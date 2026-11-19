@@ -170,6 +170,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canWrite()); err != nil {
 			return nil, err
 		}
+		if err := add(deps.canEdit()); err != nil {
+			return nil, err
+		}
 		if err := add(deps.gitStatus()); err != nil {
 			return nil, err
 		}
@@ -211,6 +214,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canWrite()); err != nil {
+			return nil, err
+		}
+		if err := add(deps.canEdit()); err != nil {
 			return nil, err
 		}
 		if err := add(deps.canShell()); err != nil {
@@ -414,7 +420,7 @@ type writeArgs struct {
 func (d Deps) canWrite() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "write_file",
-		Description: "Grava um arquivo de texto dentro do workspace do agente, criando pastas se preciso.",
+		Description: "Cria um arquivo novo ou substitui todo o conteúdo de um arquivo no workspace. Para alterar arquivos existentes, prefira edit_file (preserva encoding, quebras de linha e economiza tokens).",
 	}, func(_ agent.Context, args writeArgs) (textResult, error) {
 		if len(args.Content) > 1<<20 {
 			return textResult{}, fmt.Errorf("conteúdo acima de 1 MiB")
@@ -431,6 +437,129 @@ func (d Deps) canWrite() (tool.Tool, error) {
 		}
 		return textResult{Text: "arquivo gravado: " + args.Path}, nil
 	})
+}
+
+type editArgs struct {
+	Path       string `json:"path" jsonschema:"Caminho relativo ao diretório de trabalho do agente."`
+	OldText    string `json:"old_text" jsonschema:"Trecho exato e contíguo a ser substituído no arquivo existente."`
+	NewText    string `json:"new_text" jsonschema:"Novo texto que substituirá old_text (vazio remove o trecho)."`
+	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"Quando true, substitui todas as ocorrências de old_text; por padrão exige correspondência única."`
+}
+
+func (d Deps) canEdit() (tool.Tool, error) {
+	return functiontool.New(functiontool.Config{
+		Name:        "edit_file",
+		Description: "Edita cirurgicamente um arquivo existente substituindo old_text por new_text, preservando exatamente bytes não tocados, encoding original e quebras de linha (CRLF/LF). Sempre prefira edit_file a write_file ou scripts shell para modificar arquivos existentes.",
+	}, func(_ agent.Context, args editArgs) (textResult, error) {
+		out, err := editFileSurgical(d.Root, args)
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: out}, nil
+	})
+}
+
+func editFileSurgical(root string, args editArgs) (string, error) {
+	if args.OldText == "" {
+		return "", fmt.Errorf("old_text não pode ser vazio; informe o trecho exato a substituir ou use write_file para criar arquivo novo")
+	}
+	path, err := workspace.Resolve(root, args.Path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s é um diretório", args.Path)
+	}
+	const maxEditBytes = 2 << 20
+	if info.Size() > maxEditBytes {
+		return "", fmt.Errorf("%s excede o limite de 2 MiB para edit_file", args.Path)
+	}
+	rawBytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	raw := string(rawBytes)
+
+	oldText := args.OldText
+	newText := args.NewText
+	count := strings.Count(raw, oldText)
+
+	// Adapta quebras de linha automaticamente quando o arquivo usa CRLF (Windows)
+	// e o modelo enviou LF, preservando o estilo original sem tocar o restante dos bytes.
+	if count == 0 && strings.Contains(raw, "\r\n") && !strings.Contains(oldText, "\r\n") {
+		oldCRLF := strings.ReplaceAll(oldText, "\n", "\r\n")
+		if c := strings.Count(raw, oldCRLF); c > 0 {
+			oldText = oldCRLF
+			newText = strings.ReplaceAll(strings.ReplaceAll(newText, "\r\n", "\n"), "\n", "\r\n")
+			count = c
+		}
+	} else if count == 0 && !strings.Contains(raw, "\r\n") && strings.Contains(oldText, "\r\n") {
+		oldLF := strings.ReplaceAll(oldText, "\r\n", "\n")
+		if c := strings.Count(raw, oldLF); c > 0 {
+			oldText = oldLF
+			newText = strings.ReplaceAll(newText, "\r\n", "\n")
+			count = c
+		}
+	}
+
+	if count == 0 {
+		return "", fmt.Errorf("trecho old_text não encontrado em %s; use read_file(start_line, end_line) para conferir o texto exato", args.Path)
+	}
+	if count > 1 && !args.ReplaceAll {
+		var lines []string
+		offset := 0
+		for len(lines) < 6 {
+			idx := strings.Index(raw[offset:], oldText)
+			if idx < 0 {
+				break
+			}
+			pos := offset + idx
+			lineNo := strings.Count(raw[:pos], "\n") + 1
+			lines = append(lines, fmt.Sprintf("L%d", lineNo))
+			offset = pos + len(oldText)
+		}
+		return "", fmt.Errorf("old_text aparece %d vezes em %s (%s); inclua 1-2 linhas de contexto ao redor para tornar único ou use replace_all=true", count, args.Path, strings.Join(lines, ", "))
+	}
+
+	firstPos := strings.Index(raw, oldText)
+	firstLine := strings.Count(raw[:firstPos], "\n") + 1
+
+	n := 1
+	if args.ReplaceAll {
+		n = -1
+	}
+	updated := strings.Replace(raw, oldText, newText, n)
+	if len(updated) > maxEditBytes {
+		return "", fmt.Errorf("conteúdo resultante acima de 2 MiB")
+	}
+
+	perm := info.Mode().Perm()
+	if perm == 0 {
+		perm = 0o644
+	}
+	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
+		return "", err
+	}
+
+	oldLines := strings.Count(oldText, "\n") + 1
+	newLines := strings.Count(newText, "\n") + 1
+	if newText == "" {
+		newLines = 0
+	}
+	replaced := 1
+	if args.ReplaceAll {
+		replaced = count
+	}
+	delta := (newLines - oldLines) * replaced
+	deltaLabel := fmt.Sprintf("%+d", delta)
+	if delta == 0 {
+		deltaLabel = "0"
+	}
+	return fmt.Sprintf("arquivo editado cirurgicamente: %s (%d substituição(ões) a partir da linha L%d, delta %s linhas)", args.Path, replaced, firstLine, deltaLabel), nil
 }
 
 // docsPathAllowed valida caminhos de documentação permitidos na fase SDD
