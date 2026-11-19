@@ -604,6 +604,50 @@ func TestSyncIntegrationRefusesDirtyWorkspace(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFileUTF8ValidationAndAtomicWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	// Latin-1 bytes are not valid UTF-8: opening must fail instead of corrupting on save.
+	latin1 := filepath.Join(dir, "latin1.txt")
+	if err := os.WriteFile(latin1, []byte{'c', 'a', 'f', 0xE9}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWorkspaceFile(dir, "latin1.txt"); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("expected UTF-8 error for latin1, got %v", err)
+	}
+
+	// UTF-16 LE with BOM must be rejected with an actionable message.
+	utf16 := filepath.Join(dir, "utf16.txt")
+	if err := os.WriteFile(utf16, []byte{0xFF, 0xFE, 'a', 0x00}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWorkspaceFile(dir, "utf16.txt"); err == nil || !strings.Contains(err.Error(), "UTF-16") {
+		t.Fatalf("expected UTF-16 error, got %v", err)
+	}
+
+	// Binary content is rejected.
+	bin := filepath.Join(dir, "bin.dat")
+	if err := os.WriteFile(bin, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWorkspaceFile(dir, "bin.dat"); err == nil || !strings.Contains(err.Error(), "binário") {
+		t.Fatalf("expected binary error, got %v", err)
+	}
+
+	// Valid UTF-8 with accents and CRLF must round-trip byte-for-byte.
+	text := "linha 1\r\nconfiguração: ação\r\n"
+	if err := WriteWorkspaceFile(dir, "config/ação.txt", text); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadWorkspaceFile(dir, "config/ação.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != text {
+		t.Fatalf("round-trip mismatch:\n got=%q\nwant=%q", got, text)
+	}
+}
+
 func TestParseGHPRList(t *testing.T) {
 	raw := []byte(`[
 		{
