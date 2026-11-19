@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
@@ -230,7 +232,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	if mode == "" {
 		mode = agent.StreamingModeSSE
 	}
-	msg := buildUserContent(objective, req.Attachments)
+	msg := buildUserContent(objective+r.teamMemorySnippet(), req.Attachments)
 
 	useTriage := (runMode == "" && r.EnableTriage) ||
 		runMode == "auto" ||
@@ -1079,6 +1081,38 @@ func skillSelectionLabel(project, native []string) string {
 		parts = append(parts, "nativas da IDE: "+strings.Join(native, ", "))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// teamMemorySnippet devolve a memória compartilhada do time (.hivemind/MEMORY.md)
+// para injeção em todo run do CLI — paridade com a IDE (dogfooding achado #7:
+// conhecimento caro descoberto num run não ajudava o próximo no CLI). Cria o
+// arquivo com orientação inicial quando ainda não existe. O objetivo em si
+// (r.objectiveText) permanece limpo para nomes de branch e commits.
+func (r *Runner) teamMemorySnippet() string {
+	target, err := workspace.ResolveWithOptions(r.Workspace, ".hivemind/MEMORY.md", workspace.Options{AllowMemoryRead: true})
+	if err != nil {
+		return ""
+	}
+	if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
+		starter := "# Memória Compartilhada do Time (HiveMind)\n\n" +
+			"Anote aqui decisões arquiteturais, convenções de código, comandos específicos e restrições do projeto.\n" +
+			"Todos os agentes da equipe recebem este contexto automaticamente sem precisar repetir no chat.\n\n" +
+			"## Convenções & Arquitetura\n- \n\n" +
+			"## Comandos & Ambiente\n- \n"
+		_ = os.MkdirAll(filepath.Dir(target), 0o700)
+		_ = os.WriteFile(target, []byte(starter), 0o600)
+		return ""
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return ""
+	}
+	txt := strings.TrimSpace(string(data))
+	if txt == "" {
+		return ""
+	}
+	txt = strx.TruncateBytes(txt, 4096, "\n…")
+	return "\n[Memória Compartilhada do Time (.hivemind/MEMORY.md)]\n" + txt + "\n"
 }
 
 func (r *Runner) printUsageSummary(result Result, w io.Writer, prefix string) {

@@ -1640,3 +1640,37 @@ func TestPrintUsageSummaryWritesNothingWhenEmpty(t *testing.T) {
 		t.Fatalf("resumo incompleto: %q", buf.String())
 	}
 }
+
+// TestTeamMemorySnippetInjectsSharedMemory valida o achado #7 do dogfooding:
+// o CLI passa a ler .hivemind/MEMORY.md em todo run, como a IDE já fazia.
+func TestTeamMemorySnippetInjectsSharedMemory(t *testing.T) {
+	dir := t.TempDir()
+	r := &Runner{Workspace: dir}
+
+	// Primeiro run: arquivo não existe — cria o starter e não injeta nada.
+	if got := r.teamMemorySnippet(); got != "" {
+		t.Fatalf("primeiro run não deveria injetar nada; got = %q", got)
+	}
+	starter, err := os.ReadFile(filepath.Join(dir, ".hivemind", "MEMORY.md"))
+	if err != nil || !strings.Contains(string(starter), "Memória Compartilhada") {
+		t.Fatalf("starter não foi criado: %v", err)
+	}
+
+	// Conhecimento caro do run anterior (ex.: o JDK 21 da T1) fica disponível.
+	note := "Testes do core: rode .\\gradlew.bat com JDK 21 (o JDK 25 padrão quebra o Gradle 8.x)."
+	if err := os.WriteFile(filepath.Join(dir, ".hivemind", "MEMORY.md"), []byte("# Mem\n\n"+note), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := r.teamMemorySnippet()
+	if !strings.Contains(got, "[Memória Compartilhada do Time") || !strings.Contains(got, note) {
+		t.Fatalf("snippet não contém a memória: %q", got)
+	}
+
+	// Arquivo vazio não injeta lixo.
+	if err := os.WriteFile(filepath.Join(dir, ".hivemind", "MEMORY.md"), []byte("   \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.teamMemorySnippet(); got != "" {
+		t.Fatalf("memória vazia deveria injetar nada; got = %q", got)
+	}
+}
