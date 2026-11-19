@@ -1,4 +1,5 @@
 import { icons } from "./icons";
+import { refreshMCP } from "./mcp";
 import type { SidebarView } from "./types";
 import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel } from "./utils";
 import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
@@ -193,6 +194,7 @@ export function mountShell() {
           </button>
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
+          <button class="act-btn" data-act="mcp" title="Servidores MCP">${icons.mcp}</button>
           <div class="spacer"></div>
           <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
@@ -399,6 +401,7 @@ export function bindStaticShellEvents() {
         state.showLeftSidebar = true;
         if (view === "sessions") refreshSessions();
         if (view === "skills") refreshSkills();
+        if (view === "mcp") void refreshMCP().then(() => renderLeftSidebar());
         if (view === "git" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
           void loadGitGraph();
         }

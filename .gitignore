@@ -3,6 +3,8 @@
 /dist/
 *.test
 .hivemind/
+.code-review-graph/
+.codebase-memory/
 *.out
 /build/
 ide/build/

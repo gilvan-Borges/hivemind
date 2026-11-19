@@ -19,11 +19,7 @@ var skillNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // %LOCALAPPDATA%\HiveMind\skills. Skills criadas aqui valem para TODOS os
 // projetos abertos na IDE e são gerenciadas pelo painel de Skills.
 func NativeSkillsDir() string {
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
-	}
-	dir := filepath.Join(base, "HiveMind", "skills")
+	dir := skillx.UserSkillsDir()
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
@@ -36,6 +32,7 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	UpdatedAt   string `json:"updatedAt"` // YYYY-MM-DD
 	SizeBytes   int64  `json:"sizeBytes"`
+	Enabled     bool   `json:"enabled"`
 }
 
 // ListSkills devolve o catálogo combinado: nativas da IDE primeiro, depois as do projeto.
@@ -57,6 +54,7 @@ func skillToInfo(s skillx.Skill, baseRoot string) SkillInfo {
 		Source:      s.Source,
 		Path:        s.Path,
 		SizeBytes:   0,
+		Enabled:     s.Enabled,
 	}
 	if st, err := os.Stat(filepath.Join(baseRoot, filepath.FromSlash(s.Path))); err == nil {
 		info.SizeBytes = st.Size()
@@ -169,6 +167,11 @@ func copyDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+// SetNativeSkillEnabled liga ou desliga uma skill nativa sem apagar o texto.
+func SetNativeSkillEnabled(name string, enabled bool) error {
+	return skillx.SetSkillEnabled(NativeSkillsDir(), name, enabled)
 }
 
 func copyFile(src, dst string) error {

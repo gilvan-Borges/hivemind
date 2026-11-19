@@ -15,6 +15,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -24,14 +25,14 @@ import (
 // Deps are the clients a tool set closes over. Each developer gets its own
 // Root so parallel agents cannot write into each other's worktrees.
 type Deps struct {
-	Root                 string
-	Role                 string
-	Settings             team.Settings
-	DisableGitWrite      bool
-	DisableMerge         bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
-	ReviewCommentOnly    bool // Quando true, github_review_pr aceita apenas evento COMMENT
+	Root                   string
+	Role                   string
+	Settings               team.Settings
+	DisableGitWrite        bool
+	DisableMerge           bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
+	ReviewCommentOnly      bool // Quando true, github_review_pr aceita apenas evento COMMENT
 	AllowReadOnlyTestShell bool // Libera run_shell somente-leitura/testes (bloqueando commit/push/merge/PR) no Chefe em auto-review
-	ReviewRequestedInObj bool
+	ReviewRequestedInObj   bool
 	// DocsOnlyWrite libera APENAS o write_doc (gravação restrita a documentação)
 	// para fases SDD, onde código permanece bloqueado até a aprovação dos docs.
 	DocsOnlyWrite bool
@@ -45,6 +46,9 @@ type Deps struct {
 	JiraKey       string
 	JiraProject   string
 	BaseBranch    string
+	// MCP, quando preenchido, expõe só os servidores ligados e as duas
+	// ferramentas leves de lista e de ligar sob aprovação.
+	MCP *mcpx.Host
 }
 
 // ForRole returns the tools a role is allowed to call.
@@ -260,6 +264,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 
 	default:
 		return nil, fmt.Errorf("papel sem ferramentas: %s", role)
+	}
+	if err := deps.addMCP(&out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

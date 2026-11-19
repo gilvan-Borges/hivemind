@@ -77,6 +77,7 @@ export const icons = {
   terminal: ms("terminal", 14),
   sessions: ms("history", 17),
   skills: ms("extension", 17, true),
+  mcp: ms("hub", 17),
   download: ms("download", 13),
   tokens: ms("bolt", 12),
   editPen: ms("edit", 12),

@@ -35,6 +35,8 @@ type Skill struct {
 	Path        string    `json:"path"`
 	Source      string    `json:"source,omitempty"` // "project" | "native"
 	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
+	// Enabled é false só para skills nativas desligadas (opt-in). Skills de projeto nascem ligadas.
+	Enabled bool `json:"enabled"`
 }
 
 // Load lê <root>/.agents/skills/*/SKILL.md e devolve o catálogo do projeto,
@@ -49,6 +51,7 @@ func Load(root string) []Skill {
 // da IDE (ex.: %LOCALAPPDATA%\HiveMind\skills). Retorna nil se inexistente.
 func LoadNative(dir string) []Skill {
 	out := loadDir(dir, "", "native")
+	out = applySkillState(dir, out)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
@@ -86,6 +89,7 @@ func loadDir(dir, relBase, source string) []Skill {
 			Path:        rel,
 			Source:      source,
 			UpdatedAt:   info.ModTime(),
+			Enabled:     true,
 		})
 	}
 	return out
@@ -93,6 +97,7 @@ func loadDir(dir, relBase, source string) []Skill {
 
 // ExtractDescription devolve a primeira frase/parágrafo curto do SKILL.md (sem títulos).
 func ExtractDescription(md string) string {
+	md = stripFrontmatter(md)
 	var parts []string
 	for _, ln := range strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n") {
 		t := strings.TrimSpace(ln)
@@ -114,6 +119,23 @@ func ExtractDescription(md string) string {
 		return ""
 	}
 	return strx.TruncateBytes(strings.Join(parts, " "), maxDescriptionBytes, "…")
+}
+
+func stripFrontmatter(md string) string {
+	s := strings.ReplaceAll(md, "\r\n", "\n")
+	if !strings.HasPrefix(s, "---\n") {
+		return md
+	}
+	rest := s[4:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return md
+	}
+	after := rest[idx+4:]
+	if strings.HasPrefix(after, "\n") {
+		after = after[1:]
+	}
+	return after
 }
 
 // Match devolve as skills do catálogo cujos nomes foram pedidos (case-insensitive),
@@ -184,9 +206,20 @@ func CatalogBlock(project, native []Skill) string {
 			writeCatalogLine(&b, s)
 		}
 	}
+	var optional []Skill
 	if len(native) > 0 {
 		b.WriteString("SKILLS NATIVAS DA IDE (gerenciadas pelo painel Skills do app, mais fáceis de manter atualizadas):\n")
 		for _, s := range native {
+			if !s.Enabled {
+				optional = append(optional, s)
+				continue
+			}
+			writeCatalogLine(&b, s)
+		}
+	}
+	if len(optional) > 0 {
+		b.WriteString("SKILLS OPCIONAIS DESLIGADAS (não selecione, a menos que o usuário tenha pedido explicitamente esta skill pelo nome):\n")
+		for _, s := range optional {
 			writeCatalogLine(&b, s)
 		}
 	}
