@@ -30,9 +30,9 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
-	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
@@ -42,7 +42,7 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate"
+	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending"
 	Stage        string   `json:"stage,omitempty"`
 	Author       string   `json:"author,omitempty"`
 	Label        string   `json:"label,omitempty"`
@@ -99,14 +99,14 @@ type Runner struct {
 	skills             []skillx.Skill
 	selectedSkills     []skillx.Skill
 	// NativeSkills é o catálogo nativo da IDE, preenchido pelo runner da IDE (CLI deixa vazio).
-	NativeSkills       []skillx.Skill
-	NativeSkillsRoot   string
-	selectedNative     []skillx.Skill
-	turnInputTokens    int64
-	turnOutputTokens   int64
-	turnTotalTokens    int64
-	qaLastStatus       string
-	qaStallCount       int
+	NativeSkills     []skillx.Skill
+	NativeSkillsRoot string
+	selectedNative   []skillx.Skill
+	turnInputTokens  int64
+	turnOutputTokens int64
+	turnTotalTokens  int64
+	qaLastStatus     string
+	qaStallCount     int
 }
 
 // Request is one user turn.
@@ -128,6 +128,9 @@ type Result struct {
 	InputTokens       int64 `json:"inputTokens"`
 	OutputTokens      int64 `json:"outputTokens"`
 	TotalTokens       int64 `json:"totalTokens"`
+	// PendingQA reports that the run finished without an explicit QA approval, so
+	// no commit/push/PR was made on the delivery worktree (see finish).
+	PendingQA bool `json:"pendingQa,omitempty"`
 }
 
 type devEnv struct {
@@ -387,18 +390,22 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	result.OutputTokens = r.turnOutputTokens
 	result.TotalTokens = r.turnTotalTokens
 
-	if err := r.finish(ctx, &result, devs, key, objective); err != nil {
+	if err := r.finish(ctx, sess, &result, devs, key, objective); err != nil {
 		if r.OnEvent != nil {
 			r.OnEvent(Event{Kind: "error", Text: err.Error()})
 		}
 		return result, err
 	}
-	fmt.Fprintf(r.Out, "\nSessão %s concluída.\n", result.SessionID)
+	finishText := fmt.Sprintf("Sessão %s concluída.", result.SessionID)
+	if result.PendingQA {
+		finishText = fmt.Sprintf("Sessão %s concluída, mas a entrega ficou PENDENTE de aprovação do QA: nenhum commit, push ou PR foi feito.", result.SessionID)
+	}
+	fmt.Fprintf(r.Out, "\n%s\n", finishText)
 	r.printUsageSummary(result, r.Out, "")
 	if r.OnEvent != nil {
 		r.OnEvent(Event{
 			Kind:         "finish",
-			Text:         fmt.Sprintf("Sessão %s concluída.", result.SessionID),
+			Text:         finishText,
 			InputTokens:  int32(r.turnInputTokens),
 			OutputTokens: int32(r.turnOutputTokens),
 			Tokens:       int32(r.turnTotalTokens),
@@ -947,6 +954,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
+			"qa_approved":           "",
 			"integrate_status":      "",
 			"plan_pending_approval": "",
 			"dev_slices_joined":     "",
@@ -981,6 +989,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			"qa_feedback":           "",
 			"qa_report":             "",
 			"qa_approval_note":      "",
+			"qa_approved":           "",
 			"integrate_status":      "",
 			"chief_plan":            "",
 			"dev_slices_joined":     "",
@@ -998,7 +1007,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 	return created.Session, nil
 }
 
-func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key, objective string) error {
+func (r *Runner) finish(ctx context.Context, sess session.Session, result *Result, devs []devEnv, key, objective string) error {
 	if r.integration != "" {
 		result.IntegrationBranch = gitx.IntegrationBranch
 	}
@@ -1023,6 +1032,20 @@ func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key,
 				result.Branches = append(result.Branches, dev.Branch)
 			}
 		}
+	}
+
+	// Governance gate: a delivery is only committed/pushed/opened as PR after an
+	// explicit qa_approve from the QA agent. Without it, the code stays in the
+	// delivery worktree and the run is reported as pending QA. This is what makes
+	// "QA honesto" a product rule instead of a prompt instruction.
+	if !qaApproved(sess) {
+		result.PendingQA = true
+		msg := "entrega NÃO aprovada pelo QA: nenhum commit, push ou PR foi feito; as alterações ficaram na worktree de entrega"
+		fmt.Fprintf(r.Err, "aviso: %s\n", msg)
+		if r.OnEvent != nil {
+			r.OnEvent(Event{Kind: "qa_pending", Stage: "qa", Text: msg})
+		}
+		return nil
 	}
 
 	var notes []string
@@ -1092,6 +1115,22 @@ func (r *Runner) finish(ctx context.Context, result *Result, devs []devEnv, key,
 		}
 	}
 	return nil
+}
+
+// qaApproved reports whether the QA agent explicitly approved this delivery.
+// qa_approved is the authoritative flag; qa_approval_note is accepted as a
+// fallback for sessions created before the flag existed.
+func qaApproved(sess session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	if v, err := sess.State().Get("qa_approved"); err == nil && strings.TrimSpace(fmt.Sprint(v)) == "1" {
+		return true
+	}
+	if v, err := sess.State().Get("qa_approval_note"); err == nil && strings.TrimSpace(fmt.Sprint(v)) != "" {
+		return true
+	}
+	return false
 }
 
 func roleLabel(role string) string {
@@ -1540,7 +1579,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			Jira:                 nil,
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
-			BaseBranch:            r.Project.Settings.BaseBranch,
+			BaseBranch:           r.Project.Settings.BaseBranch,
 		})
 		if err != nil {
 			return false, "", err
@@ -1561,7 +1600,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			Jira:                 r.Jira,
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
-			BaseBranch:            r.Project.Settings.BaseBranch,
+			BaseBranch:           r.Project.Settings.BaseBranch,
 		})
 		if err != nil {
 			return false, "", err

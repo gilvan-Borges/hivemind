@@ -258,6 +258,106 @@ func TestPipelineWithMocks(t *testing.T) {
 	}
 }
 
+func TestDeliveryIsBlockedWithoutQAApproval(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não está instalado")
+	}
+	repo := t.TempDir()
+	g := gitx.Local{}
+	ctx := context.Background()
+	mustGit(t, g, ctx, repo, "init")
+	mustGit(t, g, ctx, repo, "config", "user.email", "hivemind@example.com")
+	mustGit(t, g, ctx, repo, "config", "user.name", "HiveMind Test")
+	mustGit(t, g, ctx, repo, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("oi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, g, ctx, repo, "add", "README.md")
+	mustGit(t, g, ctx, repo, "commit", "-m", "inicial")
+
+	squad := team.DefaultTeam("padrao", "", "scripted", "gemini", 1)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			AutoCommit:   true,
+			AutoPR:       false,
+			MaxQALoops:   1,
+			BaseBranch:   "main",
+			ConfirmShell: boolPtr(true),
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	models := map[string]model.LLM{
+		"chefe": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+			if call == 1 {
+				return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+					"plan":      "gravar a.txt",
+					"dev_tasks": []string{"gravar a.txt"},
+				})
+			}
+			return modelx.Text("delegado")
+		}},
+		"dev": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+			if call == 1 {
+				return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "a.txt", "content": "não aprovado\n"})
+			}
+			return modelx.Text("a.txt pronto")
+		}},
+		"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+			if call == 1 {
+				return modelx.FunctionCall("qa_request_changes", "q1", map[string]any{"notes": "falta teste"})
+			}
+			return modelx.Text("reprovado")
+		}},
+	}
+
+	store, err := sessionx.Open(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	runner := &Runner{
+		Workspace:    repo,
+		Project:      project,
+		Team:         squad,
+		Git:          g,
+		Sessions:     store,
+		Models:       models,
+		Confirm:      func(string) bool { return false },
+		Out:          &out,
+		Err:          &out,
+		Streaming:    agent.StreamingModeNone,
+		EnableTriage: true,
+	}
+	result, err := runner.Run(ctx, Request{Objective: "gravar a.txt"})
+	if err != nil {
+		t.Fatalf("run: %v\nsaída:\n%s", err, out.String())
+	}
+	if !result.PendingQA {
+		t.Fatalf("expected PendingQA=true; saída:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "PENDENTE") {
+		t.Fatalf("mensagem de pendência ausente:\n%s", out.String())
+	}
+	deliveryWT := filepath.Join(repo, ".hivemind", "worktrees", "_integracao")
+	logDelivery, err := g.Run(ctx, deliveryWT, "log", "-1", "--pretty=%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logDelivery, "gravar a.txt") {
+		t.Fatalf("entrega rejeitada não pode ser commitada: %q", logDelivery)
+	}
+	status, err := g.Run(ctx, deliveryWT, "status", "--porcelain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "a.txt") {
+		t.Fatalf("alteração deveria permanecer na worktree de entrega: %q", status)
+	}
+}
+
 func mustGit(t *testing.T, g gitx.Local, ctx context.Context, dir string, args ...string) {
 	t.Helper()
 	if _, err := g.Run(ctx, dir, args...); err != nil {
