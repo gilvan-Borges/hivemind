@@ -7,6 +7,7 @@ import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindGitSidebarEvents, getGitStatusMap, renderGitSidebarHtml } from "./git";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
 import { renderModalLayer } from "./modals";
+import { bindMCPSidebarEvents, refreshMCP, renderMCPSidebar } from "./mcp";
 import { bindModelPickerPairs, handleInlineModelChange, refreshSkills, renderModelPickerPairHtml, renderSkillRowHtml } from "./models";
 import { syncLayoutVisibility, updateStatusBar } from "./shell";
 import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
@@ -247,6 +248,22 @@ export function bindSkillsSidebarEvents(): void {
       }
     });
   });
+  document.querySelectorAll("[data-skill-enable], [data-skill-disable]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const el = btn as HTMLElement;
+      const name = el.dataset.skillEnable || el.dataset.skillDisable || "";
+      const enabled = Boolean(el.dataset.skillEnable);
+      const backend = api();
+      if (!backend?.SetNativeSkillEnabled || !name) return;
+      try {
+        await backend.SetNativeSkillEnabled(name, enabled);
+        setStatus(`Skill "${name}" ${enabled ? "ativada" : "desligada"}.`);
+        await refreshSkills();
+      } catch (err: any) {
+        toastError(`alterar a skill "${name}"`, err);
+      }
+    });
+  });
   document.querySelectorAll("[data-skill-install]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = (btn as HTMLElement).dataset.skillInstall!;
@@ -377,6 +394,12 @@ export function renderLeftSidebar() {
       </div>
     `;
     bindSessionsSidebarEvents();
+    return;
+  }
+
+  if (state.sidebarView === "mcp") {
+    sidebar.innerHTML = renderMCPSidebar();
+    bindMCPSidebarEvents(() => renderLeftSidebar());
     return;
   }
 

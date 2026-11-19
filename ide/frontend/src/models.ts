@@ -272,12 +272,19 @@ export function renderSkillRowHtml(s: SkillInfo, isNative: boolean): string {
       <div class="skill-row-head">
         <span class="skill-name">${escapeHtml(s.name)}</span>
         <span class="skill-tag ${isNative ? "native" : "project"}">${isNative ? "nativa" : "projeto"}</span>
+        ${s.enabled === false ? `<span class="skill-tag project">desligada</span>` : ""}
       </div>
       <div class="skill-roles-strip">${roleBadges}</div>
       <div class="skill-desc" title="${escapeHtml(s.description)}">${escapeHtml(s.description || "sem descrição")}</div>
       <div class="skill-meta">${escapeHtml(s.updatedAt || "")}${s.sizeBytes > 0 ? ` · ${(s.sizeBytes / 1024).toFixed(1)} KB` : ""}</div>
       <div class="skill-actions">
         <button class="mini" data-skill-assign="${escapeHtml(s.name)}" title="Definir para quem esta skill vai (Chefe, Dev, QA ou Todos)">${icons.team}<span>Papéis</span></button>
+        ${isNative && s.enabled === false
+          ? `<button class="mini primary" data-skill-enable="${escapeHtml(s.name)}">${icons.plus}<span>Ativar</span></button>`
+          : ""}
+        ${isNative && s.name === "untangle-codebase" && s.enabled !== false
+          ? `<button class="mini" data-skill-disable="${escapeHtml(s.name)}">${icons.minus}<span>Desligar</span></button>`
+          : ""}
         ${isNative
           ? `<button class="mini" data-skill-edit="${escapeHtml(s.name)}" title="Editar no editor de skills">${icons.editPen}<span>Editar</span></button>
              <button class="mini" data-skill-install="${escapeHtml(s.name)}" title="Copiar para .agents/skills deste projeto">${icons.download}<span>Instalar no projeto</span></button>

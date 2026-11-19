@@ -28,6 +28,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
@@ -68,17 +69,19 @@ type Attachment struct {
 
 // Runner executes one team against a workspace.
 type Runner struct {
-	Workspace          string
-	Project            team.File
-	Team               team.Team
-	Git                gitx.Git
-	GitHub             githubx.Client
-	Jira               jirax.Client
-	Sessions           *sessionx.Store
-	Models             map[string]model.LLM
-	NewModel           func(ctx context.Context, a team.Agent) (model.LLM, error)
-	Confirm            shellx.Confirmer
-	Approve            func(prompt string) bool
+	Workspace string
+	Project   team.File
+	Team      team.Team
+	Git       gitx.Git
+	GitHub    githubx.Client
+	Jira      jirax.Client
+	Sessions  *sessionx.Store
+	Models    map[string]model.LLM
+	NewModel  func(ctx context.Context, a team.Agent) (model.LLM, error)
+	Confirm   shellx.Confirmer
+	Approve   func(prompt string) bool
+	// MCP é o cliente da execução. Nil nos testes: nenhum servidor é iniciado.
+	MCP                *mcpx.Host
 	Out                io.Writer
 	Err                io.Writer
 	Streaming          agent.StreamingMode
@@ -869,6 +872,7 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		Jira:                 r.Jira,
 		JiraKey:              jiraKey,
 		BaseBranch:           r.Project.Settings.BaseBranch,
+		MCP:                  r.MCP,
 	})
 	if err != nil {
 		return nil, err
@@ -1874,6 +1878,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		JiraKey:                jiraKey,
 		JiraProject:            r.Project.Settings.JiraProject,
 		BaseBranch:             r.Project.Settings.BaseBranch,
+		MCP:                    r.MCP,
 	})
 	if err != nil {
 		return false, "", err
@@ -1894,6 +1899,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
 			BaseBranch:           r.Project.Settings.BaseBranch,
+			MCP:                  r.MCP,
 		})
 		if err != nil {
 			return false, "", err
@@ -1915,6 +1921,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			JiraKey:              jiraKey,
 			JiraProject:          r.Project.Settings.JiraProject,
 			BaseBranch:           r.Project.Settings.BaseBranch,
+			MCP:                  r.MCP,
 		})
 		if err != nil {
 			return false, "", err
@@ -2277,6 +2284,7 @@ REGRA DE TRIAGEM:
 			"SELEÇÃO DE SKILLS:\n" +
 			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
 			"- Se a versão NATIVA da IDE parecer mais atual ou melhor que a versão do projeto, passe o nome em \"native_skills\"; se o projeto tiver uma skill de mesmo nome, o usuário será consultado para autorizar a substituição.\n" +
+			"- Skills na seção OPCIONAIS DESLIGADAS só entram em native_skills se o usuário pediu explicitamente essa skill pelo nome.\n" +
 			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file."
 	}
 	if note := r.pinnedSkillsNote(); note != "" {

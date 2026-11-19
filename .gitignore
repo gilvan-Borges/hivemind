@@ -3,6 +3,9 @@
 /dist/
 *.test
 .hivemind/
+# Índices locais dos MCPs (produto e Cursor). Não versionar.
+.code-review-graph/
+.codebase-memory/
 *.out
 /build/
 ide/build/
@@ -14,7 +17,3 @@ ide/cover
 ide/cover/
 *.coverprofile
 *hivemind-App*
-
-# Índices locais dos MCPs opcionais do Cursor. Não versionar.
-.code-review-graph/
-.codebase-memory/

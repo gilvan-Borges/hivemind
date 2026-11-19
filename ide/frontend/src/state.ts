@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, MCPServerInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -145,6 +145,7 @@ export const state = {
   autoReviewConfigOpen: false,
   gitTab: "changes" as GitSubTab,
   skills: [] as SkillInfo[],
+  mcpServers: [] as MCPServerInfo[],
   skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
   branchPopover: {
     open: false,

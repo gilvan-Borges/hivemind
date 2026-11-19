@@ -1,16 +1,16 @@
-# Cursor neste repositório (rascunho)
+# Cursor neste repositório
 
-Configuração proposta para o agente do Cursor no HiveMind. Ainda não há pull request: a relação com a HiveMind IDE precisa ser confirmada antes de adotar isto.
+Configuração do agente do editor Cursor. O produto tem o próprio host MCP e as próprias skills nativas, descritos em [MCP.md](MCP.md). Os dois não compartilham arquivo: o Cursor lê `.cursor/mcp.json`; a CLI e a IDE leem `mcp-servers.json` na pasta de config do usuário.
 
-O Cursor lê `.cursor/mcp.json`, `.cursor/rules/*.mdc` e as skills em `.cursor/skills/` e em `.agents/skills/`. A documentação usada foi a de [MCP](https://cursor.com/docs/mcp), [Rules](https://cursor.com/docs/rules) e [Agent Skills](https://cursor.com/docs/skills).
+O Cursor também lê `.cursor/rules/*.mdc`, `.cursor/skills/` e `.agents/skills/`. A documentação usada foi a de [MCP](https://cursor.com/docs/mcp), [Rules](https://cursor.com/docs/rules) e [Agent Skills](https://cursor.com/docs/skills).
 
 ## O que este repositório é
 
 Não há um repositório separado chamado Hive IDE. A **HiveMind IDE** é o app desktop em [`ide/`](../ide/README.md) (Go + Wails, binário `hivemind-ide`). Ela reutiliza o núcleo da CLI (`internal/orchestrator`, `internal/team`, e o resto). O catálogo de skills do projeto, para o time da IDE, é só `.agents/skills/` (`internal/skillx`). O Chefe recebe esse catálogo no prompt e pode pedir uma skill pelo nome ao delegar.
 
-Por isso as skills novas deste rascunho ficam em `.cursor/skills/`, não em `.agents/skills/`. Assim o painel e o Chefe da IDE não passam a ver Ponytail nem a varredura de arquitetura até alguém decidir o contrário.
+As cópias para o agente do Cursor ficam em `.cursor/skills/`. Não as copie para `.agents/skills/`. O Chefe da IDE já recebe `ponytail` e `improve-codebase-architecture` pelo catálogo nativo semeado em `internal/skillx`. Duplicar em `.agents/skills/` faria as duas listas aparecerem juntas.
 
-As skills que já estavam em `.agents/skills/` (`ide-dark-islands-ui`, `multi-agent-ide-patterns`) não foram movidas.
+As skills que já estavam em `.agents/skills/` (`ide-dark-islands-ui`, `multi-agent-ide-patterns`) continuam só lá.
 
 ## Ligado por padrão
 
