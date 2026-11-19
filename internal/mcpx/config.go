@@ -58,7 +58,15 @@ type RemoteTool struct {
 	Schema      string
 }
 
+// userConfigPathFn is replaced in tests so they never write the developer profile.
+// On Windows UserConfigDir follows APPDATA, not XDG_CONFIG_HOME.
+var userConfigPathFn = defaultUserConfigPath
+
 func userConfigPath() (string, error) {
+	return userConfigPathFn()
+}
+
+func defaultUserConfigPath() (string, error) {
 	if base, err := os.UserConfigDir(); err == nil && strings.TrimSpace(base) != "" {
 		return filepath.Join(base, "HiveMind", "mcp-servers.json"), nil
 	}

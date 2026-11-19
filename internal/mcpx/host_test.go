@@ -47,8 +47,7 @@ func TestDisabledServerDoesNotExposeTools(t *testing.T) {
 }
 
 func TestEnableForTaskDoesNotPersistAndCloses(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	useTempUserConfig(t)
 	workspace := t.TempDir()
 	h := newHost(workspace, func(_ context.Context, s Server) (session, error) {
 		return &fakeSession{tools: []RemoteTool{{Server: s.Name, Name: "navigate", Schema: `{"type":"object"}`}}}, nil

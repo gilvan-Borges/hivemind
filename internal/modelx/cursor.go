@@ -194,10 +194,6 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("não foi possível executar o Cursor CLI: %s", redactSecret(err.Error(), c.Key))
 	}
-	waitErr := make(chan error, 1)
-	go func() {
-		waitErr <- cmd.Wait()
-	}()
 
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -218,11 +214,13 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		}
 		if notice.Text != "" && !emit(notice.Text) {
 			cancel()
-			<-waitErr
+			_ = cmd.Wait()
 			return nil, ctx.Err()
 		}
 	}
-	err = <-waitErr
+	// Wait só depois de esvaziar stdout. Chamar Wait em paralelo fecha o pipe
+	// e, num processo rápido, perde a última linha (o evento result).
+	err = cmd.Wait()
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("o Cursor CLI excedeu o tempo (%s)", timeout.Truncate(time.Second))
 	}
