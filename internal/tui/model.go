@@ -20,9 +20,11 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -115,24 +117,24 @@ type model struct {
 	quitAt  time.Time
 	status  string
 
-	modal      modal
-	wizardStep int
-	wizName    string
-	wizDevs    string
-	wizModels  []string
-	wizModel   int
-	wizEffort  int
-	efforts    []string
-	sameModel  bool
-	wizWT      bool
-	wizCommit  bool
-	wizPR      bool
-	wizGitHub  bool
-	wizJira    bool
-	wizJiraKey string
-	pick       int
-	pickItems  []string
-	slashSel   int
+	modal         modal
+	wizardStep    int
+	wizName       string
+	wizDevs       string
+	wizModels     []string
+	wizModel      int
+	wizEffort     int
+	efforts       []string
+	sameModel     bool
+	wizWT         bool
+	wizCommit     bool
+	wizPR         bool
+	wizGitHub     bool
+	wizJira       bool
+	wizJiraKey    string
+	pick          int
+	pickItems     []string
+	slashSel      int
 	atSel         int
 	atQuery       string
 	pending       string
@@ -392,6 +394,10 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 	}
 	go func() {
 		defer close(ch)
+		nativeRoot := skillx.UserSkillsDir()
+		_, _ = skillx.SeedProductSkills(nativeRoot)
+		mcpHost := mcpx.Start(ctx, workspaceDir)
+		defer mcpHost.Close()
 		r := &orchestrator.Runner{
 			Workspace:          workspaceDir,
 			Project:            projectSnapshot,
@@ -399,6 +405,9 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 			Git:                gitx.Local{},
 			Confirm:            askHuman,
 			Approve:            askHuman,
+			MCP:                mcpHost,
+			NativeSkills:       skillx.LoadNative(nativeRoot),
+			NativeSkillsRoot:   nativeRoot,
 			Out:                io.Discard,
 			Err:                io.Discard,
 			EnableTriage:       true,
