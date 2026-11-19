@@ -216,6 +216,7 @@ export interface AgentRuntime {
   model: string;
   status: "idle" | "running" | "done" | "error";
   tool?: string;
+  runningSince?: number;
   inTokens: number;
   outTokens: number;
   tokens: number;

@@ -54,7 +54,7 @@ export async function boot() {
     }
 
     if (ev.kind === "stage") {
-      // stage updated above
+      updateAgentStatus(lane, ev.author, ev.label, "running");
     } else if (ev.kind === "usage") {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);

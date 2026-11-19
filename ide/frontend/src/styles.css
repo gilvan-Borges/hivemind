@@ -978,6 +978,16 @@ button.icon-btn:hover:not(:disabled) {
 .mc-agent-card.done {
   border-color: rgba(87, 199, 147, 0.28);
 }
+.mc-agent-card .status-pill.running {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.mc-agent-elapsed {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
 .mc-tok-track {
   width: 100%;
   height: 5px;

@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import type { AgentRuntime, ChatMessage, TeamLane } from "./types";
-import { escapeHtml, formatTokens, matchAgentRuntime } from "./utils";
+import { escapeHtml, formatElapsedDuration, formatTokens, matchAgentRuntime, updateAgentRuntimeStatus } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, syncComposerButtons } from "./chat";
 import { renderEditorBody } from "./editor";
 import { renderLeftSidebar } from "./explorer";
@@ -60,11 +60,7 @@ let editingLaneId: string | null = null;
 export let thinkingTickTimer = 0;
 
 export function formatElapsedThinking(ms: number): string {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const mins = Math.floor(totalSec / 60);
-  const secs = totalSec % 60;
-  return `${mins}m ${secs}s`;
+  return formatElapsedDuration(ms);
 }
 
 export function isCurrentTurnSolo(lane: TeamLane): boolean {
@@ -90,10 +86,10 @@ export function ensureThinkingTicker() {
   if (thinkingTickTimer) return;
   thinkingTickTimer = window.setInterval(() => {
     const now = Date.now();
-    const nodes = document.querySelectorAll<HTMLElement>("[data-thinking-started]");
+    const nodes = document.querySelectorAll<HTMLElement>("[data-thinking-started], [data-agent-running-since]");
     let anyActive = false;
     nodes.forEach((node) => {
-      const started = Number(node.dataset.thinkingStarted || 0);
+      const started = Number(node.dataset.thinkingStarted || node.dataset.agentRunningSince || 0);
       if (started > 0) {
         anyActive = true;
         node.textContent = formatElapsedThinking(now - started);
@@ -164,6 +160,7 @@ export function syncDynamicDevsInLane(lane: TeamLane, devNames: string[]) {
       role: "developer",
       model: baseDevModel,
       status: "running",
+      runningSince: Date.now(),
       inTokens: 0,
       outTokens: 0,
       tokens: 0,
@@ -174,12 +171,9 @@ export function syncDynamicDevsInLane(lane: TeamLane, devNames: string[]) {
   lane.agents = [...beforeQA, ...nextDevs, ...qaAndAfter];
 }
 
-export function updateAgentStatus(lane: TeamLane, author: string, label: string | undefined, status: AgentRuntime["status"], tool: string) {
+export function updateAgentStatus(lane: TeamLane, author: string, label: string | undefined, status: AgentRuntime["status"], tool?: string) {
   const ag = matchAgentRuntime(lane.agents, author, label);
-  if (ag) {
-    ag.status = status;
-    ag.tool = tool;
-  }
+  if (ag) updateAgentRuntimeStatus(ag, status, tool);
 }
 
 export function confirmDeleteSavedTeam(teamName: string) {

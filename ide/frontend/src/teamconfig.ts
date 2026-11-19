@@ -1,11 +1,11 @@
 import { icons } from "./icons";
-import type { PermissionMode, SkillTargetRole } from "./types";
-import { escapeHtml, exactTokens, roleLabelPt, runModeLabel } from "./utils";
+import type { AgentRuntime, PermissionMode, SkillTargetRole } from "./types";
+import { escapeHtml, exactTokens, formatElapsedDuration, roleLabelPt, runModeLabel } from "./utils";
 import { refreshSessions } from "./boot";
 import { renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindAgentModelSelects, refreshExplorerTree, renderLeftSidebar } from "./explorer";
-import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
+import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, ensureThinkingTicker, renderLaneBarOnly } from "./lanes";
 import { openJiraModal, openOpenCodeModal, refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
 import { bindModelPickerPairs, refreshSkills, renderModelPickerPairHtml, skillTargetLabel } from "./models";
 import { openSidebarView, updateStatusBar } from "./shell";
@@ -115,6 +115,18 @@ export async function openTeamMemoryFile() {
   }
 }
 
+function renderMissionAgentStatusContent(agent: AgentRuntime): string {
+  if (agent.status === "running") {
+    const elapsed = agent.runningSince
+      ? ` há <span class="mc-agent-elapsed" data-agent-running-since="${agent.runningSince}">${formatElapsedDuration(Date.now() - agent.runningSince)}</span>`
+      : "";
+    return `${icons.spinner} rodando${elapsed}`;
+  }
+  if (agent.status === "done") return "concluído";
+  if (agent.status === "error") return "erro";
+  return "pronto";
+}
+
 export function renderMissionBoardHtml(): string {
   const lane = activeLane();
   const agents = lane?.agents || [];
@@ -151,7 +163,7 @@ export function renderMissionBoardHtml(): string {
                   <div class="dim">${escapeHtml(roleLabelPt(a.role))}</div>
                 </div>
                 <span class="status-pill ${a.status}" data-mc-pill="${escapeHtml(a.name)}">
-                  ${a.status === "running" ? `${icons.spinner} rodando` : a.status === "done" ? "concluído" : a.status === "error" ? "erro" : "pronto"}
+                  ${renderMissionAgentStatusContent(a)}
                 </span>
               </div>
 
@@ -197,6 +209,7 @@ export function bindMissionBoardEvents() {
     void openTeamConfigTab();
   });
   bindAgentModelSelects(root, "data-mc-agent-model");
+  if (root.querySelector("[data-agent-running-since]")) ensureThinkingTicker();
 }
 
 export function updateMissionBoardIfOpen() {
@@ -226,7 +239,7 @@ export function updateMissionBoardIfOpen() {
     const pill = root.querySelector<HTMLElement>(`[data-mc-pill="${esc}"]`);
     if (pill) {
       pill.className = `status-pill ${a.status}`;
-      pill.innerHTML = a.status === "running" ? `${icons.spinner} rodando` : a.status === "done" ? "concluído" : a.status === "error" ? "erro" : "pronto";
+      pill.innerHTML = renderMissionAgentStatusContent(a);
     }
     const sel = root.querySelector<HTMLSelectElement>(`[data-mc-agent-model="${esc}"]`);
     if (sel) sel.disabled = !!lane?.running;
@@ -239,6 +252,7 @@ export function updateMissionBoardIfOpen() {
     const inout = root.querySelector<HTMLElement>(`[data-mc-inout="${esc}"]`);
     if (inout) inout.textContent = `Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}`;
   }
+  if (root.querySelector("[data-agent-running-since]")) ensureThinkingTicker();
 }
 
 export function draftRolesForSkill(draft: TeamConfigDraft, name: string, source: "" | "native" | "project"): SkillTargetRole[] {

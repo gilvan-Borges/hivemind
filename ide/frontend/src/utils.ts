@@ -31,6 +31,29 @@ export function exactTokens(n: number | undefined | null): string {
   return Number(n || 0).toLocaleString("pt-BR");
 }
 
+export function formatElapsedDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+  if (mins > 0) return `${mins}m ${secs}s`;
+  return `${secs}s`;
+}
+
+export function updateAgentRuntimeStatus(
+  agent: AgentRuntime,
+  status: AgentRuntime["status"],
+  tool: string | undefined,
+  now = Date.now()
+): void {
+  if (status === "running" && (agent.status !== "running" || !agent.runningSince)) {
+    agent.runningSince = now;
+  }
+  agent.status = status;
+  if (tool !== undefined) agent.tool = tool;
+}
+
 export function roleLabelPt(role: string): string {
   switch (role) {
     case "architect":

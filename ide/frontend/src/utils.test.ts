@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { RunMode } from "./types";
-import { escapeHtml, exactTokens, formatTokens, runModeLabel } from "./utils";
+import type { AgentRuntime, RunMode } from "./types";
+import { escapeHtml, exactTokens, formatElapsedDuration, formatTokens, runModeLabel, updateAgentRuntimeStatus } from "./utils";
 
 describe("escapeHtml", () => {
   it("escapa os cinco caracteres perigosos", () => {
@@ -50,5 +50,38 @@ describe("formatação de tokens", () => {
 
   it("tokens exatos usam separador pt-BR", () => {
     expect(exactTokens(1234567)).toBe("1.234.567");
+  });
+});
+
+describe("tempo de atividade dos agentes", () => {
+  it("formata segundos, minutos e horas sem esconder execuções longas", () => {
+    expect(formatElapsedDuration(0)).toBe("0s");
+    expect(formatElapsedDuration(42_999)).toBe("42s");
+    expect(formatElapsedDuration(4 * 60_000 + 9_000)).toBe("4m 9s");
+    expect(formatElapsedDuration(3_723_000)).toBe("1h 2m 3s");
+    expect(formatElapsedDuration(-1)).toBe("0s");
+  });
+
+  it("preserva o início durante eventos running e reinicia em um novo turno", () => {
+    const agent: AgentRuntime = {
+      name: "dev",
+      role: "developer",
+      model: "agy",
+      status: "idle",
+      inTokens: 0,
+      outTokens: 0,
+      tokens: 0,
+      calls: 0,
+    };
+
+    updateAgentRuntimeStatus(agent, "running", "read_file", 1_000);
+    expect(agent.runningSince).toBe(1_000);
+    updateAgentRuntimeStatus(agent, "running", undefined, 2_000);
+    expect(agent.runningSince).toBe(1_000);
+    expect(agent.tool).toBe("read_file");
+
+    updateAgentRuntimeStatus(agent, "done", "", 3_000);
+    updateAgentRuntimeStatus(agent, "running", undefined, 4_000);
+    expect(agent.runningSince).toBe(4_000);
   });
 });
