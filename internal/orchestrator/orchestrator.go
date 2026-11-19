@@ -396,6 +396,10 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		}
 		return result, err
 	}
+	// Trim bulky write_file arguments and old tool output before the next turn
+	// reuses this session. The current run already finished, so no prompt is
+	// affected.
+	_ = sessionx.CompactOldToolOutputs(sess, 12)
 	finishText := fmt.Sprintf("Sessão %s concluída.", result.SessionID)
 	if result.PendingQA {
 		finishText = fmt.Sprintf("Sessão %s concluída, mas a entrega ficou PENDENTE de aprovação do QA: nenhum commit, push ou PR foi feito.", result.SessionID)
@@ -761,11 +765,15 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 	}
 	keys := append([]string(nil), stateKeys...)
 	cfg := llmagent.Config{
-		Name:                     adkName,
-		Description:              roleLabel(a.Role) + " do time HiveMind.",
-		Model:                    llm,
-		Mode:                     llmagent.ModeChat,
-		IncludeContents:          llmagent.IncludeContentsDefault,
+		Name:        adkName,
+		Description: roleLabel(a.Role) + " do time HiveMind.",
+		Model:       llm,
+		Mode:        llmagent.ModeChat,
+		// Pipeline agents receive the plan/reports through the explicit state
+		// handoff below. Keeping the full prior conversation as well duplicates
+		// that context in every prompt (one of the main drivers of the ~1.2M
+		// tokens/run measured in docs/DOGSFOODING.md).
+		IncludeContents:          llmagent.IncludeContentsNone,
 		DisallowTransferToParent: true,
 		DisallowTransferToPeers:  true,
 		Tools:                    roleTools,

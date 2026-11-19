@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,11 +21,13 @@ import (
 func newRunCmd() *cobra.Command {
 	var jiraKey, sessionID, permissionMode string
 	var yes, fullAccess bool
+	var maxTokens int64
 	cmd := &cobra.Command{
 		Use:   "run [objetivo]",
 		Short: "Executa um objetivo com o time, mostrando a saída de cada agente",
 		Example: `  hivemind run "adicionar um endpoint de healthcheck"
   hivemind run --jira PROJ-123
+  hivemind run --max-tokens 600000 "implementar o fluxo de login"
   hivemind run --full-access "corrigir revisão do PR #1"
   hivemind run "ajuste o texto" --jira PROJ-123 --session 1a2b3c4d5e6f`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -33,7 +36,7 @@ func newRunCmd() *cobra.Command {
 			if fullAccess {
 				overrideMode = team.PermissionFullAccess
 			}
-			_, err := executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, overrideMode)
+			_, err := executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, overrideMode, maxTokens)
 			return err
 		},
 	}
@@ -42,20 +45,24 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirma comandos de shell perigosos e ações protegidas sem perguntar")
 	cmd.Flags().BoolVar(&fullAccess, "full-access", false, "Concede acesso e permissão total nesta execução (estilo Claude Code / Codex)")
 	cmd.Flags().StringVar(&permissionMode, "permission-mode", "", "Sobrescreve o modo de permissão nesta execução: governed, auto_edit ou full_access")
+	cmd.Flags().Int64Var(&maxTokens, "max-tokens", -1, "Limite de tokens desta execução (0 = sem limite; -1 = usa settings.max_tokens do time)")
 	return cmd
 }
 
 func executeRun(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool) (orchestrator.Result, error) {
-	return executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, "")
+	return executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, "", -1)
 }
 
-func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool, permissionOverride string) (orchestrator.Result, error) {
+func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool, permissionOverride string, maxTokens int64) (orchestrator.Result, error) {
 	dir, project, err := loadProject(cmd)
 	if err != nil {
 		return orchestrator.Result{}, err
 	}
 	if permissionOverride != "" {
 		project.Settings.PermissionMode = team.NormalizePermissionMode(permissionOverride)
+	}
+	if maxTokens >= 0 {
+		project.Settings.MaxTokens = maxTokens
 	}
 	squad, err := selectedTeam(cmd, project)
 	if err != nil {
@@ -79,11 +86,38 @@ func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string
 		Err:       cmd.ErrOrStderr(),
 		Streaming: agent.StreamingModeSSE,
 	}
-	return runner.Run(cmd.Context(), orchestrator.Request{
+	res, runErr := runner.Run(cmd.Context(), orchestrator.Request{
 		Objective: objective,
 		JiraKey:   jiraKey,
 		SessionID: sessionID,
 	})
+	if res.TotalTokens > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Uso: %s tokens (entrada %s / saída %s)\n",
+			formatTokenCount(res.TotalTokens), formatTokenCount(res.InputTokens), formatTokenCount(res.OutputTokens))
+	}
+	return res, runErr
+}
+
+// formatTokenCount formats 1234567 as 1.234.567 (pt-BR thousands separator).
+func formatTokenCount(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	s := strconv.FormatInt(n, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	first := len(s) % 3
+	if first == 0 {
+		first = 3
+	}
+	b.WriteString(s[:first])
+	for i := first; i < len(s); i += 3 {
+		b.WriteByte('.')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 func approverWithReader(cmd *cobra.Command, settings team.Settings, yes bool, sharedReader *bufio.Reader, sharedMu *sync.Mutex) func(string) bool {
