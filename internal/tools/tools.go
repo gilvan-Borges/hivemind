@@ -433,7 +433,7 @@ func (d Deps) addGitHubRead(out *[]tool.Tool) error {
 	}
 	getPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_get_pr",
-		Description: "Lê detalhes completos de um Pull Request: autor, branches (head -> base), revisores pendentes, revisões (APPROVED / CHANGES_REQUESTED) e comentários.",
+		Description: "Lê detalhes completos de um Pull Request via conector nativo GitHub: autoria (indica se o PR é NOSSO ou de terceiro), branches (head -> base), revisores pendentes, revisões formais (APPROVED / CHANGES_REQUESTED), comentários inline no código (com arquivo, linha e comment_id) e comentários gerais na conversa.",
 	}, func(ctx agent.Context, args struct {
 		Number int `json:"number" jsonschema:"Número do pull request."`
 	}) (textResult, error) {
@@ -441,25 +441,179 @@ func (d Deps) addGitHubRead(out *[]tool.Tool) error {
 		if err != nil {
 			return textResult{}, err
 		}
-		issueComments, _ := d.GitHub.ListIssueComments(ctx, args.Number)
-		return textResult{Text: formatPRDetail(pr, issueComments)}, nil
+		if len(pr.IssueComments) == 0 && !hasFetchError(pr.CommentFetchErrors, "comentários gerais") {
+			if extra, cErr := d.GitHub.ListIssueComments(ctx, args.Number); cErr == nil {
+				pr.IssueComments = extra
+			} else {
+				pr.CommentFetchErrors = append(pr.CommentFetchErrors, fmt.Sprintf("comentários gerais: %v", cErr))
+			}
+		}
+		me, _ := d.GitHub.CurrentUser(ctx)
+		return textResult{Text: formatPRDetail(pr, pr.IssueComments, me)}, nil
 	})
 	if err != nil {
 		return err
 	}
 	comments, err := functiontool.New(functiontool.Config{
 		Name:        "github_issue_comments",
-		Description: "Lê comentários de uma issue ou pull request do GitHub.",
+		Description: "Lê todos os comentários de uma issue ou pull request no GitHub (comentários gerais na conversa + comentários inline de revisão no código quando for PR).",
 	}, func(ctx agent.Context, args struct {
 		Number int `json:"number" jsonschema:"Número da issue ou do pull request."`
 	}) (textResult, error) {
-		list, err := d.GitHub.ListIssueComments(ctx, args.Number)
+		general, err := d.GitHub.ListIssueComments(ctx, args.Number)
+		if err != nil {
+			return textResult{}, err
+		}
+		inline, _ := d.GitHub.ListPullRequestComments(ctx, args.Number)
+		var b strings.Builder
+		if len(inline) > 0 {
+			b.WriteString("[Comentários Inline no Código]\n")
+			for _, c := range inline {
+				loc := c.Path
+				if c.Line > 0 {
+					loc = fmt.Sprintf("%s:%d", c.Path, c.Line)
+				}
+				ts := ""
+				if strings.TrimSpace(c.CreatedAt) != "" {
+					ts = " (" + c.CreatedAt + ")"
+				}
+				reply := ""
+				if c.InReplyToID > 0 {
+					reply = fmt.Sprintf(" [em resposta a #%d]", c.InReplyToID)
+				}
+				fmt.Fprintf(&b, "- [comment_id=%d] @%s em %s%s%s: %s\n", c.ID, c.Author, loc, ts, reply, strings.TrimSpace(c.Body))
+			}
+		}
+		if len(general) > 0 {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("[Comentários Gerais]\n")
+			for _, c := range general {
+				ts := ""
+				if strings.TrimSpace(c.CreatedAt) != "" {
+					ts = " (" + c.CreatedAt + ")"
+				}
+				fmt.Fprintf(&b, "- @%s%s: %s\n", c.Author, ts, strings.TrimSpace(c.Body))
+			}
+		}
+		if b.Len() == 0 {
+			return textResult{Text: fmt.Sprintf("Nenhum comentário encontrado em #%d.", args.Number)}, nil
+		}
+		return textResult{Text: b.String()}, nil
+	})
+	if err != nil {
+		return err
+	}
+	prDiff, err := functiontool.New(functiontool.Config{
+		Name:        "github_pr_diff",
+		Description: "Lista os arquivos modificados e os trechos de diff (patch) de um Pull Request no GitHub. Aceita filtro opcional por caminho de arquivo.",
+	}, func(ctx agent.Context, args struct {
+		Number int    `json:"number" jsonschema:"Número do pull request."`
+		File   string `json:"file,omitempty" jsonschema:"Filtro opcional por nome/trecho do arquivo para ver o diff completo daquele arquivo."`
+	}) (textResult, error) {
+		files, err := d.GitHub.ListPullRequestFiles(ctx, args.Number)
+		if err != nil {
+			return textResult{}, err
+		}
+		filter := strings.ToLower(strings.TrimSpace(args.File))
+		var b strings.Builder
+		fmt.Fprintf(&b, "Arquivos alterados no PR #%d (%d arquivo(s)):\n", args.Number, len(files))
+		const maxTotalChars = 24000
+		for _, f := range files {
+			if filter != "" && !strings.Contains(strings.ToLower(f.Filename), filter) {
+				continue
+			}
+			fmt.Fprintf(&b, "\n=== %s [%s] (+%d -%d) ===\n", f.Filename, f.Status, f.Additions, f.Deletions)
+			if strings.TrimSpace(f.Patch) != "" {
+				remaining := maxTotalChars - b.Len()
+				if remaining <= 200 {
+					b.WriteString("... (diff truncado; informe o parâmetro file para ver arquivos específicos)\n")
+					break
+				}
+				patch := f.Patch
+				if filter == "" && len(patch) > 4000 {
+					patch = strx.TruncateBytes(patch, 4000, "\n... (patch truncado; passe file=\""+f.Filename+"\" para ver completo)")
+				} else if len(patch) > remaining {
+					patch = strx.TruncateBytes(patch, remaining, "\n... (truncado)")
+				}
+				b.WriteString(patch + "\n")
+			}
+		}
+		return textResult{Text: b.String()}, nil
+	})
+	if err != nil {
+		return err
+	}
+	listPRs, err := functiontool.New(functiontool.Config{
+		Name:        "github_list_prs",
+		Description: "Lista Pull Requests do repositório no GitHub com autor, branches, revisores pedidos e marcação se o PR é NOSSO ou aguarda nossa revisão.",
+	}, func(ctx agent.Context, args struct {
+		State string `json:"state,omitempty" jsonschema:"Estado: open (padrão), closed ou all."`
+		Limit int    `json:"limit,omitempty" jsonschema:"Quantidade máxima (padrão 20, máx 100)."`
+	}) (textResult, error) {
+		if args.Limit <= 0 {
+			args.Limit = 20
+		}
+		prs, err := d.GitHub.ListPullRequests(ctx, args.State, args.Limit)
+		if err != nil {
+			return textResult{}, err
+		}
+		if len(prs) == 0 {
+			return textResult{Text: "Nenhum Pull Request encontrado."}, nil
+		}
+		me, _ := d.GitHub.CurrentUser(ctx)
+		var b strings.Builder
+		for _, pr := range prs {
+			tag := ""
+			if me != "" && strings.EqualFold(pr.Author, me) {
+				tag = " [NOSSO]"
+			} else if me != "" {
+				for _, rr := range pr.RequestedReviewers {
+					if strings.EqualFold(rr, me) {
+						tag = " [AGUARDA SUA REVISÃO]"
+						break
+					}
+				}
+			}
+			draft := ""
+			if pr.Draft {
+				draft = " (DRAFT)"
+			}
+			fmt.Fprintf(&b, "#%d%s%s — %s | autor=@%s | %s -> %s", pr.Number, tag, draft, pr.Title, pr.Author, pr.HeadRef, pr.BaseRef)
+			if len(pr.RequestedReviewers) > 0 {
+				fmt.Fprintf(&b, " | revisores=[%s]", strings.Join(pr.RequestedReviewers, ", "))
+			}
+			b.WriteString("\n")
+		}
+		return textResult{Text: b.String()}, nil
+	})
+	if err != nil {
+		return err
+	}
+	getIssue, err := functiontool.New(functiontool.Config{
+		Name:        "github_get_issue",
+		Description: "Lê detalhes completos e comentários de uma Issue do GitHub.",
+	}, func(ctx agent.Context, args struct {
+		Number int `json:"number" jsonschema:"Número da issue no GitHub."`
+	}) (textResult, error) {
+		iss, err := d.GitHub.GetIssue(ctx, args.Number)
 		if err != nil {
 			return textResult{}, err
 		}
 		var b strings.Builder
-		for _, c := range list {
-			fmt.Fprintf(&b, "%s: %s\n", c.Author, c.Body)
+		fmt.Fprintf(&b, "Issue #%d: %s\nAutor: @%s | Estado: %s\nURL: %s\n", iss.Number, iss.Title, iss.Author, iss.State, iss.URL)
+		if len(iss.Labels) > 0 {
+			fmt.Fprintf(&b, "Labels: %s\n", strings.Join(iss.Labels, ", "))
+		}
+		if strings.TrimSpace(iss.Body) != "" {
+			fmt.Fprintf(&b, "\n[Descrição]\n%s\n", iss.Body)
+		}
+		if len(iss.Comments) > 0 {
+			b.WriteString("\n[Comentários]\n")
+			for _, c := range iss.Comments {
+				fmt.Fprintf(&b, "- @%s: %s\n", c.Author, strings.TrimSpace(c.Body))
+			}
 		}
 		return textResult{Text: b.String()}, nil
 	})
@@ -478,8 +632,17 @@ func (d Deps) addGitHubRead(out *[]tool.Tool) error {
 	if err != nil {
 		return err
 	}
-	*out = append(*out, getPR, comments, ci)
+	*out = append(*out, getPR, comments, prDiff, listPRs, getIssue, ci)
 	return nil
+}
+
+func hasFetchError(errs []string, prefix string) bool {
+	for _, e := range errs {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bool) error {
@@ -539,7 +702,7 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 
 	commentPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_comment_pr",
-		Description: "Comenta em um Pull Request. Permitido SOMENTE quando o PR é de sua própria autoria (ex: respondendo mudanças feitas após review) ou quando há pedido de revisão.",
+		Description: "Comenta na conversa geral de um Pull Request. Permitido SOMENTE quando o PR é de sua própria autoria (ex: respondendo mudanças feitas após review) ou quando há pedido de revisão.",
 	}, func(ctx agent.Context, args struct {
 		Number int    `json:"number" jsonschema:"Número do pull request."`
 		Body   string `json:"body" jsonschema:"Resumo das alterações realizadas ou resposta à revisão."`
@@ -556,6 +719,31 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 			return textResult{}, err
 		}
 		return textResult{Text: fmt.Sprintf("comentário registrado no PR #%d", args.Number)}, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	replyComment, err := functiontool.New(functiontool.Config{
+		Name:        "github_reply_review_comment",
+		Description: "Responde diretamente dentro de uma thread de comentário inline de revisão no código (usando o comment_id retornado por github_get_pr ou github_issue_comments).",
+	}, func(ctx agent.Context, args struct {
+		Number    int    `json:"number" jsonschema:"Número do pull request."`
+		CommentID int64  `json:"comment_id" jsonschema:"ID numérico do comentário inline ao qual responder."`
+		Body      string `json:"body" jsonschema:"Resposta técnica para a thread inline."`
+	}) (textResult, error) {
+		pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
+		if err != nil {
+			return textResult{}, err
+		}
+		me, _ := d.GitHub.CurrentUser(ctx)
+		if err := githubx.CheckPRCommentAllowed(pr, me, d.ReviewRequestedInObj); err != nil {
+			return textResult{}, err
+		}
+		if err := d.GitHub.ReplyToReviewComment(ctx, args.Number, args.CommentID, args.Body); err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: fmt.Sprintf("resposta registrada no comentário inline #%d do PR #%d", args.CommentID, args.Number)}, nil
 	})
 	if err != nil {
 		return err
@@ -587,7 +775,7 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 
 	reviewPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_review_pr",
-		Description: "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR. Permitido SOMENTE quando há pedido de revisão.",
+		Description: "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão.",
 	}, func(ctx agent.Context, args struct {
 		Number int    `json:"number" jsonschema:"Número do pull request."`
 		Event  string `json:"event" jsonschema:"Decisão: APPROVE, REQUEST_CHANGES ou COMMENT."`
@@ -644,14 +832,25 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		return err
 	}
 
-	*out = append(*out, commentPR, reqReview, reviewPR, mergePR)
+	*out = append(*out, commentPR, replyComment, reqReview, reviewPR, mergePR)
 	return nil
 }
 
-func formatPRDetail(pr githubx.PullRequestDetail, issueComments []githubx.Comment) string {
+func formatPRDetail(pr githubx.PullRequestDetail, issueComments []githubx.Comment, currentUser string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "PR #%d: %s\nAutor: %s | Estado: %s | Mesclado: %v\nBranches: %s -> %s\nURL: %s\n",
+	fmt.Fprintf(&b, "PR #%d: %s\nAutor: @%s | Estado: %s | Mesclado: %v\nBranches: %s -> %s\nURL: %s\n",
 		pr.Number, pr.Title, pr.Author, pr.State, pr.Merged, pr.HeadRef, pr.BaseRef, pr.URL)
+	if pr.ChangedFiles > 0 || pr.Additions > 0 || pr.Deletions > 0 {
+		fmt.Fprintf(&b, "Alterações: %d arquivo(s) (+%d -%d)\n", pr.ChangedFiles, pr.Additions, pr.Deletions)
+	}
+	me := strings.TrimSpace(currentUser)
+	if me != "" {
+		if strings.EqualFold(strings.TrimSpace(pr.Author), me) {
+			fmt.Fprintf(&b, "Papel neste PR: PR NOSSO (autor = você, @%s). VOCÊ NÃO É O REVISOR — leia abaixo os feedbacks dos revisores externos (revisões, comentários inline e comentários gerais) e atenda/corrija o que foi solicitado.\n", me)
+		} else {
+			fmt.Fprintf(&b, "Papel neste PR: PR DE TERCEIRO (autor: @%s | usuário autenticado: @%s).\n", pr.Author, me)
+		}
+	}
 	if len(pr.RequestedReviewers) > 0 {
 		fmt.Fprintf(&b, "Revisores aguardando resposta: %s\n", strings.Join(pr.RequestedReviewers, ", "))
 	}
@@ -661,26 +860,64 @@ func formatPRDetail(pr githubx.PullRequestDetail, issueComments []githubx.Commen
 	} else {
 		fmt.Fprintf(&b, "Status de aprovação: PENDENTE (%s)\n", reason)
 	}
+	if len(pr.CommentFetchErrors) > 0 {
+		fmt.Fprintf(&b, "AVISO ao ler feedbacks do GitHub: %s\n", strings.Join(pr.CommentFetchErrors, " | "))
+	}
 	if strings.TrimSpace(pr.Body) != "" {
 		fmt.Fprintf(&b, "\n[Descrição]\n%s\n", pr.Body)
 	}
 	if len(pr.Reviews) > 0 {
-		b.WriteString("\n[Revisões]\n")
+		b.WriteString("\n[Revisões Formais]\n")
 		for _, rv := range pr.Reviews {
-			fmt.Fprintf(&b, "- %s [%s]: %s\n", rv.Author, rv.State, strings.TrimSpace(rv.Body))
+			ts := ""
+			if strings.TrimSpace(rv.SubmittedAt) != "" {
+				ts = " (" + rv.SubmittedAt + ")"
+			}
+			roleTag := ""
+			if me != "" && strings.EqualFold(rv.Author, pr.Author) {
+				roleTag = " [autor]"
+			}
+			fmt.Fprintf(&b, "- @%s%s [%s]%s: %s\n", rv.Author, roleTag, rv.State, ts, strings.TrimSpace(rv.Body))
 		}
 	}
 	if len(pr.ReviewComments) > 0 {
-		b.WriteString("\n[Comentários no Código]\n")
+		b.WriteString("\n[Comentários Inline no Código]\n")
 		for _, c := range pr.ReviewComments {
-			fmt.Fprintf(&b, "- %s (%s): %s\n", c.Author, c.Path, strings.TrimSpace(c.Body))
+			loc := c.Path
+			if c.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", c.Path, c.Line)
+			}
+			ts := ""
+			if strings.TrimSpace(c.CreatedAt) != "" {
+				ts = " (" + c.CreatedAt + ")"
+			}
+			reply := ""
+			if c.InReplyToID > 0 {
+				reply = fmt.Sprintf(" [resposta a #%d]", c.InReplyToID)
+			}
+			fmt.Fprintf(&b, "- [comment_id=%d] @%s em %s%s%s: %s\n", c.ID, c.Author, loc, ts, reply, strings.TrimSpace(c.Body))
+			if strings.TrimSpace(c.DiffHunk) != "" {
+				hunk := strx.TruncateBytes(strings.TrimSpace(c.DiffHunk), 400, "...")
+				fmt.Fprintf(&b, "  trecho: %s\n", strings.ReplaceAll(hunk, "\n", " | "))
+			}
 		}
 	}
 	if len(issueComments) > 0 {
-		b.WriteString("\n[Comentários Gerais]\n")
+		b.WriteString("\n[Comentários Gerais na Conversa]\n")
 		for _, c := range issueComments {
-			fmt.Fprintf(&b, "- %s: %s\n", c.Author, strings.TrimSpace(c.Body))
+			ts := ""
+			if strings.TrimSpace(c.CreatedAt) != "" {
+				ts = " (" + c.CreatedAt + ")"
+			}
+			roleTag := ""
+			if strings.EqualFold(c.Author, pr.Author) {
+				roleTag = " [autor]"
+			}
+			fmt.Fprintf(&b, "- @%s%s%s: %s\n", c.Author, roleTag, ts, strings.TrimSpace(c.Body))
 		}
+	}
+	if len(pr.Reviews) == 0 && len(pr.ReviewComments) == 0 && len(issueComments) == 0 && len(pr.CommentFetchErrors) == 0 {
+		b.WriteString("\n[Feedbacks]\nNenhuma revisão formal, comentário inline ou comentário geral registrado neste PR até o momento.\n")
 	}
 	return b.String()
 }

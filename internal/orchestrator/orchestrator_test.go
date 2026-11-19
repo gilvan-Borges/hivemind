@@ -732,6 +732,50 @@ func (f *fakeGitHub) CommentOnIssue(_ context.Context, number int, body string) 
 	f.comments[number] = append(f.comments[number], body)
 	return nil
 }
+func (f *fakeGitHub) ListPullRequests(_ context.Context, _ string, _ int) ([]githubx.PullRequestSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]githubx.PullRequestSummary, 0, len(f.prs))
+	for _, pr := range f.prs {
+		out = append(out, githubx.PullRequestSummary{
+			Number:             pr.Number,
+			Title:              pr.Title,
+			URL:                pr.URL,
+			State:              pr.State,
+			Author:             pr.Author,
+			HeadRef:            pr.HeadRef,
+			BaseRef:            pr.BaseRef,
+			RequestedReviewers: append([]string(nil), pr.RequestedReviewers...),
+		})
+	}
+	return out, nil
+}
+func (f *fakeGitHub) ListPullRequestFiles(context.Context, int) ([]githubx.PRFile, error) {
+	return nil, nil
+}
+func (f *fakeGitHub) ListPullRequestComments(_ context.Context, number int) ([]githubx.Comment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pr, ok := f.prs[number]; ok {
+		return append([]githubx.Comment(nil), pr.ReviewComments...), nil
+	}
+	return nil, nil
+}
+func (f *fakeGitHub) ReplyToReviewComment(_ context.Context, number int, _ int64, body string) error {
+	return f.CommentOnIssue(context.Background(), number, body)
+}
+func (f *fakeGitHub) ClosePullRequest(_ context.Context, number int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pr, ok := f.prs[number]; ok {
+		pr.State = "closed"
+	}
+	return nil
+}
+func (f *fakeGitHub) GetIssue(_ context.Context, number int) (githubx.IssueDetail, error) {
+	return githubx.IssueDetail{Number: number, State: "open", Author: f.me}, nil
+}
+func (f *fakeGitHub) CloseIssue(context.Context, int) error { return nil }
 func (f *fakeGitHub) ListIssueComments(context.Context, int) ([]githubx.Comment, error) {
 	return nil, nil
 }

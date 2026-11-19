@@ -584,35 +584,85 @@ func RevertDiffHunk(ctx context.Context, workspaceDir, relPath, hunkHeader strin
 	return err
 }
 
-// GitHubStatusInfo reports whether the GitHub CLI (`gh`) is authenticated and the repo remote.
+// GitHubStatusInfo reports the native GitHub connector / CLI authentication status and repo remote.
 type GitHubStatusInfo struct {
-	Installed bool   `json:"installed"`
-	LoggedIn  bool   `json:"loggedIn"`
-	User      string `json:"user"`
-	Remote    string `json:"remote"`
-	Detail    string `json:"detail"`
+	Installed      bool   `json:"installed"`
+	LoggedIn       bool   `json:"loggedIn"`
+	User           string `json:"user"`
+	Remote         string `json:"remote"`
+	Detail         string `json:"detail"`
+	Mode           string `json:"mode,omitempty"`           // "rest-env", "rest-config", "rest-gh", "cli", "none"
+	Source         string `json:"source,omitempty"`         // "env", "config", "gh-token", "gh-cli", ""
+	ConnectorLabel string `json:"connectorLabel,omitempty"` // human label
+	TokenMasked    string `json:"tokenMasked,omitempty"`
+	BaseURL        string `json:"baseUrl,omitempty"`
 }
 
-// CheckGitHubStatus inspects `gh` authentication and the workspace `origin` remote.
+func githubConnectorLabel(mode string) string {
+	switch mode {
+	case "rest-config":
+		return "API Nativa (Token salvo)"
+	case "rest-env":
+		return "API Nativa (ENV)"
+	case "rest-gh":
+		return "API Nativa (gh auth)"
+	case "cli":
+		return "gh CLI"
+	default:
+		return "Desconectado"
+	}
+}
+
+// CheckGitHubStatus inspects the native GitHub REST connector (saved PAT, env var, or `gh auth token`),
+// falls back to `gh` CLI when needed, and reads the workspace `origin` remote.
 func CheckGitHubStatus(ctx context.Context, workspace string) GitHubStatusInfo {
-	info := GitHubStatusInfo{}
-	if _, err := exec.LookPath("gh"); err != nil {
-		info.Detail = "gh CLI não instalado"
-		return info
+	conn := githubx.InspectConnector()
+	info := GitHubStatusInfo{
+		Mode:           conn.Mode,
+		Source:         conn.Source,
+		ConnectorLabel: githubConnectorLabel(conn.Mode),
+		TokenMasked:    conn.TokenMasked,
+		BaseURL:        conn.BaseURL,
 	}
-	info.Installed = true
-	cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
-	procx.ConfigureContext(cmd)
-	var out, errBuf bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err == nil {
-		info.LoggedIn = true
-		info.User = strings.TrimSpace(out.String())
-		info.Detail = "Conectado como @" + info.User
-	} else {
-		info.Detail = "Não autenticado (rode `gh auth login`)"
+
+	_, ghLookErr := exec.LookPath("gh")
+	ghInstalled := ghLookErr == nil
+	info.Installed = conn.Configured || ghInstalled
+
+	token, baseURL, _ := githubx.LoadCredentials()
+	if token != "" {
+		client := &githubx.REST{BaseURL: baseURL, Token: token, Owner: "_", Repo: "_"}
+		if user, err := client.CurrentUser(ctx); err == nil && strings.TrimSpace(user) != "" {
+			info.LoggedIn = true
+			info.User = strings.TrimSpace(user)
+			info.Detail = fmt.Sprintf("Conectado como @%s (%s)", info.User, info.ConnectorLabel)
+		} else if err != nil {
+			info.Detail = fmt.Sprintf("Token GitHub inválido ou sem acesso (%v)", err)
+		}
 	}
+
+	if !info.LoggedIn && ghInstalled {
+		cmd := exec.CommandContext(ctx, "gh", "api", "user", "--jq", ".login")
+		procx.ConfigureContext(cmd)
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		if err := cmd.Run(); err == nil {
+			info.LoggedIn = true
+			info.User = strings.TrimSpace(out.String())
+			info.Mode = "cli"
+			info.Source = "gh-cli"
+			info.ConnectorLabel = githubConnectorLabel("cli")
+			info.Detail = "Conectado como @" + info.User + " (gh CLI)"
+		} else if info.Detail == "" {
+			info.Detail = "Não autenticado (configure o Conector GitHub ou rode `gh auth login`)"
+		}
+	}
+
+	if !info.LoggedIn && info.Detail == "" {
+		info.Detail = "Configure um Token GitHub no Conector Nativo ou autentique o `gh` CLI"
+	}
+
 	if workspace != "" {
 		g := gitx.Local{}
 		if g.IsRepo(ctx, workspace) {
@@ -671,11 +721,14 @@ func CheckoutGitBranch(ctx context.Context, workspace, branch string, create boo
 
 // ProjectIssue represents a Jira or GitHub issue listed in the IDE sidebar.
 type ProjectIssue struct {
-	Source  string `json:"source"` // "jira" or "github"
-	Key     string `json:"key"`    // e.g. "PROJ-12" or "#42"
-	Title   string `json:"title"`
-	Body    string `json:"body,omitempty"`
-	Status  string `json:"status,omitempty"`
+	Source string `json:"source"` // "jira" or "github"
+	Key    string `json:"key"`    // e.g. "PROJ-12" or "#42"
+	Title  string `json:"title"`
+	Body   string `json:"body,omitempty"`
+	Status string `json:"status,omitempty"`
+	Author string `json:"author,omitempty"`
+	URL    string `json:"url,omitempty"`
+	IsMine bool   `json:"isMine,omitempty"`
 }
 
 // ListProjectIssues fetches open Jira and/or GitHub issues for one-click squad execution.
@@ -704,13 +757,21 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 		}
 	}
 
-	// 2. GitHub issues if git origin is GitHub and `gh` is available
+	// 2. GitHub issues via native GitHub REST connector first, then `gh` CLI fallback
 	g := gitx.Local{}
 	if g.IsRepo(ctx, workspace) {
-		if url, err := g.RemoteURL(ctx, workspace); err == nil {
-			if owner, repo, ok := githubx.ParseRemote(url); ok {
+		if remoteURL, err := g.RemoteURL(ctx, workspace); err == nil {
+			if owner, repo, ok := githubx.ParseRemote(remoteURL); ok {
+				currentUser, _ := githubx.Detect(owner, repo).CurrentUser(ctx)
+				token, baseURL, _ := githubx.LoadCredentials()
+				if token != "" {
+					if restIssues, err := listIssuesREST(ctx, baseURL, owner, repo, token, currentUser); err == nil {
+						issues = append(issues, restIssues...)
+						return issues, nil
+					}
+				}
 				if ghBin, err := exec.LookPath("gh"); err == nil {
-					cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "15", "--json", "number,title,body,state")
+					cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "20", "--json", "number,title,body,state,author,url")
 					procx.ConfigureContext(cmd)
 					var out bytes.Buffer
 					cmd.Stdout = &out
@@ -720,15 +781,23 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 							Title  string `json:"title"`
 							Body   string `json:"body"`
 							State  string `json:"state"`
+							URL    string `json:"url"`
+							Author struct {
+								Login string `json:"login"`
+							} `json:"author"`
 						}
 						if json.Unmarshal(out.Bytes(), &raw) == nil {
 							for _, ghIt := range raw {
+								author := strings.TrimSpace(ghIt.Author.Login)
 								issues = append(issues, ProjectIssue{
 									Source: "github",
 									Key:    fmt.Sprintf("#%d", ghIt.Number),
 									Title:  ghIt.Title,
 									Body:   ghIt.Body,
 									Status: ghIt.State,
+									Author: author,
+									URL:    ghIt.URL,
+									IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
 								})
 							}
 						}
@@ -741,58 +810,313 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 	return issues, nil
 }
 
-// ProjectPullRequest represents an open GitHub pull request listed in the IDE sidebar.
-type ProjectPullRequest struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	Body      string `json:"body,omitempty"`
-	URL       string `json:"url"`
-	State     string `json:"state"`
-	IsDraft   bool   `json:"isDraft"`
-	Author    string `json:"author,omitempty"`
-	HeadRef   string `json:"headRef,omitempty"`
-	BaseRef   string `json:"baseRef,omitempty"`
-	UpdatedAt string `json:"updatedAt,omitempty"`
-}
-
-// ParseGHPRList parses the JSON output from `gh pr list --json ...`.
-func ParseGHPRList(data []byte) ([]ProjectPullRequest, error) {
-	var raw []struct {
-		Number    int    `json:"number"`
-		Title     string `json:"title"`
-		Body      string `json:"body"`
-		URL       string `json:"url"`
-		State     string `json:"state"`
-		IsDraft   bool   `json:"isDraft"`
-		UpdatedAt string `json:"updatedAt"`
-		HeadRef   string `json:"headRefName"`
-		BaseRef   string `json:"baseRefName"`
-		Author    struct {
-			Login string `json:"login"`
-		} `json:"author"`
+func listIssuesREST(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectIssue, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = githubx.DefaultAPIBaseURL
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues?state=open&per_page=30", base, url.PathEscape(owner), url.PathEscape(repo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]ProjectPullRequest, 0, len(raw))
-	for _, item := range raw {
-		out = append(out, ProjectPullRequest{
-			Number:    item.Number,
-			Title:     item.Title,
-			Body:      item.Body,
-			URL:       item.URL,
-			State:     item.State,
-			IsDraft:   item.IsDraft,
-			Author:    item.Author.Login,
-			HeadRef:   item.HeadRef,
-			BaseRef:   item.BaseRef,
-			UpdatedAt: item.UpdatedAt,
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "HiveMind-IDE")
+
+	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var raw []struct {
+		Number      int             `json:"number"`
+		Title       string          `json:"title"`
+		Body        string          `json:"body"`
+		State       string          `json:"state"`
+		HTMLURL     string          `json:"html_url"`
+		PullRequest json.RawMessage `json:"pull_request"`
+		User        struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var out []ProjectIssue
+	for _, it := range raw {
+		if len(bytes.TrimSpace(it.PullRequest)) > 0 && string(bytes.TrimSpace(it.PullRequest)) != "null" {
+			continue // GitHub's /issues endpoint also returns PRs; skip them here.
+		}
+		author := strings.TrimSpace(it.User.Login)
+		out = append(out, ProjectIssue{
+			Source: "github",
+			Key:    fmt.Sprintf("#%d", it.Number),
+			Title:  it.Title,
+			Body:   it.Body,
+			Status: strings.ToUpper(it.State),
+			Author: author,
+			URL:    it.HTMLURL,
+			IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
 		})
 	}
 	return out, nil
 }
 
-// ListProjectPullRequests fetches open pull requests for a GitHub-backed workspace.
+// ProjectPullRequest represents an open GitHub pull request listed in the IDE sidebar.
+type ProjectPullRequest struct {
+	Number             int      `json:"number"`
+	Title              string   `json:"title"`
+	Body               string   `json:"body,omitempty"`
+	URL                string   `json:"url"`
+	State              string   `json:"state"`
+	IsDraft            bool     `json:"isDraft"`
+	Author             string   `json:"author,omitempty"`
+	HeadRef            string   `json:"headRef,omitempty"`
+	BaseRef            string   `json:"baseRef,omitempty"`
+	UpdatedAt          string   `json:"updatedAt,omitempty"`
+	ReviewDecision     string   `json:"reviewDecision,omitempty"`
+	RequestedReviewers []string `json:"requestedReviewers,omitempty"`
+	IsMine             bool     `json:"isMine,omitempty"`
+	ReviewRequested    bool     `json:"reviewRequested,omitempty"`
+	MyResponse         string   `json:"myResponse,omitempty"`      // "", "approved", "changes_requested", "commented"
+	NeedsAttention     bool     `json:"needsAttention,omitempty"`  // true when the PR needs currentUser's attention now
+	AttentionReason    string   `json:"attentionReason,omitempty"` // "Sua revisão", "Re-revisão", "Nova resposta", "Novo commit"
+}
+
+type prActivityReview struct {
+	Author      string
+	State       string
+	SubmittedAt time.Time
+}
+
+type prActivityComment struct {
+	Author          string
+	ViewerDidAuthor bool
+	CreatedAt       time.Time
+}
+
+func parseGHTime(raw string) time.Time {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return time.Time{}
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return ts.UTC()
+	}
+	if ts, err := time.Parse(time.RFC3339, s); err == nil {
+		return ts.UTC()
+	}
+	return time.Time{}
+}
+
+func isBotLogin(login string) bool {
+	low := strings.ToLower(strings.TrimSpace(login))
+	return strings.HasSuffix(low, "[bot]") || low == "dependabot" || low == "renovate" || low == "github-actions"
+}
+
+// computePRFlowState derives the user's latest response and whether the PR needs their attention now:
+// - Third-party PRs return to "Para revisar" when review is requested (or re-requested),
+//   when another human comments/replies after currentUser's last review/comment (unless already approved),
+//   or when a new commit is pushed after CHANGES_REQUESTED.
+// - Own PRs flag NeedsAttention when a reviewer comments/reviews after the author's last comment or commit.
+func computePRFlowState(me string, isMine, reviewRequested bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
+	me = strings.TrimSpace(me)
+	if me == "" {
+		return "", false, ""
+	}
+	var myLastAt, otherLastAt time.Time
+	recordMy := func(ts time.Time) {
+		if ts.After(myLastAt) {
+			myLastAt = ts
+		}
+	}
+	recordOther := func(author string, ts time.Time) {
+		a := strings.TrimSpace(author)
+		if a == "" || strings.EqualFold(a, me) || isBotLogin(a) {
+			return
+		}
+		if ts.After(otherLastAt) {
+			otherLastAt = ts
+		}
+	}
+
+	for _, rv := range reviews {
+		if strings.EqualFold(strings.TrimSpace(rv.Author), me) {
+			recordMy(rv.SubmittedAt)
+			if !isMine {
+				switch strings.ToUpper(strings.TrimSpace(rv.State)) {
+				case "APPROVED":
+					myResp = "approved"
+				case "CHANGES_REQUESTED":
+					myResp = "changes_requested"
+				case "COMMENTED":
+					if myResp == "" {
+						myResp = "commented"
+					}
+				}
+			}
+		} else {
+			recordOther(rv.Author, rv.SubmittedAt)
+		}
+	}
+
+	for _, cm := range comments {
+		if cm.ViewerDidAuthor || strings.EqualFold(strings.TrimSpace(cm.Author), me) {
+			recordMy(cm.CreatedAt)
+			if !isMine && myResp == "" {
+				myResp = "commented"
+			}
+		} else {
+			recordOther(cm.Author, cm.CreatedAt)
+		}
+	}
+
+	if isMine {
+		authorLast := myLastAt
+		if latestCommitAt.After(authorLast) {
+			authorLast = latestCommitAt
+		}
+		if !otherLastAt.IsZero() && (authorLast.IsZero() || otherLastAt.After(authorLast)) {
+			return "", true, "Nova resposta"
+		}
+		return "", false, ""
+	}
+
+	if myResp == "" {
+		if reviewRequested {
+			return "", true, "Sua revisão"
+		}
+		return "", false, ""
+	}
+
+	// Already responded before — check if the PR needs attention again!
+	if reviewRequested && (myResp == "approved" || myResp == "changes_requested") {
+		return myResp, true, "Re-revisão"
+	}
+	if myResp != "approved" && !myLastAt.IsZero() && otherLastAt.After(myLastAt) {
+		return myResp, true, "Nova resposta"
+	}
+	if myResp == "changes_requested" && !myLastAt.IsZero() && latestCommitAt.After(myLastAt) {
+		return myResp, true, "Novo commit"
+	}
+	return myResp, false, ""
+}
+
+// ParseGHPRList parses the JSON output from `gh pr list --json ...` and enriches personal flow fields for currentUser.
+func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error) {
+	var raw []struct {
+		Number         int    `json:"number"`
+		Title          string `json:"title"`
+		Body           string `json:"body"`
+		URL            string `json:"url"`
+		State          string `json:"state"`
+		IsDraft        bool   `json:"isDraft"`
+		UpdatedAt      string `json:"updatedAt"`
+		HeadRef        string `json:"headRefName"`
+		BaseRef        string `json:"baseRefName"`
+		ReviewDecision string `json:"reviewDecision"`
+		Author         struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		ReviewRequests []struct {
+			Login string `json:"login"`
+			Name  string `json:"name"`
+			Slug  string `json:"slug"`
+		} `json:"reviewRequests"`
+		Reviews []struct {
+			State       string `json:"state"`
+			SubmittedAt string `json:"submittedAt"`
+			Author      struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"reviews"`
+		Comments []struct {
+			ViewerDidAuthor bool   `json:"viewerDidAuthor"`
+			CreatedAt       string `json:"createdAt"`
+			Author          struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	me := strings.TrimSpace(currentUser)
+	out := make([]ProjectPullRequest, 0, len(raw))
+	for _, item := range raw {
+		author := strings.TrimSpace(item.Author.Login)
+		isMine := me != "" && strings.EqualFold(author, me)
+
+		var reqs []string
+		reviewRequested := false
+		for _, rr := range item.ReviewRequests {
+			name := strings.TrimSpace(rr.Login)
+			if name == "" {
+				name = strings.TrimSpace(rr.Slug)
+			}
+			if name == "" {
+				name = strings.TrimSpace(rr.Name)
+			}
+			if name != "" {
+				reqs = append(reqs, name)
+				if me != "" && strings.EqualFold(name, me) {
+					reviewRequested = true
+				}
+			}
+		}
+
+		revs := make([]prActivityReview, 0, len(item.Reviews))
+		for _, rv := range item.Reviews {
+			revs = append(revs, prActivityReview{
+				Author:      rv.Author.Login,
+				State:       rv.State,
+				SubmittedAt: parseGHTime(rv.SubmittedAt),
+			})
+		}
+		cmts := make([]prActivityComment, 0, len(item.Comments))
+		for _, cm := range item.Comments {
+			cmts = append(cmts, prActivityComment{
+				Author:          cm.Author.Login,
+				ViewerDidAuthor: cm.ViewerDidAuthor,
+				CreatedAt:       parseGHTime(cm.CreatedAt),
+			})
+		}
+		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, revs, cmts, time.Time{})
+
+		out = append(out, ProjectPullRequest{
+			Number:             item.Number,
+			Title:              item.Title,
+			Body:               item.Body,
+			URL:                item.URL,
+			State:              item.State,
+			IsDraft:            item.IsDraft,
+			Author:             author,
+			HeadRef:            item.HeadRef,
+			BaseRef:            item.BaseRef,
+			UpdatedAt:          item.UpdatedAt,
+			ReviewDecision:     item.ReviewDecision,
+			RequestedReviewers: reqs,
+			IsMine:             isMine,
+			ReviewRequested:    reviewRequested,
+			MyResponse:         myResp,
+			NeedsAttention:     needsAttention,
+			AttentionReason:    reason,
+		})
+	}
+	return out, nil
+}
+
+// ListProjectPullRequests fetches open pull requests for a GitHub-backed workspace,
+// preferring the native GitHub GraphQL/REST connector and falling back to `gh` CLI.
 func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspace) {
@@ -806,45 +1130,380 @@ func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPu
 	if !ok {
 		return nil, nil
 	}
+	client := githubx.Detect(owner, repo)
+	currentUser, _ := client.CurrentUser(ctx)
+
+	token, baseURL, _ := githubx.LoadCredentials()
+	if token != "" {
+		if prs, gqlErr := listPullRequestsGraphQL(ctx, baseURL, owner, repo, token, currentUser); gqlErr == nil {
+			return prs, nil
+		}
+	}
 
 	if ghBin, err := exec.LookPath("gh"); err == nil {
 		cmd := exec.CommandContext(ctx, ghBin,
 			"pr", "list",
 			"--repo", owner+"/"+repo,
 			"--state", "open",
-			"--limit", "20",
-			"--json", "number,title,body,url,state,isDraft,author,headRefName,baseRefName,updatedAt",
+			"--limit", "30",
+			"--json", "number,title,body,url,state,isDraft,author,headRefName,baseRefName,updatedAt,reviewRequests,reviews,comments,reviewDecision",
 		)
 		procx.ConfigureContext(cmd)
 		var out, errBuf bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &errBuf
 		if err := cmd.Run(); err == nil {
-			if prs, parseErr := ParseGHPRList(out.Bytes()); parseErr == nil {
+			if prs, parseErr := ParseGHPRList(out.Bytes(), currentUser); parseErr == nil {
 				return prs, nil
 			}
-		} else if token := githubEnvToken(); token == "" {
+		} else if token == "" {
 			return nil, fmt.Errorf("gh pr list: %s", strings.TrimSpace(errBuf.String()))
 		}
 	}
 
-	token := githubEnvToken()
 	if token == "" {
-		return nil, fmt.Errorf("instale e autentique o `gh` CLI ou configure GITHUB_TOKEN")
+		return nil, fmt.Errorf("configure o Conector GitHub Nativo na IDE, defina GITHUB_TOKEN ou autentique o `gh` CLI")
 	}
-	return listPullRequestsREST(ctx, owner, repo, token)
+	return listPullRequestsREST(ctx, baseURL, owner, repo, token, currentUser)
 }
 
-func githubEnvToken() string {
-	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
+// CloseOwnGitHubItem closes an open PR ("pr") or GitHub issue ("issue") ONLY if authored by the authenticated user.
+// Uses the native GitHub REST connector when available, falling back to `gh` CLI.
+func CloseOwnGitHubItem(ctx context.Context, workspace, kind string, number int) error {
+	if number <= 0 {
+		return fmt.Errorf("número inválido: %d", number)
 	}
-	return strings.TrimSpace(os.Getenv("GH_TOKEN"))
+	normKind := strings.ToLower(strings.TrimSpace(kind))
+	if normKind != "pr" && normKind != "issue" {
+		return fmt.Errorf("tipo inválido: %s", kind)
+	}
+
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspace) {
+		return fmt.Errorf("esta pasta não é um repositório Git")
+	}
+	remoteURL, err := g.RemoteURL(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	owner, repo, ok := githubx.ParseRemote(remoteURL)
+	if !ok {
+		return fmt.Errorf("remote origin não é GitHub")
+	}
+	client := githubx.Detect(owner, repo)
+	if !client.Enabled() {
+		return fmt.Errorf("GitHub não está configurado. Configure o Conector GitHub Nativo ou autentique o `gh`")
+	}
+	currentUser, err := client.CurrentUser(ctx)
+	if err != nil || strings.TrimSpace(currentUser) == "" {
+		return fmt.Errorf("não foi possível identificar o usuário GitHub autenticado")
+	}
+
+	// Verify ownership directly on GitHub before closing.
+	var author string
+	if normKind == "pr" {
+		pr, err := client.GetPullRequest(ctx, number)
+		if err != nil {
+			return fmt.Errorf("falha ao verificar autoria de pr #%d: %w", number, err)
+		}
+		author = pr.Author
+	} else {
+		iss, err := client.GetIssue(ctx, number)
+		if err != nil {
+			return fmt.Errorf("falha ao verificar autoria de issue #%d: %w", number, err)
+		}
+		author = iss.Author
+	}
+	if !strings.EqualFold(strings.TrimSpace(author), strings.TrimSpace(currentUser)) {
+		return fmt.Errorf("somente itens abertos por @%s podem ser fechados aqui (autor: @%s)", currentUser, author)
+	}
+
+	if normKind == "pr" {
+		if err := client.ClosePullRequest(ctx, number); err != nil {
+			return fmt.Errorf("falha ao fechar pr #%d: %w", number, err)
+		}
+		return nil
+	}
+	if err := client.CloseIssue(ctx, number); err != nil {
+		return fmt.Errorf("falha ao fechar issue #%d: %w", number, err)
+	}
+	return nil
 }
 
-func listPullRequestsREST(ctx context.Context, owner, repo, token string) ([]ProjectPullRequest, error) {
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?state=open&per_page=20",
-		url.PathEscape(owner), url.PathEscape(repo))
+func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectPullRequest, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = githubx.DefaultAPIBaseURL
+	}
+	endpoint := base + "/graphql"
+	if strings.HasSuffix(base, "/api/v3") {
+		endpoint = strings.TrimSuffix(base, "/v3") + "/graphql"
+	}
+
+	const query = `query($owner:String!,$repo:String!){
+  repository(owner:$owner,name:$repo){
+    pullRequests(states:OPEN,first:30,orderBy:{field:UPDATED_AT,direction:DESC}){
+      nodes{
+        number
+        title
+        body
+        url
+        state
+        isDraft
+        headRefName
+        baseRefName
+        updatedAt
+        reviewDecision
+        author{ login }
+        reviewRequests(first:20){
+          nodes{
+            requestedReviewer{
+              ... on User { login }
+            }
+          }
+        }
+        reviews(last:50){
+          nodes{
+            state
+            submittedAt
+            author{ login }
+          }
+        }
+        comments(last:50){
+          nodes{
+            createdAt
+            author{ login }
+          }
+        }
+        reviewThreads(last:30){
+          nodes{
+            comments(last:20){
+              nodes{
+                createdAt
+                author{ login }
+              }
+            }
+          }
+        }
+        commits(last:1){
+          nodes{
+            commit{
+              committedDate
+              pushedDate
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+	payloadBytes, err := json.Marshal(map[string]any{
+		"query": query,
+		"variables": map[string]string{
+			"owner": owner,
+			"repo":  repo,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "HiveMind-IDE")
+
+	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github graphql %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var env struct {
+		Data struct {
+			Repository struct {
+				PullRequests struct {
+					Nodes []struct {
+						Number         int    `json:"number"`
+						Title          string `json:"title"`
+						Body           string `json:"body"`
+						URL            string `json:"url"`
+						State          string `json:"state"`
+						IsDraft        bool   `json:"isDraft"`
+						HeadRefName    string `json:"headRefName"`
+						BaseRefName    string `json:"baseRefName"`
+						UpdatedAt      string `json:"updatedAt"`
+						ReviewDecision string `json:"reviewDecision"`
+						Author         *struct {
+							Login string `json:"login"`
+						} `json:"author"`
+						ReviewRequests struct {
+							Nodes []struct {
+								RequestedReviewer struct {
+									Login string `json:"login"`
+								} `json:"requestedReviewer"`
+							} `json:"nodes"`
+						} `json:"reviewRequests"`
+						Reviews struct {
+							Nodes []struct {
+								State       string `json:"state"`
+								SubmittedAt string `json:"submittedAt"`
+								Author      *struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"reviews"`
+						Comments struct {
+							Nodes []struct {
+								CreatedAt string `json:"createdAt"`
+								Author    *struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
+						ReviewThreads struct {
+							Nodes []struct {
+								Comments struct {
+									Nodes []struct {
+										CreatedAt string `json:"createdAt"`
+										Author    *struct {
+											Login string `json:"login"`
+										} `json:"author"`
+									} `json:"nodes"`
+								} `json:"comments"`
+							} `json:"nodes"`
+						} `json:"reviewThreads"`
+						Commits struct {
+							Nodes []struct {
+								Commit struct {
+									CommittedDate string `json:"committedDate"`
+									PushedDate    string `json:"pushedDate"`
+								} `json:"commit"`
+							} `json:"nodes"`
+						} `json:"commits"`
+					} `json:"nodes"`
+				} `json:"pullRequests"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, err
+	}
+	if len(env.Errors) > 0 && len(env.Data.Repository.PullRequests.Nodes) == 0 {
+		return nil, fmt.Errorf("github graphql: %s", env.Errors[0].Message)
+	}
+
+	me := strings.TrimSpace(currentUser)
+	out := make([]ProjectPullRequest, 0, len(env.Data.Repository.PullRequests.Nodes))
+	for _, n := range env.Data.Repository.PullRequests.Nodes {
+		author := ""
+		if n.Author != nil {
+			author = strings.TrimSpace(n.Author.Login)
+		}
+		isMine := me != "" && strings.EqualFold(author, me)
+		var reqs []string
+		reviewRequested := false
+		for _, rr := range n.ReviewRequests.Nodes {
+			login := strings.TrimSpace(rr.RequestedReviewer.Login)
+			if login == "" {
+				continue
+			}
+			reqs = append(reqs, login)
+			if me != "" && strings.EqualFold(login, me) {
+				reviewRequested = true
+			}
+		}
+
+		revs := make([]prActivityReview, 0, len(n.Reviews.Nodes))
+		for _, rv := range n.Reviews.Nodes {
+			login := ""
+			if rv.Author != nil {
+				login = rv.Author.Login
+			}
+			revs = append(revs, prActivityReview{
+				Author:      login,
+				State:       rv.State,
+				SubmittedAt: parseGHTime(rv.SubmittedAt),
+			})
+		}
+
+		cmts := make([]prActivityComment, 0, len(n.Comments.Nodes)+len(n.ReviewThreads.Nodes))
+		for _, cm := range n.Comments.Nodes {
+			login := ""
+			if cm.Author != nil {
+				login = cm.Author.Login
+			}
+			cmts = append(cmts, prActivityComment{
+				Author:    login,
+				CreatedAt: parseGHTime(cm.CreatedAt),
+			})
+		}
+		for _, th := range n.ReviewThreads.Nodes {
+			for _, tc := range th.Comments.Nodes {
+				login := ""
+				if tc.Author != nil {
+					login = tc.Author.Login
+				}
+				cmts = append(cmts, prActivityComment{
+					Author:    login,
+					CreatedAt: parseGHTime(tc.CreatedAt),
+				})
+			}
+		}
+
+		var latestCommitAt time.Time
+		for _, cn := range n.Commits.Nodes {
+			if ts := parseGHTime(cn.Commit.PushedDate); ts.After(latestCommitAt) {
+				latestCommitAt = ts
+			} else if ts := parseGHTime(cn.Commit.CommittedDate); ts.After(latestCommitAt) {
+				latestCommitAt = ts
+			}
+		}
+
+		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, revs, cmts, latestCommitAt)
+
+		out = append(out, ProjectPullRequest{
+			Number:             n.Number,
+			Title:              n.Title,
+			Body:               n.Body,
+			URL:                n.URL,
+			State:              n.State,
+			IsDraft:            n.IsDraft,
+			Author:             author,
+			HeadRef:            n.HeadRefName,
+			BaseRef:            n.BaseRefName,
+			UpdatedAt:          n.UpdatedAt,
+			ReviewDecision:     n.ReviewDecision,
+			RequestedReviewers: reqs,
+			IsMine:             isMine,
+			ReviewRequested:    reviewRequested,
+			MyResponse:         myResp,
+			NeedsAttention:     needsAttention,
+			AttentionReason:    reason,
+		})
+	}
+	return out, nil
+}
+
+func listPullRequestsREST(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectPullRequest, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = githubx.DefaultAPIBaseURL
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&per_page=30",
+		base, url.PathEscape(owner), url.PathEscape(repo))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -852,6 +1511,7 @@ func listPullRequestsREST(ctx context.Context, owner, repo, token string) ([]Pro
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "HiveMind-IDE")
 
 	client := &http.Client{Timeout: 12 * time.Second}
 	resp, err := client.Do(req)
@@ -883,23 +1543,43 @@ func listPullRequestsREST(ctx context.Context, owner, repo, token string) ([]Pro
 		Base struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
+		RequestedReviewers []struct {
+			Login string `json:"login"`
+		} `json:"requested_reviewers"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
+	me := strings.TrimSpace(currentUser)
 	prs := make([]ProjectPullRequest, 0, len(raw))
 	for _, item := range raw {
+		author := strings.TrimSpace(item.User.Login)
+		var reqs []string
+		reviewReq := false
+		for _, rr := range item.RequestedReviewers {
+			login := strings.TrimSpace(rr.Login)
+			if login == "" {
+				continue
+			}
+			reqs = append(reqs, login)
+			if me != "" && strings.EqualFold(login, me) {
+				reviewReq = true
+			}
+		}
 		prs = append(prs, ProjectPullRequest{
-			Number:    item.Number,
-			Title:     item.Title,
-			Body:      item.Body,
-			URL:       item.HTMLURL,
-			State:     strings.ToUpper(item.State),
-			IsDraft:   item.Draft,
-			Author:    item.User.Login,
-			HeadRef:   item.Head.Ref,
-			BaseRef:   item.Base.Ref,
-			UpdatedAt: item.UpdatedAt,
+			Number:             item.Number,
+			Title:              item.Title,
+			Body:               item.Body,
+			URL:                item.HTMLURL,
+			State:              strings.ToUpper(item.State),
+			IsDraft:            item.Draft,
+			Author:             author,
+			HeadRef:            item.Head.Ref,
+			BaseRef:            item.Base.Ref,
+			UpdatedAt:          item.UpdatedAt,
+			RequestedReviewers: reqs,
+			IsMine:             me != "" && strings.EqualFold(author, me),
+			ReviewRequested:    reviewReq,
 		})
 	}
 	return prs, nil

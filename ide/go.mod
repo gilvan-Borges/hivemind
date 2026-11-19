@@ -3,6 +3,7 @@ module github.com/gilvan-Borges/HiveMind/ide
 go 1.26.10
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gilvan-Borges/HiveMind v0.0.0
 	github.com/wailsapp/wails/v2 v2.17.1
 	google.golang.org/adk/v2 v2.8.0

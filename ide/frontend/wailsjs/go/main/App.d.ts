@@ -18,6 +18,8 @@ export function CheckoutBranch(arg1:string,arg2:string,arg3:boolean):Promise<voi
 
 export function ChooseDirectory():Promise<string>;
 
+export function CloseOwnGitHubItem(arg1:string,arg2:string,arg3:number):Promise<void>;
+
 export function CommentJira(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CommitChanges(arg1:string,arg2:string,arg3:boolean):Promise<string>;
@@ -41,6 +43,8 @@ export function DiscardFile(arg1:string,arg2:string):Promise<void>;
 export function DoctorAgy():Promise<modelx.AgyStatus>;
 
 export function EnsureTeamMemory(arg1:string):Promise<string>;
+
+export function GetAIUsage():Promise<modelx.AIUsageReport>;
 
 export function GetCommitDetail(arg1:string,arg2:string):Promise<idecore.CommitDetail>;
 
@@ -98,7 +102,11 @@ export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutpu
 
 export function RunGitAction(arg1:string,arg2:string):Promise<string>;
 
+export function SaveAIUsageLimits(arg1:string,arg2:number,arg3:number):Promise<modelx.AIUsageReport>;
+
 export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function SaveGitHubConfig(arg1:string,arg2:string,arg3:string):Promise<idecore.GitHubStatusInfo>;
 
 export function SaveNativeSkill(arg1:string,arg2:string):Promise<void>;
 

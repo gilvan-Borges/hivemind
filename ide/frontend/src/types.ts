@@ -145,10 +145,11 @@ export type RunMode = "auto" | "direct" | "plan" | "squad";
 
 export interface ChatMessage {
   id: string;
-  kind: "user" | "chief" | "system" | "tool" | "error" | "handoff" | "diff" | "plan" | "approval";
+  kind: "user" | "chief" | "system" | "tool" | "thinking" | "error" | "handoff" | "diff" | "plan" | "approval";
   label: string;
   text: string;
   active?: boolean;
+  solo?: boolean;
   approved?: boolean;
   resolved?: "approved" | "denied";
   images?: string[];
@@ -159,6 +160,7 @@ export interface ChatMessage {
   toolOutput?: string;
   startedAt?: number;
   durationMs?: number;
+  stepCount?: number;
 }
 
 export interface AgentRuntime {
@@ -217,6 +219,11 @@ export interface GitHubStatus {
   user: string;
   remote: string;
   detail: string;
+  mode?: string;
+  source?: string;
+  connectorLabel?: string;
+  tokenMasked?: string;
+  baseUrl?: string;
 }
 
 export interface TokenStat {
@@ -274,6 +281,9 @@ export interface ProjectIssue {
   title: string;
   body?: string;
   status?: string;
+  author?: string;
+  url?: string;
+  isMine?: boolean;
 }
 
 export interface ProjectPullRequest {
@@ -287,9 +297,16 @@ export interface ProjectPullRequest {
   headRef?: string;
   baseRef?: string;
   updatedAt?: string;
+  reviewDecision?: string;
+  requestedReviewers?: string[];
+  isMine?: boolean;
+  reviewRequested?: boolean;
+  myResponse?: "" | "approved" | "changes_requested" | "commented";
+  needsAttention?: boolean;
+  attentionReason?: string;
 }
 
-export type GitSubTab = "changes" | "prs" | "issues";
+export type GitSubTab = "changes" | "prs_issues" | "flow";
 
 export interface CommandAction {
   id: string;
@@ -416,6 +433,72 @@ export interface SkillInfo {
   sizeBytes: number;
 }
 
+export interface UsageWindow {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  calls: number;
+  oldestAt?: string;
+}
+
+export interface RemoteQuotaWindow {
+  percent: number;
+  resetsAt?: string;
+  status?: string;
+  hasData: boolean;
+}
+
+export interface OpenCodeQuota {
+  available: boolean;
+  detail?: string;
+  rolling5h: RemoteQuotaWindow;
+  weekly: RemoteQuotaWindow;
+  monthly: RemoteQuotaWindow;
+}
+
+export interface ProviderLimits {
+  fiveHourTokens?: number;
+  weeklyTokens?: number;
+}
+
+export interface AIProviderUsage {
+  provider: string;
+  label: string;
+  window5h: UsageWindow;
+  windowWeekly: UsageWindow;
+  windowMonthly: UsageWindow;
+  limits: ProviderLimits;
+}
+
+export interface AgyQuotaBucket {
+  id: string;
+  name: string;
+  window: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetTime?: string;
+  description?: string;
+}
+
+export interface AgyQuotaGroup {
+  name: string;
+  description?: string;
+  buckets: AgyQuotaBucket[];
+}
+
+export interface AgyQuota {
+  available: boolean;
+  detail?: string;
+  groups?: AgyQuotaGroup[];
+}
+
+export interface AIUsageReport {
+  generatedAt: string;
+  agyQuota?: AgyQuota;
+  openCodeQuota: OpenCodeQuota;
+  providers: AIProviderUsage[];
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -451,6 +534,7 @@ export interface WailsBackendApp {
   GetCommitDetail(workspace: string, hash: string): Promise<CommitDetail>;
   RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
+  SaveGitHubConfig?(token: string, baseURL: string, workspace: string): Promise<GitHubStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;
   WindowToggleMaximize(): Promise<void>;
@@ -473,7 +557,10 @@ export interface WailsBackendApp {
   CheckoutBranch(workspace: string, branch: string, create: boolean): Promise<void>;
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
   ListPullRequests(workspace: string): Promise<ProjectPullRequest[]>;
+  CloseOwnGitHubItem(workspace: string, kind: "pr" | "issue", number: number): Promise<void>;
   OpenExternalURL(rawURL: string): Promise<void>;
+  GetAIUsage(): Promise<AIUsageReport>;
+  SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
   ListSkills(workspace: string): Promise<SkillInfo[]>;
   ReadNativeSkill(name: string): Promise<string>;
   SaveNativeSkill(name: string, body: string): Promise<void>;

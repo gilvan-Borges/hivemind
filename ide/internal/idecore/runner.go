@@ -569,6 +569,10 @@ func (m *SessionManager) RunTurnWithOptions(
 		NativeSkills:       nativeSkills,
 		NativeSkillsRoot:   nativeRoot,
 		OnEvent: func(ev orchestrator.Event) {
+			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
+				prov, mod := resolveAgentProviderModel(selected, ev.Author)
+				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+			}
 			if m.Emit != nil {
 				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
 			}
@@ -585,6 +589,39 @@ func (m *SessionManager) RunTurnWithOptions(
 		_, _ = SyncIntegrationToWorkspace(ctx, workspace)
 	}
 	return res, runErr
+}
+
+func resolveAgentProviderModel(t team.Team, author string) (provider, modelSpec string) {
+	low := strings.ToLower(strings.TrimSpace(author))
+	for _, ag := range t.Agents {
+		if strings.EqualFold(ag.Name, low) {
+			return ag.Provider, ag.Model
+		}
+	}
+	switch {
+	case strings.Contains(low, "qa"):
+		for _, ag := range t.Agents {
+			if ag.Role == team.RoleQA {
+				return ag.Provider, ag.Model
+			}
+		}
+	case strings.Contains(low, "dev") || strings.Contains(low, "desenvolvedor"):
+		for _, ag := range t.Agents {
+			if ag.Role == team.RoleDeveloper {
+				return ag.Provider, ag.Model
+			}
+		}
+	case strings.Contains(low, "chief") || strings.Contains(low, "chefe") || strings.Contains(low, "arch") || strings.Contains(low, "arquiteto") || strings.Contains(low, "pm") || strings.Contains(low, "triage") || strings.Contains(low, "closing") || strings.Contains(low, "fecho"):
+		for _, ag := range t.Agents {
+			if ag.Role == team.RoleArchitect || ag.Role == team.RoleProjectManager || ag.Name == "chefe" {
+				return ag.Provider, ag.Model
+			}
+		}
+	}
+	if len(t.Agents) > 0 {
+		return t.Agents[0].Provider, t.Agents[0].Model
+	}
+	return "agy", "agy"
 }
 
 // Cancel stops the active run on laneID (cancelling only child processes started by that lane).

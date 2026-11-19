@@ -53,6 +53,7 @@ func newGemini(ctx context.Context, provider, modelName string) (model.LLM, erro
 		cfg.Backend = genai.BackendVertexAI
 		cfg.Project = project
 		cfg.Location = location
+		cfg.HTTPClient = retryHTTPClient()
 		return gemini.NewModel(ctx, modelName, cfg)
 	}
 	key := firstEnv("GOOGLE_API_KEY", "GEMINI_API_KEY")
@@ -60,6 +61,7 @@ func newGemini(ctx context.Context, provider, modelName string) (model.LLM, erro
 		return nil, fmt.Errorf("defina GOOGLE_API_KEY (ou GEMINI_API_KEY) para usar o Gemini, ou troque o provedor para agy se o Antigravity CLI já estiver autenticado")
 	}
 	cfg.APIKey = key
+	cfg.HTTPClient = retryHTTPClient()
 	return gemini.NewModel(ctx, modelName, cfg)
 }
 
@@ -84,8 +86,9 @@ func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
 		return nil, fmt.Errorf("defina ANTHROPIC_API_KEY para usar a API da Anthropic")
 	}
 	return anthropicmodel.NewModel(ctx, modelName, anthropicmodel.ClientConfig{
-		Backend: anthropicmodel.BackendAnthropic,
-		APIKey:  key,
+		Backend:    anthropicmodel.BackendAnthropic,
+		APIKey:     key,
+		HTTPClient: retryHTTPClient(),
 	})
 }
 
@@ -100,9 +103,10 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 		api = openaimodel.APIResponses
 	}
 	return openaimodel.NewModel(ctx, modelName, &openaimodel.ClientConfig{
-		APIKey:  key,
-		BaseURL: base,
-		API:     api,
+		APIKey:     key,
+		BaseURL:    base,
+		API:        api,
+		HTTPClient: retryHTTPClient(),
 	})
 }
 

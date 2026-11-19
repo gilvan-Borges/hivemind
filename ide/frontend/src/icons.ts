@@ -93,6 +93,7 @@ export const icons = {
   sync: ms("sync", 13),
   target: ms("adjust", 12),
   cloud: ms("cloud", 12),
+  aiUsage: ms("auto_awesome", 18, true),
 };
 
 export function fileBadge(name: string): string {

@@ -662,7 +662,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 			"GOVERNANÇA GIT & PR:\n" +
 			"- Apenas você (Chefe) ou o Arquiteto realizam commit, push e operações de Pull Request.\n"
 		if r.prNumber > 0 {
-			closingExtra += fmt.Sprintf("- Esta tarefa atende revisão do PR #%d (revisores: %s). Se houver alterações prontas, faça git_commit, git_push, comente o que foi ajustado com github_comment_pr(number=%d) e peça nova revisão com github_request_review.\n",
+			closingExtra += fmt.Sprintf("- Esta tarefa atende revisão do PR #%d (revisores: %s). Se houver alterações prontas, faça git_commit, git_push, responda ponto a ponto o que foi ajustado com github_comment_pr(number=%d) (e github_reply_review_comment para comentários inline) e peça nova revisão com github_request_review.\n",
 				r.prNumber, strings.Join(r.prReviewers, ", "), r.prNumber)
 		}
 		closingExtra += "Revise [qa_report], [qa_approval_note], [qa_feedback] e use git_diff se necessário.\nEntregue ao usuário um resumo executivo claro em Markdown contendo:\n1. O que foi implementado/alterado;\n2. Resultado da revisão/testes do QA;\n3. Branch/PR e próximos passos."
@@ -1156,6 +1156,17 @@ func summarizeToolArgs(name string, args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
+	if strings.HasPrefix(name, "github_") {
+		if num, ok := args["number"]; ok && num != nil {
+			n := strings.TrimSpace(fmt.Sprint(num))
+			if n != "" {
+				if f, ok := args["file"]; ok && f != nil && strings.TrimSpace(fmt.Sprint(f)) != "" {
+					return strx.TruncateRunes(fmt.Sprintf("#%s · %s", n, strings.TrimSpace(fmt.Sprint(f))), 120, "…")
+				}
+				return "#" + n
+			}
+		}
+	}
 	for _, key := range []string{"path", "command", "message", "title", "number", "key", "jql", "ref", "note", "notes"} {
 		if v, ok := args[key]; ok && v != nil {
 			s := strings.TrimSpace(fmt.Sprint(v))
@@ -1493,8 +1504,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 
 	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
-- Só aprove ou comente um PR se houver pedido de revisão OU se estiver respondendo em um PR de nossa própria autoria.
-- Se um revisor pediu mudanças em um PR nosso: leia com github_get_pr e despache para a equipe com delegate_to_squad informando pr_number, pr_branch e reviewers (quem pediu mudança); ao terminar, o Chefe comita, comenta as mudanças e pede nova revisão.
+- ANTES de opinar, comentar ou revisar qualquer PR, chame github_get_pr (o conector nativo GitHub retorna autoria, revisões formais, comentários inline no código e comentários gerais) e confira o campo "Papel neste PR":
+  • Se o PR for NOSSO (autor = usuário autenticado): NUNCA atue como revisor nem emita parecer revisando o próprio PR. Leia todos os comentários gerais e inline deixados pelos revisores externos, faça a triagem técnica e despache para a equipe com delegate_to_squad informando pr_number, pr_branch e reviewers; ao terminar, o Chefe comita, responde ponto a ponto (github_comment_pr / github_reply_review_comment) e pede nova revisão (github_request_review).
+  • Se o PR for DE TERCEIRO: só aprove/revise/comente quando houver pedido de revisão; use github_pr_diff para inspecionar o diff completo e github_review_pr para enviar o parecer.
 - Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.`
 
 	var triageInstr string

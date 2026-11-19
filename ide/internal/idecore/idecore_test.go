@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
@@ -558,17 +559,140 @@ func TestParseGHPRList(t *testing.T) {
 			"headRefName": "feat/metas",
 			"baseRefName": "homolog",
 			"author": {"login": "gilvan-Borges"}
+		},
+		{
+			"number": 43,
+			"title": "fix: pendente minha revisao",
+			"url": "https://github.com/org/repo/pull/43",
+			"state": "OPEN",
+			"author": {"login": "marcus"},
+			"reviewRequests": [{"login": "gilvan-Borges"}],
+			"reviews": [],
+			"comments": []
+		},
+		{
+			"number": 44,
+			"title": "fix: ja aprovei esse PR",
+			"url": "https://github.com/org/repo/pull/44",
+			"state": "OPEN",
+			"author": {"login": "marcus"},
+			"reviewRequests": [{"login": "gilvan-Borges"}],
+			"reviews": [{"state": "APPROVED", "author": {"login": "gilvan-Borges"}}],
+			"comments": []
+		},
+		{
+			"number": 45,
+			"title": "fix: ja comentei nesse PR",
+			"url": "https://github.com/org/repo/pull/45",
+			"state": "OPEN",
+			"author": {"login": "marcus"},
+			"reviewRequests": [{"login": "gilvan-Borges"}],
+			"reviews": [],
+			"comments": [{"viewerDidAuthor": true, "author": {"login": "gilvan-Borges"}}]
 		}
 	]`)
-	prs, err := ParseGHPRList(raw)
+	prs, err := ParseGHPRList(raw, "gilvan-Borges")
 	if err != nil {
 		t.Fatalf("ParseGHPRList error: %v", err)
 	}
-	if len(prs) != 1 {
-		t.Fatalf("expected 1 PR, got %d", len(prs))
+	if len(prs) != 4 {
+		t.Fatalf("expected 4 PRs, got %d", len(prs))
 	}
-	if prs[0].Number != 42 || prs[0].Author != "gilvan-Borges" || !prs[0].IsDraft || prs[0].HeadRef != "feat/metas" || prs[0].BaseRef != "homolog" {
-		t.Fatalf("unexpected PR parsed: %+v", prs[0])
+	if !prs[0].IsMine || prs[0].Number != 42 || !prs[0].IsDraft {
+		t.Fatalf("unexpected PR 42: %+v", prs[0])
+	}
+	if prs[1].IsMine || !prs[1].ReviewRequested || prs[1].MyResponse != "" {
+		t.Fatalf("unexpected PR 43 (pending review): %+v", prs[1])
+	}
+	if !prs[2].ReviewRequested || prs[2].MyResponse != "approved" {
+		t.Fatalf("unexpected PR 44 (approved): %+v", prs[2])
+	}
+	if !prs[3].ReviewRequested || prs[3].MyResponse != "commented" {
+		t.Fatalf("unexpected PR 45 (commented): %+v", prs[3])
+	}
+}
+
+func TestPRFlowNeedsAttentionChronology(t *testing.T) {
+	t1 := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 11, 18, 11, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+
+	// Case 1 (exact PR #700 scenario): gilvan reproved at t1, joao commented after at t2 -> MUST return to "Para revisar" ("Nova resposta").
+	resp, need, reason := computePRFlowState(
+		"gilvan-Borges", false, false,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
+		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
+		time.Time{},
+	)
+	if resp != "changes_requested" || !need || reason != "Nova resposta" {
+		t.Fatalf("expected PR #700 to bounce back with Nova resposta, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
+	// Case 2: gilvan replies at t3 (after joao's t2) -> goes back to "Já respondidos".
+	resp, need, reason = computePRFlowState(
+		"gilvan-Borges", false, false,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
+		[]prActivityComment{
+			{Author: "joaomarqu3ss", CreatedAt: t2},
+			{Author: "gilvan-Borges", CreatedAt: t3},
+		},
+		time.Time{},
+	)
+	if resp != "changes_requested" || need {
+		t.Fatalf("expected PR to return to Já respondidos after gilvan replied last, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
+	// Case 3: bot comment after gilvan's review must NOT falsely bounce PR back.
+	_, need, _ = computePRFlowState(
+		"gilvan-Borges", false, false,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
+		[]prActivityComment{{Author: "github-actions[bot]", CreatedAt: t2}},
+		time.Time{},
+	)
+	if need {
+		t.Fatal("bot comment must not trigger needsAttention")
+	}
+
+	// Case 4: new commit pushed after CHANGES_REQUESTED -> "Novo commit".
+	resp, need, reason = computePRFlowState(
+		"gilvan-Borges", false, false,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
+		nil,
+		t2,
+	)
+	if resp != "changes_requested" || !need || reason != "Novo commit" {
+		t.Fatalf("expected Novo commit attention, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
+	// Case 5: already approved -> casual comment does NOT bounce back unless reviewRequested is true.
+	resp, need, _ = computePRFlowState(
+		"gilvan-Borges", false, false,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
+		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
+		time.Time{},
+	)
+	if resp != "approved" || need {
+		t.Fatalf("approved PR without re-review request should stay in Já respondidos, got resp=%q need=%v", resp, need)
+	}
+	resp, need, reason = computePRFlowState(
+		"gilvan-Borges", false, true,
+		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
+		nil,
+		time.Time{},
+	)
+	if resp != "approved" || !need || reason != "Re-revisão" {
+		t.Fatalf("re-requested review after approval must return as Re-revisão, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
+	// Case 6: own PR (#699) receives reviewer comment after author's last commit -> Nova resposta.
+	_, need, reason = computePRFlowState(
+		"gilvan-Borges", true, false,
+		nil,
+		[]prActivityComment{{Author: "marcusrdrigues", CreatedAt: t2}},
+		t1,
+	)
+	if !need || reason != "Nova resposta" {
+		t.Fatalf("own PR with newer reviewer comment should flag Nova resposta, got need=%v reason=%q", need, reason)
 	}
 }
 

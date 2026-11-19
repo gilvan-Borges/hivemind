@@ -26,6 +26,10 @@ export function ChooseDirectory() {
   return window['go']['main']['App']['ChooseDirectory']();
 }
 
+export function CloseOwnGitHubItem(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CloseOwnGitHubItem'](arg1, arg2, arg3);
+}
+
 export function CommentJira(arg1, arg2, arg3) {
   return window['go']['main']['App']['CommentJira'](arg1, arg2, arg3);
 }
@@ -72,6 +76,10 @@ export function DoctorAgy() {
 
 export function EnsureTeamMemory(arg1) {
   return window['go']['main']['App']['EnsureTeamMemory'](arg1);
+}
+
+export function GetAIUsage() {
+  return window['go']['main']['App']['GetAIUsage']();
 }
 
 export function GetCommitDetail(arg1, arg2) {
@@ -186,8 +194,16 @@ export function RunGitAction(arg1, arg2) {
   return window['go']['main']['App']['RunGitAction'](arg1, arg2);
 }
 
+export function SaveAIUsageLimits(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveAIUsageLimits'](arg1, arg2, arg3);
+}
+
 export function SaveFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2, arg3);
+}
+
+export function SaveGitHubConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveGitHubConfig'](arg1, arg2, arg3);
 }
 
 export function SaveNativeSkill(arg1, arg2) {

@@ -7,6 +7,8 @@ import type {
   AgentRuntime,
   AgyModel,
   AgyStatus,
+  AIProviderUsage,
+  AIUsageReport,
   ChatMessage,
   CommandAction,
   CommitDetail,
@@ -117,6 +119,13 @@ const state = {
   showFileMenu: false,
   teamConfigDraft: null as TeamConfigDraft | null,
   showOpenCodeModal: false,
+  showGitHubModal: false,
+  aiUsageModal: {
+    open: false,
+    loading: false,
+    report: null as AIUsageReport | null,
+    editingProvider: "",
+  },
   doctorModal: null as AgyStatus | null,
   confirmModal: null as ConfirmDialogState | null,
   pathModal: null as null | {
@@ -162,6 +171,7 @@ const state = {
   changesCollapsed: false,
   gitMoreMenuOpen: false,
   commitMenuOpen: false,
+  showFlowResponded: false,
   gitTab: "changes" as GitSubTab,
   skills: [] as SkillInfo[],
   skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
@@ -571,6 +581,7 @@ function mountShell() {
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
           <div class="spacer"></div>
+          <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
           <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
         </nav>
@@ -760,6 +771,20 @@ async function openDoctorModal() {
   setStatus("Pronto");
 }
 
+async function openGitHubModal() {
+  state.showGitHubModal = true;
+  renderModalLayer();
+  const backend = api();
+  if (!backend?.GitHubStatus) return;
+  try {
+    state.ghStatus = await backend.GitHubStatus(state.project?.root || "");
+    renderLeftSidebar();
+    renderModalLayer();
+  } catch {
+    // keep current status visible
+  }
+}
+
 async function openOpenCodeModal() {
   state.showOpenCodeModal = true;
   renderModalLayer();
@@ -872,6 +897,9 @@ function bindStaticShellEvents() {
     }
   });
 
+  document.getElementById("act-ai-usage")?.addEventListener("click", () => {
+    void openAIUsageModal();
+  });
   document.getElementById("act-wizard")?.addEventListener("click", () => {
     void openTeamConfigTab();
   });
@@ -1015,6 +1043,9 @@ function bindStaticShellEvents() {
         renderMentionPopup();
       } else if (state.showOpenCodeModal) {
         state.showOpenCodeModal = false;
+        renderModalLayer();
+      } else if (state.showGitHubModal) {
+        state.showGitHubModal = false;
         renderModalLayer();
       } else if (state.doctorModal) {
         state.doctorModal = null;
@@ -1385,6 +1416,7 @@ async function boot() {
       if (isActiveProject) updateStatusBar();
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);
+      markThinkingDone(lane);
       lane.messages.push({
         id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: "plan",
@@ -1405,25 +1437,50 @@ async function boot() {
       }
     } else if (ev.kind === "handoff") {
       markToolsDone(lane);
+      markThinkingDone(lane);
       lane.messages.push({
         id: `ho-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: "handoff",
         label: ev.label || "Handoff da Equipe",
         text: ev.text || "",
       });
+    } else if (ev.kind === "text" && ev.thought && ev.text) {
+      let th = findActiveThinking(lane);
+      if (!th) {
+        th = {
+          id: `th-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "thinking",
+          label: isCurrentTurnSolo(lane) ? "Pensando" : (ev.label || "Pensando"),
+          text: "",
+          active: true,
+          solo: isCurrentTurnSolo(lane),
+          startedAt: Date.now(),
+          stepCount: 0,
+        };
+        lane.messages.push(th);
+        ensureThinkingTicker();
+      }
+      if (ev.partial) {
+        th.text += ev.text;
+      } else {
+        th.text = th.text ? `${th.text}\n\n${ev.text}` : ev.text;
+      }
     } else if (ev.kind === "tool_call") {
       updateAgentStatus(lane, ev.author, ev.label, "running", ev.toolName);
+      const th = findActiveThinking(lane);
+      if (th) th.stepCount = (th.stepCount || 0) + 1;
       const last = lane.messages[lane.messages.length - 1];
       const toolLabel = ev.label || ev.author || "Agente";
       const baseText = `${ev.toolName}`;
-      if (last && last.kind === "tool" && last.label === toolLabel && last.text.startsWith(baseText)) {
+      const incomingDetail = (ev.detail || "").trim();
+      const sameTarget = last && last.kind === "tool" && last.label === toolLabel
+        && last.toolName === ev.toolName
+        && ((last.toolDetail || "").trim() === incomingDetail);
+      if (sameTarget) {
         const match = last.text.match(/×(\d+)$/);
         const count = match ? parseInt(match[1], 10) + 1 : 2;
         last.text = `${baseText} ×${count}`;
         last.active = true;
-        if (ev.detail) {
-          last.toolDetail = last.toolDetail ? `${last.toolDetail}\n${ev.detail}` : ev.detail;
-        }
         if (!last.startedAt) last.startedAt = Date.now();
       } else {
         markToolsDone(lane);
@@ -1433,8 +1490,9 @@ async function boot() {
           label: toolLabel,
           text: baseText,
           active: true,
+          solo: isCurrentTurnSolo(lane),
           toolName: ev.toolName,
-          toolDetail: ev.detail || "",
+          toolDetail: incomingDetail,
           startedAt: Date.now(),
         });
       }
@@ -1442,6 +1500,7 @@ async function boot() {
       markToolsDone(lane, ev.detail);
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
       markToolsDone(lane);
+      markThinkingDone(lane);
       updateAgentStatus(lane, ev.author, ev.label, "running", "");
       const last = lane.messages[lane.messages.length - 1];
       const msgLabel = ev.label || ev.author || "Chefe";
@@ -1462,6 +1521,7 @@ async function boot() {
       }
     } else if (ev.kind === "error") {
       markToolsDone(lane);
+      markThinkingDone(lane);
       lane.messages.push({
         id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: "error",
@@ -1470,6 +1530,8 @@ async function boot() {
       });
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
+      markThinkingDone(lane);
+      const wasSolo = isCurrentTurnSolo(lane);
       if (lane.stage && !lane.doneStages.includes(lane.stage)) {
         lane.doneStages.push(lane.stage);
       }
@@ -1478,15 +1540,22 @@ async function boot() {
         if (a.status === "running") a.status = "done";
         a.tool = "";
       });
-      const tokSuffix = lane.turnTotalTokens > 0
-        ? ` · ${exactTokens(lane.turnTotalTokens)} tokens no turno (Entrada: ${exactTokens(lane.turnInTokens)} / Saída: ${exactTokens(lane.turnOutTokens)})`
-        : "";
-      lane.messages.push({
-        id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        kind: "system",
-        label: "Sistema",
-        text: `${ev.text || "Execução concluída."}${tokSuffix}`,
-      });
+      const lastMsg = lane.messages[lane.messages.length - 1];
+      if (wasSolo && lastMsg && lastMsg.kind === "chief") {
+        if (lane.turnTotalTokens > 0) {
+          lastMsg.tokens = lane.turnTotalTokens;
+        }
+      } else {
+        const tokSuffix = lane.turnTotalTokens > 0
+          ? ` · ${exactTokens(lane.turnTotalTokens)} tokens no turno (Entrada: ${exactTokens(lane.turnInTokens)} / Saída: ${exactTokens(lane.turnOutTokens)})`
+          : "";
+        lane.messages.push({
+          id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "system",
+          label: "Sistema",
+          text: `${ev.text || "Execução concluída."}${tokSuffix}`,
+        });
+      }
       if (isActiveProject) {
         refreshDiffsAndSummarize(lane);
         refreshSessions();
@@ -1534,6 +1603,13 @@ async function boot() {
         if (outBox) outBox.scrollTop = outBox.scrollHeight;
       }
     }
+  });
+
+  window.runtime?.EventsOn("hivemind:fs-event", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!wsKey) return;
+    const changed: string[] = Array.isArray(payload?.changed) ? payload.changed.map(String) : [];
+    queueFileSystemRefresh(wsKey, changed, Boolean(payload?.overflow));
   });
 
   try {
@@ -1631,6 +1707,70 @@ async function refreshSessions(targetRoot?: string) {
     }
   } catch {
     // ignore empty workspace sessions
+  }
+}
+
+let thinkingTickTimer = 0;
+
+function formatElapsedThinking(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${mins}m ${secs}s`;
+}
+
+function isCurrentTurnSolo(lane: TeamLane): boolean {
+  if (lane.stage === "dev" || lane.stage === "qa") return false;
+  for (let i = lane.messages.length - 1; i >= 0; i--) {
+    const m = lane.messages[i];
+    if (m.kind === "user") break;
+    if (m.kind === "handoff") return false;
+  }
+  return true;
+}
+
+function findActiveThinking(lane: TeamLane): ChatMessage | null {
+  for (let i = lane.messages.length - 1; i >= 0; i--) {
+    const m = lane.messages[i];
+    if (m.kind === "user") break;
+    if (m.kind === "thinking" && m.active) return m;
+  }
+  return null;
+}
+
+function ensureThinkingTicker() {
+  if (thinkingTickTimer) return;
+  thinkingTickTimer = window.setInterval(() => {
+    const now = Date.now();
+    const nodes = document.querySelectorAll<HTMLElement>("[data-thinking-started]");
+    let anyActive = false;
+    nodes.forEach((node) => {
+      const started = Number(node.dataset.thinkingStarted || 0);
+      if (started > 0) {
+        anyActive = true;
+        node.textContent = formatElapsedThinking(now - started);
+      }
+    });
+    if (!anyActive) {
+      const stillRunning = state.lanes.some((l) => l.messages.some((m) => m.kind === "thinking" && m.active));
+      if (!stillRunning) {
+        window.clearInterval(thinkingTickTimer);
+        thinkingTickTimer = 0;
+      }
+    }
+  }, 1000);
+}
+
+function markThinkingDone(lane: TeamLane) {
+  const now = Date.now();
+  for (const m of lane.messages) {
+    if (m.kind === "thinking" && m.active) {
+      m.active = false;
+      if (m.startedAt && !m.durationMs) {
+        m.durationMs = Math.max(1000, now - m.startedAt);
+      }
+    }
   }
 }
 
@@ -2073,6 +2213,69 @@ async function refreshDiffs() {
   }
 }
 
+// Coalescência de eventos de filesystem vindos do backend (hivemind:fs-event).
+// O backend já agrupa em lotes com debounce; aqui agrupamos de novo por 250ms
+// para não re-renderizar a árvore várias vezes por segundo.
+const fsPendingBatches = new Map<string, { changed: Set<string>; overflow: boolean }>();
+let fsFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueFileSystemRefresh(wsKey: string, changed: string[], overflow: boolean) {
+  let entry = fsPendingBatches.get(wsKey);
+  if (!entry) {
+    entry = { changed: new Set<string>(), overflow: false };
+    fsPendingBatches.set(wsKey, entry);
+  }
+  for (const c of changed) entry.changed.add(c);
+  entry.overflow = entry.overflow || overflow;
+  if (fsFlushTimer) clearTimeout(fsFlushTimer);
+  fsFlushTimer = setTimeout(flushFileSystemRefreshes, 250);
+}
+
+async function flushFileSystemRefreshes() {
+  fsFlushTimer = null;
+  const batches = [...fsPendingBatches.entries()];
+  fsPendingBatches.clear();
+  for (const [wsKey, entry] of batches) {
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    if (!ctx) continue;
+    try {
+      await applyExternalFileChanges(ctx, entry.changed, entry.overflow);
+    } catch {
+      // erro transitório de leitura; o próximo lote recupera
+    }
+  }
+}
+
+// Recarrega do disco as abas de editor abertas e NÃO sujas que mudaram
+// (ex.: o agente editou o arquivo que está na sua tela) e atualiza a árvore
+// do explorador. Abas com edição não salva nunca são sobrescritas.
+async function applyExternalFileChanges(ctx: ProjectWorkspaceContext, changed: Set<string>, overflow: boolean) {
+  const backend = api();
+  if (!backend) return;
+  const isActive = ctx.id === state.activeProjectId;
+  const tabs = ctx.editorTabs;
+  const targets = tabs.filter((t) => t.kind === "file" && !t.dirty && (overflow || changed.has(t.relPath)));
+  let reloaded = 0;
+  for (const tab of targets) {
+    try {
+      const fresh = await backend.ReadFile(ctx.project.root, tab.relPath);
+      if (fresh !== tab.content) {
+        tab.content = fresh;
+        reloaded++;
+      }
+    } catch {
+      // arquivo removido ou grande demais: mantém o conteúdo atual em tela
+    }
+  }
+  if (isActive) {
+    if (reloaded > 0) {
+      renderEditorTabs();
+      renderEditorBody();
+    }
+    await refreshExplorerTree();
+  }
+}
+
 async function refreshExplorerTree() {
   const backend = api();
   if (!backend || !state.project) return;
@@ -2159,80 +2362,178 @@ function highlightActiveTreeRow() {
   });
 }
 
-function buildModelSelectOptions(currentModel: string, includeDefaultBlank = false): string {
+type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai";
+
+function inferModelProvider(modelSpec: string, includeDefaultBlank = false): ModelProviderId {
+  const cur = (modelSpec || "").trim();
+  if (!cur && includeDefaultBlank) return "default";
+  const low = cur.toLowerCase();
+  if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
+  if (low.startsWith("opencode:") || low.startsWith("opencode/") || low === "opencode") return "opencode";
+  if (low === "agy" || low.startsWith("agy:") || state.models.some((m) => m.slug.toLowerCase() === low)) return "agy";
+  if (low.startsWith("gemini")) return "gemini";
+  if (low.startsWith("claude")) return "anthropic";
+  if (low.startsWith("gpt") || low.startsWith("o1") || low.startsWith("o3") || low.startsWith("o4") || low.startsWith("grok")) {
+    return "openai";
+  }
+  if (state.openCodeGoModels.some((m) => m.slug.toLowerCase() === low)) return "opencode-go";
+  if (state.openCodeModels.some((m) => m.slug.toLowerCase() === low)) return "opencode";
+  if (!cur && state.openCodeStatus?.configured && state.openCodeGoModels.length > 0) return "opencode-go";
+  if (!cur && state.models.length === 0 && state.openCodeModels.length > 0) return "opencode";
+  return "agy";
+}
+
+function getProviderList(includeDefaultBlank = false): Array<{ id: ModelProviderId; label: string }> {
+  const out: Array<{ id: ModelProviderId; label: string }> = [];
+  if (includeDefaultBlank) {
+    out.push({ id: "default", label: "(usar modelo padrão)" });
+  }
+  const agyCount = state.models.length > 0 ? ` (${state.models.length})` : "";
+  const goCount = state.openCodeGoModels.length > 0 ? ` (${state.openCodeGoModels.length})` : "";
+  const zenCount = state.openCodeModels.length > 0 ? ` (${state.openCodeModels.length})` : "";
+  out.push(
+    { id: "agy", label: `Antigravity (agy)${agyCount}` },
+    { id: "opencode-go", label: `OpenCode Go${goCount}` },
+    { id: "opencode", label: `OpenCode Zen${zenCount}` },
+    { id: "gemini", label: "Google Gemini" },
+    { id: "anthropic", label: "Anthropic (Claude)" },
+    { id: "openai", label: "OpenAI / Grok (API)" },
+  );
+  return out;
+}
+
+function getModelsForProvider(providerId: ModelProviderId, currentModel = ""): Array<{ value: string; label: string }> {
   const cur = (currentModel || "").trim();
-  const blank = includeDefaultBlank ? `<option value="" ${!cur ? "selected" : ""}>(usar padrão)</option>` : "";
+  let items: Array<{ value: string; label: string }> = [];
+  switch (providerId) {
+    case "default":
+      return [{ value: "", label: "(herdar modelo padrão)" }];
+    case "agy":
+      items = state.models.length > 0
+        ? state.models.map((m) => ({ value: `agy:${m.slug}`, label: m.slug }))
+        : [{ value: "agy", label: "agy (padrão)" }];
+      break;
+    case "opencode-go":
+      items = state.openCodeGoModels.length > 0
+        ? state.openCodeGoModels.map((m) => ({ value: `opencode-go:${m.slug}`, label: m.slug }))
+        : [{ value: "opencode-go:glm-5.3", label: "glm-5.3" }];
+      break;
+    case "opencode":
+      items = state.openCodeModels.length > 0
+        ? state.openCodeModels.map((m) => ({ value: `opencode:${m.slug}`, label: m.slug }))
+        : [{ value: "opencode:big-pickle", label: "big-pickle" }];
+      break;
+    case "gemini":
+      items = [
+        { value: "gemini-2.5-pro", label: "gemini-2.5-pro" },
+        { value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
+        { value: "gemini-flash-latest", label: "gemini-flash-latest" },
+      ];
+      break;
+    case "anthropic":
+      items = [
+        { value: "claude-sonnet-4-5", label: "claude-sonnet-4-5" },
+        { value: "claude-opus-4-1", label: "claude-opus-4-1" },
+        { value: "claude-haiku-4-5", label: "claude-haiku-4-5" },
+      ];
+      break;
+    case "openai":
+      items = [
+        { value: "gpt-5", label: "gpt-5" },
+        { value: "gpt-4.1", label: "gpt-4.1" },
+        { value: "o3", label: "o3" },
+        { value: "grok-4", label: "grok-4 (OPENAI_BASE_URL)" },
+      ];
+      break;
+  }
+  const normalizedCur = cur.replace("/", ":");
+  if (cur && inferModelProvider(cur, false) === providerId && !items.some((x) => x.value === cur || x.value === normalizedCur)) {
+    const shortLabel = cur.replace(/^(agy|opencode-go|opencode)[:/]/i, "");
+    items = [{ value: cur, label: shortLabel || cur }, ...items];
+  }
+  return items;
+}
 
-  const inAgy = state.models.some((m) => `agy:${m.slug}` === cur || m.slug === cur);
-  const inOpenCodeGo = state.openCodeGoModels.some(
-    (m) => `opencode-go:${m.slug}` === cur || `opencode-go/${m.slug}` === cur
-  );
-  const inOpenCodeZen = state.openCodeModels.some(
-    (m) => `opencode:${m.slug}` === cur || `opencode/${m.slug}` === cur
-  );
-  const effectiveCur =
-    cur ||
-    (!includeDefaultBlank
-      ? state.openCodeStatus?.configured && state.openCodeGoModels.length > 0
-        ? `opencode-go:${state.openCodeGoModels[0].slug}`
-        : state.openCodeStatus?.configured && state.openCodeModels.length > 0
-          ? `opencode:${state.openCodeModels[0].slug}`
-          : "agy"
-      : "");
-  const effectiveInList =
-    inAgy ||
-    inOpenCodeGo ||
-    inOpenCodeZen ||
-    (!cur &&
-      state.openCodeStatus?.configured &&
-      (state.openCodeGoModels.length > 0 || state.openCodeModels.length > 0));
-  const head =
-    effectiveCur && !effectiveInList
-      ? `<option value="${escapeHtml(effectiveCur)}" selected>${escapeHtml(effectiveCur)}</option>`
-      : "";
+function buildModelOptionsForProviderHtml(providerId: ModelProviderId, currentModel = ""): string {
+  const cur = (currentModel || "").trim();
+  const normalizedCur = cur.replace("/", ":");
+  const items = getModelsForProvider(providerId, cur);
+  let matched = false;
+  const html = items
+    .map((it, i) => {
+      const isMatch = cur
+        ? it.value === cur || it.value === normalizedCur || it.label === cur
+        : i === 0;
+      if (isMatch) matched = true;
+      return `<option value="${escapeHtml(it.value)}" ${isMatch ? "selected" : ""}>${escapeHtml(it.label)}</option>`;
+    })
+    .join("");
+  if (!matched && items.length > 0) {
+    return items
+      .map((it, i) => `<option value="${escapeHtml(it.value)}" ${i === 0 ? "selected" : ""}>${escapeHtml(it.label)}</option>`)
+      .join("");
+  }
+  return html;
+}
 
-  const groups: string[] = [];
-  if (state.openCodeGoModels.length > 0) {
-    const goLabel = state.openCodeStatus?.configured
-      ? `OpenCode Go — Assinatura (${state.openCodeGoModels.length})`
-      : `OpenCode Go — Configure o token (${state.openCodeGoModels.length})`;
-    const opts = state.openCodeGoModels
-      .map((m) => {
-        const val = `opencode-go:${m.slug}`;
-        const sel = effectiveCur === val || cur === `opencode-go/${m.slug}` ? "selected" : "";
-        return `<option value="${escapeHtml(val)}" ${sel}>opencode-go:${escapeHtml(m.slug)}</option>`;
-      })
-      .join("");
-    groups.push(`<optgroup label="${escapeHtml(goLabel)}">${opts}</optgroup>`);
-  }
-  if (state.openCodeModels.length > 0) {
-    const ocLabel = state.openCodeStatus?.configured
-      ? `OpenCode Zen — Pay-as-you-go / Free (${state.openCodeModels.length})`
-      : `OpenCode Zen — Sem token (modelos -free / configure o token)`;
-    const opts = state.openCodeModels
-      .map((m) => {
-        const val = `opencode:${m.slug}`;
-        const sel = effectiveCur === val || cur === `opencode/${m.slug}` ? "selected" : "";
-        return `<option value="${escapeHtml(val)}" ${sel}>opencode:${escapeHtml(m.slug)}</option>`;
-      })
-      .join("");
-    groups.push(`<optgroup label="${escapeHtml(ocLabel)}">${opts}</optgroup>`);
-  }
-  if (state.models.length > 0) {
-    const opts = state.models
-      .map((m) => {
-        const val = `agy:${m.slug}`;
-        const sel = effectiveCur === val || cur === m.slug ? "selected" : "";
-        return `<option value="${escapeHtml(val)}" ${sel}>agy:${escapeHtml(m.slug)}</option>`;
-      })
-      .join("");
-    groups.push(`<optgroup label="Antigravity CLI (agy)">${opts}</optgroup>`);
-  }
+function renderModelPickerPairHtml(opts: {
+  pairKey: string;
+  selectId?: string;
+  dataAttr?: string;
+  dataAttrVal?: string;
+  currentModel: string;
+  includeDefaultBlank?: boolean;
+  disabled?: boolean;
+  compact?: boolean;
+}): string {
+  const includeBlank = Boolean(opts.includeDefaultBlank);
+  const prov = inferModelProvider(opts.currentModel, includeBlank);
+  const providers = getProviderList(includeBlank);
+  const provOpts = providers
+    .map((p) => `<option value="${p.id}" ${p.id === prov ? "selected" : ""}>${escapeHtml(p.label)}</option>`)
+    .join("");
+  const modelOpts = buildModelOptionsForProviderHtml(prov, opts.currentModel);
+  const idAttr = opts.selectId ? `id="${escapeHtml(opts.selectId)}"` : "";
+  const extraAttr = opts.dataAttr && opts.dataAttrVal ? `${opts.dataAttr}="${escapeHtml(opts.dataAttrVal)}"` : "";
+  const disAttr = opts.disabled ? "disabled" : "";
+  const modelDis = opts.disabled || prov === "default" ? "disabled" : "";
+  return `
+    <div class="model-picker-pair ${opts.compact ? "compact" : ""}" data-mp-pair="${escapeHtml(opts.pairKey)}">
+      <select class="mp-provider-select" data-mp-provider="${escapeHtml(opts.pairKey)}" data-mp-allow-blank="${includeBlank ? "1" : "0"}" aria-label="Provedor" ${disAttr}>
+        ${provOpts}
+      </select>
+      <select ${idAttr} class="mp-model-select" data-mp-model="${escapeHtml(opts.pairKey)}" ${extraAttr} aria-label="Modelo" ${modelDis}>
+        ${modelOpts}
+      </select>
+    </div>
+  `;
+}
 
-  if (groups.length === 0) {
-    return blank + (head || `<option value="agy" selected>agy (padrão)</option>`);
+function bindModelPickerPairs(
+  container: ParentNode | null,
+  onModelChange?: (modelSelect: HTMLSelectElement, newValue: string) => void
+) {
+  if (!container) return;
+  container.querySelectorAll<HTMLSelectElement>("[data-mp-provider]").forEach((provSel) => {
+    provSel.addEventListener("change", () => {
+      const key = provSel.dataset.mpProvider!;
+      const modelSel = container.querySelector<HTMLSelectElement>(`[data-mp-model="${CSS.escape(key)}"]`);
+      if (!modelSel) return;
+      const provId = provSel.value as ModelProviderId;
+      modelSel.innerHTML = buildModelOptionsForProviderHtml(provId, "");
+      modelSel.disabled = provId === "default" || provSel.disabled;
+      if (onModelChange) {
+        onModelChange(modelSel, modelSel.value);
+      }
+    });
+  });
+  if (onModelChange) {
+    container.querySelectorAll<HTMLSelectElement>("[data-mp-model]").forEach((modelSel) => {
+      modelSel.addEventListener("change", () => {
+        onModelChange(modelSel, modelSel.value);
+      });
+    });
   }
-  return blank + head + groups.join("");
 }
 
 async function handleInlineModelChange(agentName: string, newModel: string) {
@@ -2782,9 +3083,14 @@ function renderAgentCardsHtml(agents: AgentRuntime[]): string {
         <div class="agent-name">${escapeHtml(a.name)} · <span class="dim">${escapeHtml(roleLabelPt(a.role))}</span></div>
         <span class="status-pill ${a.status}">${a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro"}</span>
       </div>
-      <select data-sb-agent-model="${escapeHtml(a.name)}" style="width:100%;padding:3px 6px;font-size:11px;font-family:var(--mono)" ${lane?.running ? "disabled" : ""}>
-        ${buildModelSelectOptions(a.model)}
-      </select>
+      ${renderModelPickerPairHtml({
+        pairKey: `sb-${a.name}`,
+        dataAttr: "data-sb-agent-model",
+        dataAttrVal: a.name,
+        currentModel: a.model,
+        disabled: Boolean(lane?.running),
+        compact: true,
+      })}
       ${a.tool ? `<div class="agent-meta" style="color:var(--green)">Ferramenta: ${escapeHtml(a.tool)}</div>` : ""}
       ${a.tokens > 0
         ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`
@@ -2796,11 +3102,9 @@ function renderAgentCardsHtml(agents: AgentRuntime[]): string {
 
 function bindAgentModelSelects(container: ParentNode | null, attrName: string) {
   if (!container) return;
-  container.querySelectorAll<HTMLSelectElement>(`[${attrName}]`).forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const agName = sel.getAttribute(attrName) || "";
-      if (agName) handleInlineModelChange(agName, sel.value);
-    });
+  bindModelPickerPairs(container, (sel, newVal) => {
+    const agName = sel.getAttribute(attrName) || "";
+    if (agName && newVal) handleInlineModelChange(agName, newVal);
   });
 }
 
@@ -3198,6 +3502,73 @@ function renderGitGraphSectionHtml(): string {
   `;
 }
 
+function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { showResponseBadge?: boolean; showMineBadge?: boolean }): string {
+  const showResp = Boolean((opts?.showResponseBadge || (!pr.isMine && pr.needsAttention)) && pr.myResponse);
+  const respPill = showResp
+    ? pr.myResponse === "approved"
+      ? `<span class="flow-pill approved">Aprovado</span>`
+      : pr.myResponse === "changes_requested"
+        ? `<span class="flow-pill changes">Reprovado</span>`
+        : `<span class="flow-pill commented">Comentado</span>`
+    : "";
+  const attentionPill = pr.needsAttention
+    ? `<span class="flow-pill pending">${escapeHtml(pr.attentionReason || "Sua revisão")}</span>`
+    : pr.reviewRequested && !pr.isMine && !pr.myResponse
+      ? `<span class="flow-pill pending">Sua revisão</span>`
+      : "";
+  const decisionPill = pr.isMine && pr.reviewDecision
+    ? pr.reviewDecision === "APPROVED"
+      ? `<span class="flow-pill approved">Aprovado</span>`
+      : pr.reviewDecision === "CHANGES_REQUESTED"
+        ? `<span class="flow-pill changes">Ajustes</span>`
+        : pr.reviewDecision === "REVIEW_REQUIRED"
+          ? `<span class="flow-pill pending">Aguardando revisão</span>`
+          : ""
+    : "";
+  return `
+    <div class="issue-card pr-card">
+      <div class="pr-card-top">
+        <span class="tok-pill">#${pr.number}</span>
+        ${pr.isMine && opts?.showMineBadge !== false ? `<span class="flow-pill mine">Meu PR</span>` : ""}
+        ${attentionPill}
+        ${pr.isDraft ? `<span class="pr-draft-pill">DRAFT</span>` : ""}
+        ${respPill}
+        ${decisionPill}
+        ${pr.author ? `<span class="dim" style="font-size:10.5px">@${escapeHtml(pr.author)}</span>` : ""}
+      </div>
+      <div class="pr-card-title">${escapeHtml(pr.title)}</div>
+      ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
+      <div class="pr-card-actions">
+        <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${pr.isMine ? "Trabalhar c/ Equipe" : "Revisar c/ Equipe"}</span></button>
+        <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">${icons.openInNew}</button>
+        ${pr.isMine ? `<button class="mini danger" data-close-pr="${pr.number}" title="Fechar meu PR no GitHub">${icons.trash}</button>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
+  const isGH = iss.source === "github";
+  const num = isGH ? parseInt(iss.key.replace(/^#/, ""), 10) || 0 : 0;
+  return `
+    <div class="issue-card">
+      <div class="pr-card-top" style="justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+          <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
+          ${iss.isMine ? `<span class="flow-pill mine">Minha</span>` : ""}
+        </div>
+        ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
+      </div>
+      <div class="pr-card-title">${escapeHtml(iss.title)}</div>
+      <div class="pr-card-actions">
+        <button class="mini primary" style="flex:1" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
+        ${iss.url ? `<button class="mini" data-open-pr-url="${escapeHtml(iss.url)}" title="Abrir no navegador">${icons.openInNew}</button>` : ""}
+        ${iss.isMine && isGH && num > 0 ? `<button class="mini danger" data-close-issue="${num}" title="Fechar minha issue no GitHub">${icons.trash}</button>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 function renderGitSidebarHtml(proj: ProjectInfo | null): string {
   const gh = state.ghStatus;
   const hasGit = Boolean(proj?.branch);
@@ -3206,9 +3577,18 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
   const unstagedDiffs = diffs.filter((d) => !d.staged);
   const hasDiffs = diffs.length > 0;
   const jiraOn = Boolean(proj?.teamConfig?.settings?.jira_enabled);
-  const activeGitTab: GitSubTab = !hasGit && state.gitTab === "changes" ? "issues" : state.gitTab;
-  const prBadge = state.prs.loadedOnce ? ` (${state.prs.list.length})` : "";
-  const issueBadge = state.issues.loadedOnce ? ` (${state.issues.list.length})` : "";
+  const activeGitTab: GitSubTab = !hasGit && state.gitTab === "changes" ? "prs_issues" : state.gitTab;
+
+  const indexedPrs = state.prs.list.map((pr, idx) => ({ pr, idx }));
+  const pendingReviews = indexedPrs.filter(({ pr }) => !pr.isMine && (pr.needsAttention || (pr.reviewRequested && !pr.myResponse)));
+  const myPrs = indexedPrs.filter(({ pr }) => pr.isMine);
+  const respondedPrs = indexedPrs.filter(({ pr }) => !pr.isMine && Boolean(pr.myResponse) && !pr.needsAttention);
+
+  const prsIssuesTotal = state.prs.loadedOnce || state.issues.loadedOnce
+    ? ` (${state.prs.list.length + state.issues.list.length})`
+    : "";
+  const flowPendingCount = pendingReviews.length + myPrs.length;
+  const flowBadge = state.prs.loadedOnce ? ` (${flowPendingCount})` : "";
 
   let tabContentHtml = "";
   if (activeGitTab === "changes" && hasGit) {
@@ -3257,16 +3637,17 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 
       ${renderGitGraphSectionHtml()}
     `;
-  } else if (activeGitTab === "prs") {
+  } else if (activeGitTab === "prs_issues") {
+    const loadingAny = state.prs.loading || state.issues.loading;
     tabContentHtml = `
       <div class="git-section" style="padding:10px">
         <div class="git-section-head">
-          <span>Pull Requests abertos</span>
+          <span>Pull Requests (${state.prs.list.length})</span>
           <div style="display:flex;gap:5px">
-            <button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>
-            <button class="mini" id="btn-load-prs" ${state.prs.loading ? "disabled" : ""}>
-              ${state.prs.loading ? icons.spinner : icons.refresh}
-              <span>${state.prs.loadedOnce ? "Atualizar" : "Carregar"}</span>
+            ${hasGit ? `<button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>` : ""}
+            <button class="mini" id="btn-load-prs-issues" ${loadingAny ? "disabled" : ""}>
+              ${loadingAny ? icons.spinner : icons.refresh}
+              <span>${state.prs.loadedOnce || state.issues.loadedOnce ? "Atualizar" : "Carregar"}</span>
             </button>
           </div>
         </div>
@@ -3274,24 +3655,26 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           ${state.prs.loading && !state.prs.loadedOnce
             ? `<div class="dim">${icons.spinner} Carregando PRs…</div>`
             : !state.prs.loadedOnce
-              ? `<div class="dim">Clique em "Carregar" para listar os PRs abertos do repositório.</div>`
+              ? `<div class="dim">Clique em "Carregar" para buscar PRs e Issues.</div>`
               : state.prs.list.length === 0
-                ? `<div class="dim">Nenhum Pull Request aberto neste repositório.</div>`
-                : state.prs.list.map((pr, idx) => `
-                  <div class="issue-card pr-card">
-                    <div class="pr-card-top">
-                      <span class="tok-pill">#${pr.number}</span>
-                      ${pr.isDraft ? `<span class="pr-draft-pill">DRAFT</span>` : ""}
-                      ${pr.author ? `<span class="dim" style="font-size:10.5px">@${escapeHtml(pr.author)}</span>` : ""}
-                    </div>
-                    <div class="pr-card-title">${escapeHtml(pr.title)}</div>
-                    ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
-                    <div class="git-actions-row">
-                      <button class="mini primary" data-review-pr="${idx}">${icons.send}<span>Revisar c/ Equipe</span></button>
-                      <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">Abrir</button>
-                    </div>
-                  </div>
-                `).join("")
+                ? `<div class="dim">Nenhum Pull Request aberto.</div>`
+                : state.prs.list.map((pr, idx) => renderPrCardHtml(pr, idx, { showResponseBadge: true })).join("")
+          }
+        </div>
+      </div>
+
+      <div class="git-section" style="padding:10px">
+        <div class="git-section-head">
+          <span>Issues abertas (${state.issues.list.length})</span>
+        </div>
+        <div id="git-issues-list">
+          ${state.issues.loading && !state.issues.loadedOnce
+            ? `<div class="dim">${icons.spinner} Carregando issues…</div>`
+            : !state.issues.loadedOnce
+              ? `<div class="dim">Aguardando carregamento…</div>`
+              : state.issues.list.length === 0
+                ? `<div class="dim">Nenhuma issue aberta encontrada.</div>`
+                : state.issues.list.map((iss, idx) => renderIssueCardHtml(iss, idx)).join("")
           }
         </div>
       </div>
@@ -3300,31 +3683,55 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
     tabContentHtml = `
       <div class="git-section" style="padding:10px">
         <div class="git-section-head">
-          <span>Issues abertas</span>
-          <button class="mini" id="btn-load-issues" ${state.issues.loading ? "disabled" : ""}>
-            ${state.issues.loading ? icons.spinner : icons.refresh}
-            <span>${state.issues.loadedOnce ? "Atualizar" : "Carregar"}</span>
+          <span>Para revisar (${pendingReviews.length})</span>
+          <button class="mini" id="btn-load-flow" ${state.prs.loading ? "disabled" : ""}>
+            ${state.prs.loading ? icons.spinner : icons.refresh}
+            <span>${state.prs.loadedOnce ? "Atualizar" : "Carregar"}</span>
           </button>
         </div>
-        <div id="git-issues-list">
-          ${state.issues.loading && !state.issues.loadedOnce
-            ? `<div class="dim">${icons.spinner} Carregando issues…</div>`
-            : !state.issues.loadedOnce
-              ? `<div class="dim">Clique em "Carregar" para buscar issues do Jira ou GitHub.</div>`
-              : state.issues.list.length === 0
-                ? `<div class="dim">Nenhuma issue aberta encontrada.</div>`
-                : state.issues.list.map((iss, idx) => `
-                  <div class="issue-card">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
-                      <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
-                      ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
-                    </div>
-                    <div class="pr-card-title">${escapeHtml(iss.title)}</div>
-                    <button class="mini primary" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
-                  </div>
-                `).join("")
+        <div>
+          ${state.prs.loading && !state.prs.loadedOnce
+            ? `<div class="dim">${icons.spinner} Analisando seus PRs e revisões…</div>`
+            : !state.prs.loadedOnce
+              ? `<div class="dim">Clique em "Carregar" para ver seu fluxo de revisões.</div>`
+              : pendingReviews.length === 0
+                ? `<div class="dim">Nenhum PR aguardando sua revisão.</div>`
+                : pendingReviews.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showMineBadge: false })).join("")
           }
         </div>
+      </div>
+
+      <div class="git-section" style="padding:10px">
+        <div class="git-section-head">
+          <span>Meus PRs (${myPrs.length})</span>
+          ${hasGit ? `<button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>` : ""}
+        </div>
+        <div>
+          ${!state.prs.loadedOnce
+            ? `<div class="dim">Carregando…</div>`
+            : myPrs.length === 0
+              ? `<div class="dim">Você não tem PRs abertos neste repositório.</div>`
+              : myPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showMineBadge: false })).join("")
+          }
+        </div>
+      </div>
+
+      <div class="git-section" style="padding:10px">
+        <div class="git-section-head">
+          <button type="button" class="scm-collapse-btn" id="btn-toggle-flow-responded" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
+            ${state.showFlowResponded ? icons.chevronDown : icons.chevronRight}
+            <span>Já respondidos (${respondedPrs.length})</span>
+          </button>
+          <span class="dim" style="font-size:10px">comentados / aprovados / reprovados</span>
+        </div>
+        ${state.showFlowResponded ? `
+          <div>
+            ${respondedPrs.length === 0
+              ? `<div class="dim">Nenhum PR respondido ainda.</div>`
+              : respondedPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showResponseBadge: true, showMineBadge: false })).join("")
+            }
+          </div>
+        ` : ""}
       </div>
     `;
   }
@@ -3349,6 +3756,7 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
               <button type="button" class="dropdown-item" data-git-action="stash-pop">Pop Stash</button>
               <div class="scm-menu-sep"></div>
               <button type="button" class="dropdown-item" id="menu-open-pr">Abrir Pull Request…</button>
+              <button type="button" class="dropdown-item" id="menu-github-connector">Conector GitHub Nativo…</button>
               ${jiraOn ? `<button type="button" class="dropdown-item" id="menu-comment-jira">Comentar no Jira…</button>` : ""}
               <button type="button" class="dropdown-item" id="menu-switch-branch">Trocar / Criar Branch…</button>
               ${hasDiffs ? `<div class="scm-menu-sep"></div><button type="button" class="dropdown-item danger" id="menu-discard-all">Descartar Todas as Alterações</button>` : ""}
@@ -3361,16 +3769,16 @@ function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <div class="scm-repo-strip">
         <span class="gh-dot ${hasGit ? "ok" : "off"}"></span>
         <span class="scm-branch-label">${hasGit ? escapeHtml(proj!.branch) : "Sem repositório Git"}</span>
-        <span class="dim" style="font-size:10.5px;margin-left:auto" title="${escapeHtml(gh?.remote || "")}">
-          ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : escapeHtml(gh?.detail || "")}
-        </span>
+        <button type="button" class="scm-gh-pill ${gh?.loggedIn ? "ok" : "off"}" id="btn-github-connector" title="${escapeHtml([gh?.detail || "Configurar Conector GitHub Nativo", gh?.remote].filter(Boolean).join(" — "))}">
+          ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : "Conectar GitHub"}
+        </button>
       </div>
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
 
       <div class="git-subtabs scm-tabs-pad">
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Git (${diffs.length})</button>` : ""}
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "prs" ? "active" : ""}" data-git-tab="prs">PRs${prBadge}</button>` : ""}
-        <button type="button" class="git-subtab ${activeGitTab === "issues" ? "active" : ""}" data-git-tab="issues">Issues${issueBadge}</button>
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${diffs.length})</button>` : ""}
+        <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
       </div>
 
       ${tabContentHtml}
@@ -3495,8 +3903,11 @@ function bindGitSidebarEvents() {
   document.getElementById("btn-refresh-diff")?.addEventListener("click", () => {
     void refreshDiffs();
     if (state.gitTab === "changes") void loadGitGraph();
-    if (state.gitTab === "prs") void loadGitHubPRs();
-    if (state.gitTab === "issues") void loadProjectIssues();
+    if (state.gitTab === "prs_issues") {
+      void loadGitHubPRs();
+      void loadProjectIssues();
+    }
+    if (state.gitTab === "flow") void loadGitHubPRs();
   });
 
   document.getElementById("btn-scm-more")?.addEventListener("click", (ev) => {
@@ -3523,13 +3934,19 @@ function bindGitSidebarEvents() {
       if (tab === "changes" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
         void loadGitGraph();
       }
-      if (tab === "prs" && !state.prs.loadedOnce && !state.prs.loading) {
+      if (tab === "prs_issues") {
+        if (!state.prs.loadedOnce && !state.prs.loading && state.project?.branch) void loadGitHubPRs();
+        if (!state.issues.loadedOnce && !state.issues.loading) void loadProjectIssues();
+      }
+      if (tab === "flow" && !state.prs.loadedOnce && !state.prs.loading) {
         void loadGitHubPRs();
       }
-      if (tab === "issues" && !state.issues.loadedOnce && !state.issues.loading) {
-        void loadProjectIssues();
-      }
     });
+  });
+
+  document.getElementById("btn-toggle-flow-responded")?.addEventListener("click", () => {
+    state.showFlowResponded = !state.showFlowResponded;
+    renderLeftSidebar();
   });
 
   document.getElementById("btn-toggle-changes")?.addEventListener("click", () => {
@@ -3555,6 +3972,14 @@ function bindGitSidebarEvents() {
     });
   });
 
+  document.getElementById("menu-github-connector")?.addEventListener("click", () => {
+    state.gitMoreMenuOpen = false;
+    renderLeftSidebar();
+    void openGitHubModal();
+  });
+  document.getElementById("btn-github-connector")?.addEventListener("click", () => {
+    void openGitHubModal();
+  });
   document.getElementById("menu-switch-branch")?.addEventListener("click", () => {
     state.gitMoreMenuOpen = false;
     renderLeftSidebar();
@@ -3692,8 +4117,59 @@ function bindGitSidebarEvents() {
   document.getElementById("menu-comment-jira")?.addEventListener("click", () => void commentJiraAction());
 
   document.getElementById("btn-discard")?.addEventListener("click", () => promptDiscardChanges());
-  document.getElementById("btn-load-prs")?.addEventListener("click", () => void loadGitHubPRs());
-  document.getElementById("btn-load-issues")?.addEventListener("click", () => void loadProjectIssues());
+  document.getElementById("btn-load-prs-issues")?.addEventListener("click", () => {
+    if (state.project?.branch) void loadGitHubPRs();
+    void loadProjectIssues();
+  });
+  document.getElementById("btn-load-flow")?.addEventListener("click", () => void loadGitHubPRs());
+
+  document.querySelectorAll("[data-close-pr]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const num = parseInt((btn as HTMLElement).dataset.closePr || "0", 10);
+      if (!num || !state.project) return;
+      askConfirm({
+        title: `Fechar meu PR #${num}`,
+        body: `O Pull Request #${num} (aberto por você) será fechado no GitHub e removido da lista de abertos. Deseja continuar?`,
+        confirmLabel: "Fechar PR",
+        danger: true,
+        onConfirm: async () => {
+          if (!state.project || !api()?.CloseOwnGitHubItem) return;
+          try {
+            await api()!.CloseOwnGitHubItem(state.project.root, "pr", num);
+            toast(`PR #${num} fechado no GitHub.`, "success");
+            setStatus(`PR #${num} fechado.`);
+            await loadGitHubPRs();
+          } catch (err: any) {
+            toastError(`fechar o PR #${num}`, err);
+          }
+        },
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-close-issue]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const num = parseInt((btn as HTMLElement).dataset.closeIssue || "0", 10);
+      if (!num || !state.project) return;
+      askConfirm({
+        title: `Fechar minha issue #${num}`,
+        body: `A issue #${num} (aberta por você) será fechada no GitHub e removida da lista de abertas. Deseja continuar?`,
+        confirmLabel: "Fechar Issue",
+        danger: true,
+        onConfirm: async () => {
+          if (!state.project || !api()?.CloseOwnGitHubItem) return;
+          try {
+            await api()!.CloseOwnGitHubItem(state.project.root, "issue", num);
+            toast(`Issue #${num} fechada no GitHub.`, "success");
+            setStatus(`Issue #${num} fechada.`);
+            await loadProjectIssues();
+          } catch (err: any) {
+            toastError(`fechar a issue #${num}`, err);
+          }
+        },
+      });
+    });
+  });
 
   document.querySelectorAll("[data-open-pr-url]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -3714,7 +4190,13 @@ function bindGitSidebarEvents() {
       if (!pr) return;
       const branchInfo = pr.headRef && pr.baseRef ? ` (${pr.headRef} → ${pr.baseRef})` : "";
       const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body.slice(0, 1200)}` : "";
-      state.draftObjective = `Revisar PR #${pr.number}${branchInfo} — ${pr.title}${bodyPart}`;
+      if (pr.isMine) {
+        state.draftObjective = `Atender feedback do nosso PR #${pr.number}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
+      } else if (pr.needsAttention && pr.myResponse) {
+        state.draftObjective = `Reavaliar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Houve ${pr.attentionReason ? pr.attentionReason.toLowerCase() : "nova atualização"} após minha última revisão; leia os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
+      } else {
+        state.draftObjective = `Revisar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
+      }
       state.showRightAI = true;
       syncLayoutVisibility();
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
@@ -3868,10 +4350,15 @@ function renderMissionBoardHtml(): string {
               </div>
 
               <div>
-                <div class="dim" style="font-size:10.5px;margin-bottom:3px">Modelo LLM (troca imediata):</div>
-                <select data-mc-agent-model="${escapeHtml(a.name)}" style="width:100%;font-family:var(--mono);font-size:11.5px;padding:5px 7px" ${lane?.running ? "disabled" : ""}>
-                  ${buildModelSelectOptions(a.model)}
-                </select>
+                <div class="dim" style="font-size:10.5px;margin-bottom:4px">Provedor e Modelo LLM (troca imediata):</div>
+                ${renderModelPickerPairHtml({
+                  pairKey: `mc-${a.name}`,
+                  dataAttr: "data-mc-agent-model",
+                  dataAttrVal: a.name,
+                  currentModel: a.model,
+                  disabled: Boolean(lane?.running),
+                  compact: true,
+                })}
               </div>
 
               <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-family:var(--mono)">
@@ -4036,8 +4523,6 @@ function renderTeamConfigSkillRowsHtml(draft: TeamConfigDraft): string {
 
 function renderTeamConfigPageHtml(): string {
   const draft = ensureTeamConfigDraft();
-  const buildOpt = (selectedModel?: string, includeDefaultBlank = false) =>
-    buildModelSelectOptions(selectedModel || "", includeDefaultBlank);
   const assignedCount = draft.skillAssignments.length;
 
   return `
@@ -4100,21 +4585,21 @@ function renderTeamConfigPageHtml(): string {
             ${icons.sparkle}
             <div>
               <h3>Modelos LLM por Especialista</h3>
-              <div class="dim">Use um modelo padrão ou escolha modelos dedicados para Chefe, Dev e QA.</div>
+              <div class="dim">Escolha primeiro o provedor (Antigravity, OpenCode, Gemini, Claude ou OpenAI/Grok) e depois o modelo.</div>
             </div>
           </div>
           <div class="tc-fields">
             <label>Modelo padrão</label>
-            <select id="tc-model">${buildOpt(draft.defaultModel)}</select>
+            ${renderModelPickerPairHtml({ pairKey: "tc-default", selectId: "tc-model", currentModel: draft.defaultModel })}
 
             <label>Modelo do Chefe</label>
-            <select id="tc-model-chief">${buildOpt(draft.chiefModel, true)}</select>
+            ${renderModelPickerPairHtml({ pairKey: "tc-chief", selectId: "tc-model-chief", currentModel: draft.chiefModel, includeDefaultBlank: true })}
 
             <label>Modelo do Dev</label>
-            <select id="tc-model-dev">${buildOpt(draft.devModel, true)}</select>
+            ${renderModelPickerPairHtml({ pairKey: "tc-dev", selectId: "tc-model-dev", currentModel: draft.devModel, includeDefaultBlank: true })}
 
             <label>Modelo do QA</label>
-            <select id="tc-model-qa">${buildOpt(draft.qaModel, true)}</select>
+            ${renderModelPickerPairHtml({ pairKey: "tc-qa", selectId: "tc-model-qa", currentModel: draft.qaModel, includeDefaultBlank: true })}
           </div>
         </section>
 
@@ -4257,6 +4742,8 @@ function bindTeamConfigEvents() {
   const draft = ensureTeamConfigDraft();
   const root = document.getElementById("team-config-root");
   if (!root) return;
+
+  bindModelPickerPairs(root, () => syncTeamConfigDraftFromDom(draft));
 
   root.querySelectorAll("input, select").forEach((el) => {
     if ((el as HTMLElement).id === "tc-skill-filter") return;
@@ -4975,7 +5462,10 @@ function renderRightPane() {
     <div class="lane-bar" id="lane-bar"></div>
     <div class="pipeline-bar" id="pipeline-bar"></div>
     <div class="token-bar" id="token-bar"></div>
-    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-scroll-wrap">
+      <div class="chat-messages" id="chat-messages"></div>
+      <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
+    </div>
     <div class="composer-wrap">
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
@@ -5297,7 +5787,7 @@ function attachImageFiles(files: FileList | File[]) {
 }
 
 function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.durationMs || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function createMessageElement(m: ChatMessage): HTMLElement {
@@ -5314,33 +5804,189 @@ function formatToolDuration(ms?: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function toolLangBadge(fileName: string): { label: string; cls: string } {
+  const ext = (fileName.split(".").pop() || "").toLowerCase();
+  switch (ext) {
+    case "go": return { label: "GO", cls: "lang-go" };
+    case "ts": case "mts": return { label: "TS", cls: "lang-ts" };
+    case "tsx": return { label: "TSX", cls: "lang-ts" };
+    case "js": case "mjs": case "cjs": return { label: "JS", cls: "lang-js" };
+    case "jsx": return { label: "JSX", cls: "lang-js" };
+    case "css": case "scss": case "less": return { label: "CSS", cls: "lang-css" };
+    case "html": case "htm": return { label: "HTML", cls: "lang-html" };
+    case "json": return { label: "JSON", cls: "lang-json" };
+    case "md": case "mdx": return { label: "MD", cls: "lang-md" };
+    case "yaml": case "yml": return { label: "YML", cls: "lang-yaml" };
+    case "py": return { label: "PY", cls: "lang-py" };
+    case "rs": return { label: "RS", cls: "lang-rs" };
+    case "sql": return { label: "SQL", cls: "lang-sql" };
+    case "sh": case "bash": case "ps1": return { label: "SH", cls: "lang-sh" };
+    case "java": case "kt": return { label: "JVM", cls: "lang-html" };
+    case "cs": return { label: "C#", cls: "lang-css" };
+    default: return { label: ext ? ext.slice(0, 4).toUpperCase() : "TXT", cls: "lang-default" };
+  }
+}
+
+interface MinimalToolRowSpec {
+  verb: string;
+  filePath?: string;
+  fileName?: string;
+  fileSub?: string;
+  targetText?: string;
+  expandChevron?: boolean;
+}
+
+function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
+  const name = (m.toolName || m.text.split(/\s+/)[0] || "").toLowerCase();
+  const rawArg = (m.toolDetail || "").split("\n")[0].trim();
+  const active = Boolean(m.active);
+  const countMatch = m.text.match(/(×\d+)$/);
+  const countSuffix = countMatch ? ` ${countMatch[1]}` : "";
+
+  const splitFileTarget = (p: string): { filePath: string; fileName: string; fileSub: string } => {
+    const clean = p.replace(/\\/g, "/").replace(/^\.\//, "");
+    const lineMatch = clean.match(/^(.+?)(#L[\d-]+|:\d+(?:-\d+)?)$/);
+    const realPath = lineMatch ? lineMatch[1] : clean;
+    const linePart = lineMatch ? (lineMatch[2].startsWith("#") ? lineMatch[2] : `#L${lineMatch[2].slice(1)}`) : "";
+    const parts = realPath.split("/");
+    const fileName = parts.pop() || realPath;
+    const dirPart = parts.join("/");
+    const fileSub = linePart || (dirPart ? dirPart : "");
+    return { filePath: realPath, fileName, fileSub };
+  };
+
+  if (name === "read_file" && rawArg) {
+    const f = splitFileTarget(rawArg);
+    return { verb: active ? "Analisando" : "Analisou", ...f, expandChevron: false };
+  }
+  if (name === "write_file" && rawArg) {
+    const f = splitFileTarget(rawArg);
+    return { verb: active ? "Editando" : "Editou", ...f, expandChevron: false };
+  }
+  if (name === "list_dir") {
+    return {
+      verb: active ? "Listando" : "Listou",
+      targetText: `${rawArg || "."}/${countSuffix}`.replace("//", "/"),
+      expandChevron: true,
+    };
+  }
+  if (name === "run_shell") {
+    return {
+      verb: active ? "Executando" : "Executou",
+      targetText: `${rawArg || "comando"}${countSuffix}`,
+      expandChevron: true,
+    };
+  }
+  if (name === "git_status") return { verb: active ? "Verificando" : "Verificou", targetText: `git status${countSuffix}`, expandChevron: true };
+  if (name === "git_diff") return { verb: active ? "Analisando" : "Analisou", targetText: `git diff${countSuffix}`, expandChevron: true };
+  if (name === "git_commit") return { verb: active ? "Commitando" : "Commitou", targetText: rawArg || "alterações", expandChevron: true };
+  if (name === "git_push") return { verb: active ? "Enviando" : "Enviou", targetText: `git push${countSuffix}`, expandChevron: true };
+  if (name === "git_pull") return { verb: active ? "Atualizando" : "Atualizou", targetText: `git pull${countSuffix}`, expandChevron: true };
+
+  if (name === "github_get_pr") return { verb: active ? "Inspecionando" : "Inspecionou", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_issue_comments") return { verb: active ? "Lendo" : "Leu", targetText: `comentários ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_pr_diff") return { verb: active ? "Analisando" : "Analisou", targetText: `diff do PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_list_prs") return { verb: active ? "Listando" : "Listou", targetText: "Pull Requests", expandChevron: true };
+  if (name === "github_get_issue") return { verb: active ? "Lendo" : "Leu", targetText: `Issue ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_comment_pr") return { verb: active ? "Comentando" : "Comentou", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_reply_review_comment") return { verb: active ? "Respondendo" : "Respondeu", targetText: `thread no PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_review_pr") return { verb: active ? "Revisando" : "Revisou", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_request_review") return { verb: active ? "Solicitando" : "Solicitou", targetText: `revisão no PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_merge_pr") return { verb: active ? "Mesclando" : "Mesclou", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_create_pr") return { verb: active ? "Abrindo" : "Abriu", targetText: `PR ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "github_ci_status") return { verb: active ? "Verificando" : "Verificou", targetText: `CI ${rawArg || ""}`.trim(), expandChevron: true };
+
+  if (name === "jira_get") return { verb: active ? "Consultando" : "Consultou", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "jira_search") return { verb: active ? "Buscando" : "Buscou", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "jira_comment") return { verb: active ? "Comentando" : "Comentou", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "jira_transition") return { verb: active ? "Movendo" : "Moveu", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
+  if (name === "delegate_to_squad") return { verb: active ? "Acionando" : "Acionou", targetText: "equipe paralela", expandChevron: true };
+  if (name === "qa_approve") return { verb: "Aprovou", targetText: rawArg || "validação de QA", expandChevron: true };
+  if (name === "qa_request_changes") return { verb: "Pediu ajustes", targetText: rawArg || "QA → Devs", expandChevron: true };
+
+  return {
+    verb: active ? "Executando" : "Executou",
+    targetText: rawArg ? `${m.text} · ${rawArg}` : m.text,
+    expandChevron: true,
+  };
+}
+
 function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const digest = messageDigest(m);
   if (el.dataset.digest === digest) return;
   el.dataset.digest = digest;
 
+  if (m.kind === "thinking") {
+    el.className = "msg-card role-thinking";
+    const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
+    const elapsedMs = m.active && m.startedAt
+      ? Math.max(0, Date.now() - m.startedAt)
+      : (m.durationMs || 0);
+    const elapsedText = formatElapsedThinking(elapsedMs);
+    const titleWord = m.active ? "Pensando" : "Pensou";
+    const thoughtBody = m.text.trim()
+      ? renderMarkdownLite(m.text)
+      : `<div class="dim" style="font-size:11.5px">${m.active
+          ? "Analisando contexto, arquivos e ferramentas disponíveis…"
+          : `Concluído em ${escapeHtml(elapsedText)}${m.stepCount ? ` · ${m.stepCount} ação${m.stepCount === 1 ? "" : "es"}` : ""}.`
+        }</div>`;
+    el.innerHTML = `
+      <details class="agent-thought-pill ${m.active ? "is-active" : ""}" ${wasOpen ? "open" : ""}>
+        <summary class="agent-thought-summary">
+          <span class="agent-thought-title">${escapeHtml(titleWord)}</span>
+          <span class="agent-thought-elapsed" ${m.active && m.startedAt ? `data-thinking-started="${m.startedAt}"` : ""}>${escapeHtml(elapsedText)}</span>
+          <span class="agent-thought-chev">${icons.chevronDown}</span>
+        </summary>
+        <div class="agent-thought-body">${thoughtBody}</div>
+      </details>
+    `;
+    return;
+  }
+
   if (m.kind === "tool") {
+    el.className = "msg-card role-tool tool-minimal";
+    const spec = formatMinimalToolStep(m);
     const durLabel = formatToolDuration(m.durationMs);
     const hasDrawer = Boolean(m.toolDetail || m.toolOutput);
-    const shortArg = m.toolDetail ? m.toolDetail.split("\n")[0].slice(0, 72) : "";
-    if (!hasDrawer) {
-      el.innerHTML = `
-        <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
-        <span class="msg-body">${escapeHtml(m.text)}</span>
-        ${durLabel ? `<span class="tool-duration">${escapeHtml(durLabel)}</span>` : ""}
+    const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
+    const agentChip = m.solo === false && m.label
+      ? `<span class="tool-agent-tag">${escapeHtml(m.label.split("·")[0].trim())}</span>`
+      : "";
+
+    let contentHtml = "";
+    if (spec.fileName && spec.filePath) {
+      const lang = toolLangBadge(spec.fileName);
+      contentHtml = `
+        ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
+        <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
+        <span class="tool-lang-badge ${lang.cls}">${escapeHtml(lang.label)}</span>
+        <button type="button" class="tool-file-link" data-open-chat-file="${escapeHtml(spec.filePath)}" title="Abrir ${escapeHtml(spec.filePath)} no editor">${escapeHtml(spec.fileName)}</button>
+        ${spec.fileSub ? `<span class="tool-file-sub">${escapeHtml(spec.fileSub)}</span>` : ""}
+        ${agentChip}
       `;
+    } else {
+      contentHtml = `
+        ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
+        <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
+        <span class="tool-step-target">${escapeHtml(spec.targetText || m.text)}</span>
+        ${agentChip}
+      `;
+    }
+
+    if (!hasDrawer) {
+      el.innerHTML = `<div class="tool-minimal-row">${contentHtml}${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}</div>`;
       return;
     }
-    const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
+
     const drawerLines: string[] = [];
     if (m.toolDetail) drawerLines.push(`Args: ${m.toolDetail}`);
-    if (m.toolOutput) drawerLines.push(`Saída: ${m.toolOutput}`);
+    if (m.toolOutput) drawerLines.push(`Saída:\n${m.toolOutput}`);
     el.innerHTML = `
-      <details class="tool-details" ${wasOpen ? "open" : ""}>
-        <summary>
-          <span class="msg-badge badge-tool">${m.active ? icons.spinner : icons.check}<span>${escapeHtml(m.label)}</span></span>
-          <span class="msg-body">${escapeHtml(m.text)}${shortArg ? ` <span class="dim">· ${escapeHtml(shortArg)}</span>` : ""}</span>
-          ${durLabel ? `<span class="tool-duration">${escapeHtml(durLabel)}</span>` : ""}
+      <details class="tool-minimal-details" ${wasOpen ? "open" : ""}>
+        <summary class="tool-minimal-row">
+          ${contentHtml}
+          ${spec.expandChevron ? `<span class="tool-step-chev">${icons.chevronRight}</span>` : `<span class="tool-step-chev hover-only">${icons.chevronRight}</span>`}
+          ${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}
         </summary>
         <div class="tool-drawer">${escapeHtml(drawerLines.join("\n\n"))}</div>
       </details>
@@ -5538,12 +6184,22 @@ function syncComposerButtons() {
   if (sendBtn) sendBtn.disabled = !!lane?.running;
 }
 
+function syncScrollBottomBtn() {
+  const box = document.getElementById("chat-messages");
+  const btn = document.getElementById("btn-chat-scroll-bottom");
+  const lane = activeLane();
+  if (!box || !btn || !lane) return;
+  const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+  btn.style.display = distFromBottom > 48 ? "flex" : "none";
+}
+
 function scrollChatIfAuto() {
   const box = document.getElementById("chat-messages");
   const lane = activeLane();
   if (box && lane?.autoScroll) {
     box.scrollTop = box.scrollHeight;
   }
+  syncScrollBottomBtn();
 }
 
 function renderMentionPopup() {
@@ -5619,8 +6275,28 @@ function bindRightStaticEvents() {
     const lane = activeLane();
     if (!lane || !chatBox) return;
     lane.autoScroll = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 28;
+    syncScrollBottomBtn();
+  });
+  document.getElementById("btn-chat-scroll-bottom")?.addEventListener("click", () => {
+    const lane = activeLane();
+    const box = document.getElementById("chat-messages");
+    if (!lane || !box) return;
+    lane.autoScroll = true;
+    box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+    syncScrollBottomBtn();
   });
   chatBox?.addEventListener("click", (e) => {
+    const fileBtn = (e.target as HTMLElement)?.closest<HTMLButtonElement>("[data-open-chat-file]");
+    if (fileBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rel = fileBtn.dataset.openChatFile || "";
+      if (rel) {
+        const name = rel.split("/").pop() || rel;
+        void openFileInEditor(rel, name);
+      }
+      return;
+    }
     const target = (e.target as HTMLElement)?.closest<HTMLButtonElement>("[data-copy-code]");
     if (!target) return;
     const wrap = target.closest(".md-code-wrap");
@@ -5748,6 +6424,18 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     images: attached.map((x) => x.dataBase64),
   });
 
+  lane.messages.push({
+    id: `th-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    kind: "thinking",
+    label: "Pensando",
+    text: "",
+    active: true,
+    solo: effectiveMode !== "squad",
+    startedAt: Date.now(),
+    stepCount: 0,
+  });
+  ensureThinkingTicker();
+
   if (!isOverride) {
     state.draftObjective = "";
     state.draftImages = [];
@@ -5812,6 +6500,7 @@ async function sendToChief(overrideText?: string, overrideMode?: RunMode) {
     lane.running = false;
     lane.stage = "";
     markToolsDone(lane);
+    markThinkingDone(lane);
     renderProjectTabsBar();
     await refreshSessions(runProjectRoot);
     if (state.activeProjectId === runProjectId) {
@@ -5831,6 +6520,7 @@ async function cancelActiveLane() {
   if (!lane || !backend || !lane.running) return;
   await backend.CancelRun(lane.id);
   markToolsDone(lane);
+  markThinkingDone(lane);
   lane.messages.push({
     id: `sys-${Date.now()}`,
     kind: "system",
@@ -5860,6 +6550,7 @@ function getCommandActions(): CommandAction[] {
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
     { id: "wizard", label: "Configurar Equipe e Skills (.hivemind/team.yaml)", run: () => void openTeamConfigTab() },
     { id: "opencode-token", label: "Configurar Token OpenCode Zen (OPENCODE_API_KEY)", run: () => openOpenCodeModal() },
+    { id: "github-connector", label: "Conector GitHub Nativo (Token / API REST)", run: () => openGitHubModal() },
     { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
     { id: "open-folder-tab", label: "Abrir Outro Projeto em Nova Aba Isolada…", shortcut: "Ctrl+Shift+O", run: () => openFolderDialog(true) },
     { id: "open-folder", label: "Substituir Projeto na Aba Atual…", run: () => openFolderDialog(false) },
@@ -6347,6 +7038,118 @@ function renderModalLayer() {
     return;
   }
 
+  if (state.showGitHubModal) {
+    const gh = state.ghStatus;
+    const baseUrl = gh?.baseUrl || "https://api.github.com";
+    const statusBadge = gh?.loggedIn
+      ? `<span style="color:var(--green);font-weight:600">Conectado como @${escapeHtml(gh.user)} · ${escapeHtml(gh.connectorLabel || "API Nativa")}${gh.tokenMasked ? ` (${escapeHtml(gh.tokenMasked)})` : ""}</span>`
+      : `<span style="color:var(--amber)">${escapeHtml(gh?.detail || "Desconectado — informe um Token GitHub (PAT) ou autentique o gh CLI")}</span>`;
+
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="gh-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:540px">
+          <h3 class="modal-title">Conector GitHub Nativo (API REST v2022-11-28)</h3>
+          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px">
+            O HiveMind conversa diretamente com a API oficial do GitHub (PRs, revisões, comentários inline no código, diffs e issues) — sem depender de wrappers frágeis de CLI.
+            Se você já está logado no <code>gh</code>, o conector usa sua sessão via API nativa automaticamente; ou salve um Personal Access Token dedicado abaixo.
+          </p>
+          <div style="font-size:12px;margin-bottom:8px"><strong>Status:</strong> ${statusBadge}</div>
+          ${gh?.remote ? `<div class="dim" style="font-size:11px;margin-bottom:10px;font-family:var(--mono);word-break:break-all">Remote: ${escapeHtml(gh.remote)}</div>` : ""}
+          <div class="form-grid">
+            <label>GitHub Token (PAT):</label>
+            <input id="gh-api-token" type="password" placeholder="${gh?.source === "config" ? "Cole novo token para substituir…" : "ghp_… ou github_pat_… (escopos: repo, read:org)"}" autocomplete="off" />
+
+            <label>API Base URL:</label>
+            <input id="gh-base-url" value="${escapeHtml(baseUrl)}" placeholder="https://api.github.com" />
+          </div>
+          <div class="dim" style="font-size:11px;margin-top:8px;line-height:1.45">
+            Prioridade de autenticação: <code>GITHUB_TOKEN</code>/<code>GH_TOKEN</code> → Token salvo neste conector (<code>github-connector.json</code>, fora do repo) → sessão <code>gh auth token</code>.
+          </div>
+          <div id="gh-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          <div class="modal-footer">
+            ${gh?.source === "config" ? `<button class="danger mini" id="gh-clear-token">Remover Token Salvo</button>` : ""}
+            <div class="spacer"></div>
+            <button id="gh-close">Fechar</button>
+            <button class="primary" id="gh-save">Salvar & Testar</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const closeGh = () => {
+      state.showGitHubModal = false;
+      renderModalLayer();
+    };
+    document.getElementById("gh-close")?.addEventListener("click", closeGh);
+    document.getElementById("gh-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement)?.id === "gh-modal-backdrop") closeGh();
+    });
+
+    document.getElementById("gh-clear-token")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SaveGitHubConfig) return;
+      try {
+        state.ghStatus = await backend.SaveGitHubConfig("", "", state.project?.root || "");
+        renderLeftSidebar();
+        renderModalLayer();
+        setStatus("Token salvo do Conector GitHub removido.");
+      } catch (err: any) {
+        const errEl = document.getElementById("gh-modal-err");
+        if (errEl) {
+          errEl.textContent = `Falha ao remover token: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+      }
+    });
+
+    document.getElementById("gh-save")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.SaveGitHubConfig) return;
+      const tokIn = (document.getElementById("gh-api-token") as HTMLInputElement | null)?.value.trim() || "";
+      const baseIn = (document.getElementById("gh-base-url") as HTMLInputElement | null)?.value.trim() || "https://api.github.com";
+      const errEl = document.getElementById("gh-modal-err");
+      const btn = document.getElementById("gh-save") as HTMLButtonElement | null;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Testando…";
+      }
+      try {
+        if (!tokIn) {
+          // Re-test current active connector (config, env or gh auth token) without wiping a saved token.
+          state.ghStatus = await backend.GitHubStatus(state.project?.root || "");
+        } else {
+          state.ghStatus = await backend.SaveGitHubConfig(tokIn, baseIn, state.project?.root || "");
+        }
+        renderLeftSidebar();
+        if (state.ghStatus?.loggedIn) {
+          closeGh();
+          toast(`GitHub conectado como @${state.ghStatus.user} (${state.ghStatus.connectorLabel || "API Nativa"}).`, "success");
+          if (state.project?.branch) {
+            void loadGitHubPRs();
+            void loadProjectIssues();
+          }
+        } else {
+          renderModalLayer();
+          const refreshedErr = document.getElementById("gh-modal-err");
+          if (refreshedErr) {
+            refreshedErr.textContent = state.ghStatus?.detail || "Não foi possível autenticar no GitHub.";
+            refreshedErr.style.display = "block";
+          }
+        }
+      } catch (err: any) {
+        if (errEl) {
+          errEl.textContent = `Falha ao salvar configuração GitHub: ${err?.message || String(err)}`;
+          errEl.style.display = "block";
+        }
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Salvar & Testar";
+        }
+      }
+    });
+    return;
+  }
+
   if (state.showOpenCodeModal) {
     const oc = state.openCodeStatus;
     const baseUrl = oc?.baseUrl || "https://opencode.ai/zen/v1";
@@ -6529,7 +7332,387 @@ function renderModalLayer() {
     return;
   }
 
+  if (state.aiUsageModal.open) {
+    renderAIUsageModal(layer);
+    return;
+  }
+
   layer.innerHTML = "";
+}
+
+async function openAIUsageModal() {
+  state.aiUsageModal.open = true;
+  state.aiUsageModal.loading = true;
+  state.aiUsageModal.editingProvider = "";
+  renderModalLayer();
+  const backend = api();
+  if (!backend || !backend.GetAIUsage) {
+    state.aiUsageModal.loading = false;
+    renderModalLayer();
+    return;
+  }
+  try {
+    state.aiUsageModal.report = await backend.GetAIUsage();
+  } catch (err: any) {
+    toastError("carregar uso e limites das IAs", err);
+  } finally {
+    state.aiUsageModal.loading = false;
+    if (state.aiUsageModal.open) renderModalLayer();
+  }
+}
+
+function formatResetCountdown(iso?: string): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "liberando em breve";
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 60) return `reseta em ${mins}min`;
+  const hrs = Math.floor(mins / 60);
+  const remMin = mins % 60;
+  if (hrs < 24) return `reseta em ${hrs}h ${remMin}m`;
+  const days = Math.floor(hrs / 24);
+  const remHrs = hrs % 24;
+  return `reseta em ${days}d ${remHrs}h`;
+}
+
+function formatRollingReleaseCountdown(oldestAt?: string, windowHours = 5): string {
+  if (!oldestAt) return "";
+  const ts = Date.parse(oldestAt);
+  if (!Number.isFinite(ts)) return "";
+  const releaseAt = ts + windowHours * 3600 * 1000;
+  const ms = releaseAt - Date.now();
+  if (ms <= 0) return "";
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 60) return `próxima liberação em ${mins}min`;
+  const hrs = Math.floor(mins / 60);
+  const remMin = mins % 60;
+  if (hrs < 24) return `próxima liberação em ${hrs}h ${remMin}m`;
+  const days = Math.floor(hrs / 24);
+  const remHrs = hrs % 24;
+  return `próxima liberação em ${days}d ${remHrs}h`;
+}
+
+function usageBarTone(pct: number): string {
+  if (pct >= 85) return "danger";
+  if (pct >= 65) return "warn";
+  return "ok";
+}
+
+function renderQuotaBarRowHtml(label: string, pct: number, rightText: string, subText: string): string {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+  const tone = usageBarTone(clamped);
+  return `
+    <div class="aiu-window-row">
+      <div class="aiu-window-top">
+        <span class="aiu-window-label">${escapeHtml(label)}</span>
+        <span class="aiu-window-val">${escapeHtml(rightText)}</span>
+      </div>
+      <div class="aiu-bar-track">
+        <div class="aiu-bar-fill ${tone}" style="width:${clamped}%"></div>
+      </div>
+      ${subText ? `<div class="aiu-window-sub">${escapeHtml(subText)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderLocalWindowRowHtml(label: string, win: { inputTokens: number; outputTokens: number; totalTokens: number; calls: number; oldestAt?: string }, capTokens: number, windowHours: number): string {
+  const tokStr = `${formatTokens(win.totalTokens)} tok`;
+  const callsStr = `${win.calls} chamada${win.calls === 1 ? "" : "s"}`;
+  const releaseStr = formatRollingReleaseCountdown(win.oldestAt, windowHours);
+  const detailParts = [
+    `↑${formatTokens(win.inputTokens)} ↓${formatTokens(win.outputTokens)}`,
+    callsStr,
+  ];
+  if (releaseStr) detailParts.push(releaseStr);
+
+  if (capTokens > 0) {
+    const pct = Math.min(100, (win.totalTokens / capTokens) * 100);
+    return renderQuotaBarRowHtml(
+      label,
+      pct,
+      `${Math.round(pct)}% · ${tokStr} / ${formatTokens(capTokens)}`,
+      detailParts.join(" · ")
+    );
+  }
+  return `
+    <div class="aiu-window-row">
+      <div class="aiu-window-top">
+        <span class="aiu-window-label">${escapeHtml(label)}</span>
+        <span class="aiu-window-val">${escapeHtml(tokStr)}</span>
+      </div>
+      <div class="aiu-window-sub">${escapeHtml(detailParts.join(" · "))}</div>
+    </div>
+  `;
+}
+
+function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageReport): string {
+  const isEditing = state.aiUsageModal.editingProvider === p.provider;
+  const isAgy = p.provider === "agy";
+  const isOpenCodeGo = p.provider === "opencode-go";
+  const isOpenCodeZen = p.provider === "opencode";
+
+  let statusPill = `<span class="tok-pill">Local</span>`;
+  let extraHeaderBtn = "";
+  let bodyHtml = "";
+  let footnote = "";
+
+  if (isAgy) {
+    const agyOk = Boolean(state.agyStatus?.LoggedIn) || Boolean(rep.agyQuota?.available);
+    const aq = rep.agyQuota;
+    const groups = aq?.available && aq.groups && aq.groups.length > 0 ? aq.groups : [];
+    statusPill = agyOk
+      ? groups.length > 0
+        ? `<span class="flow-pill approved">API oficial (/usage)${state.models.length > 0 ? ` · ${state.models.length} modelos` : ""}</span>`
+        : `<span class="flow-pill approved">Conectado · ${state.models.length} modelos</span>`
+      : `<span class="flow-pill changes">Não autenticado</span>`;
+
+    const localSub = `
+      <div class="aiu-local-strip">
+        <span>Telemetria HiveMind:</span>
+        <strong>5h: ${formatTokens(p.window5h.totalTokens)} tok (${p.window5h.calls}x)</strong>
+        <span>·</span>
+        <strong>7d: ${formatTokens(p.windowWeekly.totalTokens)} tok (${p.windowWeekly.calls}x)</strong>
+      </div>
+    `;
+
+    if (groups.length > 0) {
+      const groupsHtml = groups.map((g) => {
+        const cleanDesc = (g.description || "").replace(/^Models within this group:\s*/i, "");
+        const rows = g.buckets.map((b) => {
+          const used = Math.round(b.usedPercent * 10) / 10;
+          const left = Math.round(b.remainingPercent * 10) / 10;
+          const lbl = b.window === "5h"
+            ? "Limite 5h"
+            : b.window === "weekly"
+              ? "Limite Semanal"
+              : b.name || "Limite";
+          return renderQuotaBarRowHtml(
+            lbl,
+            used,
+            `${used}% usado (${left}% livre)`,
+            formatResetCountdown(b.resetTime)
+          );
+        }).join("");
+        return `
+          <div class="aiu-agy-group">
+            <div class="aiu-agy-group-head">
+              <span class="aiu-agy-group-name">${escapeHtml(g.name)}</span>
+              ${cleanDesc && cleanDesc.length <= 110 ? `<span class="aiu-agy-group-desc">${escapeHtml(cleanDesc)}</span>` : ""}
+            </div>
+            ${rows}
+          </div>
+        `;
+      }).join("");
+      bodyHtml = groupsHtml + localSub;
+      footnote = aq?.detail || "Cota oficial obtida via agy /usage (0 tokens consumidos)";
+    } else {
+      bodyHtml = `
+        ${renderLocalWindowRowHtml("Janela de 5h", p.window5h, p.limits.fiveHourTokens || 0, 5)}
+        ${renderLocalWindowRowHtml("Janela Semanal (7 dias)", p.windowWeekly, p.limits.weeklyTokens || 0, 24 * 7)}
+      `;
+      footnote = aq?.detail || "Rode `agy` para autenticar e exibir as cotas oficiais de 5h e semanal.";
+    }
+  } else if (isOpenCodeGo) {
+    const ocOk = Boolean(state.openCodeStatus?.configured);
+    const q = rep.openCodeQuota;
+    statusPill = ocOk
+      ? q.available
+        ? `<span class="flow-pill approved">API oficial · ativo</span>`
+        : `<span class="flow-pill pending">Token configurado</span>`
+      : `<span class="flow-pill changes">Sem token</span>`;
+    if (!ocOk) {
+      extraHeaderBtn = `<button type="button" class="mini primary" id="aiu-open-opencode-cfg">Configurar Token</button>`;
+    }
+
+    const remoteRows: string[] = [];
+    if (q.available) {
+      if (q.rolling5h.hasData) {
+        const pct = Math.round(q.rolling5h.percent * 10) / 10;
+        const left = Math.max(0, Math.round((100 - q.rolling5h.percent) * 10) / 10);
+        remoteRows.push(renderQuotaBarRowHtml(
+          "Limite 5h (Rolling — API OpenCode Go)",
+          pct,
+          `${pct}% usado (${left}% livre)`,
+          formatResetCountdown(q.rolling5h.resetsAt)
+        ));
+      }
+      if (q.weekly.hasData) {
+        const pct = Math.round(q.weekly.percent * 10) / 10;
+        const left = Math.max(0, Math.round((100 - q.weekly.percent) * 10) / 10);
+        remoteRows.push(renderQuotaBarRowHtml(
+          "Limite Semanal (API OpenCode Go)",
+          pct,
+          `${pct}% usado (${left}% livre)`,
+          formatResetCountdown(q.weekly.resetsAt)
+        ));
+      }
+      if (q.monthly.hasData) {
+        const pct = Math.round(q.monthly.percent * 10) / 10;
+        const left = Math.max(0, Math.round((100 - q.monthly.percent) * 10) / 10);
+        remoteRows.push(renderQuotaBarRowHtml(
+          "Limite Mensal (API OpenCode Go)",
+          pct,
+          `${pct}% usado (${left}% livre)`,
+          formatResetCountdown(q.monthly.resetsAt)
+        ));
+      }
+    }
+
+    const localSub = `
+      <div class="aiu-local-strip">
+        <span>Telemetria HiveMind:</span>
+        <strong>5h: ${formatTokens(p.window5h.totalTokens)} tok (${p.window5h.calls}x)</strong>
+        <span>·</span>
+        <strong>7d: ${formatTokens(p.windowWeekly.totalTokens)} tok (${p.windowWeekly.calls}x)</strong>
+      </div>
+    `;
+
+    bodyHtml = remoteRows.length > 0
+      ? remoteRows.join("") + localSub
+      : `
+          ${renderLocalWindowRowHtml("Janela de 5h (local)", p.window5h, p.limits.fiveHourTokens || 0, 5)}
+          ${renderLocalWindowRowHtml("Janela Semanal (7 dias — local)", p.windowWeekly, p.limits.weeklyTokens || 0, 24 * 7)}
+        `;
+    footnote = q.detail || "";
+  } else {
+    if (isOpenCodeZen) {
+      statusPill = state.openCodeStatus?.configured
+        ? `<span class="flow-pill approved">Pay-as-you-go / Free</span>`
+        : `<span class="flow-pill commented">Modelos -free</span>`;
+    }
+    bodyHtml = `
+      ${renderLocalWindowRowHtml("Janela de 5h", p.window5h, p.limits.fiveHourTokens || 0, 5)}
+      ${renderLocalWindowRowHtml("Janela Semanal (7 dias)", p.windowWeekly, p.limits.weeklyTokens || 0, 24 * 7)}
+    `;
+  }
+
+  const limitFormHtml = isEditing
+    ? `
+      <div class="aiu-limits-form">
+        <div class="aiu-limits-grid">
+          <label>Meta 5h (tokens, 0 = desligado)</label>
+          <input type="number" min="0" step="50000" id="aiu-limit-5h" value="${p.limits.fiveHourTokens || 0}" placeholder="Ex: 500000" />
+          <label>Meta semanal (tokens, 0 = desligado)</label>
+          <input type="number" min="0" step="100000" id="aiu-limit-7d" value="${p.limits.weeklyTokens || 0}" placeholder="Ex: 3000000" />
+        </div>
+        <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px">
+          <button type="button" class="mini" id="aiu-limit-cancel">Cancelar</button>
+          <button type="button" class="mini primary" data-aiu-save-limits="${escapeHtml(p.provider)}">Salvar Metas</button>
+        </div>
+      </div>
+    `
+    : "";
+
+  return `
+    <div class="aiu-card">
+      <div class="aiu-card-head">
+        <div class="aiu-card-title">
+          <strong>${escapeHtml(p.label)}</strong>
+          ${statusPill}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          ${extraHeaderBtn}
+          ${!(isOpenCodeGo && rep.openCodeQuota.available) && !(isAgy && rep.agyQuota?.available)
+            ? `<button type="button" class="mini ghost" data-aiu-edit-limits="${escapeHtml(p.provider)}" title="Configurar meta opcional de tokens para 5h e 7 dias">${icons.settings}<span>Metas</span></button>`
+            : ""
+          }
+        </div>
+      </div>
+      <div class="aiu-card-body">
+        ${bodyHtml}
+      </div>
+      ${limitFormHtml}
+      ${footnote ? `<div class="aiu-footnote">${escapeHtml(footnote)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderAIUsageModal(layer: HTMLElement) {
+  const m = state.aiUsageModal;
+  const rep = m.report;
+  layer.innerHTML = `
+    <div class="modal-backdrop" id="aiu-backdrop">
+      <div class="modal-box ai-usage-modal">
+        <div class="aiu-modal-head">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="aiu-head-icon">${icons.aiUsage}</span>
+            <div>
+              <h3 class="modal-title" style="margin:0">Uso & Limites das IAs</h3>
+              <div class="dim" style="font-size:11.5px">Acompanhe janelas de 5 horas e semanal do Antigravity, OpenCode e demais provedores.</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button type="button" class="mini" id="aiu-refresh" ${m.loading ? "disabled" : ""}>
+              ${m.loading ? icons.spinner : icons.refresh}
+              <span>Atualizar</span>
+            </button>
+            <button type="button" class="icon-btn" id="aiu-close" title="Fechar">${icons.closeSmall}</button>
+          </div>
+        </div>
+
+        <div class="aiu-cards-wrap">
+          ${m.loading && !rep
+            ? `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`
+            : !rep
+              ? `<div class="dim" style="padding:20px;text-align:center">Não foi possível carregar os dados de uso.</div>`
+              : rep.providers.map((p) => renderProviderUsageCardHtml(p, rep)).join("")
+          }
+        </div>
+
+        <div class="modal-footer" style="margin-top:12px">
+          <span class="dim" style="font-size:11px">Dados locais salvos em %AppData%\\HiveMind\\ai-usage.json</span>
+          <div class="spacer"></div>
+          <button type="button" class="primary" id="aiu-close-footer">Fechar</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const closeModal = () => {
+    state.aiUsageModal.open = false;
+    state.aiUsageModal.editingProvider = "";
+    renderModalLayer();
+  };
+  document.getElementById("aiu-close")?.addEventListener("click", closeModal);
+  document.getElementById("aiu-close-footer")?.addEventListener("click", closeModal);
+  document.getElementById("aiu-backdrop")?.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).id === "aiu-backdrop") closeModal();
+  });
+  document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsageModal());
+  document.getElementById("aiu-open-opencode-cfg")?.addEventListener("click", () => {
+    state.aiUsageModal.open = false;
+    openOpenCodeModal();
+  });
+
+  layer.querySelectorAll("[data-aiu-edit-limits]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const prov = (btn as HTMLElement).dataset.aiuEditLimits || "";
+      state.aiUsageModal.editingProvider = state.aiUsageModal.editingProvider === prov ? "" : prov;
+      renderModalLayer();
+    });
+  });
+
+  document.getElementById("aiu-limit-cancel")?.addEventListener("click", () => {
+    state.aiUsageModal.editingProvider = "";
+    renderModalLayer();
+  });
+
+  layer.querySelectorAll("[data-aiu-save-limits]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const prov = (btn as HTMLElement).dataset.aiuSaveLimits || "";
+      const v5h = Math.max(0, parseInt((document.getElementById("aiu-limit-5h") as HTMLInputElement | null)?.value || "0", 10) || 0);
+      const v7d = Math.max(0, parseInt((document.getElementById("aiu-limit-7d") as HTMLInputElement | null)?.value || "0", 10) || 0);
+      if (!api()?.SaveAIUsageLimits) return;
+      try {
+        state.aiUsageModal.report = await api()!.SaveAIUsageLimits(prov, v5h, v7d);
+        state.aiUsageModal.editingProvider = "";
+        renderModalLayer();
+        toast("Metas de uso atualizadas.", "success");
+      } catch (err: any) {
+        toastError("salvar metas de uso", err);
+      }
+    });
+  });
 }
 
 boot();

@@ -64,7 +64,7 @@ func newOpenCodeHTTPClient(fallbackSessionID, authToken string) *http.Client {
 	}
 	return &http.Client{
 		Transport: &openCodeTransport{
-			base:      http.DefaultTransport,
+			base:      newRetryTransport(nil),
 			fallback:  fallbackSessionID,
 			authToken: authToken,
 		},

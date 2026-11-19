@@ -207,6 +207,11 @@ export namespace idecore {
 	    user: string;
 	    remote: string;
 	    detail: string;
+	    mode?: string;
+	    source?: string;
+	    connectorLabel?: string;
+	    tokenMasked?: string;
+	    baseUrl?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GitHubStatusInfo(source);
@@ -219,6 +224,11 @@ export namespace idecore {
 	        this.user = source["user"];
 	        this.remote = source["remote"];
 	        this.detail = source["detail"];
+	        this.mode = source["mode"];
+	        this.source = source["source"];
+	        this.connectorLabel = source["connectorLabel"];
+	        this.tokenMasked = source["tokenMasked"];
+	        this.baseUrl = source["baseUrl"];
 	    }
 	}
 	export class ImageInput {
@@ -243,6 +253,9 @@ export namespace idecore {
 	    title: string;
 	    body?: string;
 	    status?: string;
+	    author?: string;
+	    url?: string;
+	    isMine?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectIssue(source);
@@ -255,6 +268,9 @@ export namespace idecore {
 	        this.title = source["title"];
 	        this.body = source["body"];
 	        this.status = source["status"];
+	        this.author = source["author"];
+	        this.url = source["url"];
+	        this.isMine = source["isMine"];
 	    }
 	}
 	export class ProjectPullRequest {
@@ -268,6 +284,13 @@ export namespace idecore {
 	    headRef?: string;
 	    baseRef?: string;
 	    updatedAt?: string;
+	    reviewDecision?: string;
+	    requestedReviewers?: string[];
+	    isMine?: boolean;
+	    reviewRequested?: boolean;
+	    myResponse?: string;
+	    needsAttention?: boolean;
+	    attentionReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectPullRequest(source);
@@ -285,6 +308,13 @@ export namespace idecore {
 	        this.headRef = source["headRef"];
 	        this.baseRef = source["baseRef"];
 	        this.updatedAt = source["updatedAt"];
+	        this.reviewDecision = source["reviewDecision"];
+	        this.requestedReviewers = source["requestedReviewers"];
+	        this.isMine = source["isMine"];
+	        this.reviewRequested = source["reviewRequested"];
+	        this.myResponse = source["myResponse"];
+	        this.needsAttention = source["needsAttention"];
+	        this.attentionReason = source["attentionReason"];
 	    }
 	}
 	export class ProjectStack {
@@ -716,6 +746,264 @@ export namespace main {
 
 export namespace modelx {
 	
+	export class ProviderLimits {
+	    fiveHourTokens?: number;
+	    weeklyTokens?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderLimits(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fiveHourTokens = source["fiveHourTokens"];
+	        this.weeklyTokens = source["weeklyTokens"];
+	    }
+	}
+	export class UsageWindow {
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	    calls: number;
+	    oldestAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageWindow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.calls = source["calls"];
+	        this.oldestAt = source["oldestAt"];
+	    }
+	}
+	export class AIProviderUsage {
+	    provider: string;
+	    label: string;
+	    window5h: UsageWindow;
+	    windowWeekly: UsageWindow;
+	    windowMonthly: UsageWindow;
+	    limits: ProviderLimits;
+	
+	    static createFrom(source: any = {}) {
+	        return new AIProviderUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.label = source["label"];
+	        this.window5h = this.convertValues(source["window5h"], UsageWindow);
+	        this.windowWeekly = this.convertValues(source["windowWeekly"], UsageWindow);
+	        this.windowMonthly = this.convertValues(source["windowMonthly"], UsageWindow);
+	        this.limits = this.convertValues(source["limits"], ProviderLimits);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RemoteQuotaWindow {
+	    percent: number;
+	    resetsAt?: string;
+	    status?: string;
+	    hasData: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RemoteQuotaWindow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.percent = source["percent"];
+	        this.resetsAt = source["resetsAt"];
+	        this.status = source["status"];
+	        this.hasData = source["hasData"];
+	    }
+	}
+	export class OpenCodeQuota {
+	    available: boolean;
+	    detail?: string;
+	    rolling5h: RemoteQuotaWindow;
+	    weekly: RemoteQuotaWindow;
+	    monthly: RemoteQuotaWindow;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenCodeQuota(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.detail = source["detail"];
+	        this.rolling5h = this.convertValues(source["rolling5h"], RemoteQuotaWindow);
+	        this.weekly = this.convertValues(source["weekly"], RemoteQuotaWindow);
+	        this.monthly = this.convertValues(source["monthly"], RemoteQuotaWindow);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AgyQuotaBucket {
+	    id: string;
+	    name: string;
+	    window: string;
+	    usedPercent: number;
+	    remainingPercent: number;
+	    resetTime?: string;
+	    description?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgyQuotaBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.window = source["window"];
+	        this.usedPercent = source["usedPercent"];
+	        this.remainingPercent = source["remainingPercent"];
+	        this.resetTime = source["resetTime"];
+	        this.description = source["description"];
+	    }
+	}
+	export class AgyQuotaGroup {
+	    name: string;
+	    description?: string;
+	    buckets: AgyQuotaBucket[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AgyQuotaGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.buckets = this.convertValues(source["buckets"], AgyQuotaBucket);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AgyQuota {
+	    available: boolean;
+	    detail?: string;
+	    groups?: AgyQuotaGroup[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AgyQuota(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.detail = source["detail"];
+	        this.groups = this.convertValues(source["groups"], AgyQuotaGroup);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AIUsageReport {
+	    generatedAt: string;
+	    agyQuota: AgyQuota;
+	    openCodeQuota: OpenCodeQuota;
+	    providers: AIProviderUsage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AIUsageReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generatedAt = source["generatedAt"];
+	        this.agyQuota = this.convertValues(source["agyQuota"], AgyQuota);
+	        this.openCodeQuota = this.convertValues(source["openCodeQuota"], OpenCodeQuota);
+	        this.providers = this.convertValues(source["providers"], AIProviderUsage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AgyModel {
 	    slug: string;
 	    name: string;
@@ -730,6 +1018,9 @@ export namespace modelx {
 	        this.name = source["name"];
 	    }
 	}
+	
+	
+	
 	export class AgyStatus {
 	    Found: boolean;
 	    Path: string;
@@ -748,6 +1039,7 @@ export namespace modelx {
 	        this.Detail = source["Detail"];
 	    }
 	}
+	
 	export class OpenCodeStatus {
 	    configured: boolean;
 	    source: string;
@@ -774,6 +1066,8 @@ export namespace modelx {
 	        this.detail = source["detail"];
 	    }
 	}
+	
+	
 
 }
 

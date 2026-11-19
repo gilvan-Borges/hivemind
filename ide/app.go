@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -34,6 +35,8 @@ type App struct {
 	openCodeCachedAt time.Time
 	termMu           sync.Mutex
 	termCancels      map[string]context.CancelFunc
+	watcherMu        sync.Mutex
+	watchers         map[string]*idecore.FileWatcher
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -81,6 +84,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		smokeCheck:  smokeCheck,
 		fileIndex:   idecore.NewFileIndex(),
 		termCancels: make(map[string]context.CancelFunc),
+		watchers:    make(map[string]*idecore.FileWatcher),
 	}
 	app.sessions = idecore.NewSessionManager(func(ev idecore.LaneEvent) {
 		if app.ctx != nil {
@@ -107,6 +111,14 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	a.termCancels = make(map[string]context.CancelFunc)
 	a.termMu.Unlock()
+	a.watcherMu.Lock()
+	for _, w := range a.watchers {
+		if w != nil {
+			w.Close()
+		}
+	}
+	a.watchers = make(map[string]*idecore.FileWatcher)
+	a.watcherMu.Unlock()
 }
 
 // WindowMinimize minimizes the IDE window.
@@ -283,7 +295,59 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 			_ = a.fileIndex.Refresh(target)
 		}(abs)
 	}
+	a.startWatcher(abs)
 	return proj, nil
+}
+
+// startWatcher keeps exactly one FileWatcher per project root. When the agent
+// (or any external tool) edits files, the watcher refreshes the in-memory
+// FileIndex and notifies the frontend via the "hivemind:fs-event" Wails event.
+func (a *App) startWatcher(root string) {
+	if a.smokeCheck {
+		return
+	}
+	key := strings.ToLower(filepath.Clean(root))
+	a.watcherMu.Lock()
+	if _, exists := a.watchers[key]; exists {
+		a.watcherMu.Unlock()
+		return
+	}
+	a.watcherMu.Unlock()
+
+	w, err := idecore.NewFileWatcher(root, a.onFSChange)
+	if err != nil {
+		return
+	}
+	a.watcherMu.Lock()
+	if _, exists := a.watchers[key]; exists {
+		a.watcherMu.Unlock()
+		w.Close()
+		return
+	}
+	a.watchers[key] = w
+	a.watcherMu.Unlock()
+	if err := w.Start(); err != nil {
+		a.watcherMu.Lock()
+		delete(a.watchers, key)
+		a.watcherMu.Unlock()
+	}
+}
+
+// onFSChange refreshes the FileIndex for the changed root and forwards the
+// batch of changed relative paths to the frontend explorer and open editors.
+func (a *App) onFSChange(ev idecore.FileChangeEvent) {
+	if a.fileIndex != nil {
+		go func(target string) {
+			_ = a.fileIndex.Refresh(target)
+		}(ev.Root)
+	}
+	if a.ctx != nil && !a.smokeCheck {
+		wailsrt.EventsEmit(a.ctx, "hivemind:fs-event", map[string]any{
+			"workspace": ev.Root,
+			"changed":   ev.Changed,
+			"overflow":  ev.Overflow,
+		})
+	}
 }
 
 // GetRecentProjects returns the MRU list from %LOCALAPPDATA%\HiveMind\ide-recent.txt.
@@ -475,11 +539,20 @@ func (a *App) RevertHunk(workspace, relPath, hunkHeader string, hunkLines []stri
 	return idecore.RevertDiffHunk(ctx, workspace, relPath, hunkHeader, hunkLines)
 }
 
-// GitHubStatus returns `gh` CLI authentication and workspace remote info.
+// GitHubStatus returns the native GitHub connector / CLI authentication and workspace remote info.
 func (a *App) GitHubStatus(workspace string) idecore.GitHubStatusInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return idecore.CheckGitHubStatus(ctx, workspace)
+}
+
+// SaveGitHubConfig stores or clears the native GitHub Personal Access Token (PAT) and optional API base URL,
+// returning the refreshed connection status.
+func (a *App) SaveGitHubConfig(token, baseURL, workspace string) (idecore.GitHubStatusInfo, error) {
+	if err := githubx.SaveCredentials(token, baseURL); err != nil {
+		return idecore.GitHubStatusInfo{}, err
+	}
+	return a.GitHubStatus(workspace), nil
 }
 
 // InitGit initializes a Git repository in workspace.
@@ -683,6 +756,13 @@ func (a *App) ListPullRequests(workspace string) ([]idecore.ProjectPullRequest, 
 	return idecore.ListProjectPullRequests(ctx, workspace)
 }
 
+// CloseOwnGitHubItem closes a GitHub PR ("pr") or issue ("issue") opened by the authenticated user.
+func (a *App) CloseOwnGitHubItem(workspace, kind string, number int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return idecore.CloseOwnGitHubItem(ctx, workspace, kind, number)
+}
+
 // OpenExternalURL opens an http/https URL in the system default browser.
 func (a *App) OpenExternalURL(rawURL string) error {
 	trimmed := strings.TrimSpace(rawURL)
@@ -694,4 +774,19 @@ func (a *App) OpenExternalURL(rawURL string) error {
 	}
 	wailsrt.BrowserOpenURL(a.ctx, trimmed)
 	return nil
+}
+
+// GetAIUsage returns live Antigravity (/usage) and OpenCode Go quota windows (5h/weekly/monthly) plus local HiveMind usage per AI provider.
+func (a *App) GetAIUsage() modelx.AIUsageReport {
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+	defer cancel()
+	return modelx.GetAIUsageReport(ctx)
+}
+
+// SaveAIUsageLimits stores optional 5h and 7d reference token limits for a provider and returns the updated report.
+func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens int64) (modelx.AIUsageReport, error) {
+	if err := modelx.SaveAIUsageLimits(provider, fiveHourTokens, weeklyTokens); err != nil {
+		return modelx.AIUsageReport{}, err
+	}
+	return a.GetAIUsage(), nil
 }
