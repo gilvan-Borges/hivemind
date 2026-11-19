@@ -7,12 +7,13 @@ import { activeLane } from "./lanes";
 import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
-export type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter";
+export type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter" | "cursor";
 
 export function inferModelProvider(modelSpec: string, includeDefaultBlank = false): ModelProviderId {
   const cur = (modelSpec || "").trim();
   if (!cur && includeDefaultBlank) return "default";
   const low = cur.toLowerCase();
+  if (low === "cursor" || low.startsWith("cursor:") || low.startsWith("cursor/")) return "cursor";
   if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
   if (low.startsWith("opencode:") || low.startsWith("opencode/") || low === "opencode") return "opencode";
   if (low === "agy" || low.startsWith("agy:") || state.models.some((m) => m.slug.toLowerCase() === low)) return "agy";
@@ -45,6 +46,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
     { id: "anthropic", label: "Anthropic (Claude)" },
     { id: "openai", label: "OpenAI / Grok (API)" },
     { id: "openrouter", label: "OpenRouter (gateway)" },
+    { id: "cursor", label: "Cursor (agente CLI)" },
   );
   return out;
 }
@@ -91,6 +93,13 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         { value: "o3", label: "o3" },
         { value: "grok-4", label: "grok-4 (OPENAI_BASE_URL)" },
       ];
+      break;
+    case "cursor":
+      items = [{ value: "cursor:auto", label: "auto (padrão, a Cursor escolhe)" }];
+      for (const slug of state.cursorModels) {
+        if (!slug || slug.toLowerCase() === "auto") continue;
+        items.push({ value: `cursor:${slug}`, label: slug });
+      }
       break;
     case "openrouter":
       items = state.openRouterModels.length > 0
@@ -188,6 +197,25 @@ export function bindModelPickerPairs(
       modelSel.value = current;
     }
   };
+  const loadCursorCatalog = async (modelSel: HTMLSelectElement) => {
+    const backend = api();
+    if (!backend?.ListCursorModels) return;
+    try {
+      const listed = (await backend.ListCursorModels()) || [];
+      state.cursorModels = listed.map((m) => m.slug).filter((slug) => slug && slug.toLowerCase() !== "auto");
+      if (backend.CursorCLIStatus) state.cursorCLI = await backend.CursorCLIStatus();
+    } catch {
+      return;
+    }
+    const current = modelSel.value;
+    modelSel.innerHTML = buildModelOptionsForProviderHtml("cursor", current || "cursor:auto");
+    if (current && Array.from(modelSel.options).some((o) => o.value === current)) {
+      modelSel.value = current;
+    }
+    if (state.cursorCLI && !state.cursorCLI.found) {
+      setStatus(state.cursorCLI.detail);
+    }
+  };
   container.querySelectorAll<HTMLSelectElement>("[data-mp-provider]").forEach((provSel) => {
     provSel.addEventListener("change", () => {
       const key = provSel.dataset.mpProvider!;
@@ -197,10 +225,16 @@ export function bindModelPickerPairs(
       modelSel.innerHTML = buildModelOptionsForProviderHtml(provId, "");
       modelSel.disabled = provId === "default" || provSel.disabled;
       if (provId === "openrouter") void loadOpenRouterCatalog(modelSel);
+      if (provId === "cursor") void loadCursorCatalog(modelSel);
       if (onModelChange) {
         onModelChange(modelSel, modelSel.value);
       }
     });
+    if (provSel.value === "cursor") {
+      const key = provSel.dataset.mpProvider!;
+      const modelSel = container.querySelector<HTMLSelectElement>(`[data-mp-model="${CSS.escape(key)}"]`);
+      if (modelSel) void loadCursorCatalog(modelSel);
+    }
     if (provSel.value === "openrouter") {
       const key = provSel.dataset.mpProvider!;
       const modelSel = container.querySelector<HTMLSelectElement>(`[data-mp-model="${CSS.escape(key)}"]`);

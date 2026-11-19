@@ -110,6 +110,7 @@ export async function openAPIKeysModal() {
   if (!backend?.GetAPIKeysStatus) return;
   try {
     state.apiKeysStatus = await backend.GetAPIKeysStatus();
+    if (backend.CursorCLIStatus) state.cursorCLI = await backend.CursorCLIStatus();
     renderModalLayer();
   } catch {
     // mantém o modal aberto sem status
@@ -416,6 +417,9 @@ export function renderModalLayer() {
           </p>
           ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">⚠ A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e TEM prioridade sobre o valor salvo aqui.</div>` : ""}
           <div class="form-grid">
+            ${field("ak-CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
+            <p class="dim" style="font-size:11.5px;margin:-4px 0 8px;line-height:1.45">Não é uma API de chat. O HiveMind chama o <code>agent -p</code> no workspace do agente. ${state.cursorCLI?.detail ? escapeHtml(state.cursorCLI.detail) : "Se o CLI não estiver instalado, no Windows: irm 'https://cursor.com/install?win32=true' | iex"}</p>
+            ${state.apiKeysStatus?.["env_CURSOR_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">⚠ A variável <code>CURSOR_API_KEY</code> do sistema tem prioridade sobre o valor salvo aqui.</div>` : ""}
             ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-… (chave em https://openrouter.ai/keys)", saved["OPENROUTER_API_KEY"])}
             ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
             ${field("ak-OPENAI_API_KEY", "OpenAI API Key:", "sk-…", saved["OPENAI_API_KEY"])}
@@ -447,7 +451,7 @@ export function renderModalLayer() {
       const backend = api();
       if (!backend?.SaveAPIKeys) return;
       const entries: Record<string, string> = {};
-      for (const name of ["OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
+      for (const name of ["CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
         const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
         entries[name] = el?.value?.trim() || "";
       }

@@ -277,6 +277,8 @@ Nascem ligados: Context7 (documentação atual, `CONTEXT7_API_KEY`) e o Code Rev
 
 As skills `ponytail` (modo `lite`) e `improve-codebase-architecture` entram no catálogo nativo para o Chefe escolher ao delegar. `untangle-codebase` fica no disco e nasce desligada: só entra se alguém pedir a limpeza do repositório pelo nome.
 
+O provedor **Cursor** usa a assinatura da conta pelo CLI oficial (`agent -p`), não por uma API de chat. A chave `CURSOR_API_KEY` fica em Chaves de API (ou na variável de ambiente). O guia está em [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md).
+
 A proposta do agente residente (assistente sempre ligado, com sandbox) está em [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md). Ainda não há comando nem tela para ele.
 
 ## Cursor (agente do editor)

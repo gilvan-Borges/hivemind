@@ -43,8 +43,10 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 		return newOpenAI(ctx, provider, modelName)
 	case "openrouter":
 		return newOpenRouter(ctx, modelName)
+	case "cursor":
+		return NewCursor(ctx, modelName)
 	default:
-		return nil, fmt.Errorf("provedor %q não é suportado; use agy, opencode, gemini, vertex, anthropic, openai ou openrouter", provider)
+		return nil, fmt.Errorf("provedor %q não é suportado; use agy, opencode, gemini, vertex, anthropic, openai, openrouter ou cursor", provider)
 	}
 }
 

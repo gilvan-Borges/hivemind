@@ -11,6 +11,7 @@ import (
 // SupportedStoredKeyNames lists the API key/setting names the IDE can persist
 // outside environment variables (saved in the user config dir, never in the repo).
 var SupportedStoredKeyNames = []string{
+	"CURSOR_API_KEY",
 	"OPENROUTER_API_KEY",
 	"OPENROUTER_BASE_URL",
 	"OPENAI_API_KEY",

@@ -605,6 +605,8 @@ func NormalizeProvider(provider, model string) string {
 		return "openai-responses"
 	case "openrouter":
 		return "openrouter"
+	case "cursor":
+		return "cursor"
 	case "":
 		return inferProvider(model)
 	default:
@@ -615,6 +617,8 @@ func NormalizeProvider(provider, model string) string {
 func inferProvider(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
+	case m == "cursor" || strings.HasPrefix(m, "cursor:") || strings.HasPrefix(m, "cursor/"):
+		return "cursor"
 	case m == "agy" || strings.HasPrefix(m, "agy:"):
 		return "agy"
 	case m == "opencode" || m == "opencode-go" ||

@@ -22,10 +22,18 @@ func TestDefaultsLeaveHeavyServersOff(t *testing.T) {
 	}
 }
 
+func useTempUserConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp-servers.json")
+	prev := userConfigPathFn
+	userConfigPathFn = func() (string, error) { return path, nil }
+	t.Cleanup(func() { userConfigPathFn = prev })
+	return path
+}
+
 func TestSetEnabledPersistsWithoutSecrets(t *testing.T) {
-	cfgHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfgHome)
-	t.Setenv("HOME", t.TempDir())
+	userPath := useTempUserConfig(t)
 	workspace := t.TempDir()
 
 	got, err := SetEnabled(workspace, "playwright", true, false)
@@ -40,7 +48,7 @@ func TestSetEnabledPersistsWithoutSecrets(t *testing.T) {
 	if chrome == nil || chrome.Enabled {
 		t.Fatal("chrome-devtools deveria desligar ao ligar o playwright")
 	}
-	raw, err := os.ReadFile(filepath.Join(cfgHome, "HiveMind", "mcp-servers.json"))
+	raw, err := os.ReadFile(userPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +62,7 @@ func TestSetEnabledPersistsWithoutSecrets(t *testing.T) {
 }
 
 func TestProjectOverlayDoesNotChangeUserDefault(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	useTempUserConfig(t)
 	workspace := t.TempDir()
 	if _, err := SetEnabled(workspace, "github", true, true); err != nil {
 		t.Fatal(err)

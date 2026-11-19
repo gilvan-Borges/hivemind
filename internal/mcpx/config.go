@@ -58,7 +58,15 @@ type RemoteTool struct {
 	Schema      string
 }
 
+// userConfigPathFn is replaced in tests so they never write the developer profile.
+// On Windows UserConfigDir follows APPDATA, not XDG_CONFIG_HOME.
+var userConfigPathFn = defaultUserConfigPath
+
 func userConfigPath() (string, error) {
+	return userConfigPathFn()
+}
+
+func defaultUserConfigPath() (string, error) {
 	// XDG_CONFIG_HOME is honored on every OS. os.UserConfigDir already does
 	// that on Unix and ignores it on Windows, which made the tests (and any
 	// explicit override) write to %AppData% instead of the temp dir.
