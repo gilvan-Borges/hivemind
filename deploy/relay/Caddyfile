@@ -1,0 +1,11 @@
+# Troque o nome pelo DNS que aponta para a VM.
+# Caddy pede o certificado sozinho (portas 80 e 443 abertas).
+# O relay fica só em loopback.
+
+relay.example.com {
+	encode gzip
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy 127.0.0.1:8787
+}

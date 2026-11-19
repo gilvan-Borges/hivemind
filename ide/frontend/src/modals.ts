@@ -116,13 +116,60 @@ export async function openAPIKeysModal() {
   }
 }
 
+function relayStatusLine(): string {
+  const rs = state.relayStatus;
+  if (!rs?.loggedIn) return "Conta do relay: desconectada";
+  const link = !rs.linked
+    ? "sem IDE vinculada"
+    : rs.online
+      ? "túnel online"
+      : rs.enabled
+        ? "túnel reconectando"
+        : "vinculada, túnel desligado";
+  const e2e = rs.e2e ? " · criptografia ponta a ponta pronta" : "";
+  const name = rs.deviceName ? ` · ${escapeHtml(rs.deviceName)}` : "";
+  const err = rs.lastError ? `<div style="color:var(--red);margin-top:4px">${escapeHtml(rs.lastError)}</div>` : "";
+  return `Conta ${escapeHtml(rs.email)}${name} · ${link}${e2e}${err}`;
+}
+
+let relayTimer: number | undefined;
+
+function stopRelayPoll() {
+  if (relayTimer !== undefined) window.clearInterval(relayTimer);
+  relayTimer = undefined;
+}
+
+async function refreshRelayQuiet() {
+  const backend = api();
+  if (!backend?.RelayStatus || !state.showMobileModal) return;
+  try {
+    state.relayStatus = await backend.RelayStatus();
+    const el = document.getElementById("relay-status-line");
+    if (el) el.innerHTML = relayStatusLine();
+    updateStatusBar();
+  } catch {
+    // o modal continua com o último estado
+  }
+}
+
+function startRelayPoll() {
+  stopRelayPoll();
+  relayTimer = window.setInterval(() => void refreshRelayQuiet(), 3000);
+}
+
 export async function openMobileModal() {
   state.showMobileModal = true;
+  state.relayDraft.password = "";
   renderModalLayer();
   const backend = api();
   if (!backend?.MobileBridgeStatus) return;
   try {
     state.mobileStatus = await backend.MobileBridgeStatus();
+    if (backend.RelayStatus) {
+      state.relayStatus = await backend.RelayStatus();
+      if (!state.relayDraft.baseUrl) state.relayDraft.baseUrl = state.relayStatus?.baseUrl || "";
+      if (!state.relayDraft.email) state.relayDraft.email = state.relayStatus?.email || "";
+    }
     updateStatusBar();
     renderModalLayer();
     await refreshMobilePairing();
@@ -428,9 +475,9 @@ export function renderModalLayer() {
         <div class="modal-box" role="dialog" aria-modal="true" style="width:580px">
           <h3 class="modal-title">App Mobile — Continuar Trabalhos no Celular</h3>
           <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px;line-height:1.5">
-            Pareie o <strong>HiveMind Mobile</strong> (Android) para acompanhar equipes em tempo real, responder
-            aprovações, ver diffs e o Fluxo de PRs/Jira pelo celular. O motor continua 100% no seu PC — via
-            <strong>Tailscale</strong> (funciona do 4G/5G) ou <strong>Wi-Fi</strong>.
+            Pareie o <strong>HiveMind Mobile</strong> para acompanhar equipes, responder aprovações e ver diffs.
+            O motor continua no PC. Na mesma rede, use a LAN abaixo. De qualquer lugar, use o relay (os dois lados
+            só abrem conexão de saída).
           </p>
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
             <span style="font-weight:600">Estado:</span>
@@ -461,6 +508,48 @@ export function renderModalLayer() {
               ${mb?.running ? "Gerando QR…" : "Ligue o Bridge para exibir o QR de pareamento."}
             </div>
           `}
+          <div class="relay-panel">
+            <h4 class="relay-title">Acesso remoto</h4>
+            <p class="dim" style="font-size:12px;line-height:1.5;margin:0 0 10px">
+              Entre na conta do relay que você hospeda. Esta IDE e o celular se conectam a ele por
+              <strong>WebSocket de saída</strong>. O tráfego do bridge vai cifrado de ponta a ponta; a LAN acima não muda.
+            </p>
+            <div id="relay-status-line" class="relay-status">${relayStatusLine()}</div>
+            <div class="form-grid" style="margin-top:10px">
+              <label for="relay-url">URL do relay</label>
+              <input id="relay-url" type="url" placeholder="https://relay.seudominio" value="${escapeHtml(state.relayDraft.baseUrl)}" autocomplete="off" />
+              <label for="relay-email">E-mail</label>
+              <input id="relay-email" type="email" placeholder="voce@exemplo" value="${escapeHtml(state.relayDraft.email)}" autocomplete="username" />
+              <label for="relay-password">Senha</label>
+              <input id="relay-password" type="password" placeholder="não fica salva" value="${escapeHtml(state.relayDraft.password)}" autocomplete="current-password" />
+            </div>
+            <div class="relay-actions">
+              <button class="primary mini" id="relay-login" type="button">Entrar</button>
+              <button class="mini" id="relay-toggle" type="button">${state.relayStatus?.enabled ? "Desligar acesso remoto" : "Ligar acesso remoto"}</button>
+              <button class="mini" id="relay-logout" type="button">Sair da conta</button>
+            </div>
+            ${state.relayStatus?.linked ? `
+              <div class="dim" style="font-size:12px;margin-top:8px">
+                IDE vinculada${state.relayStatus.deviceName ? `: ${escapeHtml(state.relayStatus.deviceName)}` : ""}${state.relayStatus.e2e ? " · chave do celular instalada" : " · aguardando a chave do celular"}
+                <button class="mini" id="relay-unlink" type="button" style="margin-left:8px">Desvincular</button>
+              </div>
+            ` : `
+              <div class="relay-link-row">
+                <button class="mini" id="relay-make-code" type="button">Gerar código para o celular</button>
+                <input id="relay-claim" placeholder="Código gerado no celular" value="${escapeHtml(state.relayDraft.claim)}" autocomplete="off" />
+                <button class="mini" id="relay-claim-btn" type="button">Confirmar código</button>
+              </div>
+              ${state.relayLink ? `
+                <div class="relay-code-box">
+                  ${safeImageSrc(state.relayLink.qrDataUrl) ? `<img src="${escapeHtml(safeImageSrc(state.relayLink.qrDataUrl))}" alt="QR de vínculo" width="160" height="160" />` : ""}
+                  <div>
+                    <div style="font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:18px;letter-spacing:0.08em">${escapeHtml(state.relayLink.code)}</div>
+                    <div class="dim" style="font-size:11px;margin-top:4px">Expira ${escapeHtml(state.relayLink.expiresAt)}</div>
+                  </div>
+                </div>
+              ` : ""}
+            `}
+          </div>
           <div id="mb-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
             <button id="mb-close">Fechar</button>
@@ -471,7 +560,26 @@ export function renderModalLayer() {
 
     const closeMb = () => {
       state.showMobileModal = false;
+      stopRelayPoll();
       renderModalLayer();
+    };
+    startRelayPoll();
+    const bindDraft = (id: string, key: "baseUrl" | "email" | "password" | "claim") => {
+      document.getElementById(id)?.addEventListener("input", (ev) => {
+        state.relayDraft[key] = (ev.target as HTMLInputElement).value;
+      });
+    };
+    bindDraft("relay-url", "baseUrl");
+    bindDraft("relay-email", "email");
+    bindDraft("relay-password", "password");
+    bindDraft("relay-claim", "claim");
+    const showMbErr = (err: unknown) => {
+      const errEl = document.getElementById("mb-modal-err");
+      if (errEl) {
+        const reason = err instanceof Error ? err.message : String(err);
+        errEl.textContent = reason;
+        errEl.style.display = "block";
+      }
     };
     document.getElementById("mb-close")?.addEventListener("click", closeMb);
     document.getElementById("mb-modal-backdrop")?.addEventListener("click", (e) => {
@@ -517,6 +625,80 @@ export function renderModalLayer() {
         toast("Token copiado.", "success");
       } catch {
         // clipboard indisponível
+      }
+    });
+    document.getElementById("relay-login")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayLogin) return;
+      const btn = document.getElementById("relay-login") as HTMLButtonElement | null;
+      if (btn) btn.textContent = "Entrando…";
+      try {
+        state.relayStatus = await backend.RelayLogin(state.relayDraft.baseUrl.trim(), state.relayDraft.email.trim(), state.relayDraft.password);
+        state.relayDraft.password = "";
+        updateStatusBar();
+        renderModalLayer();
+        toast("Conta do relay conectada.", "success");
+      } catch (err) {
+        showMbErr(err);
+        if (btn) btn.textContent = "Entrar";
+      }
+    });
+    document.getElementById("relay-toggle")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelaySetEnabled) return;
+      try {
+        state.relayStatus = await backend.RelaySetEnabled(!state.relayStatus?.enabled);
+        updateStatusBar();
+        renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-logout")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayLogout) return;
+      try {
+        state.relayStatus = await backend.RelayLogout();
+        state.relayLink = null;
+        updateStatusBar();
+        renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-unlink")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayUnlink) return;
+      try {
+        state.relayStatus = await backend.RelayUnlink();
+        state.relayLink = null;
+        updateStatusBar();
+        renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-make-code")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayCreateLinkCode) return;
+      try {
+        state.relayLink = await backend.RelayCreateLinkCode();
+        renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-claim-btn")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayClaimLinkCode) return;
+      try {
+        state.relayStatus = await backend.RelayClaimLinkCode(state.relayDraft.claim.trim());
+        state.relayDraft.claim = "";
+        updateStatusBar();
+        renderModalLayer();
+        toast("IDE vinculada à conta.", "success");
+      } catch (err) {
+        showMbErr(err);
       }
     });
     return;

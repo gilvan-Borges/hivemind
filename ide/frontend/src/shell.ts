@@ -948,17 +948,32 @@ export function updateStatusBar() {
   const mbEl = document.getElementById("status-mobile");
   if (mbEl) {
     const mb = state.mobileStatus;
-    if (!mb) {
+    const relay = state.relayStatus;
+    const lan = !!mb?.running;
+    const relayOnline = !!relay?.online;
+    if (!mb && !relay) {
       mbEl.textContent = "mobile: …";
       mbEl.style.color = "var(--text-dim)";
-    } else if (mb.running) {
-      mbEl.textContent = `mobile: on${mb.urls.length ? ` (${mb.urls.length})` : ""}`;
+    } else if (lan && relayOnline) {
+      mbEl.textContent = "mobile: on+relay";
+      mbEl.style.color = "var(--green)";
+      mbEl.title = `LAN na porta ${mb?.port} e relay online (${relay?.deviceName || "IDE"})`;
+    } else if (relayOnline) {
+      mbEl.textContent = "mobile: relay";
+      mbEl.style.color = "var(--green)";
+      mbEl.title = "Acesso remoto pelo relay — o celular alcança esta IDE de qualquer rede";
+    } else if (relay?.enabled) {
+      mbEl.textContent = "mobile: relay…";
+      mbEl.style.color = "var(--amber)";
+      mbEl.title = relay.lastError || "Relay ligado, reconectando";
+    } else if (lan) {
+      mbEl.textContent = `mobile: on${mb.urls?.length ? ` (${mb.urls.length})` : ""}`;
       mbEl.style.color = "var(--green)";
       mbEl.title = `App Mobile ativo na porta ${mb.port} — clique para abrir o QR de pareamento`;
     } else {
       mbEl.textContent = "mobile: off";
       mbEl.style.color = "var(--text-dim)";
-      mbEl.title = "App Mobile desligado — clique para ligar e parear seu celular";
+      mbEl.title = "App Mobile desligado — clique para ligar a LAN ou o relay";
     }
   }
   const probEl = document.getElementById("status-problems");

@@ -1564,6 +1564,48 @@ button.icon-btn:hover:not(:disabled) {
   gap: 8px;
   margin-top: 16px;
 }
+.relay-panel {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.relay-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.relay-status {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.relay-actions,
+.relay-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.relay-link-row input {
+  flex: 1;
+  min-width: 140px;
+}
+.relay-code-box {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 10px;
+}
+.relay-code-box img {
+  background: #fff;
+  padding: 6px;
+  border-radius: 8px;
+}
 
 /* Pipeline Stepper & Handoff Cards */
 .pipeline-bar {

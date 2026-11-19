@@ -247,7 +247,11 @@ go test ./...
 
 Os testes não chamam Gemini, GitHub nem Jira de verdade. O modelo é um `model.LLM` scriptado, o Jira é um servidor HTTP falso, o GitHub REST também, e o git dos testes é um repositório temporário local. O shell é exercitado com comandos portáveis e com recusa de comando perigoso. Os testes que precisam de um `agy` falso compilam um binário Go em `internal/testutil/fakeagy`, então a suíte passa igualmente no Windows e no Linux.
 
-O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI **no Linux (com `-race`) e no Windows**, testes da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`.
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI **no Linux (com `-race`) e no Windows**, testes da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`. O mesmo workflow publica o relay (`hivemind-relay`) para `linux/amd64` e `linux/arm64`.
+
+## Relay (app fora da rede local)
+
+O `hivemind-relay` é um processo pequeno que a IDE e o app alcançam só com conexão de saída. A conta, o vínculo das IDEs e o túnel do Remote Bridge estão em [`docs/SPEC_RELAY.md`](docs/SPEC_RELAY.md). O passo a passo da VM Oracle Always Free (portas 80/443, Caddy, systemd) está em [`docs/GUIA_ORACLE_RELAY.md`](docs/GUIA_ORACLE_RELAY.md). Na IDE, o chip **mobile** ganha a seção **Acesso remoto**; o pareamento LAN (`hivemind://pair`) continua no mesmo modal.
 
 ## Limitações do ADK Go (v2.8.0)
 
@@ -269,6 +273,10 @@ O que o ADK entrega e o que esta CLI completa:
 
 ```
 cmd/hivemind            comando principal da CLI
+cmd/hivemind-relay      relay (conta, vínculo de IDEs, túnel WebSocket)
+relaywire/              contrato compartilhado app↔relay↔IDE
+internal/relay          autenticação, SQLite e roteamento do relay
+deploy/relay            Dockerfile, systemd e Caddyfile
 ide/                    HiveMind IDE desktop (Go + Wails v2 + TypeScript/Vite)
 internal/cli            comandos em português
 internal/tui            interface interativa de terminal (Bubble Tea)
