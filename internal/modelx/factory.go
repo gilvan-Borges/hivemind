@@ -4,8 +4,11 @@ package modelx
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -13,6 +16,11 @@ import (
 	"google.golang.org/adk/v2/model/anthropicmodel"
 	"google.golang.org/adk/v2/model/gemini"
 	"google.golang.org/adk/v2/model/openaimodel"
+)
+
+var (
+	orAuthMu sync.Mutex
+	orAuthOK map[string]time.Time
 )
 
 // New returns the ADK model for a provider id produced by team.NormalizeProvider.
@@ -112,7 +120,54 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 	})
 }
 
-// newOpenRouter builds a chat-completions model against the OpenRouter gateway.
+// openRouterCheckAuth preflights the API key against GET /key so a bad/revoked
+// key fails immediately with a clear message instead of a raw 401 mid-run.
+// Successful checks are cached in memory for a few minutes per key.
+func openRouterCheckAuth(ctx context.Context, key, base string) error {
+	orAuthMu.Lock()
+	if t, ok := orAuthOK[key]; ok && time.Since(t) < 10*time.Minute {
+		orAuthMu.Unlock()
+		return nil
+	}
+	orAuthMu.Unlock()
+
+	reqCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	url := strings.TrimRight(base, "/") + "/key"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("validar chave OpenRouter: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("validar chave OpenRouter em %s: %w (verifique OPENROUTER_BASE_URL e sua conexão)", url, err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		orAuthMu.Lock()
+		if orAuthOK == nil {
+			orAuthOK = map[string]time.Time{}
+		}
+		orAuthOK[key] = time.Now()
+		orAuthMu.Unlock()
+		return nil
+	case http.StatusUnauthorized:
+		hint := "confira OPENROUTER_API_KEY em https://openrouter.ai/keys — a chave salva na IDE pode estar antiga/revogada; abra o menu do app → Chaves de API e salve a chave atual"
+		if strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) != "" {
+			hint = "a variável de ambiente OPENROUTER_API_KEY está definida no sistema e TEM prioridade sobre a chave salva na IDE — e o OpenRouter a rejeitou; remova/corrija a variável de ambiente (ou salve a chave correta na IDE e remova a variável) em Configurações do Windows → Variáveis de Ambiente"
+		}
+		return fmt.Errorf("OpenRouter rejeitou a chave (HTTP 401 Unauthorized): %s", hint)
+	case http.StatusForbidden:
+		return fmt.Errorf("OpenRouter negou acesso (HTTP 403): a chave não tem permissão para esta conta/provedor")
+	case http.StatusPaymentRequired:
+		return fmt.Errorf("OpenRouter respondeu 402: créditos insuficientes ou cobrança pendente em https://openrouter.ai/settings/credits")
+	default:
+		return fmt.Errorf("OpenRouter respondeu HTTP %d ao validar a chave", resp.StatusCode)
+	}
+}
+
 // Model IDs follow the vendor format (e.g. "anthropic/claude-sonnet-4-5",
 // "openai/gpt-4.1", "google/gemini-2.5-pro", "deepseek/deepseek-chat").
 func newOpenRouter(ctx context.Context, modelName string) (model.LLM, error) {
@@ -123,6 +178,9 @@ func newOpenRouter(ctx context.Context, modelName string) (model.LLM, error) {
 	base := EnvOrStored("OPENROUTER_BASE_URL")
 	if base == "" {
 		base = "https://openrouter.ai/api/v1"
+	}
+	if err := openRouterCheckAuth(ctx, key, base); err != nil {
+		return nil, err
 	}
 	return openaimodel.NewModel(ctx, modelName, &openaimodel.ClientConfig{
 		APIKey:     key,

@@ -104,6 +104,9 @@ func StoredAPIKeysStatus() map[string]string {
 		if v := stored[name]; v != "" {
 			out[name] = MaskKey(v)
 		}
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			out["env_"+name] = "1"
+		}
 	}
 	return out
 }

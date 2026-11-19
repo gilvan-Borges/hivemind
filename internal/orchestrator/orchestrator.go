@@ -854,7 +854,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
 	llm, err := r.modelFor(ctx, a)
 	if err != nil {
-		return nil, fmt.Errorf("modelo de %s: %w", a.Name, err)
+		return nil, fmt.Errorf("modelo de %s (provedor %s): %w", a.Name, a.Provider, err)
 	}
 	roleTools, err := tools.ForRole(a.Role, tools.Deps{
 		Root:                 root,

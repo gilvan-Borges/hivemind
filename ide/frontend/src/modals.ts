@@ -367,6 +367,7 @@ export function renderModalLayer() {
             Salve aqui as chaves dos provedores (arquivo <code>api-keys.json</code> em <code>%APPDATA%\\HiveMind</code>, fora do repositório).
             Variáveis de ambiente sempre têm prioridade sobre o que está salvo. Deixar o campo vazio remove o valor salvo.
           </p>
+          ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">⚠ A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e TEM prioridade sobre o valor salvo aqui.</div>` : ""}
           <div class="form-grid">
             ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-… (chave em https://openrouter.ai/keys)", saved["OPENROUTER_API_KEY"])}
             ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
@@ -834,6 +835,7 @@ export function renderModalLayer() {
               ${icons.bolt} OpenRouter — Chave de API (modelos <code>fornecedor/modelo</code>)
               ${state.apiKeysStatus?.["OPENROUTER_API_KEY"] ? `<span style="color:var(--green)">(salvo: ${escapeHtml(state.apiKeysStatus["OPENROUTER_API_KEY"])})</span>` : `<span style="color:var(--amber)">(não salvo)</span>`}
             </div>
+            ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:11.5px;margin-bottom:6px">⚠ A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e TEM prioridade sobre o valor salvo aqui. Se der 401, corrija ou remova essa variável (Configurações → Variáveis de Ambiente).</div>` : ""}
             <div class="form-grid">
               <label>OpenRouter API Key:</label>
               <input id="or-api-key" type="password" placeholder="sk-or-v1-… (chave em https://openrouter.ai/keys)" autocomplete="off" />
