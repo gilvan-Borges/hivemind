@@ -6,7 +6,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
 import { refreshSkills } from "./models";
 import { updateStatusBar } from "./shell";
-import { api, setStatus, state, toast, toastError } from "./state";
+import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
 export async function openDoctorModal() {
@@ -38,17 +38,40 @@ export async function openGitHubModal() {
   }
 }
 
+export async function refreshJiraStatusAndProjects() {
+  const backend = api();
+  const root = state.project?.root || "";
+  if (!backend?.JiraStatus && !backend?.JiraStatusForWorkspace) return;
+  try {
+    state.jiraStatus = backend.JiraStatusForWorkspace
+      ? await backend.JiraStatusForWorkspace(root)
+      : await backend.JiraStatus!();
+    if (state.jiraStatus?.connected && (backend.ListJiraProjectsForWorkspace || backend.ListJiraProjects)) {
+      state.jiraProjectsLoading = true;
+      try {
+        state.jiraProjects = backend.ListJiraProjectsForWorkspace
+          ? ((await backend.ListJiraProjectsForWorkspace(root)) || [])
+          : ((await backend.ListJiraProjects!()) || []);
+      } catch {
+        // mantém lista anterior em caso de erro transitório
+      } finally {
+        state.jiraProjectsLoading = false;
+      }
+    } else if (!state.jiraStatus?.connected) {
+      state.jiraProjects = [];
+    }
+    updateStatusBar();
+    if (state.showJiraModal) renderModalLayer();
+    if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+  } catch {
+    // mantém último estado visível
+  }
+}
+
 export async function openJiraModal() {
   state.showJiraModal = true;
   renderModalLayer();
-  const backend = api();
-  if (!backend?.JiraStatus) return;
-  try {
-    state.jiraStatus = await backend.JiraStatus();
-    renderModalLayer();
-  } catch {
-    // mantém o último status visível
-  }
+  await refreshJiraStatusAndProjects();
 }
 
 export async function openOpenCodeModal() {
@@ -388,37 +411,52 @@ export function renderModalLayer() {
   if (state.showJiraModal) {
     const jira = state.jiraStatus;
     const statusBadge = jira?.connected
-      ? `<span style="color:var(--green);font-weight:600">Conectado como ${escapeHtml(jira.user || jira.email)}${jira.source ? ` (${jira.source === "env" ? "ENV" : "Conector Nativo"})` : ""}${jira.tokenMasked ? ` · token ${escapeHtml(jira.tokenMasked)}` : ""}</span>`
-      : `<span style="color:var(--amber)">${escapeHtml(jira?.detail || "Desconectado — informe URL, E-mail e API Token do Jira Cloud")}</span>`;
+      ? `<span style="color:var(--green);font-weight:600">Conectado como ${escapeHtml(jira.user || jira.email)}${jira.source ? ` (${jira.source === "env" ? "ENV" : jira.source.startsWith("mcp:") ? `MCP · ${jira.source.slice(4)}` : "Conector Nativo"})` : ""}${jira.tokenMasked ? ` · token ${escapeHtml(jira.tokenMasked)}` : ""}</span>`
+      : `<span style="color:var(--amber)">${escapeHtml(jira?.detail || "Desconectado — informe URL, E-mail e API Token ou importe do mcp_config.json")}</span>`;
+    const projects = state.jiraProjects || [];
+    const currentDefProj = (jira?.defaultProject || "").toUpperCase();
+    const hasMatchProj = projects.some((p) => p.key.toUpperCase() === currentDefProj);
 
     layer.innerHTML = `
       <div class="modal-backdrop" id="jira-modal-backdrop">
-        <div class="modal-box" role="dialog" aria-modal="true" style="width:540px">
-          <h3 class="modal-title">Conector Jira Nativo (Jira Cloud REST v3)</h3>
-          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px">
-            Salve as credenciais do Jira Cloud uma única vez (fora do repositório) para o Chefe ler issues, criar Epics/Tasks/Subtasks do SDD, comentar e transicionar.
-            Ative também <code>jira_enabled</code> no time (<code>.hivemind/team.yaml</code>) para as ferramentas Jira ficarem disponíveis aos agentes.
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:560px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+            <h3 class="modal-title" style="margin:0">Conector Jira Cloud (REST v3)</h3>
+            <div style="display:flex;gap:6px">
+              <button type="button" class="mini" id="jira-import-mcp" title="Importar automaticamente de .agents/mcp_config.json, .mcp.json ou .cursor/mcp.json">${icons.download}<span>Importar do MCP</span></button>
+              <button type="button" class="mini" id="jira-open-token-help" title="Abrir página da Atlassian para criar um API Token">${icons.openInNew}<span>Gerar Token ↗</span></button>
+            </div>
+          </div>
+          <p class="dim" style="font-size:12px;margin-top:0;margin-bottom:10px">
+            Detecta automaticamente seu <code>mcp_config.json</code> (ex.: <code>.agents/mcp_config.json</code>) ou salve aqui uma única vez fora do repo. Pode colar só <code>sua-empresa.atlassian.net</code> — os projetos aparecem dinamicamente.
           </p>
-          <div style="font-size:12px;margin-bottom:8px"><strong>Status:</strong> ${statusBadge}</div>
+          <div style="font-size:12px;margin-bottom:10px"><strong>Status:</strong> ${statusBadge}</div>
           <div class="form-grid">
-            <label>Jira Base URL:</label>
-            <input id="jira-base-url" value="${escapeHtml(jira?.baseUrl || "")}" placeholder="https://seu-dominio.atlassian.net" />
+            <label>URL do Jira:</label>
+            <input id="jira-base-url" value="${escapeHtml(jira?.baseUrl || "")}" placeholder="sua-empresa.atlassian.net" />
 
-            <label>E-mail (conta Jira):</label>
+            <label>E-mail (Atlassian):</label>
             <input id="jira-email" value="${escapeHtml(jira?.email || "")}" placeholder="voce@empresa.com" autocomplete="off" />
 
             <label>API Token:</label>
-            <input id="jira-api-token" type="password" placeholder="${jira?.source === "config" ? "Cole novo token para substituir…" : "Gerencie em Atlassian: Security → API tokens"}" autocomplete="off" />
+            <input id="jira-api-token" type="password" placeholder="${jira?.source === "config" ? "Token salvo — cole outro apenas se quiser trocar" : "Cole o API Token gerado na Atlassian"}" autocomplete="off" />
 
-            <label>Projeto padrão (opcional):</label>
-            <input id="jira-project" value="${escapeHtml(jira?.defaultProject || "")}" placeholder="PROJ (usado pelo jira_create_issue do SDD)" />
+            <label>Projeto padrão:</label>
+            ${projects.length > 0
+              ? `<select id="jira-project">
+                  <option value="">(Selecionar projeto dinamicamente…)</option>
+                  ${projects.map((p) => `<option value="${escapeHtml(p.key)}" ${p.key.toUpperCase() === currentDefProj ? "selected" : ""}>${escapeHtml(p.key)} — ${escapeHtml(p.name)}</option>`).join("")}
+                  ${currentDefProj && !hasMatchProj ? `<option value="${escapeHtml(currentDefProj)}" selected>${escapeHtml(currentDefProj)} (atual)</option>` : ""}
+                </select>`
+              : `<input id="jira-project" value="${escapeHtml(currentDefProj)}" placeholder="Opcional — após conectar aparece a lista de projetos" />`
+            }
           </div>
           <div class="dim" style="font-size:11px;margin-top:8px;line-height:1.45">
-            Prioridade: variáveis <code>JIRA_BASE_URL</code>/<code>JIRA_EMAIL</code>/<code>JIRA_API_TOKEN</code>/<code>JIRA_PROJECT</code> → credenciais salvas neste conector (<code>jira-connector.json</code>, fora do repo).
+            Prioridade: variáveis <code>JIRA_BASE_URL</code>/<code>JIRA_EMAIL</code>/<code>JIRA_API_TOKEN</code> → conector nativo (<code>jira-connector.json</code>, nunca commitado).
           </div>
           <div id="jira-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
-            ${jira?.source === "config" ? `<button class="danger mini" id="jira-clear-token">Remover Credenciais Salvas</button>` : ""}
+            ${jira?.source === "config" ? `<button class="danger mini" id="jira-clear-token">Desconectar</button>` : ""}
             <div class="spacer"></div>
             <button id="jira-close">Fechar</button>
             <button class="primary" id="jira-save">Salvar & Testar</button>
@@ -432,6 +470,36 @@ export function renderModalLayer() {
       renderModalLayer();
     };
     document.getElementById("jira-close")?.addEventListener("click", closeJira);
+    document.getElementById("jira-open-token-help")?.addEventListener("click", () => {
+      void api()?.OpenExternalURL("https://id.atlassian.com/manage-profile/security/api-tokens");
+    });
+    document.getElementById("jira-import-mcp")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.ImportJiraFromMCP) return;
+      const errEl = document.getElementById("jira-modal-err");
+      try {
+        state.jiraStatus = await backend.ImportJiraFromMCP(state.project?.root || "");
+        await refreshJiraStatusAndProjects();
+        if (state.jiraStatus?.connected) {
+          if (state.teamConfigDraft) {
+            state.teamConfigDraft.jiraEnabled = true;
+            if (!state.teamConfigDraft.jiraProject && state.jiraProjects[0]?.key) {
+              state.teamConfigDraft.jiraProject = state.jiraProjects[0].key;
+            }
+          }
+          if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+          toast(`Jira importado do MCP e conectado como ${state.jiraStatus.user || state.jiraStatus.email}!`, "success");
+        } else if (errEl) {
+          errEl.textContent = state.jiraStatus?.detail || "Credenciais importadas, mas falha ao autenticar.";
+          errEl.style.display = "block";
+        }
+      } catch (err: any) {
+        if (errEl) {
+          errEl.textContent = err?.message || String(err);
+          errEl.style.display = "block";
+        }
+      }
+    });
     document.getElementById("jira-modal-backdrop")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement)?.id === "jira-modal-backdrop") closeJira();
     });
@@ -441,7 +509,10 @@ export function renderModalLayer() {
       if (!backend?.SaveJiraConfig) return;
       try {
         state.jiraStatus = await backend.SaveJiraConfig("", "", "", "", true);
+        state.jiraProjects = [];
+        updateStatusBar();
         renderModalLayer();
+        if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
         setStatus("Credenciais do Conector Jira removidas.");
       } catch (err: any) {
         const errEl = document.getElementById("jira-modal-err");
@@ -458,19 +529,37 @@ export function renderModalLayer() {
       const baseIn = (document.getElementById("jira-base-url") as HTMLInputElement | null)?.value.trim() || "";
       const emailIn = (document.getElementById("jira-email") as HTMLInputElement | null)?.value.trim() || "";
       const tokIn = (document.getElementById("jira-api-token") as HTMLInputElement | null)?.value.trim() || "";
-      const projIn = (document.getElementById("jira-project") as HTMLInputElement | null)?.value.trim().toUpperCase() || "";
+      const projIn = (document.getElementById("jira-project") as HTMLInputElement | HTMLSelectElement | null)?.value.trim().toUpperCase() || "";
       const errEl = document.getElementById("jira-modal-err");
       const btn = document.getElementById("jira-save") as HTMLButtonElement | null;
       if (btn) {
         btn.disabled = true;
-        btn.textContent = "Testando…";
+        btn.textContent = "Conectando…";
       }
       try {
         state.jiraStatus = await backend.SaveJiraConfig(baseIn, emailIn, tokIn, projIn, false);
         if (state.jiraStatus?.connected) {
+          try {
+            const projs = backend.ListJiraProjectsForWorkspace
+              ? await backend.ListJiraProjectsForWorkspace(state.project?.root || "")
+              : await backend.ListJiraProjects?.();
+            state.jiraProjects = projs || [];
+          } catch {
+            // segue mesmo se listar projetos falhar
+          }
+          if (state.teamConfigDraft) {
+            state.teamConfigDraft.jiraEnabled = true;
+            if (!state.teamConfigDraft.jiraProject && (projIn || state.jiraProjects[0]?.key)) {
+              state.teamConfigDraft.jiraProject = projIn || state.jiraProjects[0]?.key || "";
+            }
+          }
+          updateStatusBar();
+          if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
           closeJira();
-          toast(`Jira conectado como ${state.jiraStatus.user || emailIn}.`, "success");
+          const projNote = state.jiraProjects.length > 0 ? ` (${state.jiraProjects.length} projeto(s) carregado(s))` : "";
+          toast(`Jira conectado como ${state.jiraStatus.user || emailIn}${projNote}.`, "success");
         } else {
+          updateStatusBar();
           renderModalLayer();
           const refreshedErr = document.getElementById("jira-modal-err");
           if (refreshedErr) {

@@ -8,7 +8,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAIUsageModal, openDoctorModal, openOpenCodeModal, renderModalLayer } from "./modals";
+import { openAIUsageModal, openDoctorModal, openJiraModal, openOpenCodeModal, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -218,6 +218,7 @@ export function mountShell() {
         <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
         <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
         <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
+        <button type="button" id="status-jira" class="dim plain-chip" title="Clique para conectar ao Jira Cloud">jira: …</button>
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
@@ -320,6 +321,7 @@ export function bindStaticShellEvents() {
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
   document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
   document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("status-jira")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
   document.getElementById("status-autoreview")?.addEventListener("click", () => {
     state.gitTab = "flow";
@@ -836,6 +838,24 @@ export function updateStatusBar() {
       ocEl.textContent = `opencode: off`;
       ocEl.style.color = "var(--text-dim)";
       ocEl.title = `${oc.detail || "Clique para configurar OPENCODE_API_KEY"} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
+    }
+  }
+  const jiraEl = document.getElementById("status-jira");
+  if (jiraEl) {
+    const j = state.jiraStatus;
+    if (!j) {
+      jiraEl.textContent = "jira: …";
+      jiraEl.style.color = "";
+      jiraEl.title = "Verificando Jira Cloud… (clique para conectar)";
+    } else if (j.connected) {
+      const pCount = state.jiraProjects.length > 0 ? ` (${state.jiraProjects.length})` : "";
+      jiraEl.textContent = `jira: ok${pCount}`;
+      jiraEl.style.color = "var(--green)";
+      jiraEl.title = `${j.detail}${j.defaultProject ? ` · Projeto padrão: ${j.defaultProject}` : ""} — clique para configurar`;
+    } else {
+      jiraEl.textContent = "jira: off";
+      jiraEl.style.color = "var(--text-dim)";
+      jiraEl.title = `${j.detail || "Desconectado"} — clique para conectar ao Jira Cloud`;
     }
   }
   const ghostEl = document.getElementById("status-ghost");

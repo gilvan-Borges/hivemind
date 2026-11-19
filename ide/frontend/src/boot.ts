@@ -6,7 +6,7 @@ import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from
 import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
-import { renderModalLayer } from "./modals";
+import { refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
@@ -370,6 +370,7 @@ export function bootstrapAsync(rootDir?: string) {
   }).catch(() => {});
 
   void refreshInlineAIStatus();
+  void refreshJiraStatusAndProjects();
 
   if (rootDir) {
     const targetKey = normalizePathKey(rootDir);

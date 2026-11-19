@@ -730,6 +730,36 @@ func (a *App) JiraStatus() jirax.ConnectorStatus {
 	return jirax.CheckConnection(ctx)
 }
 
+// JiraStatusForWorkspace returns Jira status including auto-discovery from workspace/parent MCP configs.
+func (a *App) JiraStatusForWorkspace(workspace string) jirax.ConnectorStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return jirax.CheckConnectionForWorkspace(ctx, workspace)
+}
+
+// ListJiraProjects fetches available Jira Cloud projects dynamically for the active credentials.
+func (a *App) ListJiraProjects() ([]jirax.Project, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	return jirax.ListProjects(ctx)
+}
+
+// ListJiraProjectsForWorkspace fetches Jira Cloud projects using workspace/MCP-aware credentials.
+func (a *App) ListJiraProjectsForWorkspace(workspace string) ([]jirax.Project, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	return jirax.ListProjectsForWorkspace(ctx, workspace)
+}
+
+// ImportJiraFromMCP imports Jira credentials from an existing mcp_config.json (workspace, parent, or user home)
+// into the user's native jira-connector.json and returns the live connection status.
+func (a *App) ImportJiraFromMCP(workspace string) (jirax.ConnectorStatus, error) {
+	if _, err := jirax.ImportFromMCP(workspace); err != nil {
+		return jirax.ConnectorStatus{}, err
+	}
+	return a.JiraStatusForWorkspace(workspace), nil
+}
+
 // SaveJiraConfig stores (or clears, when clear=true) the native Jira Cloud
 // credentials outside project repos, returning the refreshed connection status.
 func (a *App) SaveJiraConfig(baseURL, email, token, defaultProject string, clear bool) (jirax.ConnectorStatus, error) {

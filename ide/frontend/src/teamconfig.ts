@@ -6,7 +6,7 @@ import { renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindAgentModelSelects, refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
-import { openOpenCodeModal, renderModalLayer } from "./modals";
+import { openJiraModal, openOpenCodeModal, refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
 import { bindModelPickerPairs, refreshSkills, renderModelPickerPairHtml, skillTargetLabel } from "./models";
 import { openSidebarView, updateStatusBar } from "./shell";
 import { MISSION_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
@@ -91,6 +91,7 @@ export async function openTeamConfigTab(focusSection?: "skills") {
   state.activeEditorPath = TEAM_CONFIG_TAB_KEY;
   renderEditorTabs();
   renderEditorBody();
+  void refreshJiraStatusAndProjects();
   if (state.project) {
     await refreshSkills();
   }
@@ -342,6 +343,7 @@ export function renderTeamConfigPageHtml(): string {
           <div class="dim">Configure modelos por especialista, autonomia, branches, integrações e quais skills cada papel recebe automaticamente.</div>
         </div>
         <div class="tc-header-actions">
+          <button type="button" class="mini" id="tc-jira-connect-top" title="Conectar ao Jira Cloud (ou importar de mcp_config.json)">${icons.bolt}<span>${state.jiraStatus?.connected ? "Jira: Conectado" : "Conectar Jira"}</span></button>
           <button type="button" class="mini" id="tc-opencode-btn" title="Configurar token portátil do OpenCode Zen">${icons.bolt}<span>Token OpenCode</span></button>
           ${state.project?.hasTeam && (state.project.teamConfig?.teams?.length || 0) > 0 ? `<button type="button" class="mini danger" id="tc-delete-team-btn" title="Excluir equipe e parar todos os serviços">${icons.trash}<span>Excluir Equipe</span></button>` : ""}
           <button type="button" class="mini" id="tc-close-btn">Fechar</button>
@@ -425,9 +427,40 @@ export function renderTeamConfigPageHtml(): string {
               <input id="tc-homolog-branch" value="${escapeHtml(draft.homologBranch)}" placeholder="homolog" />
 
               <label>Jira Cloud</label>
-              <div class="tc-inline-check">
-                <input id="tc-jira" type="checkbox" ${draft.jiraEnabled ? "checked" : ""} />
-                <input id="tc-jira-key" value="${escapeHtml(draft.jiraProject)}" placeholder="Projeto Jira (ex: PROJ)" style="flex:1" />
+              <div class="tc-jira-box">
+                <div class="tc-jira-head">
+                  <label class="tc-jira-enable">
+                    <input id="tc-jira" type="checkbox" ${draft.jiraEnabled ? "checked" : ""} />
+                    <span>Ativar neste projeto</span>
+                  </label>
+                  <span class="tc-jira-pill ${state.jiraStatus?.connected ? "ok" : "off"}" title="${escapeHtml(state.jiraStatus?.detail || "Jira desconectado")}">
+                    ${state.jiraStatus?.connected
+                      ? `● ${escapeHtml(state.jiraStatus.user || state.jiraStatus.email || "Conectado")}`
+                      : "○ Desconectado"
+                    }
+                  </span>
+                  <div class="spacer"></div>
+                  <button type="button" class="mini" id="tc-jira-connect-btn">${state.jiraStatus?.connected ? "Configurar" : "Conectar Jira…"}</button>
+                </div>
+                <div class="tc-jira-picker">
+                  ${state.jiraProjects.length > 0
+                    ? `
+                      <select id="tc-jira-select" style="flex:1">
+                        <option value="">(Selecionar projeto Jira…)</option>
+                        ${state.jiraProjects.map((p) => `<option value="${escapeHtml(p.key)}" ${p.key.toUpperCase() === (draft.jiraProject || "").toUpperCase() ? "selected" : ""}>${escapeHtml(p.key)} — ${escapeHtml(p.name)}</option>`).join("")}
+                        ${draft.jiraProject && !state.jiraProjects.some((p) => p.key.toUpperCase() === draft.jiraProject.toUpperCase())
+                          ? `<option value="${escapeHtml(draft.jiraProject)}" selected>${escapeHtml(draft.jiraProject)} (chave manual)</option>`
+                          : ""
+                        }
+                      </select>
+                      <button type="button" class="icon-btn" id="tc-jira-refresh" title="Recarregar projetos do Jira">${state.jiraProjectsLoading ? icons.spinner : icons.refresh}</button>
+                    `
+                    : `
+                      <input id="tc-jira-key" value="${escapeHtml(draft.jiraProject)}" placeholder="Chave do projeto Jira (ex: IPG) — ou conecte para listar" style="flex:1" />
+                      ${state.jiraStatus?.connected ? `<button type="button" class="icon-btn" id="tc-jira-refresh" title="Carregar lista de projetos do Jira">${state.jiraProjectsLoading ? icons.spinner : icons.refresh}</button>` : ""}
+                    `
+                  }
+                </div>
               </div>
             </div>
             <div class="tc-toggles">
@@ -504,7 +537,8 @@ export function syncTeamConfigDraftFromDom(draft: TeamConfigDraft) {
   if (chk("tc-autocommit") !== undefined) draft.autoCommit = Boolean(chk("tc-autocommit"));
   if (chk("tc-autopr") !== undefined) draft.autoPR = Boolean(chk("tc-autopr"));
   if (chk("tc-jira") !== undefined) draft.jiraEnabled = Boolean(chk("tc-jira"));
-  if (val("tc-jira-key") !== undefined) draft.jiraProject = val("tc-jira-key") || "";
+  if (val("tc-jira-select") !== undefined) draft.jiraProject = (val("tc-jira-select") || "").trim().toUpperCase();
+  else if (val("tc-jira-key") !== undefined) draft.jiraProject = (val("tc-jira-key") || "").trim().toUpperCase();
 }
 
 export function bindTeamConfigSkillPills(draft: TeamConfigDraft) {
@@ -568,6 +602,9 @@ export function bindTeamConfigEvents() {
   bindTeamConfigSkillPills(draft);
 
   document.getElementById("tc-opencode-btn")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("tc-jira-connect-top")?.addEventListener("click", () => void openJiraModal());
+  document.getElementById("tc-jira-connect-btn")?.addEventListener("click", () => void openJiraModal());
+  document.getElementById("tc-jira-refresh")?.addEventListener("click", () => void refreshJiraStatusAndProjects());
   document.getElementById("tc-delete-team-btn")?.addEventListener("click", () => {
     const target = draft.teamName || state.project?.teamConfig?.active || "";
     if (target) confirmDeleteSavedTeam(target);

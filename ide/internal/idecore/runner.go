@@ -717,7 +717,7 @@ func (m *SessionManager) RunTurnWithOptions(
 
 	var jira jirax.Client = jirax.Disabled{Reason: "Jira desabilitado"}
 	if cfg.Settings.JiraEnabled {
-		jira = jirax.FromEnv()
+		jira = jirax.FromWorkspace(workspace)
 	}
 
 	normMode := strings.ToLower(strings.TrimSpace(runMode))
@@ -893,7 +893,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 
 	var jira jirax.Client = jirax.Disabled{Reason: "Jira desabilitado"}
 	if cfg.Settings.JiraEnabled {
-		jira = jirax.FromEnv()
+		jira = jirax.FromWorkspace(workspaceDir)
 	}
 
 	// Never block waiting for human clicks during unattended auto-review: dangerous

@@ -67,6 +67,8 @@ export function GetRecentProjects():Promise<Array<string>>;
 
 export function GitHubStatus(arg1:string):Promise<idecore.GitHubStatusInfo>;
 
+export function ImportJiraFromMCP(arg1:string):Promise<jirax.ConnectorStatus>;
+
 export function InitGit(arg1:string):Promise<void>;
 
 export function InlineComplete(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<idecore.InlineCompleteResponse>;
@@ -77,6 +79,8 @@ export function InstallSkillToProject(arg1:string,arg2:string):Promise<void>;
 
 export function JiraStatus():Promise<jirax.ConnectorStatus>;
 
+export function JiraStatusForWorkspace(arg1:string):Promise<jirax.ConnectorStatus>;
+
 export function ListBranches(arg1:string):Promise<Array<string>>;
 
 export function ListDirectory(arg1:string,arg2:string):Promise<Array<idecore.FileNode>>;
@@ -86,6 +90,10 @@ export function ListFiles(arg1:string):Promise<Array<idecore.FileNode>>;
 export function ListGitGraph(arg1:string,arg2:number,arg3:boolean):Promise<Array<idecore.GitGraphCommit>>;
 
 export function ListIssues(arg1:string):Promise<Array<idecore.ProjectIssue>>;
+
+export function ListJiraProjects():Promise<Array<jirax.Project>>;
+
+export function ListJiraProjectsForWorkspace(arg1:string):Promise<Array<jirax.Project>>;
 
 export function ListModels():Promise<Array<modelx.AgyModel>>;
 

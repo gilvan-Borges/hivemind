@@ -787,6 +787,22 @@ export namespace jirax {
 	        this.detail = source["detail"];
 	    }
 	}
+	export class Project {
+	    key: string;
+	    name: string;
+	    projectType?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Project(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.projectType = source["projectType"];
+	    }
+	}
 
 }
 

@@ -122,6 +122,10 @@ export function GitHubStatus(arg1) {
   return window['go']['main']['App']['GitHubStatus'](arg1);
 }
 
+export function ImportJiraFromMCP(arg1) {
+  return window['go']['main']['App']['ImportJiraFromMCP'](arg1);
+}
+
 export function InitGit(arg1) {
   return window['go']['main']['App']['InitGit'](arg1);
 }
@@ -142,6 +146,10 @@ export function JiraStatus() {
   return window['go']['main']['App']['JiraStatus']();
 }
 
+export function JiraStatusForWorkspace(arg1) {
+  return window['go']['main']['App']['JiraStatusForWorkspace'](arg1);
+}
+
 export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
@@ -160,6 +168,14 @@ export function ListGitGraph(arg1, arg2, arg3) {
 
 export function ListIssues(arg1) {
   return window['go']['main']['App']['ListIssues'](arg1);
+}
+
+export function ListJiraProjects() {
+  return window['go']['main']['App']['ListJiraProjects']();
+}
+
+export function ListJiraProjectsForWorkspace(arg1) {
+  return window['go']['main']['App']['ListJiraProjectsForWorkspace'](arg1);
 }
 
 export function ListModels() {

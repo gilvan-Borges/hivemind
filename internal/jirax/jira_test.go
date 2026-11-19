@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -125,5 +127,59 @@ func TestJiraNativeCredentials(t *testing.T) {
 	}
 	if FromEnv().Enabled() {
 		t.Fatal("FromEnv must be disabled after clear")
+	}
+}
+
+func TestNormalizeBaseURLAndListProjects(t *testing.T) {
+	if got := NormalizeBaseURL("vibetex.atlassian.net"); got != "https://vibetex.atlassian.net" {
+		t.Fatalf("expected https scheme added, got %q", got)
+	}
+	if got := NormalizeBaseURL("https://vibetex.atlassian.net/jira/software/projects/IPG/boards/1"); got != "https://vibetex.atlassian.net" {
+		t.Fatalf("expected path stripped to origin, got %q", got)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/project/search" {
+			_, _ = w.Write([]byte(`{"values":[{"key":"WEB","name":"Portal Web","projectTypeKey":"software"},{"key":"IPG","name":"IPG Core","projectTypeKey":"software"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &HTTP{BaseURL: srv.URL, Email: "a@b.com", Token: "tok", HTTP: srv.Client()}
+	projs, err := client.ListProjects(context.Background())
+	if err != nil {
+		t.Fatalf("ListProjects failed: %v", err)
+	}
+	if len(projs) != 2 || projs[0].Key != "IPG" || projs[1].Key != "WEB" {
+		t.Fatalf("expected sorted [IPG, WEB], got %+v", projs)
+	}
+}
+
+func TestDetectMCPConfigParentDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	for _, k := range []string{"JIRA_BASE_URL", "JIRA_HOST", "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_DOMAIN", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"} {
+		t.Setenv(k, "")
+	}
+
+	parent := filepath.Join(tmp, "Projetos")
+	ws := filepath.Join(parent, "IPG")
+	if err := os.MkdirAll(filepath.Join(parent, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"mcpServers":{"jira":{"command":"npx","args":["-y","@tocharianou/jira-mcp"],"env":{"JIRA_HOST":"https://acme.atlassian.net","JIRA_EMAIL":"dev@acme.com","JIRA_TOKEN":"tok-mcp-12345"}}}}`
+	if err := os.WriteFile(filepath.Join(parent, ".agents", "mcp_config.json"), []byte(mcpJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base, email, tok, _, src := LoadCredentialsForWorkspace(ws)
+	if base != "https://acme.atlassian.net" || email != "dev@acme.com" || tok != "tok-mcp-12345" || !strings.HasPrefix(src, "mcp:") {
+		t.Fatalf("expected MCP auto-discovery from parent .agents/mcp_config.json, got %q %q %q %q", base, email, tok, src)
 	}
 }

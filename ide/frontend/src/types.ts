@@ -275,6 +275,12 @@ export interface GitHubStatus {
   baseUrl?: string;
 }
 
+export interface JiraProject {
+  key: string;
+  name: string;
+  projectType?: string;
+}
+
 export interface JiraConnectorStatus {
   configured: boolean;
   connected: boolean;
@@ -638,6 +644,10 @@ export interface WailsBackendApp {
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   SaveGitHubConfig?(token: string, baseURL: string, workspace: string): Promise<GitHubStatus>;
   JiraStatus?(): Promise<JiraConnectorStatus>;
+  JiraStatusForWorkspace?(workspace: string): Promise<JiraConnectorStatus>;
+  ListJiraProjects?(): Promise<JiraProject[]>;
+  ListJiraProjectsForWorkspace?(workspace: string): Promise<JiraProject[]>;
+  ImportJiraFromMCP?(workspace: string): Promise<JiraConnectorStatus>;
   SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;

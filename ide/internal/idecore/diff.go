@@ -697,9 +697,9 @@ func CommentJiraIssue(ctx context.Context, workspace, issueKey, comment string) 
 	if key == "" {
 		return fmt.Errorf("informe a chave da issue Jira (ex: PROJ-123)")
 	}
-	client := jirax.FromEnv()
+	client := jirax.FromWorkspace(workspace)
 	if !client.Enabled() {
-		return fmt.Errorf("credenciais Jira não configuradas (defina JIRA_BASE_URL, JIRA_EMAIL e JIRA_API_TOKEN)")
+		return fmt.Errorf("credenciais Jira não configuradas (conecte pelo Conector Jira Nativo, mcp_config.json ou variáveis JIRA_*)")
 	}
 	if cfg, err := team.Load(workspace); err == nil && !cfg.Settings.JiraEnabled {
 		return fmt.Errorf("Jira está desabilitado nas configurações do time")
@@ -1031,7 +1031,7 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 
 	// 1. Jira issues if enabled and configured
 	if cfg, err := team.Load(workspace); err == nil && cfg.Settings.JiraEnabled {
-		jc := jirax.FromEnv()
+		jc := jirax.FromWorkspace(workspace)
 		if jc.Enabled() {
 			jql := "resolution = Unresolved ORDER BY updated DESC"
 			if projKey := sanitizeJiraProjectKey(cfg.Settings.JiraProject); projKey != "" {
