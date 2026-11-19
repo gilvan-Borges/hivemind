@@ -33,6 +33,16 @@ func (f *fakeJira) GetIssue(context.Context, string) (jirax.Issue, error) {
 	return jirax.Issue{Key: "PROJ-1", Summary: "Healthcheck", Description: "expor /health", Status: "A fazer"}, nil
 }
 func (f *fakeJira) Search(context.Context, string, int) ([]jirax.Issue, error) { return nil, nil }
+func (f *fakeJira) CreateIssue(_ context.Context, projectKey, _, summary, _, _ string) (jirax.Issue, error) {
+	f.mu.Lock()
+	f.subs = append(f.subs, summary)
+	idx := len(f.subs)
+	f.mu.Unlock()
+	if projectKey == "" {
+		projectKey = "PROJ"
+	}
+	return jirax.Issue{Key: fmt.Sprintf("%s-%d", projectKey, 100+idx), Summary: summary}, nil
+}
 func (f *fakeJira) CreateSubtask(_ context.Context, _, summary, _ string) (jirax.Issue, error) {
 	f.mu.Lock()
 	f.subs = append(f.subs, summary)
@@ -572,6 +582,331 @@ func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
 	}
 	if !dev1SawPlan || !dev1SawSlice || !dev2SawSlice {
 		t.Fatalf("expected approved plan and slices preserved: plan=%v slice1=%v slice2=%v", dev1SawPlan, dev1SawSlice, dev2SawSlice)
+	}
+}
+
+func TestSDDGatesDocsThenJiraThenSquad(t *testing.T) {
+	dir := t.TempDir()
+	squad := team.FullSquadTeam("sdd", "", "scripted", "gemini", 2)
+	project := team.File{
+		Active: squad.Name,
+		Settings: team.Settings{
+			MaxQALoops:  1,
+			BaseBranch:  "main",
+			JiraEnabled: true,
+			JiraProject: "PROJ",
+		},
+		Teams: []team.Team{squad},
+	}
+	project.Normalize()
+
+	type captured struct{ kind, gate string }
+	collect := func(out *[]captured) func(Event) {
+		return func(ev Event) {
+			if ev.Kind == "sdd_gate" {
+				*out = append(*out, captured{ev.Kind, ev.Gate})
+			}
+		}
+	}
+
+	// Gate 1 — Fase SDD de docs: Chefe grava spec via write_doc e chama sdd_docs_ready.
+	store1, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var docsGates []captured
+	devRanDuringDocs := false
+	docsRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Jira:               &fakeJira{},
+		Sessions:           store1,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		OnEvent:            collect(&docsGates),
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				switch call {
+				case 1:
+					return modelx.FunctionCall("write_doc", "w1", map[string]any{
+						"path":    "specs/05-tarefas.md",
+						"content": "# Backlog SDD\n- Epic 1: API de pedidos\n- Task: expor POST /pedidos",
+					})
+				case 2:
+					return modelx.FunctionCall("sdd_docs_ready", "g1", map[string]any{
+						"summary": "Specs SDD gravadas: 01-spec, 02-arquitetura, 05-tarefas.",
+					})
+				}
+				return modelx.Text("Docs SDD prontos para aprovação.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				devRanDuringDocs = true
+				return modelx.Text("erro")
+			}},
+		},
+	}
+	docsRes, err := docsRunner.Run(context.Background(), Request{Objective: "novo projeto do zero", RunMode: "plan:sdd"})
+	if err != nil {
+		t.Fatalf("sdd docs fase falhou: %v", err)
+	}
+	if devRanDuringDocs {
+		t.Fatal("nenhum dev pode rodar na fase SDD de docs")
+	}
+	if len(docsGates) != 1 || docsGates[0].gate != "docs" {
+		t.Fatalf("esperado 1 evento sdd_gate (docs), veio %v", docsGates)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "specs", "05-tarefas.md")); statErr != nil {
+		t.Fatalf("specs/05-tarefas.md deveria existir: %v", statErr)
+	}
+
+	// Gate 2 — Fase SDD de backlog: Chefe cria Epic no Jira e registra as ondas com delegate_to_squad.
+	store2, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jiraGates []captured
+	jira := &fakeJira{}
+	jiraRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Jira:               jira,
+		Sessions:           store2,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		OnEvent:            collect(&jiraGates),
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				switch call {
+				case 1:
+					return modelx.FunctionCall("jira_create_issue", "j1", map[string]any{
+						"type":        "Epic",
+						"summary":     "Epic 1: API de pedidos",
+						"description": "Espelha specs/05-tarefas.md",
+					})
+				case 2:
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan":      "Ondas SDD: 1) API de pedidos 2) Front",
+						"dev_tasks": []any{"onda 1: internal/pedidos/**", "onda 2: web/pedidos/**"},
+					})
+				}
+				return modelx.Text("Backlog Jira pronto para aprovação.")
+			}},
+		},
+	}
+	jiraRes, err := jiraRunner.Run(context.Background(), Request{
+		Objective: "Gate 1 aprovado: crie o backlog no Jira.",
+		SessionID: docsRes.SessionID,
+		RunMode:   "plan:sdd-jira",
+	})
+	if err != nil {
+		t.Fatalf("sdd jira fase falhou: %v", err)
+	}
+	if len(jiraGates) != 1 || jiraGates[0].gate != "jira" {
+		t.Fatalf("esperado 1 evento sdd_gate (jira), veio %v", jiraGates)
+	}
+	jira.mu.Lock()
+	created := len(jira.subs)
+	jira.mu.Unlock()
+	if created == 0 {
+		t.Fatal("esperado ao menos 1 issue criada no Jira fake")
+	}
+	_ = jiraRes
+
+	// Gate 2 aprovado — Squad executa as ondas registradas.
+	store3, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dev1SawSlice, dev2SawSlice bool
+	squadRunner := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Jira:               &fakeJira{},
+		Sessions:           store3,
+		EnableTriage:       false,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Resumo executivo final.")
+			}},
+			"tech_lead": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Guardrails ok.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "onda 1: internal/pedidos/**") {
+							dev1SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("api pronta")
+			}},
+			"dev_2": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "onda 2: web/pedidos/**") {
+							dev2SawSlice = true
+						}
+					}
+				}
+				return modelx.Text("front pronto")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "critérios de aceite verificados"})
+				}
+				return modelx.Text("ok")
+			}},
+		},
+	}
+	if _, err := squadRunner.Run(context.Background(), Request{
+		Objective: "Gate 2 aprovado: disparem o Squad.",
+		SessionID: jiraRes.SessionID,
+		RunMode:   "squad",
+	}); err != nil {
+		t.Fatalf("squad pós-gate falhou: %v", err)
+	}
+	if !dev1SawSlice || !dev2SawSlice {
+		t.Fatalf("esperado devs vendo as ondas SDD: dev1=%v dev2=%v", dev1SawSlice, dev2SawSlice)
+	}
+
+	// Regressão: plan:sdd-jira sem docs pendentes deve recusar.
+	store4, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := &Runner{
+		Workspace: dir,
+		Project:   project,
+		Team:      squad,
+		Jira:      &fakeJira{},
+		Sessions:  store4,
+		Out:       &strings.Builder{},
+		Err:       &strings.Builder{},
+		Streaming: agent.StreamingModeNone,
+	}
+	if _, err := orphan.Run(context.Background(), Request{Objective: "sem docs", RunMode: "plan:sdd-jira"}); err == nil {
+		t.Fatal("plan:sdd-jira sem docs pendentes deveria falhar")
+	}
+}
+
+func TestAutoPauseForApprovalOnLargeTask(t *testing.T) {
+	dir := t.TempDir()
+	squad := team.FullSquadTeam("auto-pause", "", "scripted", "gemini", 1)
+	project := team.File{Active: squad.Name, Settings: team.Settings{MaxQALoops: 1, BaseBranch: "main"}, Teams: []team.Team{squad}}
+	project.Normalize()
+
+	store, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawPlanReady bool
+	devRan := false
+	r := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store,
+		EnableTriage:       true,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		OnEvent: func(ev Event) {
+			if ev.Kind == "plan_ready" {
+				sawPlanReady = true
+			}
+		},
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
+						"plan":               "Refatoração ampla e arriscada do módulo de billing",
+						"dev_tasks":          []any{"fatia 1: internal/billing/core/**"},
+						"pause_for_approval": true,
+					})
+				}
+				return modelx.Text("Tarefa grande: pausando para sua aprovação.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				devRan = true
+				return modelx.Text("erro")
+			}},
+		},
+	}
+	res, err := r.Run(context.Background(), Request{Objective: "refatorar todo o módulo de billing", RunMode: "auto"})
+	if err != nil {
+		t.Fatalf("auto pause falhou: %v", err)
+	}
+	if devRan {
+		t.Fatal("dev não pode rodar antes da aprovação quando o Chefe pede pausa")
+	}
+	if !sawPlanReady {
+		t.Fatal("esperado card plan_ready quando o Chefe pede pausa no modo Auto")
+	}
+
+	// Aprovação: retoma a sessão em modo squad e o dev executa a fatia aprovada.
+	store2, err := sessionx.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devSawSlice bool
+	r2 := &Runner{
+		Workspace:          dir,
+		Project:            project,
+		Team:               squad,
+		Sessions:           store2,
+		EnableClosingChief: true,
+		Out:                &strings.Builder{},
+		Err:                &strings.Builder{},
+		Streaming:          agent.StreamingModeNone,
+		Models: map[string]model.LLM{
+			"pm": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Resumo executivo.")
+			}},
+			"tech_lead": &modelx.Scripted{Fn: func(*model.LLMRequest, int) *model.LLMResponse {
+				return modelx.Text("Guardrails ok.")
+			}},
+			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
+				if req.Config != nil && req.Config.SystemInstruction != nil {
+					for _, p := range req.Config.SystemInstruction.Parts {
+						if strings.Contains(p.Text, "fatia 1: internal/billing/core/**") {
+							devSawSlice = true
+						}
+					}
+				}
+				return modelx.Text("billing refatorado")
+			}},
+			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
+				if call == 1 {
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "ok"})
+				}
+				return modelx.Text("ok")
+			}},
+		},
+	}
+	if _, err := r2.Run(context.Background(), Request{
+		Objective: "Plano aprovado. Prossigam.",
+		SessionID: res.SessionID,
+		RunMode:   "squad",
+	}); err != nil {
+		t.Fatalf("squad pós-aprovação falhou: %v", err)
+	}
+	if !devSawSlice {
+		t.Fatal("dev deveria receber a fatia aprovada após retomar em squad")
 	}
 }
 
@@ -1265,5 +1600,43 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	}
 	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") {
 		t.Fatalf("did not expect chief-only or dev-only in qa instruction")
+	}
+}
+
+func TestUsageSummaryLine(t *testing.T) {
+	cases := []struct {
+		name   string
+		result Result
+		want   string
+	}{
+		{
+			name:   "sem tokens não gera linha",
+			result: Result{},
+			want:   "",
+		},
+		{
+			name:   "formata entrada, saída e total",
+			result: Result{InputTokens: 1032816, OutputTokens: 70062, TotalTokens: 1102878},
+			want:   "Tokens: ↑1032816 entrada · ↓70062 saída · 1102878 total",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := usageSummaryLine(tc.result); got != tc.want {
+				t.Fatalf("usageSummaryLine = %q, queria %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrintUsageSummaryWritesNothingWhenEmpty(t *testing.T) {
+	var buf strings.Builder
+	(&Runner{}).printUsageSummary(Result{}, &buf, "")
+	if buf.Len() != 0 {
+		t.Fatalf("sem tokens não deveria imprimir nada; saída = %q", buf.String())
+	}
+	(&Runner{}).printUsageSummary(Result{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}, &buf, "")
+	if !strings.Contains(buf.String(), "↑10 entrada") || !strings.Contains(buf.String(), "15 total") {
+		t.Fatalf("resumo incompleto: %q", buf.String())
 	}
 }

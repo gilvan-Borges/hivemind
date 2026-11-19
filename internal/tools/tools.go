@@ -29,15 +29,19 @@ type Deps struct {
 	Settings             team.Settings
 	DisableGitWrite      bool
 	ReviewRequestedInObj bool
-	Shell                shellx.Runner
-	Allowlist            []string
-	Confirm              shellx.Confirmer
-	Approve              func(prompt string) bool
-	Git                  gitx.Git
-	GitHub               githubx.Client
-	Jira                 jirax.Client
-	JiraKey              string
-	BaseBranch           string
+	// DocsOnlyWrite libera APENAS o write_doc (gravação restrita a documentação)
+	// para fases SDD, onde código permanece bloqueado até a aprovação dos docs.
+	DocsOnlyWrite bool
+	Shell         shellx.Runner
+	Allowlist     []string
+	Confirm       shellx.Confirmer
+	Approve       func(prompt string) bool
+	Git           gitx.Git
+	GitHub        githubx.Client
+	Jira          jirax.Client
+	JiraKey       string
+	JiraProject   string
+	BaseBranch    string
 }
 
 // ForRole returns the tools a role is allowed to call.
@@ -100,6 +104,11 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		}
 		if err := deps.addJira(&out); err != nil {
 			return nil, err
+		}
+		if deps.DocsOnlyWrite {
+			if err := add(deps.writeDoc()); err != nil {
+				return nil, err
+			}
 		}
 		if err := deps.addGitHubGovernance(&out, !deps.DisableGitWrite); err != nil {
 			return nil, err
@@ -313,6 +322,50 @@ func (d Deps) canWrite() (tool.Tool, error) {
 			return textResult{}, err
 		}
 		return textResult{Text: "arquivo gravado: " + args.Path}, nil
+	})
+}
+
+// docsPathAllowed valida caminhos de documentação permitidos na fase SDD
+// (antes da aprovação dos docs, nenhum código pode ser criado ou editado).
+func docsPathAllowed(rel string) bool {
+	p := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(rel, "\\", "/")))
+	p = strings.TrimPrefix(p, "./")
+	if p == "" || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
+		return false
+	}
+	for _, prefix := range []string{"docs/", "specs/", ".specify/", "spec/"} {
+		if strings.HasPrefix(p, prefix) {
+			return strings.HasSuffix(p, ".md")
+		}
+	}
+	if p == "readme.md" {
+		return true
+	}
+	return false
+}
+
+func (d Deps) writeDoc() (tool.Tool, error) {
+	return functiontool.New(functiontool.Config{
+		Name:        "write_doc",
+		Description: "Fase SDD: grava APENAS documentação (docs/, specs/, .specify/, README.md — sempre .md). Código-fonte permanece bloqueado até a aprovação dos docs.",
+	}, func(_ agent.Context, args writeArgs) (textResult, error) {
+		if !docsPathAllowed(args.Path) {
+			return textResult{}, fmt.Errorf("governança SDD: nesta fase só é permitido gravar documentação (.md em docs/, specs/, .specify/ ou README.md); código será criado apenas na fase de desenvolvimento após as aprovações — caminho recusado: %s", args.Path)
+		}
+		if len(args.Content) > 1<<20 {
+			return textResult{}, fmt.Errorf("conteúdo acima de 1 MiB")
+		}
+		path, err := workspace.Resolve(d.Root, args.Path)
+		if err != nil {
+			return textResult{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return textResult{}, err
+		}
+		if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: "documento gravado: " + args.Path}, nil
 	})
 }
 
@@ -985,6 +1038,39 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 	if err != nil {
 		return err
 	}
+	createIssue, err := functiontool.New(functiontool.Config{
+		Name:        "jira_create_issue",
+		Description: "Cria uma issue (Epic, Story, Task ou outro tipo) no projeto Jira. Sem project, usa o projeto padrão do time/conector.",
+	}, func(ctx agent.Context, args struct {
+		Project     string `json:"project,omitempty" jsonschema:"Chave do projeto Jira (ex: PROJ). Vazio usa o projeto padrão configurado."`
+		Type        string `json:"type" jsonschema:"Tipo da issue: Epic, Story, Task (padrão Task)."`
+		Summary     string `json:"summary" jsonschema:"Título da issue."`
+		Description string `json:"description" jsonschema:"Descrição com critérios de aceite e referência à spec."`
+		Parent      string `json:"parent,omitempty" jsonschema:"Chave pai (para Tasks/Stories sob um Epic)."`
+	}) (textResult, error) {
+		project := strings.ToUpper(strings.TrimSpace(args.Project))
+		if project == "" {
+			project = strings.ToUpper(strings.TrimSpace(d.JiraProject))
+		}
+		if project == "" {
+			if _, _, _, def, _ := jirax.LoadCredentials(); def != "" {
+				project = def
+			}
+		}
+		if project == "" && d.JiraKey != "" {
+			if i := strings.IndexByte(d.JiraKey, '-'); i > 0 {
+				project = d.JiraKey[:i]
+			}
+		}
+		issue, err := d.Jira.CreateIssue(ctx, project, args.Type, args.Summary, args.Description, args.Parent)
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: fmt.Sprintf("issue %s [%s] criada em %s", issue.Key, strings.TrimSpace(args.Type), project)}, nil
+	})
+	if err != nil {
+		return err
+	}
 	tr, err := functiontool.New(functiontool.Config{
 		Name:        "jira_transition",
 		Description: "Move uma issue para outra coluna pelo nome ou id da transição.",
@@ -1004,7 +1090,7 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 	if err != nil {
 		return err
 	}
-	*out = append(*out, get, search, sub, tr)
+	*out = append(*out, get, search, sub, createIssue, tr)
 	if err := d.addJiraComment(out); err != nil {
 		return err
 	}

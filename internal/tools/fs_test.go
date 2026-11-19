@@ -54,3 +54,58 @@ func TestRoleToolSets(t *testing.T) {
 		}
 	}
 }
+
+
+func TestDocsPathAllowed(t *testing.T) {
+	allowed := []string{
+		"specs/01-spec.md",
+		"specs/05-tarefas.md",
+		"docs/adr/0001-stack.md",
+		".specify/notes.md",
+		"README.md",
+		"readme.md",
+		"docs/ARCHITECTURE.md",
+	}
+	for _, p := range allowed {
+		if !docsPathAllowed(p) {
+			t.Errorf("docsPathAllowed(%q) = false, queria true", p)
+		}
+	}
+	blocked := []string{
+		"cmd/app/main.go",
+		"src/index.ts",
+		"internal/tools/tools.go",
+		"docs/adr/0001-stack.md.exe",
+		"specs/Makefile",
+		"README.txt",
+		"../fora/do/workspace.md",
+		"./cmd/../cmd/x.md",
+		"",
+	}
+	for _, p := range blocked {
+		if docsPathAllowed(p) {
+			t.Errorf("docsPathAllowed(%q) = true, queria false", p)
+		}
+	}
+}
+
+func TestChiefDocsOnlyToolSet(t *testing.T) {
+	root := t.TempDir()
+	chief, err := ForRole(team.RoleProjectManager, Deps{Root: root, DisableGitWrite: true, DocsOnlyWrite: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, tl := range chief {
+		names[tl.Name()] = true
+	}
+	if !names["write_doc"] {
+		t.Fatalf("Chefe em fase SDD deveria ter write_doc: %v", names)
+	}
+	if names["write_file"] {
+		t.Fatalf("Chefe em fase SDD n�o deveria ter write_file (c�digo bloqueado): %v", names)
+	}
+	if names["git_commit"] || names["git_push"] {
+		t.Fatalf("Chefe em fase SDD n�o deveria ter git_commit/git_push: %v", names)
+	}
+}

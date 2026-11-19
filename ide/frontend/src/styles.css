@@ -638,37 +638,70 @@ button.icon-btn:hover:not(:disabled) {
   padding: 7px;
 }
 
-/* Explorer Tree */
+/* Explorer Tree (VS Code-style flat indent + continuous vertical guides) */
+#explorer-tree-body {
+  padding: 4px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
 .tree-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 25px;
-  padding-right: 6px;
-  border-radius: 6px;
+  gap: 5px;
+  height: 22px;
+  padding-right: 8px;
+  margin: 0 4px;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 12.5px;
+  line-height: 22px;
   white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
 }
 .tree-row:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.055);
 }
 .tree-row.active {
-  background: var(--bg-active);
-  color: #e2e5e9;
+  background: rgba(129, 140, 248, 0.16);
+  color: #f1f5f9;
   font-weight: 500;
+}
+.tree-row.is-dimmed:not(.active) .tree-name {
+  color: #6f7890;
+}
+.tree-row.is-dimmed:not(.active) .tree-folder-icon,
+.tree-row.is-dimmed:not(.active) .file-ext-badge,
+.tree-row.is-dimmed:not(.active) .file-ext-icon {
+  opacity: 0.72;
+}
+.tree-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.075);
+  pointer-events: none;
+  transition: background 0.14s ease;
+}
+#explorer-tree-body:hover .tree-guide {
+  background: rgba(255, 255, 255, 0.14);
 }
 .tree-chevron {
   width: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-dim);
+  color: #848ca2;
   flex-shrink: 0;
 }
 .tree-folder-icon {
+  width: 15px;
   display: inline-flex;
-  color: #9aa1ac;
+  align-items: center;
+  justify-content: center;
+  color: #8fa3bf;
   flex-shrink: 0;
 }
 .file-ext-badge {
@@ -687,8 +720,11 @@ button.icon-btn:hover:not(:disabled) {
   flex-shrink: 0;
 }
 .tree-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Center Editor / Mission Control Island */
@@ -1246,6 +1282,31 @@ button.icon-btn:hover:not(:disabled) {
   color: #f2f4f6;
   font-weight: 600;
 }
+.plan-chip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.plan-chip-wrap .plan-caret {
+  padding: 2px 4px;
+}
+.plan-chip-wrap .plan-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.plan-submenu {
+  left: 0;
+  right: auto;
+  min-width: 300px;
+  top: calc(100% + 4px);
+}
+.plan-submenu .dropdown-item strong {
+  font-size: 12px;
+  color: var(--text);
+}
+.plan-submenu .dropdown-item.active strong {
+  color: var(--accent, #7aa2f7);
+}
 .composer-box textarea {
   border: none;
   padding: 0;
@@ -1777,24 +1838,36 @@ button.icon-btn:hover:not(:disabled) {
 }
 
 .tree-row .tree-actions {
-  margin-left: auto;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   display: none;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  padding-left: 10px;
+  background: linear-gradient(90deg, transparent, #181b27 28%);
+}
+.tree-row.active .tree-actions {
+  background: linear-gradient(90deg, transparent, #22263a 28%);
 }
 .tree-row:hover .tree-actions {
   display: inline-flex;
 }
 .tree-act-btn {
-  padding: 2px 4px;
+  padding: 1px 3px;
   border: none;
   background: transparent;
   color: var(--text-dim);
   border-radius: 4px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tree-act-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .search-hit {
@@ -2225,7 +2298,7 @@ button.icon-btn { min-width: 28px; min-height: 28px; }
   min-width: 22px;
   min-height: 22px;
 }
-.tree-act-btn { min-width: 22px; min-height: 22px; }
+.tree-act-btn { min-width: 20px; min-height: 18px; }
 
 /* Lane pills viram botões (mesma função, mesmo elemento — Lei 16) */
 button.lane-pill { text-align: left; }

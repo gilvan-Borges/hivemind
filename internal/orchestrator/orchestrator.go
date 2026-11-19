@@ -39,7 +39,7 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required"
+	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate"
 	Stage        string   `json:"stage,omitempty"`
 	Author       string   `json:"author,omitempty"`
 	Label        string   `json:"label,omitempty"`
@@ -47,6 +47,7 @@ type Event struct {
 	ToolName     string   `json:"toolName,omitempty"`
 	Detail       string   `json:"detail,omitempty"`
 	Devs         []string `json:"devs,omitempty"`
+	Gate         string   `json:"gate,omitempty"` // "docs" | "jira" — gates SDD exibidos como cards de aprovação no chat
 	Partial      bool     `json:"partial,omitempty"`
 	Thought      bool     `json:"thought,omitempty"`
 	InputTokens  int32    `json:"inputTokens,omitempty"`
@@ -91,6 +92,7 @@ type Runner struct {
 	prReviewers        []string
 	devSlices          []string
 	chiefPlan          string
+	pauseForApproval   bool
 	skills             []skillx.Skill
 	selectedSkills     []skillx.Skill
 	// NativeSkills é o catálogo nativo da IDE, preenchido pelo runner da IDE (CLI deixa vazio).
@@ -107,7 +109,7 @@ type Request struct {
 	Objective   string
 	JiraKey     string
 	SessionID   string
-	RunMode     string // "", "auto", "direct", "plan", "squad"
+	RunMode     string // "", "auto", "direct", "plan", "plan:sdd", "plan:sdd-jira", "squad"
 	Attachments []Attachment
 }
 
@@ -214,7 +216,10 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.turnTotalTokens = 0
 
 	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
-	sess, err := r.openSession(ctx, req.SessionID, objective, key, runMode == "squad")
+	if runMode == "plan:feature" {
+		runMode = "plan"
+	}
+	sess, err := r.openSession(ctx, req.SessionID, objective, key, runMode)
 	if err != nil {
 		return result, err
 	}
@@ -231,6 +236,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		runMode == "auto" ||
 		runMode == "direct" ||
 		runMode == "plan" ||
+		runMode == "plan:sdd" ||
+		runMode == "plan:sdd-jira" ||
 		(runMode == "squad" && r.EnableTriage && r.chiefPlan == "")
 	if useTriage {
 		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode, runMode)
@@ -243,7 +250,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			}
 			return result, err
 		}
-		if runMode == "plan" {
+		if runMode == "plan" || (r.pauseForApproval && (runMode == "" || runMode == "auto") && delegated) {
 			result.Summary = summary
 			planBody := strings.TrimSpace(r.chiefPlan)
 			if planBody == "" {
@@ -262,6 +269,27 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 					Kind:         "finish",
 					Stage:        "chief",
 					Text:         fmt.Sprintf("Plano pronto na sessão %s — revise e aprove para iniciar o Squad.", result.SessionID),
+					InputTokens:  int32(r.turnInputTokens),
+					OutputTokens: int32(r.turnOutputTokens),
+					Tokens:       int32(r.turnTotalTokens),
+				})
+			}
+			return result, nil
+		}
+		if runMode == "plan:sdd" || runMode == "plan:sdd-jira" {
+			result.Summary = summary
+			if runMode == "plan:sdd-jira" && delegated && r.chiefPlan != "" {
+				_ = sessionx.UpdateState(sess, map[string]any{
+					"chief_plan":            r.chiefPlan,
+					"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
+					"plan_pending_approval": "1",
+				})
+			}
+			if r.OnEvent != nil {
+				r.OnEvent(Event{
+					Kind:         "finish",
+					Stage:        "chief",
+					Text:         fmt.Sprintf("Fase SDD concluída na sessão %s — aguardando aprovação do gate para avançar.", result.SessionID),
 					InputTokens:  int32(r.turnInputTokens),
 					OutputTokens: int32(r.turnOutputTokens),
 					Tokens:       int32(r.turnTotalTokens),
@@ -314,6 +342,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			result.InputTokens = r.turnInputTokens
 			result.OutputTokens = r.turnOutputTokens
 			result.TotalTokens = r.turnTotalTokens
+			r.printUsageSummary(result, r.Err, "uso até o erro: ")
 			if r.OnEvent != nil {
 				r.OnEvent(Event{Kind: "error", Text: err.Error()})
 			}
@@ -330,6 +359,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				result.InputTokens = r.turnInputTokens
 				result.OutputTokens = r.turnOutputTokens
 				result.TotalTokens = r.turnTotalTokens
+				r.printUsageSummary(result, r.Err, "uso até parar: ")
 				if r.OnEvent != nil {
 					r.OnEvent(Event{Kind: "error", Text: budgetErr.Error()})
 				}
@@ -357,6 +387,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		return result, err
 	}
 	fmt.Fprintf(r.Out, "\nSessão %s concluída.\n", result.SessionID)
+	r.printUsageSummary(result, r.Out, "")
 	if r.OnEvent != nil {
 		r.OnEvent(Event{
 			Kind:         "finish",
@@ -810,7 +841,8 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	return modelx.New(ctx, a.Provider, a.Model)
 }
 
-func (r *Runner) openSession(ctx context.Context, id, objective, key string, consumePendingPlan bool) (session.Session, error) {
+func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode string) (session.Session, error) {
+	consumePendingPlan := runMode == "squad"
 	if id != "" {
 		got, err := r.Sessions.Get(ctx, &session.GetRequest{AppName: sessionx.AppName, UserID: sessionx.UserID, SessionID: id})
 		if err != nil {
@@ -818,6 +850,11 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 		}
 		pendingFlag, _ := got.Session.State().Get("plan_pending_approval")
 		isPendingPlan := strings.TrimSpace(fmt.Sprint(pendingFlag)) == "1"
+		docsFlag, _ := got.Session.State().Get("sdd_docs_pending")
+		isDocsPending := strings.TrimSpace(fmt.Sprint(docsFlag)) == "1"
+		if runMode == "plan:sdd-jira" && !isDocsPending {
+			return nil, fmt.Errorf("não há docs SDD pendentes de aprovação nesta sessão; execute primeiro o modo Planejar · Projeto SDD (plan:sdd) e aprove o Gate 1 (Docs & Arquitetura)")
+		}
 		if consumePendingPlan && isPendingPlan {
 			if prevPlan, err := got.Session.State().Get("chief_plan"); err == nil && prevPlan != nil {
 				r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
@@ -852,6 +889,9 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
+		keepPlan := (consumePendingPlan && isPendingPlan && r.chiefPlan != "") ||
+			(runMode == "plan:sdd") ||
+			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
 			"qa_feedback":           "",
 			"qa_report":             "",
@@ -863,7 +903,16 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 			"pr_branch":             "",
 			"pr_reviewers":          "",
 		}
-		if !(consumePendingPlan && isPendingPlan && r.chiefPlan != "") {
+		if runMode == "plan:sdd" || runMode == "plan:sdd-jira" {
+			resetMap["sdd_stage"] = map[bool]string{true: "docs", false: "backlog"}[runMode == "plan:sdd"]
+			if runMode == "plan:sdd" {
+				resetMap["sdd_docs_pending"] = ""
+			}
+		} else {
+			resetMap["sdd_docs_pending"] = ""
+			resetMap["sdd_stage"] = ""
+		}
+		if !keepPlan {
 			resetMap["chief_plan"] = ""
 			resetMap["selected_skills"] = ""
 			resetMap["selected_native_skills"] = ""
@@ -888,6 +937,8 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key string, con
 			"pr_branch":             "",
 			"pr_reviewers":          "",
 			"plan_pending_approval": "",
+			"sdd_stage":             "",
+			"sdd_docs_pending":      "",
 		},
 	})
 	if err != nil {
@@ -1028,6 +1079,23 @@ func skillSelectionLabel(project, native []string) string {
 		parts = append(parts, "nativas da IDE: "+strings.Join(native, ", "))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (r *Runner) printUsageSummary(result Result, w io.Writer, prefix string) {
+	line := usageSummaryLine(result)
+	if line == "" || w == nil {
+		return
+	}
+	fmt.Fprintf(w, "%s%s\n", prefix, line)
+}
+
+// usageSummaryLine formats the per-run token usage printed by the CLI at the
+// end of a run (dogfooding achado #8: cost was invisible outside the IDE).
+func usageSummaryLine(result Result) string {
+	if result.TotalTokens <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("Tokens: ↑%d entrada · ↓%d saída · %d total", result.InputTokens, result.OutputTokens, result.TotalTokens)
 }
 
 func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
@@ -1266,6 +1334,26 @@ func (r *Runner) guidanceForRole(target string, includeDynamic bool) string {
 	return skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, project, native, 0, 0)
 }
 
+// nativeSkillGuide injeta os corpos das skills NATIVAS da IDE pedidas por nome
+// (usado pelas fases SDD/Planejamento, que contam com skills nativas semeadas).
+// Nomes inexistentes são ignorados silenciosamente (o usuário pode ter excluído
+// a skill do catálogo nativo).
+func (r *Runner) nativeSkillGuide(names ...string) string {
+	if len(names) == 0 || r.NativeSkillsRoot == "" {
+		return ""
+	}
+	var picked []skillx.Skill
+	for _, n := range names {
+		if hit := skillx.Find(r.NativeSkills, n); hit != nil {
+			picked = append(picked, *hit)
+		}
+	}
+	if len(picked) == 0 {
+		return ""
+	}
+	return skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, nil, picked, 0, 0)
+}
+
 func (r *Runner) pinnedSkillsNote() string {
 	if len(r.Project.Settings.SkillAssignments) == 0 {
 		return ""
@@ -1308,13 +1396,14 @@ func (r *Runner) primaryChief() team.Agent {
 }
 
 type delegateArgs struct {
-	Plan      string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
-	DevTasks  []string `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos. Cada item dispara 1 desenvolvedor paralelo em worktree isolada (use 1 item para tarefas pequenas/focadas, ou 2 a 5 itens para entregas grandes e paralelizáveis)."`
-	PRNumber  int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
-	PRBranch  string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
-	Reviewers []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
-	Skills    []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills do projeto que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
-	NativeSkills []string `json:"native_skills,omitempty" jsonschema:"Opcional: nomes das skills NATIVAS da IDE que a equipe deve seguir. Use quando a nativa parecer mais atual ou melhor que a versão do projeto; se houver conflito de nome, o usuário será consultado para autorizar."`
+	Plan             string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	DevTasks         []string `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos. Cada item dispara 1 desenvolvedor paralelo em worktree isolada (use 1 item para tarefas pequenas/focadas, ou 2 a 5 itens para entregas grandes e paralelizáveis)."`
+	PRNumber         int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
+	PRBranch         string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
+	Reviewers        []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
+	Skills           []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills do projeto que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
+	NativeSkills     []string `json:"native_skills,omitempty" jsonschema:"Opcional: nomes das skills NATIVAS da IDE que a equipe deve seguir. Use quando a nativa parecer mais atual ou melhor que a versão do projeto; se houver conflito de nome, o usuário será consultado para autorizar."`
+	PauseForApproval bool     `json:"pause_for_approval,omitempty" jsonschema:"No modo Auto: use true quando a tarefa for grande, arriscada ou de escopo amplo e você julgar que o usuário deve revisar e aprovar o plano ANTES de disparar o Squad. false (padrão) executa direto."`
 }
 
 type delegateResult struct {
@@ -1327,12 +1416,18 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if err != nil {
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}
+
+	sddDocs := runMode == "plan:sdd"
+	sddJira := runMode == "plan:sdd-jira"
+
 	// Triage Chief uses RoleProjectManager with DisableGitWrite=true so it never edits or commits on main workspace,
 	// while retaining full PR inspection, comment, review, request-review, and merge governance tools.
+	// SDD phases narrow this further: DocsOnlyWrite blocks code and Jira/GitHub writes until the gates are approved.
 	baseTools, err := tools.ForRole(team.RoleProjectManager, tools.Deps{
 		Root:                 r.Workspace,
 		Settings:             r.Project.Settings,
 		DisableGitWrite:      true,
+		DocsOnlyWrite:        sddDocs || sddJira,
 		ReviewRequestedInObj: r.reviewRequested,
 		Allowlist:            r.Project.Settings.ShellAllowlist,
 		Confirm:              r.Confirm,
@@ -1341,10 +1436,53 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		GitHub:               r.GitHub,
 		Jira:                 r.Jira,
 		JiraKey:              jiraKey,
+		JiraProject:          r.Project.Settings.JiraProject,
 		BaseBranch:           r.Project.Settings.BaseBranch,
 	})
 	if err != nil {
 		return false, "", err
+	}
+	if sddDocs {
+		// Fase SDD de descoberta/docs: sem Jira, sem GitHub e sem delegate — apenas leitura + write_doc + gate.
+		baseTools, err = tools.ForRole(team.RoleProjectManager, tools.Deps{
+			Root:                 r.Workspace,
+			Settings:             r.Project.Settings,
+			DisableGitWrite:      true,
+			DocsOnlyWrite:        true,
+			ReviewRequestedInObj: r.reviewRequested,
+			Confirm:              r.Confirm,
+			Approve:              r.Approve,
+			Git:                  r.Git,
+			GitHub:               githubx.Disabled{Reason: "fase SDD de docs não opera GitHub"},
+			Jira:                 nil,
+			JiraKey:              jiraKey,
+			JiraProject:          r.Project.Settings.JiraProject,
+			BaseBranch:            r.Project.Settings.BaseBranch,
+		})
+		if err != nil {
+			return false, "", err
+		}
+	}
+	if sddJira {
+		// Fase SDD de backlog: Jira habilitado para criar Epics/Tasks/Subtasks + write_doc para registrar as chaves na spec.
+		baseTools, err = tools.ForRole(team.RoleProjectManager, tools.Deps{
+			Root:                 r.Workspace,
+			Settings:             r.Project.Settings,
+			DisableGitWrite:      true,
+			DocsOnlyWrite:        true,
+			ReviewRequestedInObj: r.reviewRequested,
+			Confirm:              r.Confirm,
+			Approve:              r.Approve,
+			Git:                  r.Git,
+			GitHub:               githubx.Disabled{Reason: "fase SDD de backlog não opera GitHub"},
+			Jira:                 r.Jira,
+			JiraKey:              jiraKey,
+			JiraProject:          r.Project.Settings.JiraProject,
+			BaseBranch:            r.Project.Settings.BaseBranch,
+		})
+		if err != nil {
+			return false, "", err
+		}
 	}
 
 	baseDevs := r.Team.ByRole(team.RoleDeveloper)
@@ -1354,13 +1492,54 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	var planCardEmitted bool
 	allTools := baseTools
 
-	if runMode != "direct" {
+	if sddDocs {
+		docsReady, err := functiontool.New(functiontool.Config{
+			Name:        "sdd_docs_ready",
+			Description: "Encerra a fase SDD de Discovery & Docs: registra o resumo da especificação gravada e pausa no Gate 1 para o usuário aprovar antes de qualquer criação no Jira ou código.",
+		}, func(tctx agent.Context, args struct {
+			Summary string `json:"summary" jsonschema:"Resumo executivo: artefatos SDD gravados (specs/docs/ADRs), principais decisões e próximos passos."`
+		}) (delegateResult, error) {
+			text := strings.TrimSpace(args.Summary)
+			if text == "" {
+				return delegateResult{}, fmt.Errorf("informe o resumo dos docs SDD gravados")
+			}
+			_ = tctx.State().Set("sdd_docs_pending", "1")
+			_ = tctx.State().Set("chief_plan", text)
+			if actions := tctx.Actions(); actions != nil {
+				if actions.StateDelta == nil {
+					actions.StateDelta = map[string]any{}
+				}
+				actions.StateDelta["sdd_docs_pending"] = "1"
+				actions.StateDelta["chief_plan"] = text
+			}
+			if r.OnEvent != nil {
+				r.OnEvent(Event{
+					Kind:   "sdd_gate",
+					Stage:  "chief",
+					Author: chief.Name,
+					Gate:   "docs",
+					Label:  "Gate 1 · Docs & Arquitetura SDD prontos",
+					Text:   text,
+				})
+			}
+			return delegateResult{Status: "docs SDD registrados; aguardando aprovação do usuário no Gate 1 (Criar Tasks no Jira)"}, nil
+		})
+		if err != nil {
+			return false, "", err
+		}
+		allTools = append(baseTools, docsReady)
+	}
+
+	if runMode != "direct" && !sddDocs {
 		delegateTool, err := functiontool.New(functiontool.Config{
 			Name:        "delegate_to_squad",
 			Description: fmt.Sprintf("Registra o plano técnico e dispara dinamicamente de 1 até %d desenvolvedores paralelos em worktrees separadas (Dev(s) → QA → Chefe).", maxDevs),
 		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
 			delegated = true
 			r.chiefPlan = strings.TrimSpace(args.Plan)
+			if args.PauseForApproval && (runMode == "" || runMode == "auto") {
+				r.pauseForApproval = true
+			}
 
 			cleaned := make([]string, 0, len(args.DevTasks))
 			for _, s := range args.DevTasks {
@@ -1422,6 +1601,15 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			if len(args.Skills) > 0 && len(r.selectedSkills) == 0 && len(r.selectedNative) == 0 {
 				fmt.Fprintf(r.Err, "aviso: skills pedidas pelo Chefe não existem nos catálogos (%s e nativas da IDE): %s\n", skillx.SkillsDir, strings.Join(args.Skills, ", "))
 			}
+			if runMode == "plan:sdd-jira" {
+				// Fase SDD: devs e QA seguem as skills nativas de execução/verificação SDD por padrão.
+				for _, n := range []string{"sdd-dev-executor", "sdd-qa-verifier"} {
+					if hit := skillx.Find(r.NativeSkills, n); hit != nil &&
+						skillx.Find(r.selectedNative, n) == nil && skillx.Find(r.selectedSkills, n) == nil {
+						r.selectedNative = append(r.selectedNative, *hit)
+					}
+				}
+			}
 			skillNames := skillx.Names(r.selectedSkills)
 			nativeNames := skillx.Names(r.selectedNative)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
@@ -1466,7 +1654,16 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				if len(resolved) > 1 {
 					devCountLabel = fmt.Sprintf("%d Desenvolvedores em paralelo", len(resolved))
 				}
-				if runMode == "plan" {
+				if runMode == "plan:sdd-jira" {
+					r.OnEvent(Event{
+						Kind:   "sdd_gate",
+						Stage:  "chief",
+						Author: chief.Name,
+						Gate:   "jira",
+						Label:  fmt.Sprintf("Gate 2 · Backlog Jira criado (%s)", devCountLabel),
+						Text:   strings.TrimSpace(hb.String()),
+					})
+				} else if runMode == "plan" || r.pauseForApproval {
 					planCardEmitted = true
 					r.OnEvent(Event{
 						Kind:   "plan_ready",
@@ -1487,6 +1684,12 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			}
 			if runMode == "plan" {
 				return delegateResult{Status: fmt.Sprintf("plano registrado (%d dev(s) previstos); aguardando aprovação do usuário", len(resolved))}, nil
+			}
+			if runMode == "plan:sdd-jira" {
+				return delegateResult{Status: fmt.Sprintf("backlog Jira registrado e %d onda(s) de desenvolvimento definidas; aguardando aprovação do usuário para disparar o Squad", len(resolved))}, nil
+			}
+			if r.pauseForApproval {
+				return delegateResult{Status: fmt.Sprintf("plano registrado com pausa para aprovação (%d dev(s) previstos); o usuário revisará antes de disparar o Squad", len(resolved))}, nil
 			}
 			return delegateResult{Status: fmt.Sprintf("delegado para %d desenvolvedor(es) e QA em worktree separada", len(resolved))}, nil
 		})
@@ -1521,13 +1724,48 @@ Inspecione arquivos/git/PRs se necessário e responda diretamente ao usuário co
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO (Human-in-the-Loop).
+Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO · FEATURE / TASK GRANDE (Human-in-the-Loop).
 1. Inspecione os arquivos/PRs relevantes do projeto com read_file/list_dir/git_status/github_get_pr.
-2. Elabore um plano arquitetural claro e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (escolhendo dinamicamente de 1 até %d desenvolvedores conforme o tamanho da demanda).
+2. Elabore um plano arquitetural claro (mapa de impacto, divisão de arquivos, riscos e testes) e chame delegate_to_squad preenchendo "plan" e "dev_tasks" (escolhendo dinamicamente de 1 até %d desenvolvedores conforme o tamanho da demanda).
 3. Apresente um resumo objetivo do plano ao usuário informando quantos devs serão disparados e que a execução iniciará em worktree separada assim que ele aprovar.
 %s
 %s`,
 			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
+	case "plan:sdd":
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) operando em MODO PLANEJAMENTO SDD · PROJETO DO ZERO (Spec-Driven Development com gates — Human-in-the-Loop).
+
+Este modo inicia um projeto do zero: NENHUM código é criado e NENHUMA issue é aberta até a documentação SDD completa ser aprovada pelo usuário.
+
+FLUXO TRAVADO POR GATES (você NÃO pula etapa):
+- ETAPA 1 — ENTREVISTA / DISCOVERY: faça rodadas objetivas de perguntas ao usuário até zerar ambiguidades materiais: problema de negócio, usuários/personas, requisitos funcionais e não funcionais (latência, throughput, consistência, disponibilidade, custo, segurança), stack preferida, integrações, regras de domínio, restrições e deploy. Pergunte em blocos curtos (máx. 5-8 perguntas por rodada) e NÃO avance com dúvida relevante em aberto. Respostas incompletas do usuário: registre como premissa explícita e sinalize.
+- ETAPA 2 — DOCS & ARQUITETURA SDD: só depois do escopo confirmado, grave APENAS documentação com write_doc (não existe write_file nesta fase):
+  • specs/01-spec.md — visão, escopo, NÃO-escopo, personas, requisitos funcionais/não funcionais e critérios de aceite
+  • specs/02-arquitetura.md — componentes, modelo de dados, segurança e observabilidade
+  • docs/adr/NNNN-titulo.md — um ADR curto (Contexto, Decisão, Consequências) para cada decisão relevante (stack, persistência, mensageria, etc.)
+  • specs/03-contratos.md — contratos de API/eventos/esquemas de dados
+  • specs/04-plano.md — ondas de entrega, dependências e riscos
+  • specs/05-tarefas.md — backlog completo: Epics → Tasks → Subtasks, cada task com critérios de aceite e referência à spec
+- Ao concluir, chame sdd_docs_ready com um resumo executivo (artefatos gravados + principais decisões) e PARE. Gate 1: o usuário aprovou os docs antes de qualquer Jira/código.
+
+REGRAS:
+- write_doc aceita SOMENTE .md em docs/, specs/, .specify/ ou README.md; tentativas de gravar código serão recusadas pela ferramenta.
+- Se o usuário pedir ajustes após o gate, revise os docs e chame sdd_docs_ready novamente.
+- Siga as skills nativas sdd-discovery (entrevista) e sdd-architecture-docs (geração dos docs); leia-as com read_file quando precisar de diretrizes detalhadas.`,
+			chief.Instructions, chief.Name)
+	case "plan:sdd-jira":
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) na FASE SDD — CRIAÇÃO DO BACKLOG NO JIRA (Gate 1 já aprovado pelo usuário).
+
+1. Leia specs/05-tarefas.md e os demais docs SDD aprovados (specs/, docs/adr/) com read_file.
+2. Espelhe o backlog no Jira com jira_create_issue (Epic por épico/onda; Task ou Story com os critérios de aceite da spec na description; parent para vincular ao Epic) e jira_create_subtask quando houver quebra fina. Sem project informado, o projeto padrão do time/conector é usado.
+3. Grave as chaves Jira geradas (PROJ-xxx) de volta na spec com write_doc (atualize o mapeamento tarefa→chave em specs/05-tarefas.md) para rastreabilidade.
+4. Chame delegate_to_squad com "plan" (resumo das ondas de desenvolvimento extraído de specs/04-plano.md) e "dev_tasks" (1 item por onda/desenvolvedor paralelo, SEM sobreposição de arquivos) e PARE. Gate 2: o usuário aprova o backlog e dispara o Squad.
+- Se o Jira não estiver configurado/habilitado, informe claramente o que falta (Conector Jira Nativo na IDE + jira_enabled no time) e NÃO invente chaves nem avance para o desenvolvimento.
+%s`,
+			chief.Instructions, chief.Name, scaleGuidance)
 	case "squad":
 		triageInstr = fmt.Sprintf(`%s
 
@@ -1544,6 +1782,7 @@ Você é o Chefe da equipe (%s).
 REGRA DE TRIAGEM:
 1. Se o usuário fez uma pergunta, pediu análise/diagnóstico, revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado pelo revisor (github_merge_pr) SEM precisar alterar código agora: execute as ferramentas de leitura/PR cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
 2. Se o usuário pediu para criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso: monte um plano objetivo e chame delegate_to_squad passando "plan", "dev_tasks" (1 item para demandas pequenas/focadas, ou 2 a %d itens sem conflito de arquivos para demandas grandes) e, se for revisão de PR existente, "pr_number", "pr_branch" e "reviewers".
+3. AUTONOMIA PARA PAUSAR: se a tarefa for grande, arriscada (migração, refatoração ampla, mudança de contrato, dados sensíveis) ou de escopo ambíguo, chame delegate_to_squad com pause_for_approval=true — o plano será apresentado ao usuário para aprovação ANTES de disparar o Squad. Use essa autonomia com critério: tarefas pequenas e claras executam direto.
 %s
 %s`,
 			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
@@ -1561,6 +1800,15 @@ REGRA DE TRIAGEM:
 	}
 	if chiefGuide := r.guidanceForRole(team.SkillTargetChief, false); chiefGuide != "" {
 		triageInstr += chiefGuide
+	}
+	// Skills SDD/Planejamento nativas injetadas automaticamente na fase correspondente.
+	switch runMode {
+	case "plan:sdd":
+		triageInstr += r.nativeSkillGuide("sdd-discovery", "sdd-architecture-docs")
+	case "plan:sdd-jira":
+		triageInstr += r.nativeSkillGuide("sdd-jira-planner")
+	case "plan":
+		triageInstr += r.nativeSkillGuide("plan-feature-architect")
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")

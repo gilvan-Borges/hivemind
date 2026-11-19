@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -31,6 +30,7 @@ type Client interface {
 	Enabled() bool
 	GetIssue(ctx context.Context, key string) (Issue, error)
 	Search(ctx context.Context, jql string, limit int) ([]Issue, error)
+	CreateIssue(ctx context.Context, projectKey, issueType, summary, description, parentKey string) (Issue, error)
 	CreateSubtask(ctx context.Context, parent, summary, description string) (Issue, error)
 	Comment(ctx context.Context, key, body string) error
 	Transition(ctx context.Context, key, nameOrID string) error
@@ -45,6 +45,9 @@ func (d Disabled) GetIssue(context.Context, string) (Issue, error) {
 }
 func (d Disabled) Search(context.Context, string, int) ([]Issue, error) {
 	return nil, d.err()
+}
+func (d Disabled) CreateIssue(context.Context, string, string, string, string, string) (Issue, error) {
+	return Issue{}, d.err()
 }
 func (d Disabled) CreateSubtask(context.Context, string, string, string) (Issue, error) {
 	return Issue{}, d.err()
@@ -159,6 +162,75 @@ func (h *HTTP) Search(ctx context.Context, jql string, limit int) ([]Issue, erro
 	return out, nil
 }
 
+func buildADFDoc(text string) map[string]any {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	blocks := make([]any, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		blocks = append(blocks, map[string]any{
+			"type": "paragraph",
+			"content": []any{
+				map[string]any{"type": "text", "text": line},
+			},
+		})
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, map[string]any{
+			"type": "paragraph",
+			"content": []any{
+				map[string]any{"type": "text", "text": " "},
+			},
+		})
+	}
+	return map[string]any{
+		"type":    "doc",
+		"version": 1,
+		"content": blocks,
+	}
+}
+
+func (h *HTTP) CreateIssue(ctx context.Context, projectKey, issueType, summary, description, parentKey string) (Issue, error) {
+	proj := strings.ToUpper(strings.TrimSpace(projectKey))
+	if proj == "" {
+		return Issue{}, fmt.Errorf("informe a chave do projeto Jira (ex: PROJ)")
+	}
+	for _, r := range proj {
+		if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return Issue{}, fmt.Errorf("chave de projeto Jira inválida: %q", projectKey)
+		}
+	}
+	it := strings.TrimSpace(issueType)
+	if it == "" {
+		it = "Task"
+	}
+	sum := strings.TrimSpace(summary)
+	if sum == "" {
+		return Issue{}, fmt.Errorf("o título (summary) da issue Jira não pode ficar vazio")
+	}
+	fields := map[string]any{
+		"project":     map[string]string{"key": proj},
+		"summary":     sum,
+		"issuetype":   map[string]string{"name": it},
+		"description": buildADFDoc(description),
+	}
+	if strings.TrimSpace(parentKey) != "" {
+		cleanParent := names.IssueKey(parentKey)
+		if cleanParent == "" {
+			return Issue{}, fmt.Errorf("chave Jira pai inválida: %q", parentKey)
+		}
+		fields["parent"] = map[string]string{"key": cleanParent}
+	}
+	var raw struct {
+		Key string `json:"key"`
+	}
+	if err := h.do(ctx, http.MethodPost, "/rest/api/3/issue", map[string]any{"fields": fields}, &raw); err != nil {
+		return Issue{}, err
+	}
+	return Issue{Key: raw.Key, Summary: sum, Description: description}, nil
+}
+
 func (h *HTTP) CreateSubtask(ctx context.Context, parent, summary, description string) (Issue, error) {
 	cleanParent := names.IssueKey(parent)
 	if cleanParent == "" {
@@ -168,33 +240,7 @@ func (h *HTTP) CreateSubtask(ctx context.Context, parent, summary, description s
 	if i := strings.IndexByte(cleanParent, '-'); i > 0 {
 		project = cleanParent[:i]
 	}
-	body := map[string]any{
-		"fields": map[string]any{
-			"project":   map[string]string{"key": project},
-			"parent":    map[string]string{"key": cleanParent},
-			"summary":   summary,
-			"issuetype": map[string]string{"name": "Sub-task"},
-			"description": map[string]any{
-				"type":    "doc",
-				"version": 1,
-				"content": []any{
-					map[string]any{
-						"type": "paragraph",
-						"content": []any{
-							map[string]any{"type": "text", "text": description},
-						},
-					},
-				},
-			},
-		},
-	}
-	var raw struct {
-		Key string `json:"key"`
-	}
-	if err := h.do(ctx, http.MethodPost, "/rest/api/3/issue", body, &raw); err != nil {
-		return Issue{}, err
-	}
-	return Issue{Key: raw.Key, Summary: summary, Description: description}, nil
+	return h.CreateIssue(ctx, project, "Sub-task", summary, description, cleanParent)
 }
 
 func (h *HTTP) Comment(ctx context.Context, key, body string) error {
@@ -248,13 +294,11 @@ func (h *HTTP) Transition(ctx context.Context, key, nameOrID string) error {
 	}, nil)
 }
 
-// FromEnv builds a client from JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN.
+// FromEnv builds a client from environment variables or the native HiveMind Jira connector config.
 func FromEnv() Client {
-	base := strings.TrimSpace(os.Getenv("JIRA_BASE_URL"))
-	email := strings.TrimSpace(os.Getenv("JIRA_EMAIL"))
-	token := strings.TrimSpace(os.Getenv("JIRA_API_TOKEN"))
+	base, email, token, _, _ := LoadCredentials()
 	if base == "" || email == "" || token == "" {
-		return Disabled{Reason: "defina JIRA_BASE_URL, JIRA_EMAIL e JIRA_API_TOKEN"}
+		return Disabled{Reason: "configure o Conector Jira Nativo na IDE ou defina JIRA_BASE_URL, JIRA_EMAIL e JIRA_API_TOKEN"}
 	}
 	return &HTTP{BaseURL: base, Email: email, Token: token}
 }

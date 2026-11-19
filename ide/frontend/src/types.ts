@@ -141,7 +141,7 @@ export interface DiffSummaryItem {
   removed: number;
 }
 
-export type RunMode = "auto" | "direct" | "plan" | "squad";
+export type RunMode = "auto" | "direct" | "plan" | "plan:sdd" | "plan:sdd-jira" | "squad";
 
 export interface ChatMessage {
   id: string;
@@ -152,6 +152,7 @@ export interface ChatMessage {
   solo?: boolean;
   approved?: boolean;
   resolved?: "approved" | "denied";
+  gate?: "docs" | "jira";
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
@@ -224,6 +225,18 @@ export interface GitHubStatus {
   connectorLabel?: string;
   tokenMasked?: string;
   baseUrl?: string;
+}
+
+export interface JiraConnectorStatus {
+  configured: boolean;
+  connected: boolean;
+  source: string;
+  baseUrl: string;
+  email: string;
+  tokenMasked: string;
+  defaultProject: string;
+  user: string;
+  detail: string;
 }
 
 export interface TokenStat {
@@ -535,6 +548,8 @@ export interface WailsBackendApp {
   RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   SaveGitHubConfig?(token: string, baseURL: string, workspace: string): Promise<GitHubStatus>;
+  JiraStatus?(): Promise<JiraConnectorStatus>;
+  SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;
   WindowToggleMaximize(): Promise<void>;

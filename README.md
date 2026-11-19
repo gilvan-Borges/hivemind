@@ -116,10 +116,12 @@ $env:ANTHROPIC_API_KEY = "sua-chave"
 $env:OPENAI_API_KEY = "sua-chave"
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 
-# Jira Cloud
+# Jira Cloud (variáveis OU Conector Jira Nativo salvo pela IDE em jira-connector.json)
 $env:JIRA_BASE_URL = "https://sua-empresa.atlassian.net"
 $env:JIRA_EMAIL = "voce@empresa.com"
 $env:JIRA_API_TOKEN = "seu-token"
+# opcional: projeto padrão para jira_create_issue no fluxo SDD
+$env:JIRA_PROJECT = "PROJ"
 
 # GitHub. Se o token existir, a CLI usa a API REST.
 # Sem token, usa o executável gh autenticado.
@@ -213,7 +215,8 @@ Todas as leituras e gravações ficam presas ao diretório de trabalho do agente
 
 | Papel | Ferramentas |
 | --- | --- |
-| Gerente (Chefe) | ler, listar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull`, PR (`github_create_pr`, `github_get_pr`, `github_comment_pr`, `github_request_review`, `github_review_pr`, `github_merge_pr`, `github_ci_status`) e Jira |
+| Gerente (Chefe) | ler, listar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull`, PR (`github_create_pr`, `github_get_pr`, `github_comment_pr`, `github_request_review`, `github_review_pr`, `github_merge_pr`, `github_ci_status`) e Jira (`jira_get`, `jira_search`, `jira_create_issue`, `jira_create_subtask`, `jira_comment`, `jira_transition`) |
+| Gerente (Chefe, fase SDD) | leitura + `write_doc` (grava APENAS `.md` em `docs/`, `specs/`, `.specify/` ou `README.md`) — código bloqueado até os gates serem aprovados |
 | Tech lead | ler, listar, status, diff, leitura de PR/CI e comentário no Jira |
 | Arquiteto | ler, listar, gravar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull` e governança de PR |
 | Desenvolvedor | ler, listar, gravar, shell (testes/build), `git_status` e `git_diff` (**nunca** comita nem opera PR) |
@@ -237,7 +240,7 @@ O que o ADK entrega e o que esta CLI completa:
 
 - **Sequential, parallel e loop existem** em `google.golang.org/adk/v2/agent/workflowagents` e são o que o pipeline usa. No código Go 2.8.0 eles não emitem aviso de depreciação. A documentação do ADK 2.0 descreve grafos (`workflow`) como o estilo mais novo e marca sequential/parallel/loop como depreciados no TypeScript; no Go os três construtores continuam a API pública. Não há um predicado “até os testes passarem”: o `loopagent` para quando um evento vem com `Actions.Escalate` ou quando `MaxIterations` acaba. O QA liga `Escalate` em `qa_approve`.
 - **Não há serviço de sessão em arquivo.** O ADK oferece memória, banco via GORM/SQLite e Vertex AI. Para o binário estático continuar sem CGO e a sessão poder ser retomada depois de fechar o terminal, `.hivemind/sessions/*.json` implementa `session.Service`.
-- **Não há ferramentas de Git, GitHub ou Jira** no ADK. O CLI as implementa. GitHub usa a API REST quando `GITHUB_TOKEN` ou `GH_TOKEN` existe e, na ausência do token, o executável `gh`. Jira é só Jira Cloud (REST v3), com `JIRA_BASE_URL`, `JIRA_EMAIL` e `JIRA_API_TOKEN`.
+- **Não há ferramentas de Git, GitHub ou Jira** no ADK. O CLI as implementa. GitHub usa a API REST quando `GITHUB_TOKEN` ou `GH_TOKEN` existe e, na ausência do token, o executável `gh`. Jira é só Jira Cloud (REST v3), com `JIRA_BASE_URL`, `JIRA_EMAIL` e `JIRA_API_TOKEN` — ou com as credenciais salvas pelo Conector Jira Nativo da IDE (`jira-connector.json`, fora do repo).
 - **Não há o conceito de time.** `.hivemind/team.yaml` é desta CLI. O ADK também não escolhe o modelo por agente sozinho: cada `llmagent` recebe o `model.LLM` que a fábrica cria (agy, Gemini, Vertex, Anthropic ou OpenAI). Outro provedor entra se falar a API compatível com OpenAI (`OPENAI_BASE_URL`). O provedor `openai-responses` usa a Responses API; o padrão `openai` usa Chat Completions.
 - **O ADK não fala com o Antigravity CLI.** O provedor `agy` implementa `model.LLM` chamando `agy` em modo headless (`--output-format json`). As ferramentas nativas do agy ficam de fora: o processo usa um diretório temporário e não recebe `--dangerously-skip-permissions`. A decisão de ferramenta volta em `--json-schema` e o ADK executa as ferramentas do HiveMind. A resposta chega inteira; o agy nesse modo não entrega token por token. `--conversation` do agy não é usado, porque o histórico e o resultado das ferramentas ficam na sessão do HiveMind.
 - **Confirmação de ferramenta (HITL) do ADK** pausa a execução à espera de um cliente que entenda `RequestedToolConfirmations` (o launcher e a UI web). No PowerShell isso não aparece sozinho. O `run_shell` confirma no próprio terminal e devolve erro ao modelo se você recusar.

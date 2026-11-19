@@ -53,7 +53,11 @@ export function runModeLabel(mode: RunMode): string {
     case "direct":
       return "Direto (1 Agente)";
     case "plan":
-      return "Planejar (Aprovação)";
+      return "Planejar · Feature";
+    case "plan:sdd":
+      return "Planejar · Projeto SDD";
+    case "plan:sdd-jira":
+      return "SDD · Backlog Jira";
     case "squad":
       return "Squad Completo";
     default:

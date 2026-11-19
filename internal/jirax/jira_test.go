@@ -83,4 +83,47 @@ func TestHTTPIssueSearchCommentTransition(t *testing.T) {
 	if _, err := client.GetIssue(context.Background(), "../../myself"); err == nil {
 		t.Fatal("expected traversal issue key to be rejected")
 	}
+	epic, err := client.CreateIssue(context.Background(), "PROJ", "Epic", "Fase 1: Fundação", "Linha 1\nLinha 2", "")
+	if err != nil || epic.Key != "PROJ-124" {
+		t.Fatalf("epic = %+v %v", epic, err)
+	}
+	if !strings.Contains(subtask, `"Epic"`) || !strings.Contains(subtask, "Linha 2") {
+		t.Fatalf("create issue body = %s", subtask)
+	}
+}
+
+func TestJiraNativeCredentials(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("JIRA_BASE_URL", "")
+	t.Setenv("JIRA_EMAIL", "")
+	t.Setenv("JIRA_API_TOKEN", "")
+	t.Setenv("JIRA_PROJECT", "")
+
+	if err := SaveCredentials("https://acme.atlassian.net/", "dev@acme.com", "secret-tok-1234", "ipg", false); err != nil {
+		t.Fatal(err)
+	}
+	base, email, tok, proj, src := LoadCredentials()
+	if base != "https://acme.atlassian.net" || email != "dev@acme.com" || tok != "secret-tok-1234" || proj != "IPG" || src != "config" {
+		t.Fatalf("unexpected creds: %q %q %q %q %q", base, email, tok, proj, src)
+	}
+	// Updating project without re-typing token preserves token
+	if err := SaveCredentials("https://acme.atlassian.net", "dev@acme.com", "", "HM", false); err != nil {
+		t.Fatal(err)
+	}
+	_, _, tok2, proj2, _ := LoadCredentials()
+	if tok2 != "secret-tok-1234" || proj2 != "HM" {
+		t.Fatalf("expected token preserved, got tok=%q proj=%q", tok2, proj2)
+	}
+	if !FromEnv().Enabled() {
+		t.Fatal("FromEnv must enable client from saved native connector config")
+	}
+	// Clearing removes stored credentials
+	if err := SaveCredentials("", "", "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if FromEnv().Enabled() {
+		t.Fatal("FromEnv must be disabled after clear")
+	}
 }

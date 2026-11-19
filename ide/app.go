@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
+	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -97,6 +99,11 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	applyWindowIcons()
+	// Semeia as skills nativas padrão (planejamento e SDD) no catálogo da IDE,
+	// sem sobrescrever edições do usuário feitas no painel de Skills.
+	if _, err := idecore.SeedNativeSkills(); err != nil {
+		log.Printf("aviso: falha ao semear skills nativas: %v", err)
+	}
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -560,6 +567,22 @@ func (a *App) InitGit(workspace string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return idecore.InitGitRepo(ctx, workspace)
+}
+
+// JiraStatus returns the native Jira Cloud connector status (env vars or saved config).
+func (a *App) JiraStatus() jirax.ConnectorStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return jirax.CheckConnection(ctx)
+}
+
+// SaveJiraConfig stores (or clears, when clear=true) the native Jira Cloud
+// credentials outside project repos, returning the refreshed connection status.
+func (a *App) SaveJiraConfig(baseURL, email, token, defaultProject string, clear bool) (jirax.ConnectorStatus, error) {
+	if err := jirax.SaveCredentials(baseURL, email, token, defaultProject, clear); err != nil {
+		return jirax.ConnectorStatus{}, err
+	}
+	return a.JiraStatus(), nil
 }
 
 // StartRun runs one objective through Chefe -> Dev -> QA -> Chefe on the given lane.
