@@ -51,6 +51,8 @@ export function EnsureTeamMemory(arg1:string):Promise<string>;
 
 export function GetAIUsage():Promise<modelx.AIUsageReport>;
 
+export function GetAutoReviewStatus(arg1:string):Promise<idecore.AutoReviewStatus>;
+
 export function GetCommitDetail(arg1:string,arg2:string):Promise<idecore.CommitDetail>;
 
 export function GetDiff(arg1:string):Promise<Array<idecore.FileDiff>>;
@@ -139,6 +141,8 @@ export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSe
 
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
+export function SetAutoReviewConfig(arg1:string,arg2:team.AutoReviewSettings):Promise<idecore.AutoReviewStatus>;
+
 export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function StageHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
@@ -148,6 +152,10 @@ export function StartRun(arg1:string,arg2:string,arg3:string,arg4:string,arg5:st
 export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
 
 export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
+
+export function StopActiveAutoReview(arg1:string):Promise<boolean>;
+
+export function TriggerAutoReviewPoll(arg1:string):Promise<idecore.AutoReviewStatus>;
 
 export function UpdateAgentModel(arg1:string,arg2:string,arg3:string,arg4:string):Promise<team.File>;
 

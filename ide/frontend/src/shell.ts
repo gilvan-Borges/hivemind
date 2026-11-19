@@ -219,6 +219,7 @@ export function mountShell() {
         <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
         <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
+        <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
@@ -320,6 +321,10 @@ export function bindStaticShellEvents() {
   document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
   document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
+  document.getElementById("status-autoreview")?.addEventListener("click", () => {
+    state.gitTab = "flow";
+    openSidebarView("git");
+  });
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -850,6 +855,27 @@ export function updateStatusBar() {
       ghostEl.style.color = "";
     }
     ghostEl.title = ghostButtonTitle();
+  }
+  const arEl = document.getElementById("status-autoreview");
+  if (arEl) {
+    const ar = state.autoReview;
+    if (!ar || !ar.enabled) {
+      arEl.textContent = "auto-rev: off";
+      arEl.style.color = "var(--text-dim)";
+      arEl.title = "Revisão Automática do Fluxo desligada (clique para abrir Git → Fluxo)";
+    } else if (ar.state === "reviewing" && ar.activePr) {
+      arEl.textContent = `auto-rev: #${ar.activePr}`;
+      arEl.style.color = "#6ea8fe";
+      arEl.title = `Revisando PR #${ar.activePr} automaticamente (Sem Merge) — clique para ver o Fluxo`;
+    } else if (ar.state === "paused_limit" || ar.state === "error") {
+      arEl.textContent = "auto-rev: pausa";
+      arEl.style.color = "var(--amber)";
+      arEl.title = ar.lastError || "Revisão Automática pausada";
+    } else {
+      arEl.textContent = `auto-rev: on${ar.queueCount > 0 ? ` (${ar.queueCount})` : ""}`;
+      arEl.style.color = "var(--green)";
+      arEl.title = `Revisão Automática ativa (Sem Merge) · ${ar.reviewedLastHour}/h — clique para abrir Git → Fluxo`;
+    }
   }
   if (envEl) {
     envEl.textContent = state.goVersion || "";

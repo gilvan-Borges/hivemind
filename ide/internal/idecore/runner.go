@@ -835,6 +835,107 @@ func resolveAgentProviderModel(t team.Team, author string) (provider, modelSpec 
 	return "agy", "agy"
 }
 
+// RunAutoReviewTurn runs a single autonomous PR review in an isolated lane with
+// hard merge/write blocks (DisableMerge=true, DisableGitWrite=true) and an optional
+// ephemeral worktree (reviewRoot) for executing project tests without touching the
+// user's active checkout.
+func (m *SessionManager) RunAutoReviewTurn(
+	parentCtx context.Context,
+	laneID, workspaceDir, reviewRoot, teamName, objective string,
+) (orchestrator.Result, error) {
+	cfg, err := team.Load(workspaceDir)
+	if err != nil {
+		return orchestrator.Result{}, fmt.Errorf("carregue ou configure uma equipe primeiro (.hivemind/team.yaml): %w", err)
+	}
+	selected, err := cfg.ActiveTeam(teamName)
+	if err != nil {
+		return orchestrator.Result{}, err
+	}
+
+	stack := DetectStack(workspaceDir)
+	memBlock := loadWorkspaceMemorySnippet(workspaceDir)
+	fullObjective := stack.FormatForChief() + memBlock + "\n[Objetivo do Usuário]\n" + strings.TrimSpace(objective)
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	m.mu.Lock()
+	if prev, ok := m.cancels[laneID]; ok {
+		prev()
+	}
+	m.cancels[laneID] = cancel
+	m.mu.Unlock()
+
+	defer func() {
+		cancel()
+		m.mu.Lock()
+		delete(m.cancels, laneID)
+		pending := m.denyLaneApprovalsLocked(laneID)
+		m.mu.Unlock()
+		for _, ch := range pending {
+			select {
+			case ch <- false:
+			default:
+			}
+		}
+	}()
+
+	store, err := sessionx.Open(workspaceDir)
+	if err != nil {
+		return orchestrator.Result{}, err
+	}
+
+	var gh githubx.Client = githubx.Disabled{Reason: "sem remote origin"}
+	g := gitx.Local{}
+	if url, err := g.RemoteURL(ctx, workspaceDir); err == nil {
+		if owner, repo, ok := githubx.ParseRemote(url); ok {
+			gh = githubx.Detect(owner, repo)
+		}
+	}
+
+	var jira jirax.Client = jirax.Disabled{Reason: "Jira desabilitado"}
+	if cfg.Settings.JiraEnabled {
+		jira = jirax.FromEnv()
+	}
+
+	// Never block waiting for human clicks during unattended auto-review: dangerous
+	// shell commands are rejected automatically, while safe allowlisted test commands run.
+	denyDangerous := func(string) bool { return false }
+
+	nativeRoot := NativeSkillsDir()
+	nativeSkills := skillx.LoadNative(nativeRoot)
+
+	runner := &orchestrator.Runner{
+		Workspace:          workspaceDir,
+		ReviewRoot:         reviewRoot,
+		Project:            cfg,
+		Team:               selected,
+		Git:                g,
+		GitHub:             gh,
+		Jira:               jira,
+		Sessions:           store,
+		Confirm:            denyDangerous,
+		Approve:            denyDangerous,
+		Out:                io.Discard,
+		Err:                io.Discard,
+		EnableTriage:       true,
+		EnableClosingChief: false,
+		NativeSkills:       nativeSkills,
+		NativeSkillsRoot:   nativeRoot,
+		OnEvent: func(ev orchestrator.Event) {
+			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
+				prov, mod := resolveAgentProviderModel(selected, ev.Author)
+				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+			}
+			if m.Emit != nil {
+				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
+			}
+		},
+	}
+	return runner.Run(ctx, orchestrator.Request{
+		Objective: fullObjective,
+		RunMode:   "auto-review",
+	})
+}
+
 // Cancel stops the active run on laneID (cancelling only child processes started by that lane).
 func (m *SessionManager) Cancel(laneID string) bool {
 	m.mu.Lock()

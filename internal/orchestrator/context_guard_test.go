@@ -165,4 +165,17 @@ func TestReviewModelOverrideUsedOnlyOnPRReview(t *testing.T) {
 	if gotReview.Model != "opencode-go:glm-5.3" || gotReview.Provider != "opencode" {
 		t.Fatalf("PR review turn must apply review_model override, got %+v", gotReview)
 	}
+
+	// Auto-review mode prefers auto_review.model over review_model when configured.
+	settings.AutoReview.Model = "opencode-go:glm-5.3-flash"
+	rAuto := &Runner{
+		Project:         team.File{Settings: settings},
+		Team:            baseTeam,
+		reviewRequested: true,
+		autoReviewMode:  true,
+	}
+	gotAuto := rAuto.resolveTriageChief()
+	if gotAuto.Model != "opencode-go:glm-5.3-flash" || gotAuto.Provider != "opencode" {
+		t.Fatalf("auto-review turn must prefer auto_review.model, got %+v", gotAuto)
+	}
 }

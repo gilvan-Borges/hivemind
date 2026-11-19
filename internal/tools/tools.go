@@ -28,6 +28,9 @@ type Deps struct {
 	Role                 string
 	Settings             team.Settings
 	DisableGitWrite      bool
+	DisableMerge         bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
+	ReviewCommentOnly    bool // Quando true, github_review_pr aceita apenas evento COMMENT
+	AllowReadOnlyTestShell bool // Libera run_shell somente-leitura/testes (bloqueando commit/push/merge/PR) no Chefe em auto-review
 	ReviewRequestedInObj bool
 	// DocsOnlyWrite libera APENAS o write_doc (gravação restrita a documentação)
 	// para fases SDD, onde código permanece bloqueado até a aprovação dos docs.
@@ -108,6 +111,11 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 		}
+		if deps.AllowReadOnlyTestShell {
+			if err := add(deps.canShell()); err != nil {
+				return nil, err
+			}
+		}
 		if err := deps.addJira(&out); err != nil {
 			return nil, err
 		}
@@ -176,6 +184,11 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 			if err := add(deps.gitPull()); err != nil {
+				return nil, err
+			}
+		}
+		if deps.AllowReadOnlyTestShell {
+			if err := add(deps.canShell()); err != nil {
 				return nil, err
 			}
 		}
@@ -472,11 +485,15 @@ type shellArgs struct {
 func (d Deps) canShell() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "run_shell",
-		Description: "Executa um comando permitido dentro do workspace. Operações de git commit/push/merge e PR são exclusivas do Chefe ou Arquiteto.",
+		Description: "Executa um comando permitido dentro do workspace. Operações de git commit/push/merge e PR são bloqueadas neste modo.",
 	}, func(ctx agent.Context, args shellArgs) (textResult, error) {
 		if !d.canCommitAndManagePR() {
 			if blocked, what := shellx.IsCommitOrPRCommand(args.Command); blocked {
 				return textResult{}, fmt.Errorf("governança HiveMind: apenas o Chefe ou o Arquiteto podem executar %s (desenvolvedores e QA não comitam nem operam PR)", what)
+			}
+		} else if d.AllowReadOnlyTestShell || d.DisableGitWrite || d.DisableMerge {
+			if blocked, what := shellx.IsCommitOrPRCommand(args.Command); blocked {
+				return textResult{}, fmt.Errorf("governança auto-review: operação %s bloqueada neste modo (apenas leitura/testes permitidos; sem commit, push ou merge)", what)
 			}
 		}
 		dir := d.Root
@@ -949,14 +966,21 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		return err
 	}
 
+	reviewDesc := "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão."
+	if d.ReviewCommentOnly {
+		reviewDesc = "Envia comentário de revisão (APENAS event=COMMENT) em um PR DE TERCEIRO. Modo automático configurado como somente-comentário: APPROVE e REQUEST_CHANGES são bloqueados."
+	}
 	reviewPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_review_pr",
-		Description: "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão.",
+		Description: reviewDesc,
 	}, func(ctx agent.Context, args struct {
 		Number int    `json:"number" jsonschema:"Número do pull request."`
 		Event  string `json:"event" jsonschema:"Decisão: APPROVE, REQUEST_CHANGES ou COMMENT."`
 		Body   string `json:"body" jsonschema:"Parecer técnico da revisão."`
 	}) (textResult, error) {
+		if d.ReviewCommentOnly && !strings.EqualFold(strings.TrimSpace(args.Event), "COMMENT") {
+			return textResult{}, fmt.Errorf("governança auto-review: modo configurado para somente comentar (comment_only); use event=\"COMMENT\" em vez de %q", args.Event)
+		}
 		pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
 		if err != nil {
 			return textResult{}, err
@@ -974,41 +998,43 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		return err
 	}
 
-	mergePR, err := functiontool.New(functiontool.Config{
-		Name:        "github_merge_pr",
-		Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor. Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access).",
-	}, func(ctx agent.Context, args struct {
-		Number      int    `json:"number" jsonschema:"Número do pull request."`
-		Method      string `json:"method,omitempty" jsonschema:"Método: merge (padrão), squash ou rebase."`
-		CommitTitle string `json:"commit_title,omitempty" jsonschema:"Título opcional do commit de merge."`
-	}) (textResult, error) {
-		pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
+	*out = append(*out, commentPR, replyComment, reqReview, reviewPR)
+	if !d.DisableMerge {
+		mergePR, err := functiontool.New(functiontool.Config{
+			Name:        "github_merge_pr",
+			Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor. Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access).",
+		}, func(ctx agent.Context, args struct {
+			Number      int    `json:"number" jsonschema:"Número do pull request."`
+			Method      string `json:"method,omitempty" jsonschema:"Método: merge (padrão), squash ou rebase."`
+			CommitTitle string `json:"commit_title,omitempty" jsonschema:"Título opcional do commit de merge."`
+		}) (textResult, error) {
+			pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
+			if err != nil {
+				return textResult{}, err
+			}
+			if err := githubx.CheckPRMergeAllowed(pr); err != nil {
+				return textResult{}, err
+			}
+			if d.Settings.NeedsMergePermission(pr.BaseRef) {
+				approveFn := d.Approve
+				if approveFn == nil && d.Confirm != nil {
+					approveFn = func(prompt string) bool { return d.Confirm(prompt) }
+				}
+				prompt := fmt.Sprintf("O PR #%d (%s -> %s) já foi aprovado pelo revisor. Autoriza o Chefe a mesclar na branch protegida %q?", pr.Number, pr.HeadRef, pr.BaseRef, pr.BaseRef)
+				if approveFn == nil || !approveFn(prompt) {
+					return textResult{}, fmt.Errorf("governança PR: o PR #%d aponta para %q e exige permissão explícita do usuário antes de mesclar (revisor já aprovou, aguardando sua autorização)", pr.Number, pr.BaseRef)
+				}
+			}
+			if err := d.GitHub.MergePullRequest(ctx, args.Number, args.Method, args.CommitTitle); err != nil {
+				return textResult{}, err
+			}
+			return textResult{Text: fmt.Sprintf("PR #%d mesclado com sucesso em %s", pr.Number, pr.BaseRef)}, nil
+		})
 		if err != nil {
-			return textResult{}, err
+			return err
 		}
-		if err := githubx.CheckPRMergeAllowed(pr); err != nil {
-			return textResult{}, err
-		}
-		if d.Settings.NeedsMergePermission(pr.BaseRef) {
-			approveFn := d.Approve
-			if approveFn == nil && d.Confirm != nil {
-				approveFn = func(prompt string) bool { return d.Confirm(prompt) }
-			}
-			prompt := fmt.Sprintf("O PR #%d (%s -> %s) já foi aprovado pelo revisor. Autoriza o Chefe a mesclar na branch protegida %q?", pr.Number, pr.HeadRef, pr.BaseRef, pr.BaseRef)
-			if approveFn == nil || !approveFn(prompt) {
-				return textResult{}, fmt.Errorf("governança PR: o PR #%d aponta para %q e exige permissão explícita do usuário antes de mesclar (revisor já aprovou, aguardando sua autorização)", pr.Number, pr.BaseRef)
-			}
-		}
-		if err := d.GitHub.MergePullRequest(ctx, args.Number, args.Method, args.CommitTitle); err != nil {
-			return textResult{}, err
-		}
-		return textResult{Text: fmt.Sprintf("PR #%d mesclado com sucesso em %s", pr.Number, pr.BaseRef)}, nil
-	})
-	if err != nil {
-		return err
+		*out = append(*out, mergePR)
 	}
-
-	*out = append(*out, commentPR, replyComment, reqReview, reviewPR, mergePR)
 	return nil
 }
 

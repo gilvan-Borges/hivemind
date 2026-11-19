@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { ghostTextField, nextGhostWord, setGhostTextEffect } from "./cm-editor";
 import { buildInlineDiffDecorations } from "./inline-ai";
-import type { FileDiff } from "./types";
+import { renderAutoReviewCardHtml } from "./git";
+import type { AutoReviewStatus, FileDiff } from "./types";
 
 describe("Fase 3 — Ghost Text StateField (CodeMirror 6)", () => {
   it("armazena sugestão, faz prefix-trim ao digitar e limpa ao mover cursor", () => {
@@ -69,5 +70,29 @@ describe("Fase 3 — buildInlineDiffDecorations (Revisão Hunk-a-Hunk)", () => {
   it("retorna vazio quando não há diff", () => {
     const res = buildInlineDiffDecorations(null, 10);
     expect(res.decorations).toEqual([]);
+  });
+});
+
+describe("Auto-Review Fluxo — renderAutoReviewCardHtml", () => {
+  it("exibe selo Sem Merge, PR ativo em revisão, botão Parar e histórico", () => {
+    const st: AutoReviewStatus = {
+      workspace: "/repo",
+      enabled: true,
+      state: "reviewing",
+      config: { enabled: true, poll_interval_seconds: 120, run_tests: true, review_action: "full_review", max_prs_per_hour: 6 },
+      activePr: 723,
+      activePrTitle: "test(e2e): programacao",
+      queueCount: 2,
+      reviewedLastHour: 1,
+      history: [
+        { prNumber: 722, title: "docs: FT-159", status: "reviewed", tokens: 87264, reviewedAt: "2026-11-19T13:02:00Z" },
+      ],
+    };
+    const html = renderAutoReviewCardHtml(st);
+    expect(html).toContain("Sem Merge");
+    expect(html).toContain("Revisando PR #723");
+    expect(html).toContain("Parar #723");
+    expect(html).toContain("#722");
+    expect(html).toContain("docs: FT-159");
   });
 });

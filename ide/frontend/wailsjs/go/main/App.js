@@ -90,6 +90,10 @@ export function GetAIUsage() {
   return window['go']['main']['App']['GetAIUsage']();
 }
 
+export function GetAutoReviewStatus(arg1) {
+  return window['go']['main']['App']['GetAutoReviewStatus'](arg1);
+}
+
 export function GetCommitDetail(arg1, arg2) {
   return window['go']['main']['App']['GetCommitDetail'](arg1, arg2);
 }
@@ -266,6 +270,10 @@ export function SetActiveTeam(arg1, arg2) {
   return window['go']['main']['App']['SetActiveTeam'](arg1, arg2);
 }
 
+export function SetAutoReviewConfig(arg1, arg2) {
+  return window['go']['main']['App']['SetAutoReviewConfig'](arg1, arg2);
+}
+
 export function StageFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['StageFile'](arg1, arg2, arg3);
 }
@@ -284,6 +292,14 @@ export function StartRunWithImages(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
 
 export function StartRunWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
   return window['go']['main']['App']['StartRunWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+
+export function StopActiveAutoReview(arg1) {
+  return window['go']['main']['App']['StopActiveAutoReview'](arg1);
+}
+
+export function TriggerAutoReviewPoll(arg1) {
+  return window['go']['main']['App']['TriggerAutoReviewPoll'](arg1);
 }
 
 export function UpdateAgentModel(arg1, arg2, arg3, arg4) {

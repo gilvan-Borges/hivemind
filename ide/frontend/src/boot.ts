@@ -3,7 +3,7 @@ import { exactTokens, matchAgentRuntime } from "./utils";
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
-import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
+import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { renderModalLayer } from "./modals";
@@ -26,7 +26,17 @@ export async function boot() {
   }
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
-    const hit = findLaneWithContext(payload.laneId);
+    let hit = findLaneWithContext(payload.laneId);
+    if (!hit && payload.laneId === "lane-autoreview") {
+      // Auto-cria lane dedicada de Revisão Automática no projeto ativo sem roubar foco do chat manual.
+      const autoLane = createLane(payload.team || "auto-review");
+      autoLane.id = "lane-autoreview";
+      autoLane.teamName = "auto-review";
+      autoLane.running = true;
+      state.lanes.push(autoLane);
+      renderLaneBarOnly();
+      hit = { lane: autoLane, isActiveProject: true };
+    }
     if (!hit) return;
     const { lane, ctx, isActiveProject } = hit;
     const targetSummary = isActiveProject
@@ -279,6 +289,32 @@ export async function boot() {
     queueFileSystemRefresh(wsKey, changed, Boolean(payload?.overflow));
   });
 
+  window.runtime?.EventsOn("hivemind:autoreview-status", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!wsKey) return;
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    const prevWasReviewing = (ctx ? ctx.autoReview?.state : state.autoReview?.state) === "reviewing";
+    if (ctx) ctx.autoReview = payload;
+
+    const isActive = Boolean(state.project && normalizePathKey(state.project.root) === wsKey);
+    if (isActive) {
+      state.autoReview = payload;
+      const autoLane = state.lanes.find((l) => l.id === "lane-autoreview");
+      if (autoLane) {
+        autoLane.running = payload.state === "reviewing";
+        renderLaneBarOnly();
+      }
+      updateStatusBar();
+      if (state.sidebarView === "git" && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
+      if (prevWasReviewing && payload.state !== "reviewing") {
+        void loadGitHubPRs();
+        void refreshSessions(state.project!.root);
+      }
+    }
+  });
+
   try {
     const init = await backend.GetInitialState();
     state.recent = init.recentProjects || [];
@@ -349,6 +385,18 @@ export function bootstrapAsync(rootDir?: string) {
     }).catch(() => {});
 
     refreshSessions(rootDir);
+
+    backend.GetAutoReviewStatus?.(rootDir).then((ar) => {
+      const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
+      if (ctx) ctx.autoReview = ar;
+      if (state.project && normalizePathKey(state.project.root) === targetKey) {
+        state.autoReview = ar;
+        updateStatusBar();
+        if (state.sidebarView === "git" && state.showLeftSidebar) {
+          renderLeftSidebar();
+        }
+      }
+    }).catch(() => {});
   }
 }
 

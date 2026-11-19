@@ -103,3 +103,35 @@ func TestFormatPRDetailShowsRoleAndAllComments(t *testing.T) {
 		t.Fatalf("expected third-party PR role banner, got:\n%s", thirdParty)
 	}
 }
+
+func TestAutoReviewToolsNeverExposeMerge(t *testing.T) {
+	gh := &githubx.REST{Token: "tok", Owner: "acme", Repo: "app"}
+	deps := Deps{
+		Root:                   t.TempDir(),
+		Settings:               team.DefaultSettings(),
+		DisableGitWrite:        true,
+		DisableMerge:           true,
+		ReviewCommentOnly:      true,
+		AllowReadOnlyTestShell: true,
+		ReviewRequestedInObj:   true,
+		GitHub:                 gh,
+	}
+	list, err := ForRole(team.RoleProjectManager, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, tl := range list {
+		names[tl.Name()] = true
+	}
+	for _, forbidden := range []string{"github_merge_pr", "git_commit", "git_push", "git_pull", "github_create_pr", "write_file"} {
+		if names[forbidden] {
+			t.Fatalf("auto-review mode must NEVER expose %s", forbidden)
+		}
+	}
+	for _, expected := range []string{"github_get_pr", "github_pr_files", "github_pr_diff", "github_review_pr", "github_comment_pr", "search_text", "find_files", "read_file", "run_shell"} {
+		if !names[expected] {
+			t.Fatalf("auto-review mode missing expected tool %s", expected)
+		}
+	}
+}

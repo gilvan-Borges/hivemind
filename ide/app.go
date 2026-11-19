@@ -26,6 +26,7 @@ type App struct {
 	initialDir       string
 	smokeCheck       bool
 	sessions         *idecore.SessionManager
+	autoReview       *idecore.AutoReviewManager
 	fileIndex        *idecore.FileIndex
 	mu               sync.Mutex
 	agyStatus        modelx.AgyStatus
@@ -96,6 +97,11 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			wailsrt.EventsEmit(app.ctx, "hivemind:lane-event", ev)
 		}
 	})
+	app.autoReview = idecore.NewAutoReviewManager(app.sessions, func(st idecore.AutoReviewStatus) {
+		if app.ctx != nil && !app.smokeCheck {
+			wailsrt.EventsEmit(app.ctx, "hivemind:autoreview-status", st)
+		}
+	})
 	return app
 }
 
@@ -110,6 +116,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(_ context.Context) {
+	if a.autoReview != nil {
+		a.autoReview.StopAll()
+	}
 	if a.sessions != nil {
 		a.sessions.CancelAll()
 	}
@@ -307,6 +316,15 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		}(abs)
 	}
 	a.startWatcher(abs)
+	if a.autoReview != nil && !a.smokeCheck {
+		go func(root string) {
+			baseCtx := a.ctx
+			if baseCtx == nil {
+				baseCtx = context.Background()
+			}
+			a.autoReview.SyncWorkspace(baseCtx, root)
+		}(abs)
+	}
 	return proj, nil
 }
 
@@ -643,6 +661,43 @@ func (a *App) CancelInlineAI() {
 	if e != nil {
 		e()
 	}
+}
+
+// GetAutoReviewStatus returns the current background Flow auto-review status for workspace.
+func (a *App) GetAutoReviewStatus(workspace string) idecore.AutoReviewStatus {
+	if a.autoReview == nil {
+		return idecore.AutoReviewStatus{Workspace: workspace, State: "idle"}
+	}
+	return a.autoReview.GetStatus(workspace)
+}
+
+// SetAutoReviewConfig persists and applies automatic Flow PR review settings for workspace.
+// Automatic reviews NEVER merge pull requests (hard-gated in tools/orchestrator).
+func (a *App) SetAutoReviewConfig(workspace string, cfg team.AutoReviewSettings) (idecore.AutoReviewStatus, error) {
+	if a.autoReview == nil {
+		return idecore.AutoReviewStatus{Workspace: workspace, State: "idle"}, nil
+	}
+	baseCtx := a.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	return a.autoReview.Configure(baseCtx, workspace, cfg)
+}
+
+// TriggerAutoReviewPoll kicks an immediate Flow check for workspace when auto-review is enabled.
+func (a *App) TriggerAutoReviewPoll(workspace string) idecore.AutoReviewStatus {
+	if a.autoReview == nil {
+		return idecore.AutoReviewStatus{Workspace: workspace, State: "idle"}
+	}
+	return a.autoReview.TriggerPoll(workspace)
+}
+
+// StopActiveAutoReview cancels only the currently running automatic PR review in workspace.
+func (a *App) StopActiveAutoReview(workspace string) bool {
+	if a.autoReview == nil {
+		return false
+	}
+	return a.autoReview.StopActivePR(workspace)
 }
 
 // GitHubStatus returns the native GitHub connector / CLI authentication and workspace remote info.

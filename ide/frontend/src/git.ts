@@ -1,12 +1,12 @@
 import { fileBadge, icons } from "./icons";
-import type { FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane } from "./types";
-import { escapeHtml } from "./utils";
-import { scheduleChatFlush } from "./chat";
+import type { AutoReviewSettings, AutoReviewStatus, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane } from "./types";
+import { escapeHtml, formatTokens } from "./utils";
+import { rebuildChatMessagesFull, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./explorer";
-import { activeLane } from "./lanes";
+import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
-import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar } from "./shell";
+import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { api, askConfirm, setStatus, state, toast, toastError } from "./state";
 
 export async function refreshDiffsAndSummarize(lane: TeamLane) {
@@ -394,6 +394,107 @@ export function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
   `;
 }
 
+export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
+  const enabled = Boolean(st?.enabled);
+  const cfg = st?.config || {
+    enabled: false,
+    poll_interval_seconds: 120,
+    run_tests: true,
+    review_action: "full_review" as const,
+    max_prs_per_hour: 6,
+  };
+  const runTests = cfg.run_tests !== false;
+  const action = cfg.review_action === "comment_only" ? "comment_only" : "full_review";
+  const interval = cfg.poll_interval_seconds || 120;
+  const maxPerHour = cfg.max_prs_per_hour || 6;
+  const isReviewing = st?.state === "reviewing" && Boolean(st?.activePr);
+
+  let statusLine = "Desligada · revisões apenas sob demanda";
+  if (enabled) {
+    if (isReviewing) {
+      statusLine = `Revisando PR #${st!.activePr}${runTests ? " (testes isolados ativos)" : ""}…`;
+    } else if (st?.state === "polling") {
+      statusLine = "Verificando PRs pendentes no Fluxo…";
+    } else if (st?.state === "paused_limit") {
+      statusLine = st.lastError || "Pausada por limite de volume/quota";
+    } else if (st?.state === "error") {
+      statusLine = st.lastError || "Erro na última verificação";
+    } else {
+      const qTxt = st && st.queueCount > 0 ? ` · ${st.queueCount} na fila` : "";
+      statusLine = `Vigiando fluxo · ${st?.reviewedLastHour || 0}/${maxPerHour} PRs/h${qTxt}`;
+    }
+  }
+
+  const history = (st?.history || []).slice(0, 5);
+  const hasAutoLane = state.lanes.some((l) => l.id === "lane-autoreview");
+
+  return `
+    <div class="autoreview-card ${enabled ? "is-on" : ""}">
+      <div class="autoreview-head">
+        <label class="autoreview-toggle-label" title="Quando ligada, monitora a aba Fluxo e revisa PRs de terceiros automaticamente sem nunca fazer merge">
+          <input type="checkbox" id="ar-enabled-toggle" ${enabled ? "checked" : ""} />
+          <span><strong>Revisão Automática</strong></span>
+        </label>
+        <span class="autoreview-badge-nomerge" title="Bloqueio técnico em código: github_merge_pr é removida no modo automático">Sem Merge</span>
+        <div class="spacer"></div>
+        <button type="button" class="icon-btn" id="ar-toggle-cfg" title="Configurações da Revisão Automática">
+          ${state.autoReviewConfigOpen ? icons.chevronDown : icons.chevronRight}
+        </button>
+      </div>
+      <div class="autoreview-status ${st?.state === "error" || st?.state === "paused_limit" ? "warn" : isReviewing ? "active" : ""}">
+        ${isReviewing || st?.state === "polling" ? icons.spinner : ""}
+        <span>${escapeHtml(statusLine)}</span>
+      </div>
+      ${enabled ? `
+        <div class="autoreview-actions">
+          <button type="button" class="mini" id="ar-poll-now" ${isReviewing ? "disabled" : ""}>${icons.refresh}<span>Verificar agora</span></button>
+          ${isReviewing ? `<button type="button" class="mini danger" id="ar-stop-pr">${icons.stop}<span>Parar #${st!.activePr}</span></button>` : ""}
+          ${hasAutoLane ? `<button type="button" class="mini" id="ar-open-lane" title="Acompanhar ao vivo na lane auto-review">${icons.sparkle}<span>Acompanhar</span></button>` : ""}
+        </div>
+      ` : ""}
+      ${state.autoReviewConfigOpen ? `
+        <div class="autoreview-cfg">
+          <label class="autoreview-cfg-check">
+            <input type="checkbox" id="ar-run-tests" ${runTests ? "checked" : ""} />
+            <span>Rodar testes do PR em worktree isolada</span>
+          </label>
+          <div class="autoreview-cfg-row">
+            <span class="dim">Ação:</span>
+            <select id="ar-review-action">
+              <option value="full_review" ${action === "full_review" ? "selected" : ""}>Parecer completo (Approve/Ajustes/Comentário)</option>
+              <option value="comment_only" ${action === "comment_only" ? "selected" : ""}>Somente comentar (COMMENT)</option>
+            </select>
+          </div>
+          <div class="autoreview-cfg-row">
+            <span class="dim">Intervalo:</span>
+            <select id="ar-poll-interval">
+              <option value="60" ${interval === 60 ? "selected" : ""}>1 min</option>
+              <option value="120" ${interval === 120 ? "selected" : ""}>2 min</option>
+              <option value="300" ${interval === 300 ? "selected" : ""}>5 min</option>
+              <option value="600" ${interval === 600 ? "selected" : ""}>10 min</option>
+            </select>
+            <span class="dim">Máx/h:</span>
+            <input type="number" id="ar-max-hour" min="1" max="30" value="${maxPerHour}" style="width:52px;padding:2px 6px" />
+          </div>
+        </div>
+      ` : ""}
+      ${history.length > 0 ? `
+        <div class="autoreview-history">
+          <div class="dim" style="font-size:10px;margin-bottom:3px">Últimas revisões automáticas</div>
+          ${history.map((h) => `
+            <div class="autoreview-hist-row" title="${escapeHtml(h.error || h.summary || h.title)}">
+              <span class="tok-pill">#${h.prNumber}</span>
+              <span class="autoreview-hist-status ${escapeHtml(h.status)}">${h.status === "reviewed" ? "ok" : h.status === "canceled" ? "parado" : "erro"}</span>
+              <span class="autoreview-hist-title">${escapeHtml(h.title)}</span>
+              ${h.tokens ? `<span class="dim" style="font-family:var(--mono);font-size:10px">${formatTokens(h.tokens)}</span>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
   const gh = state.ghStatus;
   const hasGit = Boolean(proj?.branch);
@@ -508,6 +609,10 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
     `;
   } else {
     tabContentHtml = `
+      <div class="git-section" style="padding:10px">
+        ${renderAutoReviewCardHtml(state.autoReview)}
+      </div>
+
       <div class="git-section" style="padding:10px">
         <div class="git-section-head">
           <span>Para revisar (${pendingReviews.length})</span>
@@ -955,6 +1060,76 @@ export function bindGitSidebarEvents() {
     void loadProjectIssues();
   });
   document.getElementById("btn-load-flow")?.addEventListener("click", () => void loadGitHubPRs());
+
+  const saveAutoReviewFromUI = async (overrideEnabled?: boolean) => {
+    const backend = api();
+    if (!backend?.SetAutoReviewConfig || !state.project) return;
+    const cur = state.autoReview?.config || {
+      enabled: false,
+      poll_interval_seconds: 120,
+      run_tests: true,
+      review_action: "full_review" as const,
+      max_prs_per_hour: 6,
+    };
+    const enabledEl = document.getElementById("ar-enabled-toggle") as HTMLInputElement | null;
+    const testsEl = document.getElementById("ar-run-tests") as HTMLInputElement | null;
+    const actionEl = document.getElementById("ar-review-action") as HTMLSelectElement | null;
+    const intervalEl = document.getElementById("ar-poll-interval") as HTMLSelectElement | null;
+    const maxEl = document.getElementById("ar-max-hour") as HTMLInputElement | null;
+
+    const nextCfg: AutoReviewSettings = {
+      ...cur,
+      enabled: overrideEnabled !== undefined ? overrideEnabled : Boolean(enabledEl?.checked ?? cur.enabled),
+      run_tests: testsEl ? testsEl.checked : cur.run_tests !== false,
+      review_action: (actionEl?.value === "comment_only" ? "comment_only" : (cur.review_action || "full_review")) as "full_review" | "comment_only",
+      poll_interval_seconds: intervalEl ? (parseInt(intervalEl.value, 10) || 120) : (cur.poll_interval_seconds || 120),
+      max_prs_per_hour: maxEl ? Math.max(1, Math.min(30, parseInt(maxEl.value, 10) || 6)) : (cur.max_prs_per_hour || 6),
+    };
+    try {
+      const updated = await backend.SetAutoReviewConfig(state.project.root, nextCfg);
+      state.autoReview = updated;
+      updateStatusBar();
+      renderLeftSidebar();
+      setStatus(nextCfg.enabled ? "Revisão Automática do Fluxo ativada (Sem Merge)." : "Revisão Automática do Fluxo desativada.");
+    } catch (err: any) {
+      toastError("atualizar a Revisão Automática", err);
+    }
+  };
+
+  document.getElementById("ar-enabled-toggle")?.addEventListener("change", (e) => {
+    void saveAutoReviewFromUI((e.target as HTMLInputElement).checked);
+  });
+  document.getElementById("ar-toggle-cfg")?.addEventListener("click", () => {
+    state.autoReviewConfigOpen = !state.autoReviewConfigOpen;
+    renderLeftSidebar();
+  });
+  document.getElementById("ar-run-tests")?.addEventListener("change", () => void saveAutoReviewFromUI());
+  document.getElementById("ar-review-action")?.addEventListener("change", () => void saveAutoReviewFromUI());
+  document.getElementById("ar-poll-interval")?.addEventListener("change", () => void saveAutoReviewFromUI());
+  document.getElementById("ar-max-hour")?.addEventListener("change", () => void saveAutoReviewFromUI());
+  document.getElementById("ar-poll-now")?.addEventListener("click", async () => {
+    if (!state.project || !api()?.TriggerAutoReviewPoll) return;
+    state.autoReview = await api()!.TriggerAutoReviewPoll!(state.project.root);
+    updateStatusBar();
+    renderLeftSidebar();
+  });
+  document.getElementById("ar-stop-pr")?.addEventListener("click", async () => {
+    if (!state.project || !api()?.StopActiveAutoReview) return;
+    await api()!.StopActiveAutoReview!(state.project.root);
+    setStatus("Revisão automática do PR atual interrompida.");
+  });
+  document.getElementById("ar-open-lane")?.addEventListener("click", () => {
+    const autoLane = state.lanes.find((l) => l.id === "lane-autoreview");
+    if (!autoLane) return;
+    state.activeLaneId = autoLane.id;
+    state.showRightAI = true;
+    syncLayoutVisibility();
+    renderLaneBarOnly();
+    renderPipelineBar();
+    renderTokenBar();
+    rebuildChatMessagesFull();
+    syncComposerButtons();
+  });
 
   document.querySelectorAll("[data-close-pr]").forEach((btn) => {
     btn.addEventListener("click", () => {

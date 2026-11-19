@@ -52,6 +52,47 @@ export interface SkillAssignment {
   roles: SkillTargetRole[];
 }
 
+export interface AutoReviewSettings {
+  enabled: boolean;
+  poll_interval_seconds?: number;
+  run_tests?: boolean;
+  review_action?: "full_review" | "comment_only";
+  include_drafts?: boolean;
+  max_prs_per_hour?: number;
+  max_tokens_per_pr?: number;
+  model?: string;
+}
+
+export interface AutoReviewEntry {
+  prNumber: number;
+  title: string;
+  author?: string;
+  headRef?: string;
+  baseRef?: string;
+  status: "reviewed" | "error" | "canceled";
+  summary?: string;
+  tokens?: number;
+  durationMs?: number;
+  sessionId?: string;
+  reviewedAt: string;
+  error?: string;
+}
+
+export interface AutoReviewStatus {
+  workspace: string;
+  enabled: boolean;
+  state: "idle" | "polling" | "reviewing" | "paused_limit" | "error";
+  config: AutoReviewSettings;
+  activePr?: number;
+  activePrTitle?: string;
+  queueCount: number;
+  reviewedLastHour: number;
+  lastPollAt?: string;
+  nextPollAt?: string;
+  lastError?: string;
+  history?: AutoReviewEntry[];
+}
+
 export interface TeamSettings {
   permission_mode?: PermissionMode;
   jira_enabled: boolean;
@@ -68,6 +109,7 @@ export interface TeamSettings {
   in_turn_keep_tool_results?: number;
   review_model?: string;
   inline_model?: string;
+  auto_review?: AutoReviewSettings;
   skill_assignments?: SkillAssignment[];
 }
 
@@ -430,6 +472,7 @@ export interface ProjectWorkspaceContext {
     collapsed: boolean;
   };
   gitTab: GitSubTab;
+  autoReview?: AutoReviewStatus | null;
   draftObjective: string;
   draftImages: ImageAttachment[];
   jiraKeyInput: string;
@@ -587,6 +630,10 @@ export interface WailsBackendApp {
   InlineComplete?(workspace: string, relPath: string, prefix: string, suffix: string, model: string): Promise<InlineCompleteResponse>;
   InlineEdit?(workspace: string, relPath: string, instruction: string, selectedText: string, startLine: number, endLine: number, beforeCtx: string, afterCtx: string, model: string): Promise<InlineEditResponse>;
   CancelInlineAI?(): Promise<void>;
+  GetAutoReviewStatus?(workspace: string): Promise<AutoReviewStatus>;
+  SetAutoReviewConfig?(workspace: string, cfg: AutoReviewSettings): Promise<AutoReviewStatus>;
+  TriggerAutoReviewPoll?(workspace: string): Promise<AutoReviewStatus>;
+  StopActiveAutoReview?(workspace: string): Promise<boolean>;
   GitHubStatus(workspace: string): Promise<GitHubStatus>;
   SaveGitHubConfig?(token: string, baseURL: string, workspace: string): Promise<GitHubStatus>;
   JiraStatus?(): Promise<JiraConnectorStatus>;

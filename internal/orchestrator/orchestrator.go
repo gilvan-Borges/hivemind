@@ -85,6 +85,9 @@ type Runner struct {
 	OnEvent            func(Event)
 	EnableTriage       bool
 	EnableClosingChief bool
+	// ReviewRoot optionally isolates read/test tools during auto-review onto an ephemeral PR worktree.
+	ReviewRoot         string
+	autoReviewMode     bool
 	integration        string
 	deliveryRoot       string
 	deliveryBranch     string
@@ -230,6 +233,10 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	if runMode == "plan:feature" {
 		runMode = "plan"
 	}
+	r.autoReviewMode = runMode == "auto-review"
+	if r.autoReviewMode {
+		r.reviewRequested = true
+	}
 	sess, err := r.openSession(ctx, req.SessionID, objective, key, runMode)
 	if err != nil {
 		return result, err
@@ -246,6 +253,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	useTriage := (runMode == "" && r.EnableTriage) ||
 		runMode == "auto" ||
 		runMode == "direct" ||
+		runMode == "auto-review" ||
 		runMode == "plan" ||
 		runMode == "plan:sdd" ||
 		runMode == "plan:sdd-jira" ||
@@ -1703,6 +1711,13 @@ type delegateResult struct {
 
 func (r *Runner) resolveTriageChief() team.Agent {
 	chief := r.primaryChief()
+	if r.autoReviewMode {
+		if arm := strings.TrimSpace(r.Project.Settings.AutoReview.Model); arm != "" {
+			chief.Model = arm
+			chief.Provider = team.NormalizeProvider("", arm)
+			return chief
+		}
+	}
 	if r.reviewRequested {
 		if rm := strings.TrimSpace(r.Project.Settings.ReviewModel); rm != "" {
 			chief.Model = rm
@@ -1721,25 +1736,35 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 
 	sddDocs := runMode == "plan:sdd"
 	sddJira := runMode == "plan:sdd-jira"
+	isAutoReview := runMode == "auto-review"
+
+	toolRoot := r.Workspace
+	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
+		toolRoot = r.ReviewRoot
+	}
 
 	// Triage Chief uses RoleProjectManager with DisableGitWrite=true so it never edits or commits on main workspace,
 	// while retaining full PR inspection, comment, review, request-review, and merge governance tools.
+	// In auto-review mode, DisableMerge=true physically omits github_merge_pr (hard-gate).
 	// SDD phases narrow this further: DocsOnlyWrite blocks code and Jira/GitHub writes until the gates are approved.
 	baseTools, err := tools.ForRole(team.RoleProjectManager, tools.Deps{
-		Root:                 r.Workspace,
-		Settings:             r.Project.Settings,
-		DisableGitWrite:      true,
-		DocsOnlyWrite:        sddDocs || sddJira,
-		ReviewRequestedInObj: r.reviewRequested,
-		Allowlist:            r.Project.Settings.ShellAllowlist,
-		Confirm:              r.Confirm,
-		Approve:              r.Approve,
-		Git:                  r.Git,
-		GitHub:               r.GitHub,
-		Jira:                 r.Jira,
-		JiraKey:              jiraKey,
-		JiraProject:          r.Project.Settings.JiraProject,
-		BaseBranch:           r.Project.Settings.BaseBranch,
+		Root:                   toolRoot,
+		Settings:               r.Project.Settings,
+		DisableGitWrite:        true,
+		DisableMerge:           isAutoReview,
+		ReviewCommentOnly:      isAutoReview && r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only",
+		AllowReadOnlyTestShell: isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests(),
+		DocsOnlyWrite:          sddDocs || sddJira,
+		ReviewRequestedInObj:   r.reviewRequested || isAutoReview,
+		Allowlist:              r.Project.Settings.ShellAllowlist,
+		Confirm:                r.Confirm,
+		Approve:                r.Approve,
+		Git:                    r.Git,
+		GitHub:                 r.GitHub,
+		Jira:                   r.Jira,
+		JiraKey:                jiraKey,
+		JiraProject:            r.Project.Settings.JiraProject,
+		BaseBranch:             r.Project.Settings.BaseBranch,
 	})
 	if err != nil {
 		return false, "", err
@@ -1832,7 +1857,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		allTools = append(baseTools, docsReady)
 	}
 
-	if runMode != "direct" && !sddDocs {
+	if runMode != "direct" && runMode != "auto-review" && !sddDocs {
 		delegateTool, err := functiontool.New(functiontool.Config{
 			Name:        "delegate_to_squad",
 			Description: fmt.Sprintf("Registra o plano técnico e dispara dinamicamente de 1 até %d desenvolvedores paralelos em worktrees separadas (Dev(s) → QA → Chefe).", maxDevs),
@@ -2037,6 +2062,27 @@ PROTOCOLO DE REVISÃO PROFUNDA & ECONÔMICA DE PR:
 
 	var triageInstr string
 	switch runMode {
+	case "auto-review":
+		testRule := "Execução de testes desabilitada nesta configuração (faça auditoria estática completa no diff e no projeto)."
+		if r.Project.Settings.AutoReview.EffectiveRunTests() {
+			testRule = "Testes habilitados em worktree isolada da branch do PR: você PODE rodar comandos de teste/build da stack via run_shell (ex.: testes afetados pelo PR) e citar os resultados objetivos no parecer. Operações de commit, push ou merge via shell são bloqueadas."
+		}
+		actionRule := "Publique o parecer adequado com github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT conforme os achados técnicos)."
+		if r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only" {
+			actionRule = "Modo SOMENTE COMENTAR ativo: publique obrigatoriamente com github_review_pr usando event=\"COMMENT\" (APPROVE e REQUEST_CHANGES estão bloqueados)."
+		}
+		triageInstr = fmt.Sprintf(`%s
+
+Você é o Chefe da equipe (%s) operando em MODO REVISÃO AUTOMÁTICA DE FLUXO (autônomo, SEM MERGE).
+REGRAS ABSOLUTAS DESTE MODO:
+1. NUNCA tente mesclar o PR (github_merge_pr foi fisicamente removida; o merge é decisão humana).
+2. Inspecione o PR com github_get_pr + github_pr_files + github_pr_diff + github_ci_status.
+3. Quando houver dúvida fora do diff, investigue o repositório inteiro livremente usando search_text, find_files e read_file(start_line, end_line).
+4. %s
+5. %s
+6. Ao final, devolva um resumo curto e objetivo do veredito registrado no GitHub.
+%s`,
+			chief.Instructions, chief.Name, testRule, actionRule, govRules)
 	case "direct":
 		triageInstr = fmt.Sprintf(`%s
 
@@ -2183,8 +2229,12 @@ REGRA DE TRIAGEM:
 			if r.OnEvent != nil {
 				r.emitEvent(ev, labels)
 			}
-			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
-				return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
+			tokenLimit := r.Project.Settings.MaxTokens
+			if isAutoReview {
+				tokenLimit = r.Project.Settings.AutoReview.EffectiveMaxTokensPerPR(tokenLimit)
+			}
+			if tokenLimit > 0 && r.turnTotalTokens > tokenLimit {
+				return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, tokenLimit)
 			}
 		}
 		if ev != nil && !ev.Partial && ev.LLMResponse.Content != nil {

@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, OpenCodeStatus, PermissionMode, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, OpenCodeStatus, PermissionMode, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -131,6 +131,8 @@ export const state = {
   gitMoreMenuOpen: false,
   commitMenuOpen: false,
   showFlowResponded: false,
+  autoReview: null as AutoReviewStatus | null,
+  autoReviewConfigOpen: false,
   gitTab: "changes" as GitSubTab,
   skills: [] as SkillInfo[],
   skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
@@ -231,6 +233,7 @@ export function saveActiveToProjectContext() {
   ctx.prs = state.prs;
   ctx.gitGraph = state.gitGraph;
   ctx.gitTab = state.gitTab;
+  ctx.autoReview = state.autoReview;
   ctx.draftObjective = state.draftObjective;
   ctx.draftImages = state.draftImages;
   ctx.jiraKeyInput = state.jiraKeyInput;
@@ -259,6 +262,7 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.prs = ctx.prs;
   state.gitGraph = ctx.gitGraph;
   state.gitTab = ctx.gitTab;
+  state.autoReview = ctx.autoReview ?? null;
   state.draftObjective = ctx.draftObjective;
   state.draftImages = ctx.draftImages;
   state.jiraKeyInput = ctx.jiraKeyInput;

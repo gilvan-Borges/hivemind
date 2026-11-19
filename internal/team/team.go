@@ -41,28 +41,96 @@ type File struct {
 	Teams    []Team   `yaml:"teams" json:"teams"`
 }
 
+// AutoReviewSettings configures automatic background PR review on the IDE Flow tab.
+// Automatic reviews NEVER merge pull requests (enforced as a hard tool gate).
+type AutoReviewSettings struct {
+	Enabled             bool   `yaml:"enabled" json:"enabled"`
+	PollIntervalSeconds int    `yaml:"poll_interval_seconds,omitempty" json:"poll_interval_seconds,omitempty"`
+	RunTests            *bool  `yaml:"run_tests,omitempty" json:"run_tests,omitempty"`
+	ReviewAction        string `yaml:"review_action,omitempty" json:"review_action,omitempty"` // "full_review" | "comment_only"
+	IncludeDrafts       bool   `yaml:"include_drafts,omitempty" json:"include_drafts,omitempty"`
+	MaxPRsPerHour       int    `yaml:"max_prs_per_hour,omitempty" json:"max_prs_per_hour,omitempty"`
+	MaxTokensPerPR      int64  `yaml:"max_tokens_per_pr,omitempty" json:"max_tokens_per_pr,omitempty"`
+	Model               string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// EffectivePollIntervalSeconds returns the bounded polling interval (default 120s, min 60s, max 3600s).
+func (a AutoReviewSettings) EffectivePollIntervalSeconds() int {
+	if a.PollIntervalSeconds <= 0 {
+		return 120
+	}
+	if a.PollIntervalSeconds < 60 {
+		return 60
+	}
+	if a.PollIntervalSeconds > 3600 {
+		return 3600
+	}
+	return a.PollIntervalSeconds
+}
+
+// EffectiveRunTests reports whether automatic reviews may execute project tests in an isolated worktree (default true).
+func (a AutoReviewSettings) EffectiveRunTests() bool {
+	if a.RunTests == nil {
+		return true
+	}
+	return *a.RunTests
+}
+
+// EffectiveReviewAction normalizes the review action ("full_review" or "comment_only").
+func (a AutoReviewSettings) EffectiveReviewAction() string {
+	switch strings.ToLower(strings.TrimSpace(a.ReviewAction)) {
+	case "comment_only", "comment", "comments":
+		return "comment_only"
+	default:
+		return "full_review"
+	}
+}
+
+// EffectiveMaxPRsPerHour returns the hourly PR cap (default 6, range 1..30).
+func (a AutoReviewSettings) EffectiveMaxPRsPerHour() int {
+	if a.MaxPRsPerHour <= 0 {
+		return 6
+	}
+	if a.MaxPRsPerHour > 30 {
+		return 30
+	}
+	return a.MaxPRsPerHour
+}
+
+// EffectiveMaxTokensPerPR returns the per-PR token budget (default 600,000 when unset).
+func (a AutoReviewSettings) EffectiveMaxTokensPerPR(fallback int64) int64 {
+	if a.MaxTokensPerPR > 0 {
+		return a.MaxTokensPerPR
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 600000
+}
+
 // Settings apply to every team in the project.
 type Settings struct {
-	PermissionMode           string   `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
-	JiraEnabled              bool     `yaml:"jira_enabled" json:"jira_enabled"`
-	JiraProject              string   `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
-	Worktrees                *bool    `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
-	AutoCommit               bool     `yaml:"auto_commit" json:"auto_commit"`
-	AutoPR                   bool     `yaml:"auto_pr" json:"auto_pr"`
-	HomologBranch            string   `yaml:"homolog_branch,omitempty" json:"homolog_branch,omitempty"`
-	ProtectedBranches        []string `yaml:"protected_branches,omitempty" json:"protected_branches,omitempty"`
-	RequireMainMergeApproval *bool    `yaml:"require_main_merge_approval,omitempty" json:"require_main_merge_approval,omitempty"`
-	MaxQALoops               int      `yaml:"max_qa_loops" json:"max_qa_loops"`
-	MaxDynamicDevs           int      `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
-	MaxLLMCalls              int               `yaml:"max_llm_calls" json:"max_llm_calls"`
-	MaxTokens                int64             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	InTurnKeepToolResults    int               `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
-	ReviewModel              string            `yaml:"review_model,omitempty" json:"review_model,omitempty"`
-	InlineModel              string            `yaml:"inline_model,omitempty" json:"inline_model,omitempty"`
-	BaseBranch               string            `yaml:"base_branch" json:"base_branch"`
-	ShellAllowlist           []string          `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
-	ConfirmShell             *bool             `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
-	SkillAssignments         []SkillAssignment `yaml:"skill_assignments,omitempty" json:"skill_assignments,omitempty"`
+	PermissionMode           string             `yaml:"permission_mode,omitempty" json:"permission_mode,omitempty"`
+	JiraEnabled              bool               `yaml:"jira_enabled" json:"jira_enabled"`
+	JiraProject              string             `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
+	Worktrees                *bool              `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
+	AutoCommit               bool               `yaml:"auto_commit" json:"auto_commit"`
+	AutoPR                   bool               `yaml:"auto_pr" json:"auto_pr"`
+	HomologBranch            string             `yaml:"homolog_branch,omitempty" json:"homolog_branch,omitempty"`
+	ProtectedBranches        []string           `yaml:"protected_branches,omitempty" json:"protected_branches,omitempty"`
+	RequireMainMergeApproval *bool              `yaml:"require_main_merge_approval,omitempty" json:"require_main_merge_approval,omitempty"`
+	MaxQALoops               int                `yaml:"max_qa_loops" json:"max_qa_loops"`
+	MaxDynamicDevs           int                `yaml:"max_dynamic_devs,omitempty" json:"max_dynamic_devs,omitempty"`
+	MaxLLMCalls              int                `yaml:"max_llm_calls" json:"max_llm_calls"`
+	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
+	ReviewModel              string             `yaml:"review_model,omitempty" json:"review_model,omitempty"`
+	InlineModel              string             `yaml:"inline_model,omitempty" json:"inline_model,omitempty"`
+	AutoReview               AutoReviewSettings `yaml:"auto_review,omitempty" json:"auto_review,omitempty"`
+	BaseBranch               string             `yaml:"base_branch" json:"base_branch"`
+	ShellAllowlist           []string           `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
+	ConfirmShell             *bool              `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
+	SkillAssignments         []SkillAssignment  `yaml:"skill_assignments,omitempty" json:"skill_assignments,omitempty"`
 }
 
 // DefaultSettings returns the recommended governance defaults:

@@ -21,6 +21,92 @@ export namespace githubx {
 
 export namespace idecore {
 	
+	export class AutoReviewEntry {
+	    prNumber: number;
+	    title: string;
+	    author?: string;
+	    headRef?: string;
+	    baseRef?: string;
+	    status: string;
+	    summary?: string;
+	    tokens?: number;
+	    durationMs?: number;
+	    sessionId?: string;
+	    reviewedAt: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoReviewEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prNumber = source["prNumber"];
+	        this.title = source["title"];
+	        this.author = source["author"];
+	        this.headRef = source["headRef"];
+	        this.baseRef = source["baseRef"];
+	        this.status = source["status"];
+	        this.summary = source["summary"];
+	        this.tokens = source["tokens"];
+	        this.durationMs = source["durationMs"];
+	        this.sessionId = source["sessionId"];
+	        this.reviewedAt = source["reviewedAt"];
+	        this.error = source["error"];
+	    }
+	}
+	export class AutoReviewStatus {
+	    workspace: string;
+	    enabled: boolean;
+	    state: string;
+	    config: team.AutoReviewSettings;
+	    activePr?: number;
+	    activePrTitle?: string;
+	    queueCount: number;
+	    reviewedLastHour: number;
+	    lastPollAt?: string;
+	    nextPollAt?: string;
+	    lastError?: string;
+	    history?: AutoReviewEntry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoReviewStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspace = source["workspace"];
+	        this.enabled = source["enabled"];
+	        this.state = source["state"];
+	        this.config = this.convertValues(source["config"], team.AutoReviewSettings);
+	        this.activePr = source["activePr"];
+	        this.activePrTitle = source["activePrTitle"];
+	        this.queueCount = source["queueCount"];
+	        this.reviewedLastHour = source["reviewedLastHour"];
+	        this.lastPollAt = source["lastPollAt"];
+	        this.nextPollAt = source["nextPollAt"];
+	        this.lastError = source["lastError"];
+	        this.history = this.convertValues(source["history"], AutoReviewEntry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class CommandOutput {
 	    command: string;
 	    output: string;
@@ -1265,6 +1351,32 @@ export namespace team {
 	        this.instructions = source["instructions"];
 	    }
 	}
+	export class AutoReviewSettings {
+	    enabled: boolean;
+	    poll_interval_seconds?: number;
+	    run_tests?: boolean;
+	    review_action?: string;
+	    include_drafts?: boolean;
+	    max_prs_per_hour?: number;
+	    max_tokens_per_pr?: number;
+	    model?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoReviewSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.poll_interval_seconds = source["poll_interval_seconds"];
+	        this.run_tests = source["run_tests"];
+	        this.review_action = source["review_action"];
+	        this.include_drafts = source["include_drafts"];
+	        this.max_prs_per_hour = source["max_prs_per_hour"];
+	        this.max_tokens_per_pr = source["max_tokens_per_pr"];
+	        this.model = source["model"];
+	    }
+	}
 	export class Team {
 	    name: string;
 	    description?: string;
@@ -1332,6 +1444,7 @@ export namespace team {
 	    in_turn_keep_tool_results?: number;
 	    review_model?: string;
 	    inline_model?: string;
+	    auto_review?: AutoReviewSettings;
 	    base_branch: string;
 	    shell_allowlist?: string[];
 	    confirm_shell?: boolean;
@@ -1359,6 +1472,7 @@ export namespace team {
 	        this.in_turn_keep_tool_results = source["in_turn_keep_tool_results"];
 	        this.review_model = source["review_model"];
 	        this.inline_model = source["inline_model"];
+	        this.auto_review = this.convertValues(source["auto_review"], AutoReviewSettings);
 	        this.base_branch = source["base_branch"];
 	        this.shell_allowlist = source["shell_allowlist"];
 	        this.confirm_shell = source["confirm_shell"];
