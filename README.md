@@ -273,6 +273,8 @@ Nascem ligados: Context7 (documentação atual, `CONTEXT7_API_KEY`) e o Code Rev
 
 As skills `ponytail` (modo `lite`) e `improve-codebase-architecture` entram no catálogo nativo para o Chefe escolher ao delegar. `untangle-codebase` fica no disco e nasce desligada: só entra se alguém pedir a limpeza do repositório pelo nome.
 
+A proposta do agente residente (assistente sempre ligado, com sandbox) está em [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md). Ainda não há comando nem tela para ele.
+
 ## Cursor (agente do editor)
 
 Quem edita este repositório no Cursor tem outra config, só para esse agente, em [`docs/CURSOR.md`](docs/CURSOR.md). Context7 e o Code Review Graph ficam ligados em `.cursor/mcp.json`. Playwright, Chrome DevTools, Toolbox, GitHub, Figma, Codebase Memory e a skill `untangle-codebase` ficam de fora do que o Cursor carrega.
