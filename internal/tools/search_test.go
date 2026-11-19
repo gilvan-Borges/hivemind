@@ -66,7 +66,7 @@ func TestSearchTextLiteralAndRegex(t *testing.T) {
 		t.Fatalf("glob *.spec.ts should not match routes.ts:\n%s", out)
 	}
 
-	// 3. Path restriction.
+	// 3. Path restriction (directory and single file).
 	out, err = runSearchText(context.Background(), root, searchTextArgs{
 		Query: "SUPER_ADMIN",
 		Path:  "api",
@@ -76,6 +76,17 @@ func TestSearchTextLiteralAndRegex(t *testing.T) {
 	}
 	if !strings.Contains(out, "Nenhuma ocorrência encontrada") {
 		t.Fatalf("expected no matches under api/, got:\n%s", out)
+	}
+
+	out, err = runSearchText(context.Background(), root, searchTextArgs{
+		Query: "PageResponse",
+		Path:  "api/ClienteController.java",
+	})
+	if err != nil {
+		t.Fatalf("single-file path search failed: %v", err)
+	}
+	if !strings.Contains(out, "api/ClienteController.java:2:") {
+		t.Fatalf("expected match in single-file search, got:\n%s", out)
 	}
 }
 

@@ -1112,4 +1112,15 @@ func TestDetectStackMonorepoSubdirs(t *testing.T) {
 			t.Fatalf(".worktrees must be excluded from ListFileTree, got %+v", tree)
 		}
 	}
+
+	// Verify Angular + tsconfig does not produce redundant Angular/TypeScript labels.
+	ngDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(ngDir, "front"), 0o755)
+	_ = os.WriteFile(filepath.Join(ngDir, "front", "angular.json"), []byte(`{}`), 0o644)
+	_ = os.WriteFile(filepath.Join(ngDir, "front", "package.json"), []byte(`{"dependencies":{"@angular/core":"19.0.0"}}`), 0o644)
+	_ = os.WriteFile(filepath.Join(ngDir, "front", "tsconfig.json"), []byte(`{}`), 0o644)
+	ngStack := DetectStack(ngDir)
+	if ngStack.Summary != "Angular / TypeScript" {
+		t.Fatalf("expected consolidated Angular / TypeScript summary, got %q", ngStack.Summary)
+	}
 }

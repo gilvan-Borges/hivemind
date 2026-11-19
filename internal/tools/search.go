@@ -50,7 +50,7 @@ var searchIgnoredDirs = map[string]bool{
 
 type searchTextArgs struct {
 	Query         string `json:"query" jsonschema:"Texto ou expressão regular a buscar no código."`
-	Path          string `json:"path,omitempty" jsonschema:"Subdiretório relativo opcional para restringir a busca (padrão: raiz do workspace)."`
+	Path          string `json:"path,omitempty" jsonschema:"Subdiretório ou arquivo relativo opcional para restringir a busca (padrão: raiz do workspace)."`
 	Glob          string `json:"glob,omitempty" jsonschema:"Filtro de nome de arquivo opcional (ex.: *.ts, *.java, *.go, *Controller*)."`
 	Regex         bool   `json:"regex,omitempty" jsonschema:"Quando true, interpreta query como expressão regular (Go RE2)."`
 	CaseSensitive bool   `json:"case_sensitive,omitempty" jsonschema:"Quando true, diferencia maiúsculas e minúsculas (padrão: false)."`
@@ -94,7 +94,7 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 	if query == "" {
 		return "", fmt.Errorf("informe o parâmetro query para search_text")
 	}
-	searchDir, absRoot, err := resolveSearchBase(root, args.Path)
+	searchDir, absRoot, err := resolveSearchBase(root, args.Path, true)
 	if err != nil {
 		return "", err
 	}
@@ -275,7 +275,7 @@ func runFindFiles(ctx interface{ Done() <-chan struct{} }, root string, args fin
 	if pattern == "" {
 		return "", fmt.Errorf("informe o parâmetro pattern para find_files")
 	}
-	searchDir, absRoot, err := resolveSearchBase(root, args.Path)
+	searchDir, absRoot, err := resolveSearchBase(root, args.Path, false)
 	if err != nil {
 		return "", err
 	}
@@ -371,7 +371,7 @@ func runFindFiles(ctx interface{ Done() <-chan struct{} }, root string, args fin
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func resolveSearchBase(root, relPath string) (searchDir, absRoot string, err error) {
+func resolveSearchBase(root, relPath string, allowFile bool) (searchDir, absRoot string, err error) {
 	absRoot, err = filepath.Abs(root)
 	if err != nil {
 		return "", "", err
@@ -390,7 +390,7 @@ func resolveSearchBase(root, relPath string) (searchDir, absRoot string, err err
 	if err != nil {
 		return "", "", err
 	}
-	if !info.IsDir() {
+	if !info.IsDir() && !allowFile {
 		return "", "", fmt.Errorf("%s não é um diretório", relPath)
 	}
 	return resolved, absRoot, nil

@@ -52,7 +52,16 @@ func DetectStack(workspace string) ProjectStack {
 		}
 	}
 
-	inspectStackDir(abs, "", addStack, addBuild, setTestHint)
+	hasStackContaining := func(substr string) bool {
+		for _, ex := range ps.Stacks {
+			if strings.Contains(ex, substr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	inspectStackDir(abs, "", addStack, addBuild, setTestHint, hasStackContaining)
 
 	// Monorepo fallback: if no primary stack was detected at the root, inspect
 	// first-level non-ignored subdirectories (e.g. api/, web/, backend/, frontend/).
@@ -66,7 +75,7 @@ func DetectStack(workspace string) ProjectStack {
 				if strings.HasPrefix(name, ".") || ignoredDirs[name] || name == "vendor" || name == "docs" || name == "specs" {
 					continue
 				}
-				inspectStackDir(filepath.Join(abs, name), name, addStack, addBuild, setTestHint)
+				inspectStackDir(filepath.Join(abs, name), name, addStack, addBuild, setTestHint, hasStackContaining)
 			}
 		}
 	}
@@ -79,7 +88,7 @@ func DetectStack(workspace string) ProjectStack {
 	return ps
 }
 
-func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func(string)) {
+func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func(string), hasStackContaining func(string) bool) {
 	has := func(rel string) bool {
 		_, err := os.Stat(filepath.Join(dir, rel))
 		return err == nil
@@ -106,7 +115,8 @@ func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func
 		addBuild("gradle")
 		setTestHint(hintFor("./gradlew test"))
 	}
-	if has("angular.json") {
+	hasAngularJSON := has("angular.json")
+	if hasAngularJSON {
 		addStack("Angular / TypeScript")
 		addBuild("ng / npm")
 	}
@@ -114,7 +124,9 @@ func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func
 		pkg := readPackageJSONDeps(filepath.Join(dir, "package.json"))
 		switch {
 		case strings.Contains(pkg, "@angular/core"):
-			addStack("Angular / Node.js")
+			if !hasAngularJSON && !hasStackContaining("Angular") {
+				addStack("Angular / TypeScript")
+			}
 		case strings.Contains(pkg, "next"):
 			addStack("Next.js / React")
 		case strings.Contains(pkg, "react"):
@@ -124,7 +136,7 @@ func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func
 		default:
 			addStack("Node.js")
 		}
-		if has("tsconfig.json") {
+		if has("tsconfig.json") && !hasStackContaining("TypeScript") {
 			addStack("TypeScript")
 		}
 		addBuild("npm")
