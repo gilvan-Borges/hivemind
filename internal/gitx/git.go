@@ -34,7 +34,8 @@ type Git interface {
 type Local struct{}
 
 func (Local) Run(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	fullArgs := append([]string{"-c", "core.quotepath=false"}, args...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
 	procx.ConfigureContext(cmd)
 	if dir != "" {
 		cmd.Dir = dir
@@ -97,8 +98,17 @@ func (g Local) CommitAll(ctx context.Context, dir, message string) (bool, error)
 	if strings.TrimSpace(status) == "" {
 		return false, nil
 	}
-	if _, err := g.Run(ctx, dir, "add", "-A"); err != nil {
+	// Never stage HiveMind's own state (.hivemind/sessions, worktrees, MEMORY.md).
+	// git add -A would also fail when a worktree is nested under .hivemind/.
+	if _, err := g.Run(ctx, dir, "add", "-A", "--", ".", ":(exclude).hivemind", ":(exclude).hivemind/**"); err != nil {
 		return false, err
+	}
+	staged, err := g.Run(ctx, dir, "diff", "--cached", "--name-only")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(staged) == "" {
+		return false, nil
 	}
 	if _, err := g.Run(ctx, dir, "commit", "-m", message); err != nil {
 		return false, err

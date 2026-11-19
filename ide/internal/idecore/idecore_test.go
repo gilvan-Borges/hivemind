@@ -648,6 +648,35 @@ func TestWorkspaceFileUTF8ValidationAndAtomicWrite(t *testing.T) {
 	}
 }
 
+func TestQuotedGitPathsAreDecoded(t *testing.T) {
+	raw := "diff --git \"a/a\\303\\247\\303\\243o.ts\" \"b/a\\303\\247\\303\\243o.ts\"\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ \"b/a\\303\\247\\303\\243o.ts\"\n" +
+		"@@ -0,0 +1,1 @@\n" +
+		"+export const ação = 1;\n"
+	diffs := ParseUnifiedDiff(raw)
+	if len(diffs) != 1 || diffs[0].Path != "ação.ts" {
+		t.Fatalf("quoted path decoded = %+v", diffs)
+	}
+	status, staged := parsePorcelainStatus("?? \"a\\303\\247\\303\\243o.ts\"\n")
+	if _, ok := status["ação.ts"]; !ok {
+		t.Fatalf("quoted porcelain path not decoded: %+v (%v)", status, staged)
+	}
+}
+
+func TestHasUserChangesIgnoresHivemind(t *testing.T) {
+	if hasUserChanges("?? .hivemind/\n") {
+		t.Fatal(".hivemind bookkeeping must not count as user work")
+	}
+	if !hasUserChanges(" M README.md\n") {
+		t.Fatal("tracked modification must count as user work")
+	}
+	if !hasUserChanges("?? novo.txt\n") {
+		t.Fatal("untracked file must count as user work")
+	}
+}
+
 func TestParseGHPRList(t *testing.T) {
 	raw := []byte(`[
 		{

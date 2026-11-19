@@ -102,15 +102,52 @@ func ParseUnifiedDiff(raw string) []FileDiff {
 
 func parseDiffGitPath(header string) string {
 	// Format: diff --git a/path b/path
-	idx := strings.LastIndex(header, " b/")
-	if idx >= 0 {
-		return strings.TrimSpace(header[idx+3:])
+	rest := strings.TrimPrefix(header, "diff --git ")
+	if strings.HasPrefix(rest, `"`) {
+		if _, second, ok := splitGitPathPair(rest); ok {
+			return strings.TrimPrefix(gitx.UnquotePath(second), "b/")
+		}
 	}
-	fields := strings.Fields(header)
-	if len(fields) >= 4 {
-		return strings.TrimPrefix(fields[3], "b/")
+	if idx := strings.LastIndex(rest, " b/"); idx >= 0 {
+		return gitx.UnquotePath(strings.TrimSpace(rest[idx+3:]))
 	}
-	return header
+	if fields := strings.Fields(rest); len(fields) >= 2 {
+		return strings.TrimPrefix(gitx.UnquotePath(fields[len(fields)-1]), "b/")
+	}
+	return gitx.UnquotePath(header)
+}
+
+// splitGitPathPair splits the two quoted paths of a "diff --git" header.
+func splitGitPathPair(s string) (first, second string, ok bool) {
+	i := 0
+	read := func() (string, bool) {
+		for i < len(s) && s[i] == ' ' {
+			i++
+		}
+		if i >= len(s) || s[i] != '"' {
+			return "", false
+		}
+		start := i
+		i++
+		for i < len(s) {
+			if s[i] == '\\' && i+1 < len(s) {
+				i += 2
+				continue
+			}
+			if s[i] == '"' {
+				i++
+				return s[start:i], true
+			}
+			i++
+		}
+		return "", false
+	}
+	a, okA := read()
+	b, okB := read()
+	if !okA || !okB {
+		return "", "", false
+	}
+	return a, b, true
 }
 
 // WorkspaceDiff returns parsed unified diffs (staged, unstaged, and untracked new files) for workspace.
@@ -135,7 +172,7 @@ func WorkspaceDiff(ctx context.Context, workspaceDir string) ([]FileDiff, error)
 
 	if untrackedRaw, uErr := runGit(ctx, workspaceDir, "ls-files", "--others", "--exclude-standard"); uErr == nil {
 		for _, line := range strings.Split(strings.ReplaceAll(untrackedRaw, "\r\n", "\n"), "\n") {
-			rel := strings.TrimSpace(line)
+			rel := gitx.UnquotePath(strings.TrimSpace(line))
 			if rel == "" || seen[rel] || rel == ".hivemind" || strings.HasPrefix(rel, ".hivemind/") {
 				continue
 			}
@@ -190,7 +227,7 @@ func parsePorcelainStatus(raw string) (map[string]string, map[string]bool) {
 		if idx := strings.LastIndex(pathPart, " -> "); idx >= 0 {
 			pathPart = strings.TrimSpace(pathPart[idx+4:])
 		}
-		pathPart = strings.Trim(pathPart, `"`)
+		pathPart = gitx.UnquotePath(pathPart)
 		pathPart = filepath.ToSlash(pathPart)
 		if pathPart == "" {
 			continue
@@ -224,15 +261,15 @@ func StageWorkspaceFile(ctx context.Context, workspaceDir, relPath string, stage
 		return err
 	}
 	if stage {
-		_, err := runGit(ctx, workspaceDir, "add", "--", relClean)
+		_, err := runGit(ctx, workspaceDir, "add", "--", gitx.LiteralPathspec(relClean))
 		return err
 	}
 	g := gitx.Local{}
 	if g.HasCommit(ctx, workspaceDir) {
-		_, err := runGit(ctx, workspaceDir, "reset", "HEAD", "--", relClean)
+		_, err := runGit(ctx, workspaceDir, "reset", "HEAD", "--", gitx.LiteralPathspec(relClean))
 		return err
 	}
-	_, err := runGit(ctx, workspaceDir, "rm", "--cached", "--", relClean)
+	_, err := runGit(ctx, workspaceDir, "rm", "--cached", "--", gitx.LiteralPathspec(relClean))
 	return err
 }
 
@@ -354,6 +391,9 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 		parts := strings.Split(line, "\t")
 		if len(parts) < 2 {
 			continue
+		}
+		for i := range parts {
+			parts[i] = gitx.UnquotePath(parts[i])
 		}
 		code := parts[0]
 		switch {
@@ -799,8 +839,8 @@ func ListGitBranches(ctx context.Context, workspace string) ([]string, error) {
 // CheckoutGitBranch switches to an existing branch or creates a new one when create is true.
 func CheckoutGitBranch(ctx context.Context, workspace, branch string, create bool) error {
 	name := strings.TrimSpace(branch)
-	if name == "" {
-		return fmt.Errorf("informe o nome da branch")
+	if err := gitx.ValidateBranchName(name); err != nil {
+		return err
 	}
 	if create {
 		_, err := runGit(ctx, workspace, "checkout", "-b", name)
