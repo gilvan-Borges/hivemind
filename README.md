@@ -163,16 +163,19 @@ Um exemplo completo está em [examples/team.yaml](examples/team.yaml). Campos ú
 | `permission_mode` | `governed` (padrão), `auto_edit` ou `full_access` (autonomia e permissão total estilo Claude Code / Codex) |
 | `worktrees` | Sempre trabalha em worktree separada por padrão (`true`) |
 | `jira_enabled` | Liga ou desliga as ferramentas de Jira e o comentário final |
-| `auto_commit` | Commit consolidado pelo Chefe/Arquiteto na worktree de entrega (`true` por padrão) |
-| `auto_pr` | `git push` e abertura do pull request da worktree de entrega (`true` por padrão) |
+| `auto_commit` | Commit consolidado pelo Chefe/Arquiteto na worktree de entrega (`true` por padrão), **somente após `qa_approve`** |
+| `auto_pr` | `git push` e abertura do pull request da worktree de entrega (`true` por padrão), **somente após `qa_approve`** |
 | `homolog_branch` | Branch de homologação (`homolog`) onde o Chefe pode mesclar após aprovação do revisor |
 | `base_branch` | Branch base principal (`main`); merge em `main` pede permissão explícita ao usuário (salvo em `full_access`) |
 | `max_qa_loops` | Máximo de voltas desenvolvedor/QA |
 | `max_llm_calls` | Limite de chamadas de modelo. `0` usa o padrão do ADK (500). `-1` não limita |
+| `max_tokens` | Limite de tokens por execução (padrão `0` = sem limite). `hivemind run --max-tokens N` sobrescreve |
 | `shell_allowlist` | Executáveis que `run_shell` pode chamar (`full_access` libera todos) |
 | `confirm_shell` | Pede confirmação para comando destrutivo |
 
-Comandos de shell fora da lista são recusados. `git push --force`, `git reset --hard`, `rm` e pipes pedem confirmação. Fora de um terminal a confirmação é negada, a menos que você passe `--yes`.
+Comandos de shell fora da lista são recusados. `git push --force`, `git reset --hard`, `rm` e pipes pedem confirmação. Fora de um terminal a confirmação é negada, a menos que você passe `--yes`. O `run_shell` roda com ambiente sanitizado (sem `*_TOKEN`/`*_KEY`), timeout padrão de 20 minutos e saída limitada.
+
+Se o QA não aprovar a entrega, o run termina como **pendente de QA**: as alterações ficam na worktree de entrega e **não** há commit, push nem pull request.
 
 ## Uso
 
@@ -184,6 +187,9 @@ hivemind
 
 # uma execução, com a saída de cada agente
 hivemind run "adicionar um endpoint de healthcheck"
+
+# limita o custo desta execução (sobrescreve settings.max_tokens)
+hivemind run --max-tokens 600000 "implementar o fluxo de login"
 
 # a issue vira o objetivo; a chave entra na branch, no commit e no PR
 hivemind run --jira PROJ-123
@@ -230,9 +236,9 @@ Todas as leituras e gravações ficam presas ao diretório de trabalho do agente
 go test ./...
 ```
 
-Os testes não chamam Gemini, GitHub nem Jira de verdade. O modelo é um `model.LLM` scriptado, o Jira é um servidor HTTP falso, o GitHub REST também, e o git dos testes é um repositório temporário local. O shell é exercitado com `echo` e com recusa de comando perigoso.
+Os testes não chamam Gemini, GitHub nem Jira de verdade. O modelo é um `model.LLM` scriptado, o Jira é um servidor HTTP falso, o GitHub REST também, e o git dos testes é um repositório temporário local. O shell é exercitado com comandos portáveis e com recusa de comando perigoso. Os testes que precisam de um `agy` falso compilam um binário Go em `internal/testutil/fakeagy`, então a suíte passa igualmente no Windows e no Linux.
 
-O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI e da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`.
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI **no Linux (com `-race`) e no Windows**, testes da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`.
 
 ## Limitações do ADK Go (v2.8.0)
 
