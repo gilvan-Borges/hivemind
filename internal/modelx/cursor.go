@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -172,7 +173,21 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	prompt := buildCursorPrompt(req)
+	imgDir := filepath.Join(dir, ".hivemind", "cursor-images")
+	if err := os.MkdirAll(imgDir, 0o755); err != nil {
+		return nil, err
+	}
+	images, err := SaveRequestImages(imgDir, req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, img := range images {
+			_ = os.Remove(img.Path)
+		}
+		_ = os.Remove(imgDir)
+	}()
+	prompt := buildCursorPrompt(req, images)
 	prompt = redactSecret(prompt, c.Key)
 	taskPath, err := writeCursorTask(dir, prompt)
 	if err != nil {
@@ -195,28 +210,36 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		return nil, fmt.Errorf("não foi possível executar o Cursor CLI: %s", redactSecret(err.Error(), c.Key))
 	}
 
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var final string
 	var sawResult bool
 	var failed bool
-	for sc.Scan() {
-		notice, ok := parseCursorStreamLine(sc.Text())
+	// Lê até o EOF, inclusive linhas maiores que o limite: um tool_call com o
+	// corpo do arquivo pode passar de 4 MiB. Parar o scanner sem drenar enche
+	// o pipe e o CLI trava até o timeout.
+	readErr := readCursorStream(stdout, maxCursorLine, func(line string) bool {
+		notice, ok := parseCursorStreamLine(line)
 		if !ok {
-			continue
+			return true
 		}
 		notice.Text = redactSecret(notice.Text, c.Key)
 		if notice.Final {
 			final = notice.Text
 			sawResult = true
 			failed = notice.Failed
-			continue
+			return true
 		}
 		if notice.Text != "" && !emit(notice.Text) {
-			cancel()
-			_ = cmd.Wait()
+			return false
+		}
+		return true
+	})
+	if readErr != nil {
+		cancel()
+		_ = cmd.Wait()
+		if errors.Is(readErr, errStopStream) {
 			return nil, ctx.Err()
 		}
+		return nil, fmt.Errorf("leitura do Cursor CLI: %s", redactSecret(readErr.Error(), c.Key))
 	}
 	// Wait só depois de esvaziar stdout. Chamar Wait em paralelo fecha o pipe
 	// e, num processo rápido, perde a última linha (o evento result).
@@ -307,7 +330,7 @@ func writeCursorTask(dir, prompt string) (string, error) {
 	return path, nil
 }
 
-func buildCursorPrompt(req *model.LLMRequest) string {
+func buildCursorPrompt(req *model.LLMRequest, images []SavedImage) string {
 	var b strings.Builder
 	b.WriteString("Você é o agente Cursor chamado pelo HiveMind, via CLI oficial em modo headless.\n")
 	b.WriteString("Trabalhe só neste workspace. Não faça git commit, git push nem abra pull request: isso é do HiveMind.\n")
@@ -321,7 +344,14 @@ func buildCursorPrompt(req *model.LLMRequest) string {
 			b.WriteByte('\n')
 		}
 	}
+	if len(images) > 0 {
+		b.WriteString("\nImagens anexadas pelo usuário. Leia estes arquivos antes de responder:\n")
+		for _, img := range images {
+			fmt.Fprintf(&b, "- %s (%s)\n", img.Path, img.MIMEType)
+		}
+	}
 	b.WriteString("\n[conversa]\n")
+	imgIdx := 0
 	if req != nil {
 		for _, content := range req.Contents {
 			if content == nil {
@@ -331,7 +361,7 @@ func buildCursorPrompt(req *model.LLMRequest) string {
 			if role == "" {
 				role = "user"
 			}
-			fmt.Fprintf(&b, "(%s)\n%s\n", role, contentText(content))
+			fmt.Fprintf(&b, "(%s)\n%s\n", role, contentTextWithImageCursor(content, images, &imgIdx))
 		}
 	}
 	return b.String()
@@ -468,22 +498,79 @@ func cursorWellKnown() []string {
 	return out
 }
 
+const maxCursorLine = 1024 * 1024
+
+var errStopStream = errors.New("stream interrompido")
+
+// readCursorStream lê até o EOF. Uma linha maior que max é descartada, mas o
+// restante do pipe continua sendo lido para o processo não bloquear.
+func readCursorStream(r io.Reader, max int, handle func(line string) bool) error {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var buf []byte
+	skipping := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if skipping {
+			if err == bufio.ErrBufferFull {
+				continue
+			}
+			skipping = false
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if err == bufio.ErrBufferFull {
+			if len(buf)+len(chunk) > max {
+				buf = nil
+				skipping = true
+				continue
+			}
+			buf = append(buf, chunk...)
+			continue
+		}
+		if len(chunk) > 0 {
+			buf = append(buf, chunk...)
+		}
+		if len(buf) > 0 && len(buf) <= max {
+			line := string(buf)
+			buf = nil
+			if !handle(line) {
+				return errStopStream
+			}
+		} else {
+			buf = nil
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
 type limitWriter struct {
 	w io.Writer
 	n int
 }
 
 func (l *limitWriter) Write(p []byte) (int, error) {
-	if l.n <= 0 {
-		return len(p), nil
+	orig := len(p)
+	if l.n <= 0 || orig == 0 {
+		return orig, nil
 	}
-	if len(p) > l.n {
-		p = p[:l.n]
+	write := p
+	if len(write) > l.n {
+		write = write[:l.n]
 	}
-	n, err := l.w.Write(p)
+	n, err := l.w.Write(write)
 	l.n -= n
-	if err != nil {
+	if err != nil || n < len(write) {
 		return n, err
 	}
-	return len(p), nil
+	return orig, nil
 }

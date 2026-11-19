@@ -95,6 +95,64 @@ func TestCursorModelID(t *testing.T) {
 	}
 }
 
+func TestLimitWriterReportsFullLength(t *testing.T) {
+	var buf strings.Builder
+	w := &limitWriter{w: &buf, n: 4}
+	n, err := w.Write([]byte("abcdefghij"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 10 {
+		t.Fatalf("escreveu %d, o contrato exige o tamanho original", n)
+	}
+	if buf.String() != "abcd" {
+		t.Fatalf("guardou %q", buf.String())
+	}
+	n, err = w.Write([]byte("zzzz"))
+	if err != nil || n != 4 {
+		t.Fatalf("descarte n=%d err=%v", n, err)
+	}
+	if buf.String() != "abcd" {
+		t.Fatalf("passou do limite: %q", buf.String())
+	}
+}
+
+func TestReadCursorStreamSkipsOversizedLine(t *testing.T) {
+	first := "{\"type\":\"assistant\",\"timestamp_ms\":1,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}\n"
+	huge := strings.Repeat("y", 70*1024) + "\n"
+	last := "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"fim\"}\n"
+	var got []string
+	err := readCursorStream(strings.NewReader(first+huge+last), 1024, func(line string) bool {
+		got = append(got, strings.TrimSpace(line))
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !strings.Contains(got[0], "oi") || !strings.Contains(got[1], "fim") {
+		t.Fatalf("linhas: %d %v", len(got), got)
+	}
+}
+
+func TestBuildCursorPromptIncludesImagePath(t *testing.T) {
+	dir := t.TempDir()
+	req := &model.LLMRequest{Contents: []*genai.Content{{
+		Role: "user",
+		Parts: []*genai.Part{
+			{Text: "o que tem nesta tela?"},
+			{InlineData: &genai.Blob{MIMEType: "image/png", Data: []byte{0x89, 0x50, 0x4e, 0x47}}},
+		},
+	}}}
+	images, err := SaveRequestImages(dir, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := buildCursorPrompt(req, images)
+	if strings.Contains(prompt, "omitido") || !strings.Contains(prompt, images[0].Path) {
+		t.Fatalf("prompt:\n%s", prompt)
+	}
+}
+
 func TestRedactSecret(t *testing.T) {
 	if got := redactSecret("falha crsr_abc no stderr", "crsr_abc"); strings.Contains(got, "crsr_abc") {
 		t.Fatal(got)
