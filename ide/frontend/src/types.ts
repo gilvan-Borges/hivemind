@@ -699,6 +699,26 @@ export interface MobilePairing {
   qrDataUrl: string;
 }
 
+export interface RelayStatus {
+  enabled: boolean;
+  loggedIn: boolean;
+  email: string;
+  baseUrl: string;
+  deviceId: string;
+  deviceName: string;
+  linked: boolean;
+  online: boolean;
+  lastError: string;
+  e2e: boolean;
+}
+
+export interface RelayLinkCode {
+  code: string;
+  expiresAt: string;
+  uri: string;
+  qrDataUrl: string;
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -755,6 +775,13 @@ export interface WailsBackendApp {
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
   RotateMobileToken?(): Promise<MobileBridgeStatus>;
   MobilePairing?(): Promise<MobilePairing>;
+  RelayStatus?(): Promise<RelayStatus>;
+  RelayLogin?(baseURL: string, email: string, password: string): Promise<RelayStatus>;
+  RelayLogout?(): Promise<RelayStatus>;
+  RelaySetEnabled?(on: boolean): Promise<RelayStatus>;
+  RelayCreateLinkCode?(): Promise<RelayLinkCode>;
+  RelayClaimLinkCode?(code: string): Promise<RelayStatus>;
+  RelayUnlink?(): Promise<RelayStatus>;
   SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;

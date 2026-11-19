@@ -397,6 +397,10 @@ export function bootstrapAsync(rootDir?: string) {
     state.mobileStatus = st;
     updateStatusBar();
   }).catch(() => {});
+  backend.RelayStatus?.().then((st) => {
+    state.relayStatus = st;
+    updateStatusBar();
+  }).catch(() => {});
 
   if (rootDir) {
     const targetKey = normalizePathKey(rootDir);

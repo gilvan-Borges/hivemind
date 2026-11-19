@@ -77,6 +77,11 @@ jobs:
         run: |
           go vet ./internal/idecore/...
           go test -v ./internal/idecore/...
+      - name: Testes do cliente de relay da IDE
+        working-directory: ide
+        run: |
+          go vet ./internal/relayclient/...
+          go test -count=1 ./internal/relayclient/...
       - name: Build e smoke-check do executável da IDE (Windows)
         if: runner.os == 'Windows'
         working-directory: ide
@@ -128,3 +133,30 @@ jobs:
         with:
           name: hivemind-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/${{ matrix.bin }}
+
+  build-relay:
+    name: Binário relay linux/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - name: Compilar hivemind-relay estático
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w" -o dist/hivemind-relay ./cmd/hivemind-relay
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hivemind-relay-linux-${{ matrix.goarch }}
+          path: dist/hivemind-relay

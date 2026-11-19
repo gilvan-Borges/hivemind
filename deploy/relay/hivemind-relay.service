@@ -1,0 +1,22 @@
+[Unit]
+Description=HiveMind Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hivemind
+Group=hivemind
+EnvironmentFile=/etc/hivemind-relay.env
+ExecStart=/usr/local/bin/hivemind-relay
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/hivemind-relay
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
