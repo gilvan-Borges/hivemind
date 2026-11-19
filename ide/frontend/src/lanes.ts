@@ -4,7 +4,7 @@ import { escapeHtml, formatTokens, matchAgentRuntime } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, syncComposerButtons } from "./chat";
 import { renderEditorBody } from "./editor";
 import { renderLeftSidebar } from "./explorer";
-import { updateStatusBar } from "./shell";
+import { openSidebarView, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, nextLaneSeq, setStatus, state, toast, toastError } from "./state";
 import { buildDraftFromProject, updateMissionBoardIfOpen } from "./teamconfig";
 
@@ -363,7 +363,13 @@ export function renderLaneBarOnly() {
       el.addEventListener("click", (ev) => {
         const tgt = ev.target as HTMLElement | null;
         if (tgt?.closest("[data-close-lane]") || tgt?.closest("[data-rename-lane]") || tgt?.closest("#lane-rename-input")) return;
-        state.activeLaneId = (el as HTMLElement).dataset.lane!;
+        const laneID = (el as HTMLElement).dataset.lane!;
+        if (laneID === "lane-autoreview") {
+          state.gitTab = "flow";
+          openSidebarView("git");
+          return;
+        }
+        state.activeLaneId = laneID;
         renderLaneBarOnly();
         renderPipelineBar();
         renderTokenBar();

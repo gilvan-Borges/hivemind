@@ -1302,6 +1302,17 @@ export function bindGitSidebarEvents() {
       } else {
         state.draftObjective = `Revisar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
       }
+      if (activeLane()?.id === "lane-autoreview") {
+        const manualLane = state.lanes.find((lane) => lane.id !== "lane-autoreview");
+        if (manualLane) {
+          state.activeLaneId = manualLane.id;
+          renderLaneBarOnly();
+          renderPipelineBar();
+          renderTokenBar();
+          rebuildChatMessagesFull();
+          syncComposerButtons();
+        }
+      }
       state.showRightAI = true;
       syncLayoutVisibility();
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;

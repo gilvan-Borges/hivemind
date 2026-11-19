@@ -832,16 +832,45 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		t.Fatalf("expected Novo commit attention, got resp=%q need=%v reason=%q", resp, need, reason)
 	}
 
-	// Case 5: already approved -> casual comment does NOT bounce back unless reviewRequested is true.
-	resp, need, _ = computePRFlowState(
+	// Case 5: human comment after an approval -> returns to "Para revisar" as "Nova resposta".
+	resp, need, reason = computePRFlowState(
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
 		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
 		time.Time{},
 	)
-	if resp != "approved" || need {
-		t.Fatalf("approved PR without re-review request should stay in Já respondidos, got resp=%q need=%v", resp, need)
+	if resp != "approved" || !need || reason != "Nova resposta" {
+		t.Fatalf("human comment after approval must return as Nova resposta, got resp=%q need=%v reason=%q", resp, need, reason)
 	}
+
+	// A later CHANGES_REQUESTED review must also requeue an already-approved PR.
+	resp, need, reason = computePRFlowState(
+		"gilvan-Borges", false, false, false,
+		[]prActivityReview{
+			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
+			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+		},
+		nil,
+		time.Time{},
+	)
+	if resp != "approved" || !need || reason != "Nova resposta" {
+		t.Fatalf("changes requested after approval must return as Nova resposta, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
+	// Once the current user responds after that activity, the PR leaves the pending queue again.
+	resp, need, reason = computePRFlowState(
+		"gilvan-Borges", false, false, false,
+		[]prActivityReview{
+			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
+			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+		},
+		[]prActivityComment{{Author: "gilvan-Borges", CreatedAt: t3}},
+		time.Time{},
+	)
+	if resp != "approved" || need {
+		t.Fatalf("approved PR must leave pending queue after the user responds last, got resp=%q need=%v reason=%q", resp, need, reason)
+	}
+
 	resp, need, reason = computePRFlowState(
 		"gilvan-Borges", false, true, true,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},

@@ -31,9 +31,10 @@ export async function boot() {
     let hit = findLaneWithContext(payload.laneId);
     if (!hit && payload.laneId === "lane-autoreview") {
       // Auto-cria lane dedicada de Revisão Automática no projeto ativo sem roubar foco do chat manual.
-      const autoLane = createLane(payload.team || "auto-review");
+      const teamName = payload.team || state.project?.teamConfig?.active || state.project?.teamConfig?.teams?.[0]?.name || activeLane()?.teamName || "principal";
+      const autoLane = createLane(teamName);
       autoLane.id = "lane-autoreview";
-      autoLane.teamName = "auto-review";
+      autoLane.label = "auto-review";
       autoLane.running = true;
       state.lanes.push(autoLane);
       renderLaneBarOnly();

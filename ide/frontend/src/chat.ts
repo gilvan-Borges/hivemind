@@ -968,6 +968,13 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   const effectiveMode = overrideMode || state.runMode;
   if (!text && attached.length === 0) return;
 
+  if (lane.id === "lane-autoreview") {
+    state.gitTab = "flow";
+    openSidebarView("git");
+    setStatus("A lane auto-review é exclusiva da automação. Escolha um PR no Fluxo e use Revisar c/ Equipe.");
+    return;
+  }
+
   if (lane.running) {
     if (laneRedirecting.has(lane.id)) return;
     laneRedirecting.add(lane.id);

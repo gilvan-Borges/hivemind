@@ -1235,13 +1235,13 @@ func isBotLogin(login string) bool {
 }
 
 // computePRFlowState derives the user's latest response and whether the PR needs their attention now:
-// - Third-party PRs return to "Para revisar" when review is requested (or re-requested),
-//   when another human comments/replies after currentUser's last review/comment (unless already approved),
-//   or when a new commit is pushed after CHANGES_REQUESTED.
-// - Own PRs appear in active "Meus PRs" ONLY when action is needed from the author:
-//   (1) an external reviewer approved and the PR is ready to merge, or
-//   (2) another human commented/requested changes after the author's last comment or commit.
-//   Otherwise (author pushed/commented last and is waiting for reviewer), it moves to "Aguardando / Já respondidos".
+//   - Third-party PRs return to "Para revisar" when review is requested (or re-requested),
+//     when another human comments/replies after currentUser's last review/comment,
+//     or when a new commit is pushed after CHANGES_REQUESTED.
+//   - Own PRs appear in active "Meus PRs" ONLY when action is needed from the author:
+//     (1) an external reviewer approved and the PR is ready to merge, or
+//     (2) another human commented/requested changes after the author's last comment or commit.
+//     Otherwise (author pushed/commented last and is waiting for reviewer), it moves to "Aguardando / Já respondidos".
 func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
 	me = strings.TrimSpace(me)
 	if me == "" {
@@ -1348,7 +1348,7 @@ func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers 
 	if reviewRequested && (myResp == "approved" || myResp == "changes_requested") {
 		return myResp, true, "Re-revisão"
 	}
-	if myResp != "approved" && !myLastAt.IsZero() && otherLastAt.After(myLastAt) {
+	if !myLastAt.IsZero() && otherLastAt.After(myLastAt) {
 		return myResp, true, "Nova resposta"
 	}
 	if myResp == "changes_requested" && !myLastAt.IsZero() && latestCommitAt.After(myLastAt) {

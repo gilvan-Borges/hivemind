@@ -53,6 +53,50 @@ func TestAutoReviewFilterAndFingerprintDedup(t *testing.T) {
 	}
 }
 
+func TestAutoReviewRequeuesApprovedPRAfterHumanActivity(t *testing.T) {
+	t1 := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	now := t2.Add(time.Minute)
+	cfg := normalizeAutoReviewSettings(team.AutoReviewSettings{Enabled: true})
+
+	previous := ProjectPullRequest{
+		Number:     725,
+		Title:      "PR already reviewed",
+		Author:     "author",
+		HeadRef:    "feat/pr-725",
+		MyResponse: "approved",
+		UpdatedAt:  t1.Format(time.RFC3339),
+	}
+	seen := map[string]autoReviewRecord{
+		"725": {Fingerprint: PRAutoReviewFingerprint(previous), ReviewedAt: t1},
+	}
+
+	resp, needsAttention, reason := computePRFlowState(
+		"gilvan-Borges", false, false, false,
+		[]prActivityReview{
+			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
+			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+		},
+		nil,
+		time.Time{},
+	)
+	updated := previous
+	updated.MyResponse = resp
+	updated.NeedsAttention = needsAttention
+	updated.AttentionReason = reason
+	updated.UpdatedAt = t2.Format(time.RFC3339)
+
+	eligible := SelectEligibleAutoReviewPRs([]ProjectPullRequest{updated}, cfg, seen, now)
+	if len(eligible) != 1 || eligible[0].Number != 725 {
+		t.Fatalf("approved PR with later human activity must be requeued, got %+v", eligible)
+	}
+
+	seen["725"] = autoReviewRecord{Fingerprint: PRAutoReviewFingerprint(updated), ReviewedAt: now}
+	if eligible = SelectEligibleAutoReviewPRs([]ProjectPullRequest{updated}, cfg, seen, now.Add(time.Minute)); len(eligible) != 0 {
+		t.Fatalf("unchanged PR must be deduplicated after re-review, got %+v", eligible)
+	}
+}
+
 func TestAutoReviewRateLimitAndBackoff(t *testing.T) {
 	dir := t.TempDir()
 	_, err := BuildTeamFromWizard(dir, WizardInput{TeamName: "principal", DevCount: 1, DefaultModel: "agy"})
