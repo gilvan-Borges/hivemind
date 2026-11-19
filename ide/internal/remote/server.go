@@ -91,6 +91,17 @@ func (s *Server) Stop(ctx context.Context) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
+// Bearer returns the LAN bridge token used to authorize in-process calls
+// (the relay client presents it locally; it never leaves the PC).
+func (s *Server) Bearer() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Token
+}
+
 // SetToken replaces the accepted bearer token (used after rotation while the
 // server is running; all previously paired devices are rejected immediately).
 func (s *Server) SetToken(token string) {
@@ -279,14 +290,14 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 // runStartRequest is the POST /api/v1/runs/start and /runs/redirect payload.
 type runStartRequest struct {
-	LaneID    string                `json:"laneId"`
-	Workspace string                `json:"workspace"`
-	Team      string                `json:"team,omitempty"`
-	Objective string                `json:"objective,omitempty"`
-	JiraKey   string                `json:"jiraKey,omitempty"`
-	SessionID string                `json:"sessionId,omitempty"`
-	RunMode   string                `json:"runMode,omitempty"`
-	Images    []idecore.ImageInput  `json:"images,omitempty"`
+	LaneID    string               `json:"laneId"`
+	Workspace string               `json:"workspace"`
+	Team      string               `json:"team,omitempty"`
+	Objective string               `json:"objective,omitempty"`
+	JiraKey   string               `json:"jiraKey,omitempty"`
+	SessionID string               `json:"sessionId,omitempty"`
+	RunMode   string               `json:"runMode,omitempty"`
+	Images    []idecore.ImageInput `json:"images,omitempty"`
 }
 
 func (req *runStartRequest) validate() string {

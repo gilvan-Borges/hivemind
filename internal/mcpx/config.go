@@ -67,6 +67,12 @@ func userConfigPath() (string, error) {
 }
 
 func defaultUserConfigPath() (string, error) {
+	// XDG_CONFIG_HOME is honored on every OS. os.UserConfigDir already does
+	// that on Unix and ignores it on Windows, which made the tests (and any
+	// explicit override) write to %AppData% instead of the temp dir.
+	if base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); base != "" {
+		return filepath.Join(base, "HiveMind", "mcp-servers.json"), nil
+	}
 	if base, err := os.UserConfigDir(); err == nil && strings.TrimSpace(base) != "" {
 		return filepath.Join(base, "HiveMind", "mcp-servers.json"), nil
 	}

@@ -99,6 +99,8 @@ Sem data; entra o que o dogfooding contínuo apontar, em ordem provável:
 5. Observabilidade do CLI (logs estruturados, métricas por run); CI rodando testes do CLI no Windows **feito**.
 6. Blame/pr-quality: QA loop com verificação executável (hoje o QA pode aprovar sem rodar teste — é só instrução de prompt).
 
+Proposta à parte, ainda sem código e sem fase própria: [SPEC_HIVE_AGENT.md](SPEC_HIVE_AGENT.md) (agente residente). Não entra na fila antes de a fase anterior fechar no dogfooding.
+
 ---
 
 ## Débitos transversais (não pertencem a uma fase; corrigir ao tocar o código)

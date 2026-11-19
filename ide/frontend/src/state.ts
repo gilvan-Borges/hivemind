@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, CursorCLIStatus, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, MCPServerInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -88,6 +88,9 @@ export const state = {
   showMobileModal: false,
   mobileStatus: null as MobileBridgeStatus | null,
   mobilePairing: null as MobilePairing | null,
+  relayStatus: null as RelayStatus | null,
+  relayLink: null as RelayLinkCode | null,
+  relayDraft: { baseUrl: "", email: "", password: "", claim: "" },
   aiUsageModal: {
     open: false,
     loading: false,

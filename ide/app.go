@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
@@ -47,6 +48,7 @@ type App struct {
 	watcherMu        sync.Mutex
 	watchers         map[string]*idecore.FileWatcher
 	mobile           *mobileBridge
+	relay            *relayclient.Client
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -123,6 +125,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		}
 	})
 	app.mobile = newMobileBridge(app.sessions, app.autoReview)
+	app.relay = newRelayClient(app)
 	return app
 }
 
@@ -137,6 +140,9 @@ func (a *App) startup(ctx context.Context) {
 	if a.mobile != nil {
 		a.mobile.start()
 	}
+	if a.relay != nil && !a.smokeCheck {
+		a.relay.Start()
+	}
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -148,6 +154,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.autoReview != nil {
 		a.autoReview.StopAll()
+	}
+	if a.relay != nil {
+		a.relay.Stop()
 	}
 	if a.mobile != nil {
 		a.mobile.stop()
