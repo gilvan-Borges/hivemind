@@ -156,6 +156,7 @@ var knownDisallowedToolTiers = map[string]Tier{
 	"git_reset":             TierDestructive,
 	"delegate_to_hive_team": TierDestructive,
 	"desktop_click":         TierDestructive,
+	"desktop_type":          TierDestructive,
 	"browser_open":          TierNetwork,
 }
 
@@ -255,6 +256,12 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 	}
 
 	cleanArgs := SanitizeArgs(call.Args)
+	switch name {
+	case "browser_open", "desktop_click", "desktop_type":
+		// Profile paths and coordinates from the model are ignored. There is no
+		// second path that runs on the host session.
+		return isolatedSpaceDecision(name)
+	}
 	tier, inPhase2 := ClassifyTool(Call{
 		Name:       name,
 		Args:       cleanArgs,

@@ -136,25 +136,31 @@ func (m *ResidentManager) Status() resident.Status {
 		st = "ocioso"
 	}
 
+	browserOK, browserReason := resident.IsolatedBrowserAvailable()
+	desktopOK, desktopReason := resident.IsolatedDesktopAvailable()
 	return resident.Status{
-		State:            st,
-		Phase:            2,
-		ReadOnly:         false,
-		AccountID:        acct,
-		Workstream:       resident.SanitizeWorkstream(cfg.Workstream),
-		Provider:         prov,
-		Model:            mod,
-		MemoryDir:        mem.AccountDir(),
-		AuditPath:        m.audit.Path(),
-		LastError:        lastErr,
-		SandboxAvailable: probe.Available,
-		SandboxMechanism: probe.Mechanism,
-		SandboxReason:    probe.Reason,
-		VaultAvailable:   vaultOK,
-		VaultReason:      vaultReason,
-		AllowedBinaries:  pol.AllowedBinaries,
-		AllowedHosts:     pol.AllowedHosts,
-		VaultSecrets:     vaultNames,
+		State:                 st,
+		Phase:                 2,
+		ReadOnly:              false,
+		AccountID:             acct,
+		Workstream:            resident.SanitizeWorkstream(cfg.Workstream),
+		Provider:              prov,
+		Model:                 mod,
+		MemoryDir:             mem.AccountDir(),
+		AuditPath:             m.audit.Path(),
+		LastError:             lastErr,
+		SandboxAvailable:      probe.Available,
+		SandboxMechanism:      probe.Mechanism,
+		SandboxReason:         probe.Reason,
+		VaultAvailable:        vaultOK,
+		VaultReason:           vaultReason,
+		AllowedBinaries:       pol.AllowedBinaries,
+		AllowedHosts:          pol.AllowedHosts,
+		VaultSecrets:          vaultNames,
+		IsolatedBrowser:       browserOK,
+		IsolatedBrowserReason: browserReason,
+		IsolatedDesktop:       desktopOK,
+		IsolatedDesktopReason: desktopReason,
 	}
 }
 

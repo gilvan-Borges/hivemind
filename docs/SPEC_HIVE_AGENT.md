@@ -405,9 +405,9 @@ Aceite:
 - Host fora da allowlist, e nome que resolve para `169.254.169.254` ou loopback, recusam.
 - Cancelar pelo app (`runs/cancel`) mata o turno e os filhos.
 
-### Fase 4 — Browser e desktop isolados
+### Fase 4 — Browser e desktop isolados — recusados até haver espaço de verdade
 
-Windows Sandbox sob demanda, perfil limpo, rede conforme a allowlist do espaço. Sem o recurso de SO, a ferramenta não aparece habilitada. Desktop da sessão real continua inexistente. Binário `cua` externo é opcional e não é dependência.
+O processo isolado de `exec` (AppContainer + Job Object no Windows, bwrap + seccomp no Linux) não é um browser com perfil limpo nem um desktop separado. Não há filtro de egress para um processo gráfico, e um clique na sessão real sairia do isolamento. `browser_open`, `desktop_click` e `desktop_type` ficam desligados: a política recusa sem perguntar, o broker não chama o sandbox e o caminho de perfil vindo do modelo é ignorado. Quando o espaço existir de fato, a ferramenta só sobe dentro dele. Sem esse espaço, nada roda. A sessão real não recebe clique. O perfil do browser da pessoa não é argumento.
 
 Aceite:
 

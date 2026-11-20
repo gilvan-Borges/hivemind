@@ -107,24 +107,28 @@ type ProjectRef struct {
 
 // Status reports the resident assistant's live state for the IDE UI (§11).
 type Status struct {
-	State            string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
-	Phase            int      `json:"phase"`
-	ReadOnly         bool     `json:"readOnly"`
-	AccountID        string   `json:"accountId"`
-	Workstream       string   `json:"workstream"`
-	Provider         string   `json:"provider"`
-	Model            string   `json:"model"`
-	MemoryDir        string   `json:"memoryDir,omitempty"`
-	AuditPath        string   `json:"auditPath,omitempty"`
-	LastError        string   `json:"lastError,omitempty"`
-	SandboxAvailable bool     `json:"sandboxAvailable"`
-	SandboxMechanism string   `json:"sandboxMechanism,omitempty"`
-	SandboxReason    string   `json:"sandboxReason,omitempty"`
-	VaultAvailable   bool     `json:"vaultAvailable"`
-	VaultReason      string   `json:"vaultReason,omitempty"`
-	AllowedBinaries  []string `json:"allowedBinaries"`
-	AllowedHosts     []string `json:"allowedHosts"`
-	VaultSecrets     []string `json:"vaultSecrets"`
+	State                 string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
+	Phase                 int      `json:"phase"`
+	ReadOnly              bool     `json:"readOnly"`
+	AccountID             string   `json:"accountId"`
+	Workstream            string   `json:"workstream"`
+	Provider              string   `json:"provider"`
+	Model                 string   `json:"model"`
+	MemoryDir             string   `json:"memoryDir,omitempty"`
+	AuditPath             string   `json:"auditPath,omitempty"`
+	LastError             string   `json:"lastError,omitempty"`
+	SandboxAvailable      bool     `json:"sandboxAvailable"`
+	SandboxMechanism      string   `json:"sandboxMechanism,omitempty"`
+	SandboxReason         string   `json:"sandboxReason,omitempty"`
+	VaultAvailable        bool     `json:"vaultAvailable"`
+	VaultReason           string   `json:"vaultReason,omitempty"`
+	AllowedBinaries       []string `json:"allowedBinaries"`
+	AllowedHosts          []string `json:"allowedHosts"`
+	VaultSecrets          []string `json:"vaultSecrets"`
+	IsolatedBrowser       bool     `json:"isolatedBrowser"`
+	IsolatedBrowserReason string   `json:"isolatedBrowserReason,omitempty"`
+	IsolatedDesktop       bool     `json:"isolatedDesktop"`
+	IsolatedDesktopReason string   `json:"isolatedDesktopReason,omitempty"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.
@@ -178,14 +182,14 @@ type TurnRequest struct {
 
 // TurnResult summarizes the completed turn.
 type TurnResult struct {
-	SessionID    string `json:"sessionId"`
-	Workstream   string `json:"workstream"`
-	FinalText    string `json:"finalText"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model"`
-	InputTokens  int64  `json:"inputTokens"`
-	OutputTokens int64  `json:"outputTokens"`
-	TotalTokens  int64  `json:"totalTokens"`
-	ToolCalls    int    `json:"toolCalls"`
-	PromptBuildMs int64 `json:"promptBuildMs"`
+	SessionID     string `json:"sessionId"`
+	Workstream    string `json:"workstream"`
+	FinalText     string `json:"finalText"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	InputTokens   int64  `json:"inputTokens"`
+	OutputTokens  int64  `json:"outputTokens"`
+	TotalTokens   int64  `json:"totalTokens"`
+	ToolCalls     int    `json:"toolCalls"`
+	PromptBuildMs int64  `json:"promptBuildMs"`
 }
