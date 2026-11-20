@@ -2,8 +2,12 @@ package modelx
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseOpenCodeUsageJSON(t *testing.T) {
@@ -109,6 +113,8 @@ func TestGetAIUsageReportListsEachAgyAccount(t *testing.T) {
 	}
 	fetchOpenCodeUsageFn = func(context.Context) OpenCodeQuota { return OpenCodeQuota{} }
 	t.Cleanup(func() {
+		FlushAIUsage()
+		resetUsageMemForTest()
 		usageFilePathFn = prevPath
 		fetchAgyUsageFn = prevAgy
 		fetchOpenCodeUsageFn = prevOC
@@ -146,6 +152,8 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	fetchAgyUsageFn = func(context.Context) AgyQuota { return AgyQuota{Available: true} }
 	fetchOpenCodeUsageFn = func(context.Context) OpenCodeQuota { return OpenCodeQuota{Available: true} }
 	t.Cleanup(func() {
+		FlushAIUsage()
+		resetUsageMemForTest()
 		usageFilePathFn = prevPath
 		fetchAgyUsageFn = prevAgy
 		fetchOpenCodeUsageFn = prevOC
@@ -197,5 +205,154 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	}
 	if orFound == nil || orFound.Window5h.TotalTokens != 150 || orFound.Window5h.Calls != 1 {
 		t.Fatalf("unexpected openrouter usage: %+v", orFound)
+	}
+}
+
+func useUsageFile(t *testing.T, path string) {
+	t.Helper()
+	prevPath := usageFilePathFn
+	prevAgy := fetchAgyUsageFn
+	prevOC := fetchOpenCodeUsageFn
+	prevList := listAgyProfilesUsageFn
+	prevInterval := usageFlushInterval
+	usageFilePathFn = func() (string, error) { return path, nil }
+	listAgyProfilesUsageFn = func() []ProviderProfileSummary { return nil }
+	fetchAgyUsageFn = func(context.Context) AgyQuota { return AgyQuota{} }
+	fetchOpenCodeUsageFn = func(context.Context) OpenCodeQuota { return OpenCodeQuota{} }
+	usageFlushInterval = time.Hour
+	resetUsageMemForTest()
+	t.Cleanup(func() {
+		FlushAIUsage()
+		resetUsageMemForTest()
+		usageFilePathFn = prevPath
+		fetchAgyUsageFn = prevAgy
+		fetchOpenCodeUsageFn = prevOC
+		listAgyProfilesUsageFn = prevList
+		usageFlushInterval = prevInterval
+	})
+}
+
+func TestRecordAIUsageBuffersUntilFlush(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "ai-usage.json")
+	useUsageFile(t, tmp)
+	t.Setenv("OPENCODE_API_KEY", "")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "")
+
+	RecordAIUsage("agy", "agy:gemini-4-neon-high", 10, 1, 11)
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("a chamada não deveria regravar o JSON: %v", err)
+	}
+	rep := GetAIUsageReport(context.Background())
+	var agy *AIProviderUsage
+	for i := range rep.Providers {
+		if rep.Providers[i].Provider == "agy" {
+			agy = &rep.Providers[i]
+		}
+	}
+	if agy == nil || agy.Window5h.TotalTokens != 11 {
+		t.Fatalf("o relatório tem de ver o buffer antes do flush: %+v", agy)
+	}
+
+	FlushAIUsage()
+	info, err := os.Stat(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tmp + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("gravação atômica deixou o arquivo temporário")
+	}
+	RecordAIUsage("agy", "agy:gemini-4-neon-high", 3, 1, 4)
+	info2, err := os.Stat(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info2.ModTime().Equal(info.ModTime()) || info2.Size() != info.Size() {
+		t.Fatal("a segunda chamada regravou o arquivo inteiro")
+	}
+	data, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), `"tot":`) != 1 {
+		t.Fatalf("disco ainda deveria ter só o primeiro evento: %s", data)
+	}
+	rep = GetAIUsageReport(context.Background())
+	agy = nil
+	for i := range rep.Providers {
+		if rep.Providers[i].Provider == "agy" {
+			agy = &rep.Providers[i]
+		}
+	}
+	if agy == nil || agy.Window5h.TotalTokens != 15 {
+		t.Fatalf("memória deveria somar o intervalo ainda não gravado: %+v", agy)
+	}
+
+	FlushAIUsage()
+	resetUsageMemForTest()
+	rep = GetAIUsageReport(context.Background())
+	agy = nil
+	for i := range rep.Providers {
+		if rep.Providers[i].Provider == "agy" {
+			agy = &rep.Providers[i]
+		}
+	}
+	if agy == nil || agy.Window5h.TotalTokens != 15 || agy.Window5h.Calls != 2 {
+		t.Fatalf("releitura do JSON compatível: %+v", agy)
+	}
+}
+
+func TestRecordAIUsagePrunesAfter31Days(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "ai-usage.json")
+	old := time.Now().UTC().Add(-40 * 24 * time.Hour)
+	raw, err := json.Marshal(usageStoreFile{
+		Version: 1,
+		Events: []usageEvent{{
+			Timestamp: old, Provider: "agy", Model: "agy:old",
+			InputTokens: 9, OutputTokens: 1, TotalTokens: 10,
+		}},
+		Limits: map[string]ProviderLimits{"cursor": {WeeklyTokens: 42}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	useUsageFile(t, tmp)
+	RecordAIUsage("agy", "agy:new", 2, 1, 3)
+	FlushAIUsage()
+	data, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var store usageStoreFile
+	if err := json.Unmarshal(data, &store); err != nil {
+		t.Fatal(err)
+	}
+	if store.Limits["cursor"].WeeklyTokens != 42 {
+		t.Fatalf("limites antigos: %+v", store.Limits)
+	}
+	if len(store.Events) != 1 || store.Events[0].TotalTokens != 3 || strings.Contains(string(data), "agy:old") {
+		t.Fatalf("retenção de 31 dias: %+v", store.Events)
+	}
+}
+
+func BenchmarkRecordAIUsage(b *testing.B) {
+	tmp := filepath.Join(b.TempDir(), "ai-usage.json")
+	prevPath := usageFilePathFn
+	prevInterval := usageFlushInterval
+	usageFilePathFn = func() (string, error) { return tmp, nil }
+	usageFlushInterval = time.Hour
+	resetUsageMemForTest()
+	b.Cleanup(func() {
+		FlushAIUsage()
+		resetUsageMemForTest()
+		usageFilePathFn = prevPath
+		usageFlushInterval = prevInterval
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		RecordAIUsage("agy", "agy:bench", 1, 1, 2)
 	}
 }

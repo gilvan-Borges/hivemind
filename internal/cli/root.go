@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tui"
 )
@@ -22,6 +23,7 @@ var Version = "0.1.0"
 
 // Execute runs the CLI with args, which do not include the program name.
 func Execute(args []string) error {
+	defer modelx.FlushAIUsage()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	root := newRoot()

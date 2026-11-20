@@ -65,6 +65,7 @@ func startHeadlessHealthProbe(ctx context.Context, hub *Hub) {
 // RunHeadless starts the Remote Bridge without the IDE window — the backend
 // of `hivemind serve`. It blocks until ctx is canceled (Ctrl+C).
 func RunHeadless(ctx context.Context, workspace string) error {
+	defer modelx.FlushAIUsage()
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err

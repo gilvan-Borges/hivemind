@@ -1,8 +1,6 @@
 package resident
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,8 +19,7 @@ type skillReviewFile struct {
 
 // HashSkillBody is the SHA-256 the IDE stores when a person reviews a skill.
 func HashSkillBody(body []byte) string {
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:])
+	return skillx.HashBody(body)
 }
 
 func skillReviewPath(baseDir string) string {

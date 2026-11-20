@@ -4,12 +4,15 @@
 package skillx
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
@@ -43,15 +46,29 @@ type Skill struct {
 	Enabled bool `json:"enabled"`
 }
 
+// HashBody is the SHA-256 hex the IDE stores when a person reviews a skill.
+func HashBody(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+type skillCacheEntry struct {
+	stamp  string
+	hash   string
+	skills []Skill
+}
+
+var skillCache sync.Map
+
 // Load lê <root>/.agents/skills/*/SKILL.md e <root>/.hivemind/skills/*/SKILL.md
 // e devolve o catálogo do projeto, ordenado por nome e sem duplicatas.
 func Load(root string) []Skill {
-	out := loadDir(filepath.Join(root, SkillsDir), SkillsDir, "project")
+	out := loadDirCached(filepath.Join(root, SkillsDir), SkillsDir, "project")
 	seen := make(map[string]bool, len(out))
 	for _, s := range out {
 		seen[s.Name] = true
 	}
-	for _, s := range loadDir(filepath.Join(root, filepath.FromSlash(HiveMindSkillsDir)), HiveMindSkillsDir, "project") {
+	for _, s := range loadDirCached(filepath.Join(root, filepath.FromSlash(HiveMindSkillsDir)), HiveMindSkillsDir, "project") {
 		if !seen[s.Name] {
 			seen[s.Name] = true
 			out = append(out, s)
@@ -64,18 +81,74 @@ func Load(root string) []Skill {
 // LoadNative lê <dir>/<name>/SKILL.md, onde dir é a raiz do catálogo nativo
 // da IDE (ex.: %LOCALAPPDATA%\HiveMind\skills). Retorna nil se inexistente.
 func LoadNative(dir string) []Skill {
-	out := loadDir(dir, "", "native")
+	out := loadDirCached(dir, "", "native")
 	out = applySkillState(dir, out)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-func loadDir(dir, relBase, source string) []Skill {
+func loadDirCached(dir, relBase, source string) []Skill {
+	stamp := skillDirStamp(dir)
+	key := source + "\x00" + relBase + "\x00" + dir
+	if v, ok := skillCache.Load(key); ok {
+		e := v.(*skillCacheEntry)
+		// shortcut: mtime+size iguais não relêem o SKILL.md; o hash do corpo só é recalculado quando o mtime muda. Para pegar um write que restaura o mtime antigo, hashear em toda chamada.
+		if e.stamp == stamp {
+			return cloneSkills(e.skills)
+		}
+	}
+	skills, hash := loadDir(dir, relBase, source)
+	if v, ok := skillCache.Load(key); ok {
+		e := v.(*skillCacheEntry)
+		if e.hash != "" && e.hash == hash {
+			fresh := cloneSkills(skills)
+			skillCache.Store(key, &skillCacheEntry{stamp: stamp, hash: hash, skills: fresh})
+			return cloneSkills(fresh)
+		}
+	}
+	stored := cloneSkills(skills)
+	skillCache.Store(key, &skillCacheEntry{stamp: stamp, hash: hash, skills: stored})
+	return cloneSkills(stored)
+}
+
+func skillDirStamp(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		return "missing"
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, e.Name(), "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%s|%d|%d\n", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	if b.Len() == 0 {
+		return "empty"
+	}
+	return b.String()
+}
+
+func cloneSkills(in []Skill) []Skill {
+	if in == nil {
 		return nil
 	}
+	out := make([]Skill, len(in))
+	copy(out, in)
+	return out
+}
+
+func loadDir(dir, relBase, source string) ([]Skill, string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, ""
+	}
 	var out []Skill
+	var parts []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -97,6 +170,7 @@ func loadDir(dir, relBase, source string) []Skill {
 		if relBase != "" {
 			rel = relBase + "/" + rel
 		}
+		parts = append(parts, name+"\n"+HashBody(data))
 		out = append(out, Skill{
 			Name:        name,
 			Description: ExtractDescription(string(data)),
@@ -106,7 +180,8 @@ func loadDir(dir, relBase, source string) []Skill {
 			Enabled:     true,
 		})
 	}
-	return out
+	sort.Strings(parts)
+	return out, HashBody([]byte(strings.Join(parts, "\n")))
 }
 
 // ExtractDescription devolve a primeira frase/parágrafo curto do SKILL.md (sem títulos).

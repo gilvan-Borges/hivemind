@@ -176,3 +176,54 @@ func TestGuidanceBlockMixesProjectAndNativeRoots(t *testing.T) {
 		t.Fatalf("skill nativa ausente: %q", got)
 	}
 }
+
+func TestLoadCacheInvalidatesOnMtimeAndHash(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "code-review", "# Code Review\n\nRevisa PRs com foco em segurança.")
+	first := Load(root)
+	if len(first) != 1 || !strings.Contains(first[0].Description, "Revisa PRs") {
+		t.Fatalf("primeira carga: %+v", first)
+	}
+	key := "project\x00" + SkillsDir + "\x00" + filepath.Join(root, SkillsDir)
+	v, ok := skillCache.Load(key)
+	if !ok {
+		t.Fatal("cache não guardou o catálogo")
+	}
+	hash := v.(*skillCacheEntry).hash
+	if hash == "" || hash != HashBody([]byte("code-review\n"+HashBody(mustReadSkill(t, root, "code-review")))) {
+		t.Fatalf("hash revisado ausente ou diferente: %s", hash)
+	}
+
+	path := filepath.Join(root, SkillsDir, "code-review", "SKILL.md")
+	later := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	second := Load(root)
+	if second[0].Description != first[0].Description {
+		t.Fatalf("mesmo corpo não pode mudar a descrição: %q", second[0].Description)
+	}
+	v, _ = skillCache.Load(key)
+	if v.(*skillCacheEntry).hash != hash {
+		t.Fatal("mtime sem mudança de conteúdo alterou o hash revisado")
+	}
+
+	writeSkill(t, root, "code-review", "# Code Review\n\nDescrição nova depois da edição.")
+	third := Load(root)
+	if !strings.Contains(third[0].Description, "Descrição nova") {
+		t.Fatalf("edição não invalidou o cache: %q", third[0].Description)
+	}
+	v, _ = skillCache.Load(key)
+	if v.(*skillCacheEntry).hash == hash {
+		t.Fatal("hash revisado deveria mudar com o corpo")
+	}
+}
+
+func mustReadSkill(t *testing.T, root, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, SkillsDir, name, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
