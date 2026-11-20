@@ -1038,6 +1038,207 @@ func buildMyJiraIssuesJQL(projectKey string) string {
 	return "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
 }
 
+// inferJiraProjectKeyForWorkspace matches the current workspace/repository name
+// (e.g. "ipg", "ipg-mobile", "appVibePromotor-drops", "vibetexCedae", "PraticoMuralWeb", "suporte")
+// against the organization's Jira projects (e.g. IPG, VPD, CED, MDT, VS, VB, VBWHTS, VC, VOF, SB, RKSAM).
+// If the repository has no corresponding project in Jira yet (e.g. "vibe-saude", "trace-pharma", "vibeservice-ponto"),
+// it returns ("", false) when multiple Jira projects exist in the org so tasks from unrelated Jira projects are NEVER mixed in.
+func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (matchedKey string, hasMultipleOrgProjects bool) {
+	if strings.TrimSpace(workspaceDir) == "" {
+		return "", false
+	}
+	projs, err := jirax.ListProjectsForWorkspace(ctx, workspaceDir)
+	if err != nil || len(projs) == 0 {
+		return "", false
+	}
+	if len(projs) == 1 {
+		return sanitizeJiraProjectKey(projs[0].Key), false
+	}
+
+	normAlpha := func(s string) string {
+		var b strings.Builder
+		for _, r := range strings.ToLower(s) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+
+	// stripAffixes removes common mobile/web/org prefixes and suffixes to extract the core product name.
+	stripAffixes := func(raw string) []string {
+		s := strings.ToLower(strings.TrimSpace(raw))
+		if s == "" {
+			return nil
+		}
+		var out []string
+		add := func(v string) {
+			v = strings.Trim(v, "-_. ")
+			if v == "" {
+				return
+			}
+			for _, existing := range out {
+				if existing == v {
+					return
+				}
+			}
+			out = append(out, v)
+		}
+		add(s)
+		cur := s
+		for changed := true; changed; {
+			changed = false
+			for _, pref := range []string{"app-", "app_", "hub-", "hub_", "auditoria-", "auditoria_", "vibetex-", "vibetex_", "projeto-", "projeto_"} {
+				if strings.HasPrefix(cur, pref) && len(cur) > len(pref)+1 {
+					cur = strings.TrimPrefix(cur, pref)
+					add(cur)
+					changed = true
+				}
+			}
+			for _, camelPref := range []string{"auditoriavibe", "appvibe", "hubvibe", "vibetex"} {
+				if strings.HasPrefix(cur, camelPref) && len(cur) > len(camelPref)+1 {
+					rest := strings.TrimPrefix(cur, camelPref)
+					if strings.HasPrefix(camelPref, "auditoriavibe") || strings.HasPrefix(camelPref, "appvibe") || strings.HasPrefix(camelPref, "hubvibe") {
+						rest = "vibe" + rest
+					}
+					cur = rest
+					add(cur)
+					changed = true
+				}
+			}
+			for _, camelPref := range []string{"app", "hub", "auditoria"} {
+				if strings.HasPrefix(cur, camelPref) && len(cur) > len(camelPref)+2 && cur != "apple" {
+					cur = strings.TrimPrefix(cur, camelPref)
+					add(cur)
+					changed = true
+				}
+			}
+			for _, suf := range []string{
+				"-mobile", "_mobile", "mobile",
+				"-ios", "_ios", "-android", "_android",
+				"-app", "_app", "app",
+				"-web", "_web", "web",
+				"-front", "_front", "-frontend", "_frontend",
+				"-back", "_back", "-backend", "_backend",
+				"-api", "_api", "api",
+				"-core", "_core", "-service", "_service", "-srv", "_srv",
+				"-demo", "_demo", "atualizado",
+			} {
+				if strings.HasSuffix(cur, suf) && len(cur) > len(suf)+1 {
+					cur = strings.TrimSuffix(cur, suf)
+					add(cur)
+					changed = true
+				}
+			}
+		}
+		if parts := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' }); len(parts) > 1 {
+			for _, pt := range parts {
+				if len(pt) >= 3 && pt != "app" && pt != "web" && pt != "mobile" && pt != "ios" && pt != "api" && pt != "vibe" && pt != "vibetex" {
+					add(pt)
+				}
+			}
+		}
+		return out
+	}
+
+	var candidates []string
+	addSource := func(raw string) {
+		for _, v := range stripAffixes(raw) {
+			seen := false
+			for _, c := range candidates {
+				if c == v {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				candidates = append(candidates, v)
+			}
+		}
+	}
+
+	g := gitx.Local{}
+	if g.IsRepo(ctx, workspaceDir) {
+		if remoteURL, rErr := g.RemoteURL(ctx, workspaceDir); rErr == nil {
+			if _, repo, ok := githubx.ParseRemote(remoteURL); ok {
+				addSource(repo)
+			}
+		}
+	}
+	addSource(filepath.Base(filepath.Clean(workspaceDir)))
+
+	// 1. Exact key match (e.g., "ipg" / "ipg-mobile" -> "IPG").
+	for _, cand := range candidates {
+		for _, p := range projs {
+			if strings.EqualFold(p.Key, cand) {
+				return sanitizeJiraProjectKey(p.Key), true
+			}
+		}
+	}
+
+	// 2. Normalized project Name match (e.g., "vibePromotor" / "vibepromotor-drops" -> "VibePromotor (DROPS)" [VPD],
+	// "AppSolBrilhante" -> "Sol Brilhante" [SB], "vibetexCedae" -> "Cedae" [CED], "suporte" -> "Vibe Suporte" [VS],
+	// "PraticoMuralWeb" -> "Mural de Troca" [MDT]).
+	for _, cand := range candidates {
+		nc := normAlpha(cand)
+		if len(nc) < 3 || nc == "vibe" || nc == "vibetex" || nc == "geral" {
+			continue
+		}
+		for _, p := range projs {
+			// Split Jira project name into main title and parenthetical alias, e.g. "VibePromotor (DROPS)" -> ["vibepromotor", "drops"]
+			rawName := strings.ToLower(p.Name)
+			mainTitle := rawName
+			aliasTitle := ""
+			if openIdx := strings.IndexByte(rawName, '('); openIdx >= 0 {
+				mainTitle = rawName[:openIdx]
+				if closeIdx := strings.IndexByte(rawName[openIdx:], ')'); closeIdx > 1 {
+					aliasTitle = rawName[openIdx+1 : openIdx+closeIdx]
+				}
+			}
+			nm := normAlpha(mainTitle)
+			na := normAlpha(aliasTitle)
+			// Strip generic "vibe" prefix from Jira project name for matching (e.g. "Vibe Suporte" -> "suporte")
+			nmNoVibe := strings.TrimPrefix(nm, "vibe")
+
+			if (nm != "" && (nc == nm || strings.Contains(nc, nm))) ||
+				(na != "" && len(na) >= 3 && (nc == na || strings.Contains(nc, na))) ||
+				(len(nmNoVibe) >= 4 && (nc == nmNoVibe || strings.HasSuffix(nc, nmNoVibe))) ||
+				(strings.Contains(nc, "mural") && strings.Contains(nm, "mural")) {
+				return sanitizeJiraProjectKey(p.Key), true
+			}
+		}
+	}
+
+	// 3. Fallback: inspect recent git commit messages for an explicit Jira key prefix (e.g. "feat(IPG-123): ...").
+	if g.IsRepo(ctx, workspaceDir) && g.HasCommit(ctx, workspaceDir) {
+		if logRaw, lErr := g.Run(ctx, workspaceDir, "log", "-n", "25", "--pretty=%s"); lErr == nil && logRaw != "" {
+			counts := map[string]int{}
+			bestKey := ""
+			bestCount := 0
+			upperLog := strings.ToUpper(logRaw)
+			for _, p := range projs {
+				k := sanitizeJiraProjectKey(p.Key)
+				if k == "" {
+					continue
+				}
+				c := strings.Count(upperLog, k+"-")
+				if c > 0 {
+					counts[k] = c
+					if c > bestCount {
+						bestCount = c
+						bestKey = k
+					}
+				}
+			}
+			if bestKey != "" && bestCount >= 2 {
+				return bestKey, true
+			}
+		}
+	}
+
+	return "", true
+}
+
 // ListProjectIssues fetches open Jira tasks assigned to the current user and/or open GitHub issues for one-click squad execution.
 func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, error) {
 	var issues []ProjectIssue
@@ -1052,33 +1253,41 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 				cfgProj = cfg.Settings.JiraProject
 			}
 			projKey := sanitizeJiraProjectKey(cfgProj)
-			if projKey == "" {
-				projKey = sanitizeJiraProjectKey(res.DefaultProject)
-			}
-			jql := buildMyJiraIssuesJQL(projKey)
-			list, err := jc.Search(ctx, jql, 50)
-			if err == nil && len(list) == 0 && projKey != "" {
-				// If a default project filter yielded 0 tasks assigned to currentUser(), fall back to all non-Done tasks assigned to currentUser() across the org.
-				if allList, err2 := jc.Search(ctx, buildMyJiraIssuesJQL(""), 50); err2 == nil {
-					list = allList
+			hasMultiOrgProjs := false
+			if projKey == "" && !strings.EqualFold(strings.TrimSpace(cfgProj), "*") {
+				projKey, hasMultiOrgProjs = inferJiraProjectKeyForWorkspace(ctx, workspace)
+				if projKey != "" {
+					// Persist the inferred project key in team.yaml so subsequent runs & tools know it immediately.
+					EnableProjectJira(workspace, projKey)
 				}
 			}
-			if err == nil {
-				base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
-				for _, it := range list {
-					browseURL := ""
-					if base != "" && it.Key != "" {
-						browseURL = base + "/browse/" + url.PathEscape(it.Key)
+			if projKey == "" && !hasMultiOrgProjs {
+				projKey = sanitizeJiraProjectKey(res.DefaultProject)
+			}
+			// Only query Jira when we matched a specific Jira project (or when the user explicitly chose "*" for all projects,
+			// or when the Jira instance only has a single project). Repositories that don't exist in Jira yet (e.g. vibe-saude)
+			// won't pull unrelated tasks from other company projects.
+			shouldQueryJira := projKey != "" || strings.EqualFold(strings.TrimSpace(cfgProj), "*") || !hasMultiOrgProjs
+			if shouldQueryJira {
+				jql := buildMyJiraIssuesJQL(projKey)
+				list, err := jc.Search(ctx, jql, 50)
+				if err == nil {
+					base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
+					for _, it := range list {
+						browseURL := ""
+						if base != "" && it.Key != "" {
+							browseURL = base + "/browse/" + url.PathEscape(it.Key)
+						}
+						issues = append(issues, ProjectIssue{
+							Source: "jira",
+							Key:    it.Key,
+							Title:  it.Summary,
+							Body:   it.Description,
+							Status: it.Status,
+							URL:    browseURL,
+							IsMine: true,
+						})
 					}
-					issues = append(issues, ProjectIssue{
-						Source: "jira",
-						Key:    it.Key,
-						Title:  it.Summary,
-						Body:   it.Description,
-						Status: it.Status,
-						URL:    browseURL,
-						IsMine: true,
-					})
 				}
 			}
 		}

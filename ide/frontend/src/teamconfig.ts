@@ -41,6 +41,12 @@ export function buildDraftFromProject(): TeamConfigDraft {
   const existingQA = curTeam?.agents?.find((a) => a.role === "qa");
   const curChiefRole = existingChief?.role === "project_manager" ? "project_manager" : "architect";
   const defaultModel = existingChief?.model || existingDev?.model || state.models[0]?.slug || "agy";
+  const resolveAutoJiraProj = () => {
+    if (settings?.jira_project) return settings.jira_project;
+    const repoBase = (state.project?.name || "").toLowerCase().replace(/[-_](mobile|app|web|front|frontend|back|backend|api|core|service)$/i, "");
+    const hit = state.jiraProjects.find((p) => p.key.toLowerCase() === (state.project?.name || "").toLowerCase() || (repoBase && p.key.toLowerCase() === repoBase));
+    return hit?.key || state.jiraStatus?.defaultProject || "";
+  };
   return {
     workspace: state.project?.root || "",
     teamName: activeTeamName,
@@ -58,7 +64,7 @@ export function buildDraftFromProject(): TeamConfigDraft {
     autoCommit: settings ? settings.auto_commit === true : false,
     autoPR: settings ? settings.auto_pr === true : false,
     jiraEnabled: settings?.jira_enabled === true || Boolean(state.jiraStatus?.connected && state.jiraStatus?.matchMode !== "isolated_none"),
-    jiraProject: settings?.jira_project || state.jiraStatus?.defaultProject || "",
+    jiraProject: resolveAutoJiraProj(),
     skillAssignments: (settings?.skill_assignments || []).map((a) => ({
       name: a.name,
       source: a.source || "",

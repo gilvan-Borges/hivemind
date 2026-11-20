@@ -48,7 +48,7 @@ func classifyWithoutVision(role, runMode, step string, in ClassifyInput) (Class,
 	}
 
 	if role == team.RoleProjectManager || role == team.RoleTechLead || role == team.RoleArchitect {
-		if isTriageStep(step) && isShortAndSmall(in) {
+		if step == "light_ops" || (isTriageStep(step) && isShortAndSmall(in)) {
 			return ClassTrivial, ComplexityLow
 		}
 		if isPlanningStep(step) || isTriageStep(step) || step == "" {
@@ -72,7 +72,7 @@ func classifyWithoutVision(role, runMode, step string, in ClassifyInput) (Class,
 }
 
 func isTriageStep(step string) bool {
-	return step == "triage_chief" || step == "triage" || step == "runtriagechief"
+	return step == "triage_chief" || step == "triage" || step == "runtriagechief" || step == "light_ops"
 }
 
 func isPlanningStep(step string) bool {

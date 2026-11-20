@@ -1887,6 +1887,75 @@ type delegateResult struct {
 	Status string `json:"status"`
 }
 
+// isLightOperationalObjective returns true when the user prompt is a short operational
+// request (e.g., checking a Jira task, changing task status, commenting on a PR/issue,
+// or listing status) that does not ask to write/refactor code.
+func isLightOperationalObjective(raw string) bool {
+	// Extract the user's actual prompt if prefixed with stack/memory blocks.
+	text := strings.TrimSpace(raw)
+	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
+	}
+	if len(text) == 0 || len(text) > 700 {
+		return false
+	}
+	low := strings.ToLower(text)
+	// Exclude explicit code implementation/refactoring requests.
+	for _, heavy := range []string{
+		"implement", "refator", "crie o arquivo", "criar arquivo", "edite o código",
+		"editar o código", "corrija o bug", "corrigir o bug", "desenvolv", "escreva o teste",
+		"adicione o endpoint", "criar componente", "migração",
+	} {
+		if strings.Contains(low, heavy) {
+			return false
+		}
+	}
+	for _, kw := range []string{
+		"jira", "task", "tarefa", "issue", "status", "coluna", "transi",
+		"in progress", "em andamento", "done", "conclu", "coment", "comment",
+		"conferir", "confira", "verificar", "verifique", "listar", "liste",
+		"qual o status", "mude o status", "mudar status", "atualize o status",
+		"mover para", "mova para", "pr #", "pull request",
+	} {
+		if strings.Contains(low, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveLightJevAgent picks a Jev-routed agent for lightweight operational triage
+// (Jira task checks, status transitions, GitHub comments) when the Chief is pinned
+// to a heavy model. If another agent in the team already uses Jev (e.g., dev on
+// openrouter:auto / jev:openrouter / jev:auto), its Jev scope is reused; otherwise
+// it defaults to jev:auto (or jev:openrouter when OpenRouter credentials exist).
+func (r *Runner) resolveLightJevAgent(chief team.Agent) (team.Agent, bool) {
+	cProv := team.NormalizeProvider(chief.Provider, chief.Model)
+	cLow := strings.ToLower(strings.TrimSpace(chief.Model))
+	if cProv == "jev" || strings.HasPrefix(cLow, "jev:") || strings.HasSuffix(cLow, ":auto") {
+		return chief, true
+	}
+	for _, ag := range r.Team.Agents {
+		p := team.NormalizeProvider(ag.Provider, ag.Model)
+		m := strings.ToLower(strings.TrimSpace(ag.Model))
+		if p == "jev" || strings.HasPrefix(m, "jev:") || (p != "cursor" && strings.HasSuffix(m, ":auto")) {
+			routed := chief
+			routed.Provider = ag.Provider
+			routed.Model = ag.Model
+			return routed, true
+		}
+	}
+	creds := modelx.JevCredentialPresence()
+	routed := chief
+	routed.Provider = "jev"
+	if creds["openrouter"] {
+		routed.Model = "jev:openrouter"
+	} else {
+		routed.Model = "jev:auto"
+	}
+	return routed, true
+}
+
 func (r *Runner) resolveTriageChief() team.Agent {
 	chief := r.primaryChief()
 	if r.autoReviewMode {
@@ -1900,6 +1969,12 @@ func (r *Runner) resolveTriageChief() team.Agent {
 		if rm := strings.TrimSpace(r.Project.Settings.ReviewModel); rm != "" {
 			chief.Model = rm
 			chief.Provider = team.NormalizeProvider("", rm)
+		}
+		return chief
+	}
+	if isLightOperationalObjective(r.objectiveText) {
+		if light, ok := r.resolveLightJevAgent(chief); ok {
+			return light
 		}
 	}
 	return chief
@@ -1916,10 +1991,14 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
 		toolRoot = r.ReviewRoot
 	}
+	triageStep := "triage_chief"
+	if isLightOperationalObjective(r.objectiveText) && !sddDocs && !sddJira && !isAutoReview {
+		triageStep = "light_ops"
+	}
 	triageCtx := modelx.WithAgentDir(ctx, toolRoot)
 	triageCtx = withJevRouteHint(triageCtx, jevRouteHint{
 		RunMode:      runMode,
-		Step:         "triage_chief",
+		Step:         triageStep,
 		ObjectiveLen: len(r.objectiveText),
 		InputTokens:  jev.EstimateFirstStepInputTokens(len(r.objectiveText), len(r.teamMemorySnippet()), true),
 		HasImages:    r.hasImages || hasImageContent(msg),

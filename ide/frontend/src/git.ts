@@ -620,10 +620,15 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <div class="git-section" style="padding:10px">
         ${(() => {
           const allIssues = state.issues.list.map((iss, idx) => ({ iss, idx }));
-          const statuses = Array.from(new Set(allIssues.map((x) => (x.iss.status || "").trim()).filter(Boolean)));
+          const jiraCount = allIssues.filter((x) => x.iss.source === "jira").length;
+          const ghCount = allIssues.filter((x) => x.iss.source === "github").length;
+          const hasBothSources = jiraCount > 0 && ghCount > 0;
+          const activeSource = hasBothSources ? state.issuesSourceFilter : "";
+          const sourceFiltered = allIssues.filter(({ iss }) => !activeSource || iss.source === activeSource);
+          const statuses = Array.from(new Set(sourceFiltered.map((x) => (x.iss.status || "").trim()).filter(Boolean)));
           const activeStatus = statuses.includes(state.issuesStatusFilter) ? state.issuesStatusFilter : "";
           const q = (state.issuesFilterQuery || "").trim().toLowerCase();
-          const filtered = allIssues.filter(({ iss }) => {
+          const filtered = sourceFiltered.filter(({ iss }) => {
             if (activeStatus && (iss.status || "").trim() !== activeStatus) return false;
             if (q && !(`${iss.key} ${iss.title} ${iss.status || ""}`.toLowerCase().includes(q))) return false;
             return true;
@@ -631,16 +636,30 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           const countLabel = filtered.length !== allIssues.length
             ? `${filtered.length}/${allIssues.length}`
             : `${allIssues.length}`;
+          const detectedJiraKeys = Array.from(new Set(
+            allIssues
+              .filter((x) => x.iss.source === "jira" && x.iss.key.includes("-"))
+              .map((x) => x.iss.key.split("-")[0].toUpperCase())
+          ));
+          const activeJiraProj = (proj?.teamConfig?.settings?.jira_project || detectedJiraKeys[0] || state.jiraStatus?.defaultProject || "").toUpperCase();
           return `
             <div class="git-section-head">
               <span>Minhas tasks & issues (${countLabel})</span>
+              ${activeJiraProj ? `<span class="tok-pill" title="Projeto Jira vinculado automaticamente a este repositório">Jira: ${escapeHtml(activeJiraProj)}</span>` : ""}
             </div>
             ${allIssues.length > 0 ? `
               <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
                 <input id="issues-filter-input" value="${escapeHtml(state.issuesFilterQuery)}" placeholder="Filtrar por chave ou título…" style="width:100%;font-size:11.5px;padding:4px 8px" />
+                ${hasBothSources ? `
+                  <div style="display:flex;gap:4px;flex-wrap:wrap">
+                    <button type="button" class="mini ${activeSource === "" ? "primary" : "ghost"}" data-issue-source="">Todas (${allIssues.length})</button>
+                    <button type="button" class="mini ${activeSource === "jira" ? "primary" : "ghost"}" data-issue-source="jira">Jira${activeJiraProj ? ` · ${escapeHtml(activeJiraProj)}` : ""} (${jiraCount})</button>
+                    <button type="button" class="mini ${activeSource === "github" ? "primary" : "ghost"}" data-issue-source="github">GitHub (${ghCount})</button>
+                  </div>
+                ` : ""}
                 ${statuses.length > 1 ? `
                   <div style="display:flex;gap:4px;flex-wrap:wrap">
-                    <button type="button" class="mini ${activeStatus === "" ? "primary" : "ghost"}" data-issue-status="">Todas</button>
+                    <button type="button" class="mini ${activeStatus === "" ? "primary" : "ghost"}" data-issue-status="">Todos status</button>
                     ${statuses.map((st) => `
                       <button type="button" class="mini ${activeStatus === st ? "primary" : "ghost"}" data-issue-status="${escapeHtml(st)}">${escapeHtml(st)}</button>
                     `).join("")}
@@ -1150,6 +1169,14 @@ export function bindGitSidebarEvents() {
       nextEl.focus();
       nextEl.setSelectionRange(pos, pos);
     }
+  });
+  document.querySelectorAll("[data-issue-source]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const src = ((btn as HTMLElement).dataset.issueSource || "") as "" | "jira" | "github";
+      state.issuesSourceFilter = src;
+      state.issuesStatusFilter = "";
+      renderLeftSidebar();
+    });
   });
   document.querySelectorAll("[data-issue-status]").forEach((btn) => {
     btn.addEventListener("click", () => {
