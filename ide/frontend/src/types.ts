@@ -273,7 +273,7 @@ export interface TerminalEntry {
 }
 
 export interface EditorTab {
-  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident";
+  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident" | "ai-usage";
   relPath: string;
   name: string;
   content: string;
@@ -727,9 +727,17 @@ export interface AgyQuota {
   groups?: AgyQuotaGroup[];
 }
 
+export interface AgyAccountQuota {
+  profileId: string;
+  name: string;
+  email?: string;
+  quota: AgyQuota;
+}
+
 export interface AIUsageReport {
   generatedAt: string;
   agyQuota?: AgyQuota;
+  agyAccounts?: AgyAccountQuota[];
   openCodeQuota: OpenCodeQuota;
   providers: AIProviderUsage[];
 }

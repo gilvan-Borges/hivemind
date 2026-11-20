@@ -318,7 +318,7 @@ func cursorArgs(modelID, workspace string) []string {
 		"--force",
 		"--sandbox", sandboxMode,
 		"--workspace", workspace,
-		"Siga exatamente o arquivo .hivemind/cursor-task.md neste workspace. Não faça git commit, git push nem abra pull request. Resuma em português ao terminar.",
+		"Siga exatamente o arquivo .hivemind/cursor-task.md neste workspace. Resuma em português ao terminar.",
 	}
 	if modelID != "" && modelID != "auto" {
 		args = append([]string{"--model", modelID}, args...)
@@ -365,7 +365,8 @@ func writeCursorTask(dir, prompt string) (string, error) {
 func buildCursorPrompt(req *model.LLMRequest, images []SavedImage) string {
 	var b strings.Builder
 	b.WriteString("Você é o agente Cursor chamado pelo HiveMind, via CLI oficial em modo headless.\n")
-	b.WriteString("Trabalhe só neste workspace. Não faça git commit, git push nem abra pull request: isso é do HiveMind.\n")
+	b.WriteString("Trabalhe só neste workspace.\n")
+	b.WriteString("Se a instrução do time (Chefe/Arquiteto) pedir commit, push ou PR, faça. Dev e QA não devem commit/push/PR.\n")
 	b.WriteString("Se a instrução disser que você não pode gravar código, não altere arquivos.\n")
 	b.WriteString("O modo headless não pergunta nada: o que exigiria aprovação é recusado pelo CLI.\n")
 	b.WriteString("Termine com um resumo curto em português do que fez ou do que ficou bloqueado.\n")

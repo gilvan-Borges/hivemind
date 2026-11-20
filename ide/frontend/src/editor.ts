@@ -8,6 +8,7 @@ import { openCommandPalette, openQuickOpen } from "./quickopen";
 import { bindResidentViewEvents, renderResidentViewHtml } from "./resident";
 import { renderProjectTabsBar, syncLayoutVisibility } from "./shell";
 import { api, askConfirm, setStatus, state, toastError } from "./state";
+import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
 import { closeInlineEdit, ghostButtonTitle, openInlineEdit, renderInlineEditBar, scheduleGhostText, syncEditorInlineReview, toggleGhostText } from "./inline-ai";
@@ -193,9 +194,11 @@ export function renderEditorTabs() {
           ? icons.swarm
           : t.kind === "team-config"
             ? icons.settings
-            : t.kind === "diff" || t.kind === "commit"
-              ? icons.gitSmall
-              : fileBadge(t.name);
+            : t.kind === "ai-usage"
+              ? icons.aiUsage
+              : t.kind === "diff" || t.kind === "commit"
+                ? icons.gitSmall
+                : fileBadge(t.name);
     return `
       <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
         ${tabIcon}
@@ -653,6 +656,12 @@ export function renderEditorBody() {
   if (activeTab.kind === "team-config") {
     body.innerHTML = renderTeamConfigPageHtml();
     bindTeamConfigEvents();
+    return;
+  }
+
+  if (activeTab.kind === "ai-usage") {
+    body.innerHTML = renderAIUsagePageHtml();
+    bindAIUsagePageEvents();
     return;
   }
 

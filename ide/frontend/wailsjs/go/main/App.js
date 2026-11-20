@@ -126,6 +126,10 @@ export function EnsureTeamMemory(arg1) {
   return window['go']['main']['App']['EnsureTeamMemory'](arg1);
 }
 
+export function ExternalSessions() {
+  return window['go']['main']['App']['ExternalSessions']();
+}
+
 export function GetAIUsage() {
   return window['go']['main']['App']['GetAIUsage']();
 }
