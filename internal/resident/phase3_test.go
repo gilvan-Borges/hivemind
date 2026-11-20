@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,8 @@ func TestPhase3CronIsStructuredAndFiresOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// No Windows o Go reporta 0666 mesmo com WriteFile(..., 0600). A criação não muda.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("routines.json deveria ser 0600, veio %o", info.Mode().Perm())
 	}
 	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)

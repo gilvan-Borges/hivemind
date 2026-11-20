@@ -86,6 +86,20 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	return m
 }
 
+// Close solta a trava do processo para o diretório temporário do teste poder sair.
+func (m *ResidentManager) Close() {
+	if m == nil {
+		return
+	}
+	if m.sched != nil {
+		m.sched.Stop()
+	}
+	if m.release != nil {
+		m.release()
+		m.release = nil
+	}
+}
+
 func (m *ResidentManager) fireRoutine(rt resident.Routine) {
 	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, resident.OriginRoutine, rt.Classes)
 }
