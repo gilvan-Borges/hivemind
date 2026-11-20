@@ -1,6 +1,8 @@
 package extsess
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -20,9 +22,11 @@ var reservedSources = map[string]bool{
 }
 
 // Reject is a detector file that was skipped. Reason never includes the file body.
+// Fingerprint is a hash of the bytes, used to record the rejection once per content.
 type Reject struct {
-	ID     string
-	Reason string
+	ID          string
+	Reason      string
+	Fingerprint string
 }
 
 // OnReject receives a skipped detector. It may be nil.
@@ -58,22 +62,27 @@ func loadDetectorNames(dir string) (map[string]string, []Reject) {
 			rejected = append(rejected, Reject{ID: e.Name(), Reason: "arquivo ilegível"})
 			continue
 		}
+		fp := fingerprint(raw)
 		var doc map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &doc); err != nil {
-			rejected = append(rejected, Reject{ID: e.Name(), Reason: "json inválido"})
+			rejected = append(rejected, Reject{ID: e.Name(), Reason: "json inválido", Fingerprint: fp})
 			continue
 		}
 		if _, ok := doc["command"]; ok {
-			rejected = append(rejected, Reject{ID: e.Name(), Reason: "comando não é permitido"})
+			rejected = append(rejected, Reject{ID: e.Name(), Reason: "comando não é permitido", Fingerprint: fp})
 			continue
 		}
 		var parsed detectorFile
 		if err := json.Unmarshal(raw, &parsed); err != nil {
-			rejected = append(rejected, Reject{ID: e.Name(), Reason: "json inválido"})
+			rejected = append(rejected, Reject{ID: e.Name(), Reason: "json inválido", Fingerprint: fp})
 			continue
 		}
 		if parsed.SchemaVersion != 1 || !parsed.ReadOnly || !idPattern.MatchString(parsed.ID) || reservedSources[parsed.ID] || len(parsed.ProcessNames) == 0 {
-			rejected = append(rejected, Reject{ID: parsed.ID, Reason: "detector recusado"})
+			id := parsed.ID
+			if id == "" {
+				id = e.Name()
+			}
+			rejected = append(rejected, Reject{ID: id, Reason: "detector recusado", Fingerprint: fp})
 			continue
 		}
 		for _, name := range parsed.ProcessNames {
@@ -85,6 +94,11 @@ func loadDetectorNames(dir string) (map[string]string, []Reject) {
 		}
 	}
 	return names, rejected
+}
+
+func fingerprint(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func mergedNames() map[string]string {
