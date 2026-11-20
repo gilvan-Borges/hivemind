@@ -319,6 +319,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 
 	r.Project.Normalize()
+	ctx = modelx.WithPermissionMode(ctx, r.Project.Settings.EffectivePermissionMode())
 
 	r.integration = ""
 	r.deliveryRoot = ""

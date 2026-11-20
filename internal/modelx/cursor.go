@@ -41,12 +41,50 @@ func agentDirFrom(ctx context.Context) string {
 	return dir
 }
 
+// CursorWindowsSandboxWarning is shown in the IDE when the Cursor CLI has no
+// sandbox on this OS. --trust and --force stay off unless the mode is full_access.
+const CursorWindowsSandboxWarning = "No Windows o Cursor CLI não tem sandbox. --trust e --force só são passados em Full Acesso. Em Governado e Auto-Edição o CLI recusa edições que pediriam aprovação."
+
+func cursorSandboxMode(goos string) string {
+	if goos == "windows" {
+		return "disabled"
+	}
+	return "enabled"
+}
+
+func cursorSandboxWarning(goos string) string {
+	if goos == "windows" {
+		return CursorWindowsSandboxWarning
+	}
+	return ""
+}
+
 // CursorStatus is safe to print. It never includes the API key.
 type CursorStatus struct {
-	Found  bool   `json:"found"`
-	Path   string `json:"path"`
-	HasKey bool   `json:"hasKey"`
-	Detail string `json:"detail"`
+	Found          bool   `json:"found"`
+	Path           string `json:"path"`
+	HasKey         bool   `json:"hasKey"`
+	Detail         string `json:"detail"`
+	Sandbox        string `json:"sandbox,omitempty"`
+	SandboxWarning string `json:"sandboxWarning,omitempty"`
+}
+
+func applyCursorSandboxStatus(st *CursorStatus) {
+	if st == nil {
+		return
+	}
+	st.Sandbox = cursorSandboxMode(runtime.GOOS)
+	st.SandboxWarning = cursorSandboxWarning(runtime.GOOS)
+	if st.SandboxWarning == "" {
+		return
+	}
+	if strings.TrimSpace(st.Detail) == "" {
+		st.Detail = st.SandboxWarning
+		return
+	}
+	if !strings.Contains(st.Detail, st.SandboxWarning) {
+		st.Detail = st.Detail + " " + st.SandboxWarning
+	}
 }
 
 // Cursor is a model.LLM backed by the official Cursor CLI (`agent -p`).
@@ -61,6 +99,9 @@ type Cursor struct {
 	Key        string
 	Env        map[string]string
 	IsolateEnv bool
+	// PermMode is the team permission mode captured when the model was built.
+	// Only full_access passes --trust and --force to the Cursor CLI.
+	PermMode string
 }
 
 // LookCursor finds the official CLI. HIVEMIND_CURSOR_AGENT_PATH, when set,
@@ -94,6 +135,7 @@ func ProbeCursor() CursorStatus {
 	path, err := LookCursor()
 	if err != nil {
 		st.Detail = err.Error()
+		applyCursorSandboxStatus(&st)
 		return st
 	}
 	st.Found = true
@@ -103,6 +145,7 @@ func ProbeCursor() CursorStatus {
 	} else {
 		st.Detail = "CLI encontrado, mas falta CURSOR_API_KEY. Cole a chave do painel Cursor em Chaves de API, ou exporte a variável. O modo headless não usa a sessão interativa do editor."
 	}
+	applyCursorSandboxStatus(&st)
 	return st
 }
 
@@ -140,6 +183,7 @@ func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
 		Key:        key,
 		Env:        envMap,
 		IsolateEnv: isolate,
+		PermMode:   permissionModeFrom(ctx),
 	}, nil
 }
 
@@ -213,13 +257,20 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	}()
 	prompt := buildCursorPrompt(req, images)
 	prompt = redactSecret(prompt, c.Key)
+	mode := permissionModeFrom(ctx)
+	if mode == "" {
+		mode = c.PermMode
+	}
+	if cursorSandboxMode(runtime.GOOS) == "disabled" && !cursorTrustForce(mode) {
+		prompt += "\nNeste Windows o CLI está sem sandbox e sem --trust/--force. Uma edição que exigiria aprovação é recusada. Não contorne isso.\n"
+	}
 	taskPath, err := writeCursorTask(dir, prompt)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(taskPath)
 
-	args := cursorArgs(c.Model, dir)
+	args := cursorArgs(c.Model, dir, mode)
 	cmd := cursorCommand(runCtx, bin, args)
 	cmd.Dir = dir
 	baseEnv := os.Environ()
@@ -338,27 +389,51 @@ func rejectForeignCursorModel(id string) error {
 	return fmt.Errorf("cursor/%s: modelo incompatível com o provedor Cursor (id de outro provedor não é enviado ao CLI): OpenAI API error: 400 Bad Request: model %q is not a Cursor model", id, id)
 }
 
-func cursorArgs(modelID, workspace string) []string {
-	sandboxMode := "enabled"
-	if runtime.GOOS == "windows" {
-		// Cursor CLI sandbox mode requires macOS or Linux and errors immediately on Windows
-		// ("Error: Sandbox mode is enabled but not available on this system").
-		sandboxMode = "disabled"
-	}
+func cursorArgs(modelID, workspace, permissionMode string) []string {
+	return buildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS)
+}
+
+func buildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--stream-partial-output",
-		"--trust",
-		"--force",
-		"--sandbox", sandboxMode,
+	}
+	if cursorTrustForce(permissionMode) {
+		args = append(args, "--trust", "--force")
+	}
+	args = append(args,
+		"--sandbox", cursorSandboxMode(goos),
 		"--workspace", workspace,
 		"Siga exatamente o arquivo .hivemind/cursor-task.md neste workspace. Resuma em português ao terminar.",
-	}
+	)
 	if modelID != "" && modelID != "auto" {
 		args = append([]string{"--model", modelID}, args...)
 	}
 	return args
+}
+
+func cursorTrustForce(permissionMode string) bool {
+	return strings.EqualFold(strings.TrimSpace(permissionMode), "full_access")
+}
+
+type permissionModeKey struct{}
+
+// WithPermissionMode marks the team permission mode for this call.
+// Only full_access passes --trust and --force to the Cursor CLI.
+func WithPermissionMode(ctx context.Context, mode string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, permissionModeKey{}, strings.TrimSpace(mode))
+}
+
+func permissionModeFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	mode, _ := ctx.Value(permissionModeKey{}).(string)
+	return strings.TrimSpace(mode)
 }
 
 func cursorChildEnv(base []string, key string) []string {

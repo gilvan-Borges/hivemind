@@ -240,6 +240,7 @@ export function renderComposerModeBar() {
               </button>
             `;
           }).join("")}
+          ${state.cursorCLI?.sandboxWarning ? `<div class="composer-popover-desc" style="padding:8px 12px 10px">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
         </div>
       ` : ""}
     </div>
