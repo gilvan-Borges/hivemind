@@ -300,12 +300,31 @@ type runStartRequest struct {
 	Images    []idecore.ImageInput `json:"images,omitempty"`
 }
 
-func (req *runStartRequest) validate() string {
-	if strings.TrimSpace(req.LaneID) == "" {
-		return "laneId obrigatório"
+func isAllowedRunMode(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto", "direct", "plan", "plan:sdd", "plan:sdd-jira", "squad", "resident":
+		return true
+	default:
+		return false
 	}
-	if strings.TrimSpace(req.Workspace) == "" {
-		return "workspace obrigatório"
+}
+
+func (req *runStartRequest) validate() string {
+	if !isAllowedRunMode(req.RunMode) {
+		return fmt.Sprintf("runMode inválido: %q", req.RunMode)
+	}
+	isResident := strings.EqualFold(strings.TrimSpace(req.RunMode), "resident")
+	if isResident {
+		// Resident runs always use fixed lane "resident" (§1.10, §10).
+		req.LaneID = "resident"
+		req.RunMode = "resident"
+	} else {
+		if strings.TrimSpace(req.LaneID) == "" {
+			return "laneId obrigatório"
+		}
+		if strings.TrimSpace(req.Workspace) == "" {
+			return "workspace obrigatório"
+		}
 	}
 	if strings.TrimSpace(req.Objective) == "" && len(req.Images) == 0 {
 		return "objective (ou images) obrigatório"

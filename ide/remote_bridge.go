@@ -18,14 +18,14 @@ type mobileBridge struct {
 	cfg     remote.Config
 }
 
-func newMobileBridge(sessions *idecore.SessionManager, autoReview *idecore.AutoReviewManager) *mobileBridge {
+func newMobileBridge(sessions *idecore.SessionManager, residentMgr *idecore.ResidentManager, autoReview *idecore.AutoReviewManager) *mobileBridge {
 	cfg, err := remote.LoadConfig()
 	if err != nil {
 		log.Printf("aviso: remote bridge: %v", err)
 		cfg = remote.Config{Port: remote.DefaultPort}
 	}
 	hub := remote.NewHub()
-	adapter := &remote.Adapter{Sessions: sessions, AutoReview: autoReview, Hub: hub}
+	adapter := &remote.Adapter{Sessions: sessions, Resident: residentMgr, AutoReview: autoReview, Hub: hub}
 	server := remote.NewServer(hub, adapter, cfg)
 	return &mobileBridge{hub: hub, adapter: adapter, server: server, cfg: cfg}
 }

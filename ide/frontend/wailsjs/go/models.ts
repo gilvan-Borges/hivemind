@@ -1884,6 +1884,187 @@ export namespace remote {
 
 }
 
+export namespace resident {
+	
+	export class AuditEntry {
+	    ts: string;
+	    phase: string;
+	    accountId: string;
+	    deviceId?: string;
+	    origin: string;
+	    workstream?: string;
+	    tool: string;
+	    tier: string;
+	    decision: string;
+	    approvalId?: string;
+	    sandbox?: string;
+	    target?: string;
+	    outcome?: string;
+	    errorClass?: string;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts = source["ts"];
+	        this.phase = source["phase"];
+	        this.accountId = source["accountId"];
+	        this.deviceId = source["deviceId"];
+	        this.origin = source["origin"];
+	        this.workstream = source["workstream"];
+	        this.tool = source["tool"];
+	        this.tier = source["tier"];
+	        this.decision = source["decision"];
+	        this.approvalId = source["approvalId"];
+	        this.sandbox = source["sandbox"];
+	        this.target = source["target"];
+	        this.outcome = source["outcome"];
+	        this.errorClass = source["errorClass"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class LocalTurnMessage {
+	    role: string;
+	    text: string;
+	    // Go type: time
+	    at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalTurnMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.text = source["text"];
+	        this.at = this.convertValues(source["at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MemoryFact {
+	    id: string;
+	    workstream?: string;
+	    text: string;
+	    pinned?: boolean;
+	    source?: string;
+	    // Go type: time
+	    createdAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryFact(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workstream = source["workstream"];
+	        this.text = source["text"];
+	        this.pinned = source["pinned"];
+	        this.source = source["source"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Status {
+	    state: string;
+	    phase: number;
+	    readOnly: boolean;
+	    accountId: string;
+	    workstream: string;
+	    provider: string;
+	    model: string;
+	    memoryDir?: string;
+	    auditPath?: string;
+	    lastError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.phase = source["phase"];
+	        this.readOnly = source["readOnly"];
+	        this.accountId = source["accountId"];
+	        this.workstream = source["workstream"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.memoryDir = source["memoryDir"];
+	        this.auditPath = source["auditPath"];
+	        this.lastError = source["lastError"];
+	    }
+	}
+	export class TurnResult {
+	    sessionId: string;
+	    workstream: string;
+	    finalText: string;
+	    provider: string;
+	    model: string;
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	    toolCalls: number;
+	    promptBuildMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TurnResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.workstream = source["workstream"];
+	        this.finalText = source["finalText"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.toolCalls = source["toolCalls"];
+	        this.promptBuildMs = source["promptBuildMs"];
+	    }
+	}
+
+}
+
 export namespace team {
 	
 	export class Agent {

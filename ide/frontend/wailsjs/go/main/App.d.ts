@@ -8,6 +8,7 @@ import {team} from '../models';
 import {mcpx} from '../models';
 import {remote} from '../models';
 import {relayclient} from '../models';
+import {resident} from '../models';
 import {orchestrator} from '../models';
 
 export function ApplyHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
@@ -179,6 +180,26 @@ export function RelayUnlink():Promise<relayclient.Status>;
 export function RemoveProjectSkill(arg1:string,arg2:string):Promise<void>;
 
 export function RenamePath(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function ResidentAddMemory(arg1:string,arg2:string,arg3:boolean):Promise<resident.MemoryFact>;
+
+export function ResidentAuditLog(arg1:number):Promise<Array<resident.AuditEntry>>;
+
+export function ResidentCancel():Promise<boolean>;
+
+export function ResidentClearSession(arg1:string):Promise<void>;
+
+export function ResidentDeleteMemory(arg1:string):Promise<boolean>;
+
+export function ResidentListMemory(arg1:string):Promise<Array<resident.MemoryFact>>;
+
+export function ResidentSaveConfig(arg1:string,arg2:string,arg3:string):Promise<resident.Status>;
+
+export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
+
+export function ResidentStartTurn(arg1:string,arg2:string,arg3:string):Promise<resident.TurnResult>;
+
+export function ResidentStatus():Promise<resident.Status>;
 
 export function ResizePTY(arg1:string,arg2:number,arg3:number):Promise<void>;
 
