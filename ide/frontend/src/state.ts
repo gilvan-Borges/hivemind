@@ -142,6 +142,7 @@ export const state = {
   issuesFilterQuery: "",
   issuesStatusFilter: "",
   issuesSourceFilter: "" as "" | "jira" | "github",
+  expandedIssueSubtasks: new Set<string>(),
   prs: {
     list: [] as ProjectPullRequest[],
     loading: false,

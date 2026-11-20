@@ -1018,16 +1018,34 @@ func CheckoutGitBranch(ctx context.Context, workspace, branch string, create boo
 	return err
 }
 
+// ProjectSubtask represents a Jira subtask or child issue summarized inside a parent issue card.
+type ProjectSubtask struct {
+	Key     string `json:"key"`
+	Summary string `json:"summary"`
+	Status  string `json:"status,omitempty"`
+	Done    bool   `json:"done"`
+	URL     string `json:"url,omitempty"`
+}
+
 // ProjectIssue represents a Jira or GitHub issue listed in the IDE sidebar.
 type ProjectIssue struct {
-	Source string `json:"source"` // "jira" or "github"
-	Key    string `json:"key"`    // e.g. "PROJ-12" or "#42"
-	Title  string `json:"title"`
-	Body   string `json:"body,omitempty"`
-	Status string `json:"status,omitempty"`
-	Author string `json:"author,omitempty"`
-	URL    string `json:"url,omitempty"`
-	IsMine bool   `json:"isMine,omitempty"`
+	Source         string           `json:"source"` // "jira" or "github"
+	Key            string           `json:"key"`    // e.g. "PROJ-12" or "#42"
+	Title          string           `json:"title"`
+	Body           string           `json:"body,omitempty"`
+	Status         string           `json:"status,omitempty"`
+	IssueType      string           `json:"issueType,omitempty"`
+	IsSubtask      bool             `json:"isSubtask,omitempty"`
+	ParentKey      string           `json:"parentKey,omitempty"`
+	ParentTitle    string           `json:"parentTitle,omitempty"`
+	ParentURL      string           `json:"parentUrl,omitempty"`
+	SubtaskTotal   int              `json:"subtaskTotal,omitempty"`
+	SubtaskDone    int              `json:"subtaskDone,omitempty"`
+	SubtaskPending int              `json:"subtaskPending,omitempty"`
+	Subtasks       []ProjectSubtask `json:"subtasks,omitempty"`
+	Author         string           `json:"author,omitempty"`
+	URL            string           `json:"url,omitempty"`
+	IsMine         bool             `json:"isMine,omitempty"`
 }
 
 func buildMyJiraIssuesJQL(projectKey string) string {
@@ -1296,20 +1314,103 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 					jql := buildMyJiraIssuesJQL(projKey)
 					list, err := jc.Search(ctx, jql, 50)
 					if err == nil {
+						// For top-level issues that may have child issues linked via `parent` (e.g. Epic/Parent in team-managed projects)
+						// rather than inline `fields.subtasks`, batch-fetch child issues in a single JQL call.
+						var parentCandidates []string
+						for _, it := range list {
+							if it.Key != "" && len(it.Subtasks) == 0 && !strings.Contains(strings.ToLower(it.IssueType), "sub") {
+								parentCandidates = append(parentCandidates, fmt.Sprintf("%q", it.Key))
+							}
+						}
+						childrenByParent := make(map[string][]jirax.SubtaskItem)
+						if len(parentCandidates) > 0 {
+							if len(parentCandidates) > 25 {
+								parentCandidates = parentCandidates[:25]
+							}
+							childCtx, cancelChild := context.WithTimeout(ctx, 5*time.Second)
+							childJQL := fmt.Sprintf("parent in (%s) ORDER BY key ASC", strings.Join(parentCandidates, ","))
+							if children, cErr := jc.Search(childCtx, childJQL, 100); cErr == nil {
+								for _, ch := range children {
+									pk := strings.TrimSpace(ch.ParentKey)
+									if pk == "" || ch.Key == "" {
+										continue
+									}
+									childrenByParent[pk] = append(childrenByParent[pk], jirax.SubtaskItem{
+										Key:     ch.Key,
+										Summary: ch.Summary,
+										Status:  ch.Status,
+										Done:    jirax.IsDoneStatus(ch.Status),
+									})
+								}
+							}
+							cancelChild()
+						}
+
 						base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
 						for _, it := range list {
 							browseURL := ""
 							if base != "" && it.Key != "" {
 								browseURL = base + "/browse/" + url.PathEscape(it.Key)
 							}
+							parentURL := ""
+							if base != "" && it.ParentKey != "" {
+								parentURL = base + "/browse/" + url.PathEscape(it.ParentKey)
+							}
+
+							rawSubs := it.Subtasks
+							if len(rawSubs) == 0 {
+								rawSubs = childrenByParent[it.Key]
+							} else if extra := childrenByParent[it.Key]; len(extra) > 0 {
+								seen := make(map[string]bool, len(rawSubs))
+								for _, s := range rawSubs {
+									seen[s.Key] = true
+								}
+								for _, s := range extra {
+									if !seen[s.Key] {
+										rawSubs = append(rawSubs, s)
+									}
+								}
+							}
+
+							var projSubs []ProjectSubtask
+							doneCount := 0
+							for _, st := range rawSubs {
+								isDone := st.Done || jirax.IsDoneStatus(st.Status)
+								if isDone {
+									doneCount++
+								}
+								stURL := ""
+								if base != "" && st.Key != "" {
+									stURL = base + "/browse/" + url.PathEscape(st.Key)
+								}
+								projSubs = append(projSubs, ProjectSubtask{
+									Key:     st.Key,
+									Summary: st.Summary,
+									Status:  st.Status,
+									Done:    isDone,
+									URL:     stURL,
+								})
+							}
+							totalSubs := len(projSubs)
+							pendingSubs := totalSubs - doneCount
+
 							issues = append(issues, ProjectIssue{
-								Source: "jira",
-								Key:    it.Key,
-								Title:  it.Summary,
-								Body:   it.Description,
-								Status: it.Status,
-								URL:    browseURL,
-								IsMine: true,
+								Source:         "jira",
+								Key:            it.Key,
+								Title:          it.Summary,
+								Body:           it.Description,
+								Status:         it.Status,
+								IssueType:      it.IssueType,
+								IsSubtask:      it.IsSubtask || it.ParentKey != "",
+								ParentKey:      it.ParentKey,
+								ParentTitle:    it.ParentSummary,
+								ParentURL:      parentURL,
+								SubtaskTotal:   totalSubs,
+								SubtaskDone:    doneCount,
+								SubtaskPending: pendingSubs,
+								Subtasks:       projSubs,
+								URL:            browseURL,
+								IsMine:         true,
 							})
 						}
 					}

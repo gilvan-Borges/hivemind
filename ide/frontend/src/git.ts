@@ -401,16 +401,65 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
 export function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
   const isGH = iss.source === "github";
   const num = isGH ? parseInt(iss.key.replace(/^#/, ""), 10) || 0 : 0;
+  const subTotal = iss.subtaskTotal || (iss.subtasks ? iss.subtasks.length : 0);
+  const subDone = iss.subtaskDone ?? (iss.subtasks ? iss.subtasks.filter((s) => s.done).length : 0);
+  const subPending = iss.subtaskPending ?? Math.max(0, subTotal - subDone);
+  const hasSubtasks = subTotal > 0;
+  const isExpanded = hasSubtasks && state.expandedIssueSubtasks.has(iss.key);
+  const pctDone = hasSubtasks ? Math.round((subDone / subTotal) * 100) : 0;
+  const hasParent = Boolean(iss.parentKey);
+  const isSubtaskBadge = Boolean(iss.isSubtask || (hasParent && !hasSubtasks));
+
   return `
-    <div class="issue-card">
+    <div class="issue-card ${hasSubtasks ? "has-subtasks" : ""} ${hasParent ? "is-subtask-card" : ""}">
       <div class="pr-card-top" style="justify-content:space-between">
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
+          ${isSubtaskBadge ? `<span class="flow-pill subtask-type-pill" title="Subtarefa vinculada a ${escapeHtml(iss.parentKey || "task pai")}">Subtask</span>` : ""}
+          ${hasSubtasks ? `<span class="flow-pill parent-count-pill" title="${subDone} concluída(s) · ${subPending} sem fazer · total de ${subTotal} subtasks">${subTotal} subtask${subTotal === 1 ? "" : "s"}</span>` : ""}
           ${isGH && iss.isMine ? `<span class="flow-pill mine">Minha</span>` : ""}
         </div>
         ${iss.status ? `<span class="dim" style="font-size:10.5px">${escapeHtml(iss.status)}</span>` : ""}
       </div>
+      ${hasParent ? `
+        <div class="issue-parent-banner" title="Task Pai: ${escapeHtml(iss.parentKey!)}${iss.parentTitle ? " — " + escapeHtml(iss.parentTitle) : ""}">
+          <span class="issue-parent-icon">↳</span>
+          <span class="issue-parent-label">Pai:</span>
+          <button type="button" class="issue-parent-key-btn" data-filter-parent-key="${escapeHtml(iss.parentKey!)}" title="Filtrar pela task pai ${escapeHtml(iss.parentKey!)}">${escapeHtml(iss.parentKey!)}</button>
+          ${iss.parentTitle ? `<span class="issue-parent-title">${escapeHtml(iss.parentTitle)}</span>` : ""}
+          ${iss.parentUrl ? `<button type="button" class="issue-parent-open-btn" data-open-pr-url="${escapeHtml(iss.parentUrl)}" title="Abrir task pai ${escapeHtml(iss.parentKey!)} no Jira">${icons.openInNew}</button>` : ""}
+        </div>
+      ` : ""}
       <div class="pr-card-title">${escapeHtml(iss.title)}</div>
+      ${hasSubtasks ? `
+        <div class="issue-subtasks-box">
+          <button type="button" class="issue-subtasks-summary" data-toggle-issue-subtasks="${escapeHtml(iss.key)}" title="Clique para ${isExpanded ? "ocultar" : "listar"} as ${subTotal} subtasks">
+            <span class="subtask-stat ok">${icons.check} <strong>${subDone}</strong> OK</span>
+            <span class="subtask-sep">·</span>
+            <span class="subtask-stat pending"><strong>${subPending}</strong> sem fazer</span>
+            <span class="subtask-sep">=</span>
+            <span class="subtask-stat total"><strong>${subTotal}</strong> subtask${subTotal === 1 ? "" : "s"}</span>
+            <span class="subtask-expand-icon">${isExpanded ? icons.chevronDown : icons.chevronRight}</span>
+          </button>
+          <div class="issue-subtasks-bar" title="${pctDone}% concluído (${subDone} de ${subTotal})">
+            <div class="issue-subtasks-bar-fill" style="width:${pctDone}%"></div>
+          </div>
+          ${isExpanded && iss.subtasks && iss.subtasks.length > 0 ? `
+            <div class="issue-subtasks-list">
+              ${iss.subtasks.map((st) => `
+                <div class="issue-subtask-row ${st.done ? "is-done" : "is-pending"}" title="${escapeHtml(st.key)} — ${escapeHtml(st.summary)} [${escapeHtml(st.status || (st.done ? "Concluído" : "Pendente"))}]">
+                  <span class="subtask-row-mark">${st.done ? "✓" : "○"}</span>
+                  <span class="subtask-row-key">${escapeHtml(st.key)}</span>
+                  <span class="subtask-row-summary">${escapeHtml(st.summary)}</span>
+                  ${st.status ? `<span class="subtask-row-status">${escapeHtml(st.status)}</span>` : ""}
+                  ${!st.done ? `<button type="button" class="subtask-row-solve" data-solve-subtask-key="${escapeHtml(st.key)}" data-solve-subtask-title="${escapeHtml(st.summary)}" data-solve-subtask-parent="${escapeHtml(iss.key)} — ${escapeHtml(iss.title)}" title="Resolver ${escapeHtml(st.key)} c/ Equipe">${icons.send}</button>` : ""}
+                  ${st.url ? `<button type="button" class="subtask-row-open" data-open-pr-url="${escapeHtml(st.url)}" title="Abrir ${escapeHtml(st.key)} no Jira">${icons.openInNew}</button>` : ""}
+                </div>
+              `).join("")}
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
       <div class="pr-card-actions">
         <button class="mini primary" style="flex:1" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
         ${iss.url ? `<button class="mini" data-open-pr-url="${escapeHtml(iss.url)}" title="Abrir no navegador">${icons.openInNew}</button>` : ""}
@@ -630,7 +679,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           const q = (state.issuesFilterQuery || "").trim().toLowerCase();
           const filtered = sourceFiltered.filter(({ iss }) => {
             if (activeStatus && (iss.status || "").trim() !== activeStatus) return false;
-            if (q && !(`${iss.key} ${iss.title} ${iss.status || ""}`.toLowerCase().includes(q))) return false;
+            if (q && !(`${iss.key} ${iss.title} ${iss.status || ""} ${iss.parentKey || ""} ${iss.parentTitle || ""}`.toLowerCase().includes(q))) return false;
             return true;
           });
           const countLabel = filtered.length !== allIssues.length
@@ -1393,43 +1442,94 @@ export function bindGitSidebarEvents() {
     });
   });
 
+  document.querySelectorAll("[data-toggle-issue-subtasks]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const key = (btn as HTMLElement).dataset.toggleIssueSubtasks || "";
+      if (!key) return;
+      if (state.expandedIssueSubtasks.has(key)) {
+        state.expandedIssueSubtasks.delete(key);
+      } else {
+        state.expandedIssueSubtasks.add(key);
+      }
+      renderLeftSidebar();
+    });
+  });
+
+  document.querySelectorAll("[data-filter-parent-key]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const parentKey = ((btn as HTMLElement).dataset.filterParentKey || "").trim();
+      if (!parentKey) return;
+      state.issuesFilterQuery = state.issuesFilterQuery.trim().toUpperCase() === parentKey.toUpperCase() ? "" : parentKey;
+      renderLeftSidebar();
+    });
+  });
+
+  const loadIssueObjectiveIntoChat = (issueKey: string, objectiveText: string, source: string) => {
+    if (source === "jira" && issueKey) {
+      state.jiraKeyInput = issueKey;
+      const jk = document.getElementById("jira-key-input") as HTMLInputElement | null;
+      if (jk) jk.value = issueKey;
+    }
+    state.draftObjective = objectiveText;
+    const targetLane = activeLane();
+    if (targetLane && !targetLane.running && targetLane.sessionId) {
+      // Start a clean session when loading a new Jira/GitHub issue from the sidebar.
+      targetLane.sessionId = "";
+      targetLane.turnInTokens = 0;
+      targetLane.turnOutTokens = 0;
+      targetLane.turnTotalTokens = 0;
+      targetLane.sessionInTokens = 0;
+      targetLane.sessionOutTokens = 0;
+      targetLane.sessionTotalTokens = 0;
+      targetLane.messages = [];
+      renderLaneBarOnly();
+      renderPipelineBar();
+      renderTokenBar();
+      rebuildChatMessagesFull();
+      syncComposerButtons();
+    }
+    state.showRightAI = true;
+    syncLayoutVisibility();
+    const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+    if (chatInput) {
+      chatInput.value = state.draftObjective;
+      chatInput.focus();
+    }
+    setStatus(`Issue ${issueKey} carregada no chat do Chefe.`);
+  };
+
+  document.querySelectorAll("[data-solve-subtask-key]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const subKey = (el.dataset.solveSubtaskKey || "").trim();
+      const subTitle = (el.dataset.solveSubtaskTitle || "").trim();
+      const parentInfo = (el.dataset.solveSubtaskParent || "").trim();
+      if (!subKey) return;
+      const parentLine = parentInfo ? `\nTask pai: ${parentInfo}` : "";
+      loadIssueObjectiveIntoChat(subKey, `Resolver issue ${subKey} — ${subTitle}${parentLine}`, "jira");
+    });
+  });
+
   document.querySelectorAll("[data-solve-issue]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const idx = parseInt((btn as HTMLElement).dataset.solveIssue || "0", 10);
       const iss = state.issues.list[idx];
       if (!iss) return;
-      if (iss.source === "jira") {
-        state.jiraKeyInput = iss.key;
-        const jk = document.getElementById("jira-key-input") as HTMLInputElement | null;
-        if (jk) jk.value = iss.key;
-      }
+      const parentLine = iss.parentKey
+        ? `\nTask pai: ${iss.parentKey}${iss.parentTitle ? ` — ${iss.parentTitle}` : ""}`
+        : "";
+      const subLine = iss.subtaskTotal && iss.subtaskTotal > 0
+        ? `\nSubtasks no Jira: ${iss.subtaskDone || 0} OK · ${iss.subtaskPending ?? Math.max(0, iss.subtaskTotal - (iss.subtaskDone || 0))} sem fazer = ${iss.subtaskTotal} subtasks`
+        : "";
       const bodyPart = iss.body ? `\n\nDescrição:\n${iss.body.slice(0, 1200)}` : "";
-      state.draftObjective = `Resolver issue ${iss.key} — ${iss.title}${bodyPart}`;
-      const targetLane = activeLane();
-      if (targetLane && !targetLane.running && targetLane.sessionId) {
-        // Start a clean session when loading a new Jira/GitHub issue from the sidebar.
-        targetLane.sessionId = "";
-        targetLane.turnInTokens = 0;
-        targetLane.turnOutTokens = 0;
-        targetLane.turnTotalTokens = 0;
-        targetLane.sessionInTokens = 0;
-        targetLane.sessionOutTokens = 0;
-        targetLane.sessionTotalTokens = 0;
-        targetLane.messages = [];
-        renderLaneBarOnly();
-        renderPipelineBar();
-        renderTokenBar();
-        rebuildChatMessagesFull();
-        syncComposerButtons();
-      }
-      state.showRightAI = true;
-      syncLayoutVisibility();
-      const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
-      if (chatInput) {
-        chatInput.value = state.draftObjective;
-        chatInput.focus();
-      }
-      setStatus(`Issue ${iss.key} carregada no chat do Chefe.`);
+      loadIssueObjectiveIntoChat(
+        iss.key,
+        `Resolver issue ${iss.key} — ${iss.title}${parentLine}${subLine}${bodyPart}`,
+        iss.source
+      );
     });
   });
 }

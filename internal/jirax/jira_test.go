@@ -371,3 +371,43 @@ func TestLegacyJiraFileMigration(t *testing.T) {
 		t.Fatalf("legacy token leaked in summary: %+v", got.Profiles)
 	}
 }
+
+func TestMatchJiraTransitionIDSemanticAndPlural(t *testing.T) {
+	var transitions []jiraTransitionItem
+	mk := func(id, name, toName, catKey string) jiraTransitionItem {
+		var tr jiraTransitionItem
+		tr.ID = id
+		tr.Name = name
+		tr.To.Name = toName
+		tr.To.StatusCategory.Key = catKey
+		return tr
+	}
+	transitions = []jiraTransitionItem{
+		mk("11", "To Do", "A fazer", "new"),
+		mk("21", "In Progress", "EM ANDAMENTO", "indeterminate"),
+		mk("31", "Review", "REVISÃO", "indeterminate"),
+		mk("41", "Done", "CONCLUÍDOS", "done"),
+	}
+
+	cases := []struct {
+		query  string
+		wantID string
+	}{
+		{"Concluído", "41"},
+		{"concluido", "41"},
+		{"CONCLUÍDOS", "41"},
+		{"Done", "41"},
+		{"Finalizado", "41"},
+		{"Em andamento", "21"},
+		{"In Progress", "21"},
+		{"Revisão", "31"},
+		{"revisar", "31"},
+		{"A fazer", "11"},
+		{"To Do", "11"},
+	}
+	for _, tc := range cases {
+		if got := matchJiraTransitionID(transitions, tc.query); got != tc.wantID {
+			t.Errorf("matchJiraTransitionID(%q) = %q, want %q", tc.query, got, tc.wantID)
+		}
+	}
+}

@@ -551,12 +551,41 @@ export namespace idecore {
 		    return a;
 		}
 	}
+	export class ProjectSubtask {
+	    key: string;
+	    summary: string;
+	    status?: string;
+	    done: boolean;
+	    url?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectSubtask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.summary = source["summary"];
+	        this.status = source["status"];
+	        this.done = source["done"];
+	        this.url = source["url"];
+	    }
+	}
 	export class ProjectIssue {
 	    source: string;
 	    key: string;
 	    title: string;
 	    body?: string;
 	    status?: string;
+	    issueType?: string;
+	    isSubtask?: boolean;
+	    parentKey?: string;
+	    parentTitle?: string;
+	    parentUrl?: string;
+	    subtaskTotal?: number;
+	    subtaskDone?: number;
+	    subtaskPending?: number;
+	    subtasks?: ProjectSubtask[];
 	    author?: string;
 	    url?: string;
 	    isMine?: boolean;
@@ -572,10 +601,37 @@ export namespace idecore {
 	        this.title = source["title"];
 	        this.body = source["body"];
 	        this.status = source["status"];
+	        this.issueType = source["issueType"];
+	        this.isSubtask = source["isSubtask"];
+	        this.parentKey = source["parentKey"];
+	        this.parentTitle = source["parentTitle"];
+	        this.parentUrl = source["parentUrl"];
+	        this.subtaskTotal = source["subtaskTotal"];
+	        this.subtaskDone = source["subtaskDone"];
+	        this.subtaskPending = source["subtaskPending"];
+	        this.subtasks = this.convertValues(source["subtasks"], ProjectSubtask);
 	        this.author = source["author"];
 	        this.url = source["url"];
 	        this.isMine = source["isMine"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ProjectPullRequest {
 	    number: number;
@@ -643,6 +699,7 @@ export namespace idecore {
 	        this.summary = source["summary"];
 	    }
 	}
+	
 	export class RestoredMessage {
 	    id: string;
 	    kind: string;

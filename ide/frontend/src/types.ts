@@ -445,12 +445,29 @@ export interface TextSearchMatch {
   preview: string;
 }
 
+export interface ProjectSubtask {
+  key: string;
+  summary: string;
+  status?: string;
+  done: boolean;
+  url?: string;
+}
+
 export interface ProjectIssue {
   source: string;
   key: string;
   title: string;
   body?: string;
   status?: string;
+  issueType?: string;
+  isSubtask?: boolean;
+  parentKey?: string;
+  parentTitle?: string;
+  parentUrl?: string;
+  subtaskTotal?: number;
+  subtaskDone?: number;
+  subtaskPending?: number;
+  subtasks?: ProjectSubtask[];
   author?: string;
   url?: string;
   isMine?: boolean;

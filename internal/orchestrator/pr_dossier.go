@@ -610,6 +610,7 @@ func newChiefToolStrippingModelCallback(maxExploreCalls, maxExploreTurns int, is
 		"search_text":           true,
 		"find_files":            true,
 		"list_dir":              true,
+		"run_shell":             true,
 		"git_diff":              true,
 		"git_status":            true,
 		"jira_get":              true,
@@ -769,14 +770,14 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 		}
 
 		switch name {
-		case "read_file", "search_text", "find_files", "list_dir", "jira_get", "jira_search", "git_diff", "git_status":
+		case "read_file", "search_text", "find_files", "list_dir", "run_shell", "jira_get", "jira_search", "git_diff", "git_status", "github_get_pr", "github_list_prs", "github_pr_files", "github_pr_diff":
 			mu.Lock()
 			exploreCount++
 			cur := exploreCount
 			mu.Unlock()
 			if cur > maxExploreCalls {
 				return map[string]any{
-					"text": fmt.Sprintf("ORÇAMENTO DE TRIAGEM DO CHEFE ATINGIDO (%d/%d leituras/buscas): PARE IMEDIATAMENTE de abrir novos arquivos na fase de triagem. No padrão OpenAI Codex/Swarm, o Chefe apenas mapeia o escopo em 1-2 turnos e delega a implementação para a worktree do Desenvolvedor. Chame AGORA delegate_to_squad preenchendo 'plan', 'context_brief' (com os contratos/arquivos que você já viu) e 'dev_tasks' (focado na task/subtask pendente) para criar a worktree e iniciar o Dev.", cur-1, maxExploreCalls),
+					"text": fmt.Sprintf("ORÇAMENTO DE TRIAGEM DO CHEFE ATINGIDO (%d/%d leituras/buscas): PARE IMEDIATAMENTE de abrir novos arquivos ou rodar git log/show via run_shell na fase de triagem. Se a issue já está implementada na branch, responda diretamente ao usuário agora; caso contrário, chame AGORA delegate_to_squad preenchendo 'plan', 'context_brief' e 'dev_tasks' para criar a worktree e iniciar o Dev.", cur-1, maxExploreCalls),
 				}, nil
 			}
 		}
