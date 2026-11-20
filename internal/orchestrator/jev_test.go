@@ -330,6 +330,69 @@ func TestClassifierStaysOffUnlessEnabled(t *testing.T) {
 	}
 }
 
+func TestClassifierDefaultOnAndFailureKeepsHeuristic(t *testing.T) {
+	if !jev.DefaultPolicy().ClassifyEnabled {
+		t.Fatal("padrão do classificador deveria ser ligado")
+	}
+	long := strings.Repeat("lorem ipsum dolor sit amet ", 40)
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{
+		Step: "dev_report", ObjectiveLen: len(long), Objective: long, InputTokens: 3000,
+	})
+	agent := team.Agent{Name: "n", Role: "analyst", Provider: "jev", Model: "auto"}
+	route := func(pol jev.Policy, classify func(context.Context, string) (string, error)) string {
+		t.Helper()
+		cat := jev.NewCatalogStore(t.TempDir()+"/catalog.json", nil)
+		cat.MergeSource("openrouter", []jev.ModelEntry{{
+			Provider: "openrouter", Model: "deepseek/deepseek-chat",
+			ContextLength: 128_000, PromptMicroUSD: 0.14, CompletionMicroUSD: 0.28,
+			Capabilities: jev.Capabilities{Tools: true}, Tier: jev.TierCheap, DataClass: jev.DataClassHTTPAPI,
+		}})
+		var got string
+		factory := NewJevModelFactory(JevFactoryOptions{
+			Policy:  &pol,
+			Catalog: cat,
+			Health: func() jev.HealthSnapshot {
+				return jev.HealthSnapshot{Credentials: map[string]bool{"openrouter": true}, AgyRemainingPct: -1}
+			},
+			BuildModel: func(_ context.Context, provider, modelName string) (model.LLM, error) {
+				if modelName == "deepseek-v4.1-flash" {
+					return nil, errors.New("classificador indisponível")
+				}
+				got = provider + "/" + modelName
+				return &modelx.Scripted{}, nil
+			},
+			Classify: classify,
+		})
+		if _, err := factory(ctx, agent); err != nil {
+			t.Fatalf("rota não pode cair se o classificador falha: %v", err)
+		}
+		return got
+	}
+	off := jev.DefaultPolicy()
+	off.ClassifyEnabled = false
+	want := route(off, func(context.Context, string) (string, error) {
+		t.Fatal("flag desligada não chama o classificador")
+		return "", nil
+	})
+	if want == "" {
+		t.Fatal("rota heurística vazia")
+	}
+	on := jev.DefaultPolicy()
+	if got := route(on, func(context.Context, string) (string, error) {
+		return "", errors.New("indisponível")
+	}); got != want {
+		t.Fatalf("erro do classificador mudou a rota: %s vs %s", got, want)
+	}
+	if got := route(on, func(context.Context, string) (string, error) {
+		return "duas palavras invalidas demais", nil
+	}); got != want {
+		t.Fatalf("texto inválido mudou a rota: %s vs %s", got, want)
+	}
+	if got := route(on, nil); got != want {
+		t.Fatalf("modelo do classificador indisponível mudou a rota: %s vs %s", got, want)
+	}
+}
+
 func TestRepoDenyCursorSkipsBuildEvenWhenPinned(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, ".hivemind"), 0o755); err != nil {

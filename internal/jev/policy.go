@@ -46,7 +46,7 @@ type RolePin struct {
 type Policy struct {
 	Version                 int                     `json:"version"`
 	Enabled                 bool                    `json:"enabled"`
-	ClassifyEnabled         bool                    `json:"classifyEnabled,omitempty"`
+	ClassifyEnabled         bool                    `json:"classifyEnabled"`
 	Weights                 Weights                 `json:"weights"`
 	AutoEscalateUSD         float64                 `json:"autoEscalateUsd"`
 	MaxEscalateRatio        float64                 `json:"maxEscalateRatio"`
@@ -68,8 +68,9 @@ type RepoPolicy struct {
 // DefaultPolicy returns the safe default Jev configuration (opt-in Enabled: false).
 func DefaultPolicy() Policy {
 	return Policy{
-		Version: 1,
-		Enabled: false,
+		Version:         1,
+		Enabled:         false,
+		ClassifyEnabled: true,
 		Weights: Weights{
 			Quality: 0.35,
 			Cost:    0.50,
@@ -170,7 +171,31 @@ func LoadPolicyFrom(path string) (Policy, error) {
 	if parsed.AllowDataClass == nil {
 		parsed.AllowDataClass = pol.AllowDataClass
 	}
+	on, err := classifyEnabledFromJSON(data)
+	if err != nil {
+		return pol, err
+	}
+	parsed.ClassifyEnabled = on
 	return parsed, nil
+}
+
+// classifyEnabledFromJSON keeps an explicit false and turns the classifier on
+// when the file never had the key. omitempty used to drop false, so only a
+// written false counts as "the person turned it off".
+func classifyEnabledFromJSON(data []byte) (bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return true, err
+	}
+	body, ok := raw["classifyEnabled"]
+	if !ok || string(body) == "null" {
+		return true, nil
+	}
+	var on bool
+	if err := json.Unmarshal(body, &on); err != nil {
+		return true, err
+	}
+	return on, nil
 }
 
 // SavePolicyTo writes policy.json with strict permissions (0700 dir, 0600 file).

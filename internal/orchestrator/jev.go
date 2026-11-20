@@ -127,8 +127,9 @@ type JevFactoryOptions struct {
 	OnEvent      func(Event)
 	ExtraSecrets []string
 	DisableWrap  bool
-	// Classify is the optional cheap-model reply. Nil builds one cheap model,
-	// and only when policy.ClassifyEnabled is on and confidence is low.
+	// Classify is the cheap-model reply. Nil builds one cheap model when
+	// confidence is low. The call is on unless policy.ClassifyEnabled is
+	// explicitly false. A failure or an unusable reply keeps the heuristic.
 	Classify func(ctx context.Context, objective string) (string, error)
 }
 
@@ -301,6 +302,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					class, comp = nextClass, nextComp
 				}
 			}
+			// Falha, modelo indisponível ou texto fora do enum: fica o heurístico.
 		}
 		task := jev.Task{
 			Role:        role,

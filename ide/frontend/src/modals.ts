@@ -1845,6 +1845,7 @@ export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
     maxEscalateRatio: 3,
     dailyUsd: { openrouter: 1, opencode: 1, gemini: 1, openai: 1, anthropic: 1 },
     allowDataClass: ["cli_account", "http_api", "workspace_agent"],
+    classifyEnabled: true,
   };
   const daily = p.dailyUsd || {};
   const allow = new Set(p.allowDataClass || []);
@@ -1861,6 +1862,7 @@ export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
       </div>
       <div class="aiu-card-body" style="display:grid;gap:6px;font-size:12px">
         ${check("jev-enabled", p.enabled, "Jev ligado")}
+        ${check("jev-classify", p.classifyEnabled !== false, "Classificador ligado (desligue para gravar false)")}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <label class="dim">qualidade <input id="jev-w-quality" type="number" step="0.01" min="0" value="${p.weights.quality}" style="width:70px"/></label>
           <label class="dim">custo <input id="jev-w-cost" type="number" step="0.01" min="0" value="${p.weights.cost}" style="width:70px"/></label>
@@ -2399,6 +2401,7 @@ export function bindAIUsagePageEvents() {
     const base = jevPolicyDraft ?? {
       version: 1,
       enabled: false,
+      classifyEnabled: true,
       weights: { quality: 0.35, cost: 0.5, latency: 0.15 },
       autoEscalateUsd: 0.02,
       maxEscalateRatio: 3,
@@ -2407,9 +2410,11 @@ export function bindAIUsagePageEvents() {
     if ((document.getElementById("jev-dc-cli") as HTMLInputElement | null)?.checked) allow.push("cli_account");
     if ((document.getElementById("jev-dc-http") as HTMLInputElement | null)?.checked) allow.push("http_api");
     if ((document.getElementById("jev-dc-ws") as HTMLInputElement | null)?.checked) allow.push("workspace_agent");
+    const classifyEl = document.getElementById("jev-classify") as HTMLInputElement | null;
     const next: JevPolicy = {
       ...base,
       enabled: Boolean((document.getElementById("jev-enabled") as HTMLInputElement | null)?.checked),
+      classifyEnabled: classifyEl ? classifyEl.checked : base.classifyEnabled !== false,
       weights: {
         quality: numField("jev-w-quality", base.weights.quality),
         cost: numField("jev-w-cost", base.weights.cost),
