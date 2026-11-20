@@ -59,6 +59,7 @@ type Cursor struct {
 	Dir     string
 	Timeout time.Duration
 	Key     string
+	Env     map[string]string
 }
 
 // LookCursor finds the official CLI. HIVEMIND_CURSOR_AGENT_PATH, when set,
@@ -106,7 +107,8 @@ func ProbeCursor() CursorStatus {
 // NewCursor builds the adapter. The key is read from the environment first,
 // then from api-keys.json. The model id "auto" lets the Cursor CLI choose.
 func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
-	key := EnvOrStored("CURSOR_API_KEY")
+	prof, _, _ := ResolveProfile(ctx, "cursor")
+	key := resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina CURSOR_API_KEY para usar o Cursor (painel Cursor → API Keys). A variável de ambiente tem prioridade sobre a chave salva na IDE")
 	}
@@ -114,11 +116,16 @@ func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
 	if err != nil {
 		return nil, err
 	}
+	var envMap map[string]string
+	if prof != nil && len(prof.Env) > 0 {
+		envMap = prof.Env
+	}
 	return &Cursor{
 		Bin:   bin,
 		Model: cursorModelID(modelName),
 		Dir:   agentDirFrom(ctx),
 		Key:   key,
+		Env:   envMap,
 	}, nil
 }
 
@@ -198,7 +205,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	args := cursorArgs(c.Model, dir)
 	cmd := cursorCommand(runCtx, bin, args)
 	cmd.Dir = dir
-	cmd.Env = cursorChildEnv(os.Environ(), c.Key)
+	cmd.Env = mergeEnv(cursorChildEnv(os.Environ(), c.Key), c.Env)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

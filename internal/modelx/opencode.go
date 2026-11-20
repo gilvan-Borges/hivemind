@@ -326,6 +326,14 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 		}
 	}
 	apiKey, zenBaseURL, _ := LoadOpenCodeCredentials()
+	if prof, _, _ := ResolveProfile(ctx, "opencode"); prof != nil && len(prof.Env) > 0 {
+		if k := firstNonEmpty(prof.Env["OPENCODE_API_KEY"], prof.Env["OPENCODE_ZEN_API_KEY"]); k != "" {
+			apiKey = k
+		}
+		if b := strings.TrimRight(strings.TrimSpace(prof.Env["OPENCODE_BASE_URL"]), "/"); b != "" {
+			zenBaseURL = b
+		}
+	}
 	if apiKey == "" {
 		if isOpenCodeFreeModel(modelID) {
 			apiKey = "public"

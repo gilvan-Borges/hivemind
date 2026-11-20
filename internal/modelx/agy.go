@@ -45,6 +45,9 @@ type Agy struct {
 	// Dir is the process working directory. Empty means a fresh temp dir,
 	// never the project, so agy's own tools cannot write the repo.
 	Dir string
+	// Env carries optional per-profile environment overrides (e.g. AGY_ADC_AUTH,
+	// CLOUDSDK_CONFIG, GOOGLE_CLOUD_PROJECT) isolated to this child process.
+	Env map[string]string
 }
 
 // AgyStatus is what `hivemind doctor` prints about the CLI. It never includes
@@ -156,12 +159,35 @@ func ParseAgySpec(modelName string) (slug, effort string) {
 
 // NewAgy builds a model that shells out to agy. Bin may be empty; then PATH is searched.
 func NewAgy(bin, modelName string) (*Agy, error) {
+	return NewAgyForContext(context.Background(), bin, modelName)
+}
+
+// NewAgyForContext resolves any workspace/org-scoped AGY profile from ctx and builds
+// an Agy adapter with isolated per-process environment variables.
+func NewAgyForContext(ctx context.Context, bin, modelName string) (*Agy, error) {
+	prof, _, _ := ResolveProfile(ctx, "agy")
+	var envMap map[string]string
+	if prof != nil {
+		if len(prof.Env) > 0 {
+			envMap = make(map[string]string, len(prof.Env))
+			for k, v := range prof.Env {
+				envMap[k] = v
+			}
+		}
+		if bin == "" && strings.TrimSpace(prof.Command) != "" {
+			bin = strings.TrimSpace(prof.Command)
+		}
+	}
+
 	slug, effort := ParseAgySpec(modelName)
+	if slug == "" {
+		slug = strings.TrimSpace(envMap["AGY_MODEL"])
+	}
 	if slug == "" {
 		slug = strings.TrimSpace(os.Getenv("AGY_MODEL"))
 	}
 	if effort == "" {
-		effort = strings.ToLower(strings.TrimSpace(os.Getenv("AGY_EFFORT")))
+		effort = strings.ToLower(strings.TrimSpace(firstNonEmpty(envMap["AGY_EFFORT"], os.Getenv("AGY_EFFORT"))))
 		if effort != "" && !isAgyEffort(effort) {
 			return nil, fmt.Errorf("AGY_EFFORT %q é inválido; use low, medium, high, xhigh ou max", effort)
 		}
@@ -173,7 +199,7 @@ func NewAgy(bin, modelName string) (*Agy, error) {
 		}
 		bin = found
 	}
-	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout}, nil
+	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout, Env: envMap}, nil
 }
 
 // Name implements model.LLM.
@@ -243,12 +269,12 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	defer os.Remove(schema)
 	args = append(args, "--json-schema", schema)
 
-	stdout, stderr, code, err := invokeAgy(runCtx, a.Bin, dir, args, prompt)
+	stdout, stderr, code, err := invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env)
 	if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
 		select {
 		case <-runCtx.Done():
 		case <-time.After(2 * time.Second):
-			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env)
 		}
 	}
 	// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
@@ -265,7 +291,7 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		select {
 		case <-runCtx.Done():
 		case <-time.After(agyRetryDelays[attempt]):
-			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env)
 		}
 	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
@@ -764,9 +790,16 @@ func localAppDataAgy() string {
 // A broken pipe on that write is ignored: the process often exits first when
 // it rejects the command, and the real exit code plus stderr are what matter.
 func invokeAgy(ctx context.Context, bin, dir string, args []string, stdinText string) (string, string, int, error) {
+	return invokeAgyWithEnv(ctx, bin, dir, args, stdinText, nil)
+}
+
+func invokeAgyWithEnv(ctx context.Context, bin, dir string, args []string, stdinText string, extraEnv map[string]string) (string, string, int, error) {
 	cmd := agyCommand(ctx, bin, args)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if len(extraEnv) > 0 {
+		cmd.Env = mergeEnv(os.Environ(), extraEnv)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

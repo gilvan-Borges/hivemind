@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+
+	"github.com/gilvan-Borges/HiveMind/internal/orgx"
 )
 
 // Project represents a Jira Cloud project discovered dynamically via REST API v3.
@@ -17,6 +20,31 @@ type Project struct {
 	Key         string `json:"key"`
 	Name        string `json:"name"`
 	ProjectType string `json:"projectType,omitempty"`
+}
+
+// JiraProfile defines one named Jira Cloud connection (e.g., Vibetex, Org B).
+type JiraProfile struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	BaseURL        string   `json:"base_url,omitempty"`
+	Email          string   `json:"email,omitempty"`
+	Token          string   `json:"token,omitempty"`
+	DefaultProject string   `json:"default_project,omitempty"`
+	OrgPatterns    []string `json:"org_patterns,omitempty"`
+	IsDefault      bool     `json:"is_default,omitempty"`
+}
+
+// JiraProfileSummary is the secret-safe UI view of a JiraProfile.
+type JiraProfileSummary struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	BaseURL        string   `json:"baseUrl"`
+	Email          string   `json:"email"`
+	TokenMasked    string   `json:"tokenMasked"`
+	DefaultProject string   `json:"defaultProject"`
+	OrgPatterns    []string `json:"orgPatterns,omitempty"`
+	IsDefault      bool     `json:"isDefault,omitempty"`
+	HasToken       bool     `json:"hasToken"`
 }
 
 // NormalizeBaseURL turns user-pasted Jira links (e.g. "empresa.atlassian.net" or
@@ -41,24 +69,55 @@ func NormalizeBaseURL(raw string) string {
 	return fmt.Sprintf("%s://%s", scheme, u.Host)
 }
 
-type storedJiraConfig struct {
+type storedJiraFile struct {
+	// Legacy single-connector fields kept for backward compatibility.
 	BaseURL        string `json:"base_url,omitempty"`
 	Email          string `json:"email,omitempty"`
 	Token          string `json:"token,omitempty"`
 	DefaultProject string `json:"default_project,omitempty"`
+
+	// Multi-profile / multi-org schema.
+	ActiveProfile     string            `json:"active_profile,omitempty"`
+	Profiles          []JiraProfile     `json:"profiles,omitempty"`
+	WorkspaceBindings map[string]string `json:"workspace_bindings,omitempty"` // normalized workspace -> profileID or "none"
 }
 
 // ConnectorStatus describes the native Jira Cloud connector state for the IDE UI.
 type ConnectorStatus struct {
-	Configured     bool   `json:"configured"`
-	Connected      bool   `json:"connected"`
-	Source         string `json:"source"` // "env", "config", ""
-	BaseURL        string `json:"baseUrl"`
-	Email          string `json:"email"`
-	TokenMasked    string `json:"tokenMasked"`
-	DefaultProject string `json:"defaultProject"`
-	User           string `json:"user"`
-	Detail         string `json:"detail"`
+	Configured        bool                 `json:"configured"`
+	Connected         bool                 `json:"connected"`
+	Source            string               `json:"source"` // "env", "config", "mcp:...", "none", ""
+	BaseURL           string               `json:"baseUrl"`
+	Email             string               `json:"email"`
+	TokenMasked       string               `json:"tokenMasked"`
+	DefaultProject    string               `json:"defaultProject"`
+	User              string               `json:"user"`
+	Detail            string               `json:"detail"`
+	ActiveProfileID   string               `json:"activeProfileId,omitempty"`
+	ActiveProfileName string               `json:"activeProfileName,omitempty"`
+	MatchMode         string               `json:"matchMode,omitempty"` // "env", "manual", "auto_org", "default", "isolated_none", "mcp"
+	MatchedRule       string               `json:"matchedRule,omitempty"`
+	BindingMode       string               `json:"bindingMode,omitempty"` // "", "none", or pinned profileID
+	DetectedOrg       string               `json:"detectedOrg,omitempty"`
+	SuggestedPatterns []string             `json:"suggestedPatterns,omitempty"`
+	Profiles          []JiraProfileSummary `json:"profiles,omitempty"`
+}
+
+// ResolvedCredentials describes the exact Jira resolution outcome for a workspace.
+type ResolvedCredentials struct {
+	BaseURL           string
+	Email             string
+	Token             string
+	DefaultProject    string
+	Source            string
+	ProfileID         string
+	ProfileName       string
+	MatchMode         string
+	MatchedRule       string
+	BindingMode       string
+	DetectedOrg       string
+	SuggestedPatterns []string
+	Profiles          []JiraProfileSummary
 }
 
 func jiraConfigPath() (string, error) {
@@ -72,95 +131,294 @@ func jiraConfigPath() (string, error) {
 	return filepath.Join(home, ".hivemind", "jira-connector.json"), nil
 }
 
-// LoadStoredConfig reads the native Jira connector settings saved in the user config dir.
-func LoadStoredConfig() (baseURL, email, token, defaultProject string) {
+func readJiraFile() storedJiraFile {
 	path, err := jiraConfigPath()
 	if err != nil {
-		return "", "", "", ""
+		return storedJiraFile{}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", "", "", ""
+		return storedJiraFile{}
 	}
-	var cfg storedJiraConfig
-	if json.Unmarshal(data, &cfg) != nil {
-		return "", "", "", ""
+	var doc storedJiraFile
+	if json.Unmarshal(data, &doc) != nil {
+		return storedJiraFile{}
 	}
-	return strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
-		strings.TrimSpace(cfg.Email),
-		strings.TrimSpace(cfg.Token),
-		strings.ToUpper(strings.TrimSpace(cfg.DefaultProject))
+	// Migrate legacy flat config in-memory if profiles list is empty.
+	if len(doc.Profiles) == 0 && (strings.TrimSpace(doc.BaseURL) != "" || strings.TrimSpace(doc.Email) != "" || strings.TrimSpace(doc.Token) != "") {
+		doc.Profiles = []JiraProfile{{
+			ID:             "default",
+			Name:           deriveProfileName(doc.BaseURL, "Padrão"),
+			BaseURL:        NormalizeBaseURL(doc.BaseURL),
+			Email:          strings.TrimSpace(doc.Email),
+			Token:          strings.TrimSpace(doc.Token),
+			DefaultProject: strings.ToUpper(strings.TrimSpace(doc.DefaultProject)),
+			IsDefault:      true,
+		}}
+		doc.ActiveProfile = "default"
+	}
+	for i := range doc.Profiles {
+		p := &doc.Profiles[i]
+		p.ID = sanitizeProfileID(p.ID)
+		if p.ID == "" {
+			p.ID = sanitizeProfileID(p.Name)
+		}
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("jira-%d", i+1)
+		}
+		p.Name = strings.TrimSpace(p.Name)
+		if p.Name == "" {
+			p.Name = deriveProfileName(p.BaseURL, p.ID)
+		}
+		p.BaseURL = NormalizeBaseURL(p.BaseURL)
+		p.Email = strings.TrimSpace(p.Email)
+		p.Token = strings.TrimSpace(p.Token)
+		p.DefaultProject = strings.ToUpper(strings.TrimSpace(p.DefaultProject))
+	}
+	return doc
 }
 
-// LoadCredentials resolves Jira Cloud credentials in priority order:
-// 1. Environment variables (JIRA_BASE_URL/JIRA_HOST/JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN/JIRA_TOKEN, JIRA_PROJECT)
-// 2. Native HiveMind Jira connector (%AppData%\HiveMind\jira-connector.json)
+func writeJiraFile(doc storedJiraFile) error {
+	path, err := jiraConfigPath()
+	if err != nil {
+		return err
+	}
+	// Keep legacy flat fields synced to active/default profile for external readers when single/default exists.
+	var primary *JiraProfile
+	for i := range doc.Profiles {
+		if doc.Profiles[i].ID == doc.ActiveProfile {
+			primary = &doc.Profiles[i]
+			break
+		}
+	}
+	if primary == nil && len(doc.Profiles) > 0 {
+		primary = &doc.Profiles[0]
+	}
+	if primary != nil && len(doc.Profiles) == 1 && len(primary.OrgPatterns) == 0 {
+		doc.BaseURL = primary.BaseURL
+		doc.Email = primary.Email
+		doc.Token = primary.Token
+		doc.DefaultProject = primary.DefaultProject
+	} else {
+		doc.BaseURL = ""
+		doc.Email = ""
+		doc.Token = ""
+		doc.DefaultProject = ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func summarizeProfiles(list []JiraProfile) []JiraProfileSummary {
+	out := make([]JiraProfileSummary, 0, len(list))
+	for _, p := range list {
+		out = append(out, JiraProfileSummary{
+			ID:             p.ID,
+			Name:           p.Name,
+			BaseURL:        p.BaseURL,
+			Email:          p.Email,
+			TokenMasked:    maskJiraToken(p.Token),
+			DefaultProject: p.DefaultProject,
+			OrgPatterns:    append([]string(nil), p.OrgPatterns...),
+			IsDefault:      p.IsDefault,
+			HasToken:       strings.TrimSpace(p.Token) != "",
+		})
+	}
+	return out
+}
+
+func findProfileByID(list []JiraProfile, id string) *JiraProfile {
+	target := strings.ToLower(strings.TrimSpace(id))
+	if target == "" {
+		return nil
+	}
+	for i := range list {
+		if strings.ToLower(strings.TrimSpace(list[i].ID)) == target {
+			return &list[i]
+		}
+	}
+	return nil
+}
+
+// LoadStoredConfig reads the active native Jira connector settings saved in the user config dir.
+func LoadStoredConfig() (baseURL, email, token, defaultProject string) {
+	doc := readJiraFile()
+	if p := findProfileByID(doc.Profiles, doc.ActiveProfile); p != nil {
+		return p.BaseURL, p.Email, p.Token, p.DefaultProject
+	}
+	if len(doc.Profiles) > 0 {
+		p := doc.Profiles[0]
+		return p.BaseURL, p.Email, p.Token, p.DefaultProject
+	}
+	return "", "", "", ""
+}
+
+// LoadCredentials resolves Jira Cloud credentials without workspace context.
 func LoadCredentials() (baseURL, email, token, defaultProject, source string) {
 	return LoadCredentialsForWorkspace("")
 }
 
-// LoadCredentialsForWorkspace resolves Jira Cloud credentials with MCP auto-discovery:
-// 1. Environment variables
-// 2. Native HiveMind Jira connector (%AppData%\HiveMind\jira-connector.json)
-// 3. Existing MCP configs (.agents/mcp_config.json, .mcp.json, .cursor/mcp.json in workspace, parent dir, or user home)
-func LoadCredentialsForWorkspace(workspace string) (baseURL, email, token, defaultProject, source string) {
+// ResolveForWorkspace resolves Jira Cloud credentials with strict multi-org isolation:
+// 1. Environment variables (JIRA_*)
+// 2. Explicit workspace binding (pinned profile ID or "none" to isolate org without Jira)
+// 3. Auto-detection of Git organization / workspace path against profile org_patterns
+// 4. Org isolation guard (if profiles define org_patterns and detected workspace does not match,
+//    do NOT leak another org's Jira; only use explicit IsDefault fallback or workspace-local MCP)
+// 5. Fallback to active/single stored profile, then MCP discovery.
+func ResolveForWorkspace(workspace string) ResolvedCredentials {
+	doc := readJiraFile()
+	ws := strings.TrimSpace(workspace)
+	orgID := orgx.Detect(ws)
+	res := ResolvedCredentials{
+		DetectedOrg:       orgID.GitOrg,
+		SuggestedPatterns: orgID.SuggestedPatterns,
+		Profiles:          summarizeProfiles(doc.Profiles),
+	}
+	wsKey := orgx.NormalizeWorkspaceKey(ws)
+	if wsKey != "" && doc.WorkspaceBindings != nil {
+		res.BindingMode = strings.TrimSpace(doc.WorkspaceBindings[wsKey])
+	}
+
 	envBase := NormalizeBaseURL(firstNonEmptyEnv("JIRA_BASE_URL", "JIRA_HOST", "JIRA_URL", "ATLASSIAN_URL", "ATLASSIAN_DOMAIN"))
 	envEmail := firstNonEmptyEnv("JIRA_EMAIL", "JIRA_USERNAME", "ATLASSIAN_EMAIL")
 	envToken := firstNonEmptyEnv("JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_API_TOKEN")
 	envProj := strings.ToUpper(firstNonEmptyEnv("JIRA_PROJECT"))
 
-	stBase, stEmail, stToken, stProj := LoadStoredConfig()
+	if envBase != "" && envEmail != "" && envToken != "" {
+		res.BaseURL = envBase
+		res.Email = envEmail
+		res.Token = envToken
+		res.DefaultProject = envProj
+		res.Source = "env"
+		res.MatchMode = "env"
+		return res
+	}
 
-	baseURL = envBase
-	email = envEmail
-	token = envToken
-	defaultProject = envProj
-	if baseURL != "" && email != "" && token != "" {
-		source = "env"
-	}
-	if baseURL == "" {
-		baseURL = NormalizeBaseURL(stBase)
-	}
-	if email == "" {
-		email = stEmail
-	}
-	if token == "" {
-		token = stToken
-	}
-	if defaultProject == "" {
-		defaultProject = stProj
-	}
-	if source == "" && baseURL != "" && email != "" && token != "" {
-		source = "config"
-	}
-	if baseURL == "" || email == "" || token == "" {
-		mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := DetectMCPConfig(workspace)
-		if baseURL == "" {
-			baseURL = mcpBase
+	applyProfile := func(p *JiraProfile, mode, rule string) ResolvedCredentials {
+		res.BaseURL = p.BaseURL
+		res.Email = p.Email
+		res.Token = p.Token
+		res.DefaultProject = p.DefaultProject
+		if envBase != "" {
+			res.BaseURL = envBase
 		}
-		if email == "" {
-			email = mcpEmail
+		if envEmail != "" {
+			res.Email = envEmail
 		}
-		if token == "" {
-			token = mcpToken
+		if envToken != "" {
+			res.Token = envToken
 		}
-		if defaultProject == "" {
-			defaultProject = mcpProj
+		if envProj != "" {
+			res.DefaultProject = envProj
 		}
-		if source == "" && baseURL != "" && email != "" && token != "" && mcpPath != "" {
-			source = "mcp:" + filepath.Base(mcpPath)
+		res.ProfileID = p.ID
+		res.ProfileName = p.Name
+		res.MatchMode = mode
+		res.MatchedRule = rule
+		if res.BaseURL != "" && res.Email != "" && res.Token != "" {
+			res.Source = "config"
+		}
+		return res
+	}
+
+	// 2. Explicit manual workspace binding ("none" disables Jira cleanly for this repo/org).
+	if strings.EqualFold(res.BindingMode, "none") {
+		res.Source = "none"
+		res.MatchMode = "isolated_none"
+		return res
+	}
+	if res.BindingMode != "" {
+		if p := findProfileByID(doc.Profiles, res.BindingMode); p != nil {
+			return applyProfile(p, "manual", "")
 		}
 	}
-	return baseURL, email, token, defaultProject, source
+
+	// 3. Auto-match against configured org_patterns.
+	hasOrgScopedProfiles := false
+	for i := range doc.Profiles {
+		if len(doc.Profiles[i].OrgPatterns) > 0 {
+			hasOrgScopedProfiles = true
+			if ws != "" {
+				if matched, pat := orgx.MatchPatterns(orgID, doc.Profiles[i].OrgPatterns); matched {
+					return applyProfile(&doc.Profiles[i], "auto_org", pat)
+				}
+			}
+		}
+	}
+
+	// 4. Org isolation: if workspace has an identity and user configured org-scoped profiles
+	// without matching, allow only an explicitly marked IsDefault profile (or workspace-local MCP).
+	if hasOrgScopedProfiles && ws != "" {
+		for i := range doc.Profiles {
+			if doc.Profiles[i].IsDefault && len(doc.Profiles[i].OrgPatterns) == 0 {
+				return applyProfile(&doc.Profiles[i], "default", "")
+			}
+		}
+		if mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := detectWorkspaceLocalMCPConfig(ws); mcpBase != "" && mcpEmail != "" && mcpToken != "" {
+			res.BaseURL = firstNonEmpty(envBase, mcpBase)
+			res.Email = firstNonEmpty(envEmail, mcpEmail)
+			res.Token = firstNonEmpty(envToken, mcpToken)
+			res.DefaultProject = firstNonEmpty(envProj, mcpProj)
+			res.Source = "mcp:" + filepath.Base(mcpPath)
+			res.MatchMode = "mcp"
+			return res
+		}
+		res.Source = "none"
+		res.MatchMode = "isolated_none"
+		return res
+	}
+
+	// 5. Legacy / single-profile fallback (active profile, then first complete profile).
+	if p := findProfileByID(doc.Profiles, doc.ActiveProfile); p != nil {
+		return applyProfile(p, "default", "")
+	}
+	for i := range doc.Profiles {
+		if doc.Profiles[i].IsDefault {
+			return applyProfile(&doc.Profiles[i], "default", "")
+		}
+	}
+	if len(doc.Profiles) > 0 {
+		return applyProfile(&doc.Profiles[0], "default", "")
+	}
+
+	// 6. Global / workspace MCP discovery fallback.
+	mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := DetectMCPConfig(ws)
+	res.BaseURL = firstNonEmpty(envBase, mcpBase)
+	res.Email = firstNonEmpty(envEmail, mcpEmail)
+	res.Token = firstNonEmpty(envToken, mcpToken)
+	res.DefaultProject = firstNonEmpty(envProj, mcpProj)
+	if res.BaseURL != "" && res.Email != "" && res.Token != "" && mcpPath != "" {
+		res.Source = "mcp:" + filepath.Base(mcpPath)
+		res.MatchMode = "mcp"
+	}
+	return res
 }
 
-// FromWorkspace returns a configured Jira client using env, native connector, or MCP config discovery.
+// LoadCredentialsForWorkspace resolves Jira Cloud credentials with org/workspace awareness and MCP discovery.
+func LoadCredentialsForWorkspace(workspace string) (baseURL, email, token, defaultProject, source string) {
+	res := ResolveForWorkspace(workspace)
+	return res.BaseURL, res.Email, res.Token, res.DefaultProject, res.Source
+}
+
+// FromWorkspace returns a configured Jira client using env, org/workspace profile, or MCP discovery.
 func FromWorkspace(workspace string) Client {
-	baseURL, email, token, _, _ := LoadCredentialsForWorkspace(workspace)
-	if baseURL == "" || email == "" || token == "" {
+	res := ResolveForWorkspace(workspace)
+	if res.BaseURL == "" || res.Email == "" || res.Token == "" {
+		if res.MatchMode == "isolated_none" {
+			if res.DetectedOrg != "" {
+				return Disabled{Reason: fmt.Sprintf("Sem Jira vinculado para a organização %q", res.DetectedOrg)}
+			}
+			return Disabled{Reason: "Jira desativado para este projeto"}
+		}
 		return Disabled{Reason: "Jira não configurado (conecte via Conector Jira Nativo, mcp_config.json ou variáveis JIRA_*)"}
 	}
-	return &HTTP{BaseURL: NormalizeBaseURL(baseURL), Email: email, Token: token}
+	return &HTTP{BaseURL: NormalizeBaseURL(res.BaseURL), Email: res.Email, Token: res.Token}
 }
 
 func firstNonEmptyEnv(keys ...string) string {
@@ -170,6 +428,36 @@ func firstNonEmptyEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func detectWorkspaceLocalMCPConfig(workspace string) (baseURL, email, token, defaultProject, foundPath string) {
+	if strings.TrimSpace(workspace) == "" {
+		return "", "", "", "", ""
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		abs = workspace
+	}
+	for _, path := range []string{
+		filepath.Join(abs, ".agents", "mcp_config.json"),
+		filepath.Join(abs, ".mcp.json"),
+		filepath.Join(abs, ".cursor", "mcp.json"),
+	} {
+		b, e, t, p, ok := parseJiraFromMCPFile(path)
+		if ok {
+			return b, e, t, p, path
+		}
+	}
+	return "", "", "", "", ""
 }
 
 // DetectMCPConfig scans standard MCP config files (workspace, parent directory, and user config)
@@ -243,7 +531,6 @@ func parseJiraFromMCPFile(path string) (baseURL, email, token, defaultProject st
 		return ""
 	}
 
-	// Prefer servers explicitly named jira/atlassian first, then fallback to any server with Atlassian creds.
 	var ordered []string
 	for name := range doc.MCPServers {
 		ordered = append(ordered, name)
@@ -286,42 +573,194 @@ func ImportFromMCP(workspace string) (string, error) {
 	if foundPath == "" {
 		return "", fmt.Errorf("nenhuma configuração Jira encontrada em mcp_config.json (.agents/, .mcp.json ou pasta do usuário)")
 	}
-	if err := SaveCredentials(b, e, t, p, false); err != nil {
+	orgID := orgx.Detect(workspace)
+	name := deriveProfileName(b, "MCP")
+	var patterns []string
+	if orgID.GitOrg != "" {
+		patterns = []string{orgID.GitOrg}
+	}
+	if err := SaveProfile(JiraProfile{
+		ID:             sanitizeProfileID(name),
+		Name:           name,
+		BaseURL:        b,
+		Email:          e,
+		Token:          t,
+		DefaultProject: p,
+		OrgPatterns:    patterns,
+	}, workspace); err != nil {
 		return "", err
 	}
 	return foundPath, nil
 }
 
-// SaveCredentials stores or updates the native Jira Cloud credentials outside project repos.
-// If clear is true, all stored credentials are removed. If clear is false and token is empty,
-// any previously stored token is preserved so the user can update URL/email/project safely.
+// SaveCredentials stores or updates the default/active native Jira Cloud profile.
+// When clear is true, all profiles are cleared (backward-compatible single-connector semantics).
 func SaveCredentials(baseURL, email, token, defaultProject string, clear bool) error {
-	path, err := jiraConfigPath()
-	if err != nil {
-		return err
+	if clear {
+		return writeJiraFile(storedJiraFile{})
 	}
-	var cfg storedJiraConfig
-	if !clear {
-		_, _, existingTok, _ := LoadStoredConfig()
-		tok := strings.TrimSpace(token)
-		if tok == "" {
-			tok = existingTok
+	doc := readJiraFile()
+	targetID := doc.ActiveProfile
+	if targetID == "" && len(doc.Profiles) > 0 {
+		targetID = doc.Profiles[0].ID
+	}
+	if targetID == "" {
+		targetID = "default"
+	}
+	var existing JiraProfile
+	if cur := findProfileByID(doc.Profiles, targetID); cur != nil {
+		existing = *cur
+	}
+	existing.ID = targetID
+	if strings.TrimSpace(existing.Name) == "" {
+		existing.Name = deriveProfileName(baseURL, "Padrão")
+	}
+	existing.BaseURL = NormalizeBaseURL(baseURL)
+	existing.Email = strings.TrimSpace(email)
+	if strings.TrimSpace(token) != "" {
+		existing.Token = strings.TrimSpace(token)
+	}
+	existing.DefaultProject = strings.ToUpper(strings.TrimSpace(defaultProject))
+	return SaveProfile(existing, "")
+}
+
+// SaveProfile creates or updates a named Jira profile. Blank Token preserves any previously
+// stored token for that profile ID. When bindWorkspace is non-empty, pins that workspace to this profile.
+func SaveProfile(input JiraProfile, bindWorkspace string) error {
+	doc := readJiraFile()
+	id := sanitizeProfileID(input.ID)
+	if id == "" {
+		id = sanitizeProfileID(input.Name)
+	}
+	if id == "" {
+		id = sanitizeProfileID(deriveProfileName(input.BaseURL, ""))
+	}
+	if id == "" {
+		id = fmt.Sprintf("jira-%d", len(doc.Profiles)+1)
+	}
+
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = deriveProfileName(input.BaseURL, id)
+	}
+
+	var patterns []string
+	seenPat := map[string]bool{}
+	for _, pat := range input.OrgPatterns {
+		p := strings.TrimSpace(pat)
+		if p == "" {
+			continue
 		}
-		cfg = storedJiraConfig{
-			BaseURL:        NormalizeBaseURL(baseURL),
-			Email:          strings.TrimSpace(email),
-			Token:          tok,
-			DefaultProject: strings.ToUpper(strings.TrimSpace(defaultProject)),
+		lp := strings.ToLower(p)
+		if !seenPat[lp] {
+			seenPat[lp] = true
+			patterns = append(patterns, p)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+
+	existing := findProfileByID(doc.Profiles, id)
+	tok := strings.TrimSpace(input.Token)
+	if tok == "" && existing != nil {
+		tok = existing.Token
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
+
+	next := JiraProfile{
+		ID:             id,
+		Name:           name,
+		BaseURL:        NormalizeBaseURL(input.BaseURL),
+		Email:          strings.TrimSpace(input.Email),
+		Token:          tok,
+		DefaultProject: strings.ToUpper(strings.TrimSpace(input.DefaultProject)),
+		OrgPatterns:    patterns,
+		IsDefault:      input.IsDefault,
 	}
-	return os.WriteFile(path, data, 0o600)
+	if next.BaseURL == "" || next.Email == "" || next.Token == "" {
+		return fmt.Errorf("informe URL do Jira, e-mail e API token para salvar o perfil %q", next.Name)
+	}
+
+	if next.IsDefault {
+		for i := range doc.Profiles {
+			doc.Profiles[i].IsDefault = false
+		}
+	}
+
+	replaced := false
+	for i := range doc.Profiles {
+		if strings.EqualFold(doc.Profiles[i].ID, id) {
+			doc.Profiles[i] = next
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		doc.Profiles = append(doc.Profiles, next)
+	}
+	doc.ActiveProfile = id
+
+	if wsKey := orgx.NormalizeWorkspaceKey(bindWorkspace); wsKey != "" {
+		if doc.WorkspaceBindings == nil {
+			doc.WorkspaceBindings = map[string]string{}
+		}
+		doc.WorkspaceBindings[wsKey] = id
+	}
+	return writeJiraFile(doc)
+}
+
+// DeleteProfile removes a Jira profile by ID and clears workspace bindings referencing it.
+func DeleteProfile(profileID string) error {
+	target := strings.ToLower(strings.TrimSpace(profileID))
+	if target == "" {
+		return fmt.Errorf("id do perfil inválido")
+	}
+	doc := readJiraFile()
+	filtered := make([]JiraProfile, 0, len(doc.Profiles))
+	for _, p := range doc.Profiles {
+		if strings.ToLower(strings.TrimSpace(p.ID)) != target {
+			filtered = append(filtered, p)
+		}
+	}
+	doc.Profiles = filtered
+	if strings.EqualFold(doc.ActiveProfile, target) {
+		doc.ActiveProfile = ""
+		if len(doc.Profiles) > 0 {
+			doc.ActiveProfile = doc.Profiles[0].ID
+		}
+	}
+	for k, v := range doc.WorkspaceBindings {
+		if strings.EqualFold(v, target) {
+			delete(doc.WorkspaceBindings, k)
+		}
+	}
+	return writeJiraFile(doc)
+}
+
+// BindWorkspace sets how a workspace resolves its Jira profile:
+// - "" resets to automatic org detection
+// - "none" isolates/disables Jira for this workspace
+// - "<profileID>" pins the named Jira profile for this workspace
+func BindWorkspace(workspace, target string) error {
+	wsKey := orgx.NormalizeWorkspaceKey(workspace)
+	if wsKey == "" {
+		return fmt.Errorf("workspace vazio")
+	}
+	doc := readJiraFile()
+	if doc.WorkspaceBindings == nil {
+		doc.WorkspaceBindings = map[string]string{}
+	}
+	val := strings.TrimSpace(target)
+	switch {
+	case val == "" || strings.EqualFold(val, "auto"):
+		delete(doc.WorkspaceBindings, wsKey)
+	case strings.EqualFold(val, "none"):
+		doc.WorkspaceBindings[wsKey] = "none"
+	default:
+		p := findProfileByID(doc.Profiles, val)
+		if p == nil {
+			return fmt.Errorf("perfil Jira %q não encontrado", val)
+		}
+		doc.WorkspaceBindings[wsKey] = p.ID
+	}
+	return writeJiraFile(doc)
 }
 
 // CheckConnection validates the active Jira credentials live against GET /rest/api/3/myself.
@@ -329,36 +768,64 @@ func CheckConnection(ctx context.Context) ConnectorStatus {
 	return CheckConnectionForWorkspace(ctx, "")
 }
 
-// CheckConnectionForWorkspace validates active Jira credentials (including MCP auto-discovery for workspace).
+// CheckConnectionForWorkspace validates active Jira credentials (including org/workspace profile or MCP discovery).
 func CheckConnectionForWorkspace(ctx context.Context, workspace string) ConnectorStatus {
-	baseURL, email, token, proj, source := LoadCredentialsForWorkspace(workspace)
+	res := ResolveForWorkspace(workspace)
 	st := ConnectorStatus{
-		Configured:     baseURL != "" && email != "" && token != "",
-		Source:         source,
-		BaseURL:        baseURL,
-		Email:          email,
-		TokenMasked:    maskJiraToken(token),
-		DefaultProject: proj,
+		Configured:        res.BaseURL != "" && res.Email != "" && res.Token != "",
+		Source:            res.Source,
+		BaseURL:           res.BaseURL,
+		Email:             res.Email,
+		TokenMasked:       maskJiraToken(res.Token),
+		DefaultProject:    res.DefaultProject,
+		ActiveProfileID:   res.ProfileID,
+		ActiveProfileName: res.ProfileName,
+		MatchMode:         res.MatchMode,
+		MatchedRule:       res.MatchedRule,
+		BindingMode:       res.BindingMode,
+		DetectedOrg:       res.DetectedOrg,
+		SuggestedPatterns: res.SuggestedPatterns,
+		Profiles:          res.Profiles,
+	}
+	if res.MatchMode == "isolated_none" {
+		if res.BindingMode == "none" {
+			st.Detail = "Jira desativado manualmente para este projeto"
+		} else if res.DetectedOrg != "" {
+			st.Detail = fmt.Sprintf("Sem Jira vinculado à organização %q (perfis de outras orgs isolados)", res.DetectedOrg)
+		} else {
+			st.Detail = "Sem perfil Jira correspondente a este projeto"
+		}
+		return st
 	}
 	if !st.Configured {
 		st.Detail = "Não configurado (informe URL, E-mail e API Token ou use mcp_config.json)"
 		return st
 	}
-	client := &HTTP{BaseURL: NormalizeBaseURL(baseURL), Email: email, Token: token}
+	client := &HTTP{BaseURL: NormalizeBaseURL(res.BaseURL), Email: res.Email, Token: res.Token}
 	var raw struct {
 		DisplayName  string `json:"displayName"`
 		EmailAddress string `json:"emailAddress"`
 	}
 	if err := client.do(ctx, http.MethodGet, "/rest/api/3/myself", nil, &raw); err != nil {
-		st.Detail = fmt.Sprintf("Falha ao autenticar no Jira: %v", err)
+		st.Detail = fmt.Sprintf("Falha ao autenticar no Jira (%s): %v", firstNonEmpty(res.ProfileName, sourceLabel(res.Source)), err)
 		return st
 	}
 	st.Connected = true
 	st.User = strings.TrimSpace(raw.DisplayName)
 	if st.User == "" {
-		st.User = email
+		st.User = res.Email
 	}
-	st.Detail = fmt.Sprintf("Conectado como %s (%s)", st.User, sourceLabel(source))
+	origin := sourceLabel(res.Source)
+	if res.ProfileName != "" {
+		origin = res.ProfileName
+		switch res.MatchMode {
+		case "auto_org":
+			origin += " · auto (" + firstNonEmpty(res.DetectedOrg, res.MatchedRule) + ")"
+		case "manual":
+			origin += " · fixado"
+		}
+	}
+	st.Detail = fmt.Sprintf("Conectado como %s (%s)", st.User, origin)
 	return st
 }
 
@@ -367,11 +834,11 @@ func ListProjects(ctx context.Context) ([]Project, error) {
 	return ListProjectsForWorkspace(ctx, "")
 }
 
-// ListProjectsForWorkspace fetches Jira Cloud projects using workspace-aware credentials (env, native, or MCP).
+// ListProjectsForWorkspace fetches Jira Cloud projects using workspace/org-aware credentials.
 func ListProjectsForWorkspace(ctx context.Context, workspace string) ([]Project, error) {
 	baseURL, email, token, _, _ := LoadCredentialsForWorkspace(workspace)
 	if baseURL == "" || email == "" || token == "" {
-		return nil, fmt.Errorf("Jira não configurado")
+		return nil, fmt.Errorf("Jira não configurado para este workspace")
 	}
 	client := &HTTP{BaseURL: NormalizeBaseURL(baseURL), Email: email, Token: token}
 	return client.ListProjects(ctx)
@@ -422,6 +889,9 @@ func sourceLabel(src string) string {
 	if src == "env" {
 		return "ENV"
 	}
+	if src == "none" {
+		return "Desativado"
+	}
 	if strings.HasPrefix(src, "mcp:") {
 		return "MCP (" + strings.TrimPrefix(src, "mcp:") + ")"
 	}
@@ -437,4 +907,33 @@ func maskJiraToken(tok string) string {
 		return "****"
 	}
 	return k[:4] + "…" + k[len(k)-4:]
+}
+
+func deriveProfileName(baseURL, fallback string) string {
+	norm := NormalizeBaseURL(baseURL)
+	if norm != "" {
+		if u, err := url.Parse(norm); err == nil && u.Host != "" {
+			host := strings.TrimSuffix(u.Host, ".atlassian.net")
+			host = strings.TrimPrefix(host, "jira.")
+			if host != "" {
+				return host
+			}
+		}
+	}
+	return fallback
+}
+
+func sanitizeProfileID(raw string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }

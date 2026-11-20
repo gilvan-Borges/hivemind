@@ -183,3 +183,90 @@ func TestDetectMCPConfigParentDir(t *testing.T) {
 		t.Fatalf("expected MCP auto-discovery from parent .agents/mcp_config.json, got %q %q %q %q", base, email, tok, src)
 	}
 }
+
+func TestMultiOrgJiraIsolation(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	for _, k := range []string{"JIRA_BASE_URL", "JIRA_HOST", "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_DOMAIN", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "JIRA_PROJECT"} {
+		t.Setenv(k, "")
+	}
+
+	mkRepo := func(folder, remote string) string {
+		ws := filepath.Join(tmp, folder)
+		gd := filepath.Join(ws, ".git")
+		if err := os.MkdirAll(gd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if remote != "" {
+			cfg := "[remote \"origin\"]\n\turl = " + remote + "\n"
+			if err := os.WriteFile(filepath.Join(gd, "config"), []byte(cfg), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return ws
+	}
+
+	wsVibetex := mkRepo("vibetex-ipg", "git@github.com:vibetex/ipg.git")
+	wsEmpresaB := mkRepo("empresa-b-api", "https://github.com/empresab/api.git")
+	wsOrg3 := mkRepo("terceira-org-app", "https://github.com/org3/app.git")
+
+	if err := SaveProfile(JiraProfile{
+		ID:             "vibetex",
+		Name:           "Jira Vibetex",
+		BaseURL:        "https://vibetex.atlassian.net",
+		Email:          "gilvan@vibetex.com",
+		Token:          "tok-vibetex-1234",
+		DefaultProject: "IPG",
+		OrgPatterns:    []string{"vibetex"},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveProfile(JiraProfile{
+		ID:             "empresab",
+		Name:           "Jira Empresa B",
+		BaseURL:        "https://empresab.atlassian.net",
+		Email:          "gilvan@empresab.com",
+		Token:          "tok-empb-5678",
+		DefaultProject: "EB",
+		OrgPatterns:    []string{"empresab"},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Org 1 -> Vibetex Jira
+	rV := ResolveForWorkspace(wsVibetex)
+	if rV.BaseURL != "https://vibetex.atlassian.net" || rV.DefaultProject != "IPG" || rV.MatchMode != "auto_org" {
+		t.Fatalf("expected vibetex auto_org, got %+v", rV)
+	}
+
+	// Org 2 -> Empresa B Jira
+	rB := ResolveForWorkspace(wsEmpresaB)
+	if rB.BaseURL != "https://empresab.atlassian.net" || rB.DefaultProject != "EB" || rB.MatchMode != "auto_org" {
+		t.Fatalf("expected empresab auto_org, got %+v", rB)
+	}
+
+	// Org 3 -> strictly isolated (no Jira configured, NEVER leaks Vibetex or Empresa B)
+	r3 := ResolveForWorkspace(wsOrg3)
+	if r3.MatchMode != "isolated_none" || r3.BaseURL != "" || FromWorkspace(wsOrg3).Enabled() {
+		t.Fatalf("expected org3 isolated without Jira, got %+v", r3)
+	}
+
+	// Manual pin overrides isolation or switches Jira
+	if err := BindWorkspace(wsOrg3, "vibetex"); err != nil {
+		t.Fatal(err)
+	}
+	r3Pinned := ResolveForWorkspace(wsOrg3)
+	if r3Pinned.BaseURL != "https://vibetex.atlassian.net" || r3Pinned.MatchMode != "manual" {
+		t.Fatalf("expected manual pin to vibetex, got %+v", r3Pinned)
+	}
+
+	// Explicit "none" disables Jira even on a matched org
+	if err := BindWorkspace(wsVibetex, "none"); err != nil {
+		t.Fatal(err)
+	}
+	rVOff := ResolveForWorkspace(wsVibetex)
+	if rVOff.MatchMode != "isolated_none" || FromWorkspace(wsVibetex).Enabled() {
+		t.Fatalf("expected manual none to disable vibetex Jira, got %+v", rVOff)
+	}
+}

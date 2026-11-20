@@ -6,6 +6,14 @@ export function ApplyHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ApplyHunk'](arg1, arg2, arg3, arg4);
 }
 
+export function BindJiraWorkspace(arg1, arg2) {
+  return window['go']['main']['App']['BindJiraWorkspace'](arg1, arg2);
+}
+
+export function BindProviderWorkspace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['BindProviderWorkspace'](arg1, arg2, arg3);
+}
+
 export function BootstrapAgy(arg1) {
   return window['go']['main']['App']['BootstrapAgy'](arg1);
 }
@@ -66,12 +74,20 @@ export function CursorCLIStatus() {
   return window['go']['main']['App']['CursorCLIStatus']();
 }
 
+export function DeleteJiraProfile(arg1, arg2) {
+  return window['go']['main']['App']['DeleteJiraProfile'](arg1, arg2);
+}
+
 export function DeleteNativeSkill(arg1) {
   return window['go']['main']['App']['DeleteNativeSkill'](arg1);
 }
 
 export function DeletePath(arg1, arg2) {
   return window['go']['main']['App']['DeletePath'](arg1, arg2);
+}
+
+export function DeleteProviderProfile(arg1, arg2) {
+  return window['go']['main']['App']['DeleteProviderProfile'](arg1, arg2);
 }
 
 export function DeleteSession(arg1, arg2) {
@@ -128,6 +144,10 @@ export function GetInitialState() {
 
 export function GetInlineAIStatus(arg1) {
   return window['go']['main']['App']['GetInlineAIStatus'](arg1);
+}
+
+export function GetProviderProfilesOverview(arg1) {
+  return window['go']['main']['App']['GetProviderProfilesOverview'](arg1);
 }
 
 export function GetRecentProjects() {
@@ -370,12 +390,20 @@ export function SaveJiraConfig(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SaveJiraConfig'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function SaveJiraProfile(arg1, arg2) {
+  return window['go']['main']['App']['SaveJiraProfile'](arg1, arg2);
+}
+
 export function SaveNativeSkill(arg1, arg2) {
   return window['go']['main']['App']['SaveNativeSkill'](arg1, arg2);
 }
 
 export function SaveOpenCodeConfig(arg1, arg2) {
   return window['go']['main']['App']['SaveOpenCodeConfig'](arg1, arg2);
+}
+
+export function SaveProviderProfile(arg1) {
+  return window['go']['main']['App']['SaveProviderProfile'](arg1);
 }
 
 export function SaveSkillAssignments(arg1, arg2) {

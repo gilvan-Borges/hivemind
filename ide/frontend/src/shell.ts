@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -39,6 +39,8 @@ export function switchProjectTab(projectId: string) {
     gitBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
   }
   setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
+  void refreshJiraStatusAndProjects();
+  void refreshProviderProfiles();
 }
 
 export function closeProjectTab(projectId: string) {
@@ -840,16 +842,20 @@ export function updateStatusBar() {
     tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
   }
   if (agyEl) {
+    const resolvedAgy = state.profilesOverview?.resolved?.["agy"];
+    const profBadge = resolvedAgy?.profileName ? ` · ${resolvedAgy.profileName}` : "";
     if (!state.agyStatus) {
-      agyEl.textContent = "agy: …";
+      agyEl.textContent = `agy: …${profBadge}`;
       agyEl.style.color = "";
       agyEl.title = "Verificando Antigravity CLI (agy)…";
     } else if (state.agyStatus.LoggedIn) {
-      agyEl.textContent = `agy: ok (${state.models.length})`;
+      agyEl.textContent = resolvedAgy?.profileName
+        ? `agy: ${resolvedAgy.profileName}`
+        : `agy: ok (${state.models.length})`;
       agyEl.style.color = "var(--green)";
-      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)`;
+      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)${resolvedAgy?.profileName ? ` · Conta ativa: ${resolvedAgy.profileName} (${resolvedAgy.matchMode})` : ""}`;
     } else {
-      agyEl.textContent = "agy: off";
+      agyEl.textContent = `agy: off${profBadge}`;
       agyEl.style.color = "var(--amber)";
       agyEl.title = `agy: ${state.agyStatus.Detail}`;
     }
@@ -879,9 +885,14 @@ export function updateStatusBar() {
       jiraEl.title = "Verificando Jira Cloud… (clique para conectar)";
     } else if (j.connected) {
       const pCount = state.jiraProjects.length > 0 ? ` (${state.jiraProjects.length})` : "";
-      jiraEl.textContent = `jira: ok${pCount}`;
+      const profLabel = j.activeProfileName ? j.activeProfileName : "ok";
+      jiraEl.textContent = `jira: ${profLabel}${pCount}`;
       jiraEl.style.color = "var(--green)";
-      jiraEl.title = `${j.detail}${j.defaultProject ? ` · Projeto padrão: ${j.defaultProject}` : ""} — clique para configurar`;
+      jiraEl.title = `${j.detail}${j.defaultProject ? ` · Projeto padrão: ${j.defaultProject}` : ""} — clique para gerenciar perfis Jira`;
+    } else if (j.matchMode === "isolated_none") {
+      jiraEl.textContent = j.detectedOrg ? `jira: sem (${j.detectedOrg})` : "jira: off";
+      jiraEl.style.color = "var(--text-dim)";
+      jiraEl.title = `${j.detail || "Sem Jira para esta org"} — clique para vincular`;
     } else {
       jiraEl.textContent = "jira: off";
       jiraEl.style.color = "var(--text-dim)";

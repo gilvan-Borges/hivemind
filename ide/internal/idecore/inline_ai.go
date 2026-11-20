@@ -83,19 +83,28 @@ func isHTTPInlineProvider(provider string) bool {
 	}
 }
 
-func hasHTTPProviderCredentials(provider string) bool {
+func hasHTTPProviderCredentials(workspaceDir, provider string) bool {
+	ctx := modelx.WithWorkspace(context.Background(), workspaceDir)
+	norm := modelx.NormalizeProfileProvider(provider)
+	if prof, _, _ := modelx.ResolveProfile(ctx, norm); prof != nil && len(prof.Env) > 0 {
+		for _, k := range []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"} {
+			if strings.TrimSpace(prof.Env[k]) != "" {
+				return true
+			}
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "opencode", "opencode-go":
 		key, _, _ := modelx.LoadOpenCodeCredentials()
 		return strings.TrimSpace(key) != ""
 	case "openai", "openai-responses":
-		return strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" || strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) != ""
+		return strings.TrimSpace(modelx.EnvOrStored("OPENAI_API_KEY")) != "" || strings.TrimSpace(modelx.EnvOrStored("OPENAI_BASE_URL")) != ""
 	case "anthropic":
-		return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != ""
+		return strings.TrimSpace(modelx.EnvOrStored("ANTHROPIC_API_KEY")) != ""
 	case "gemini":
-		return strings.TrimSpace(os.Getenv("GOOGLE_API_KEY")) != "" || strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != ""
+		return strings.TrimSpace(modelx.FirstEnvOrStored("GOOGLE_API_KEY", "GEMINI_API_KEY")) != ""
 	case "vertex":
-		return strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")) != ""
+		return strings.TrimSpace(modelx.EnvOrStored("GOOGLE_CLOUD_PROJECT")) != ""
 	default:
 		return false
 	}
@@ -135,7 +144,7 @@ func ResolveInlineModel(workspaceDir, requestedModel string, requireHTTP bool) (
 			for _, role := range []string{team.RoleDeveloper, team.RoleArchitect, team.RoleProjectManager} {
 				for _, ag := range active.ByRole(role) {
 					prov := team.NormalizeProvider(ag.Provider, ag.Model)
-					if isHTTPInlineProvider(prov) && strings.TrimSpace(ag.Model) != "" && hasHTTPProviderCredentials(prov) {
+					if isHTTPInlineProvider(prov) && strings.TrimSpace(ag.Model) != "" && hasHTTPProviderCredentials(workspaceDir, prov) {
 						return prov, strings.TrimSpace(ag.Model), ""
 					}
 				}
@@ -206,6 +215,7 @@ func CompleteInlineCode(ctx context.Context, req InlineCompleteRequest) (InlineC
 
 	runCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
+	runCtx = modelx.WithWorkspace(runCtx, req.Workspace)
 	runCtx = modelx.WithSessionID(runCtx, "inline-ghost-"+filepath.Base(req.FilePath))
 
 	llm, err := inlineModelFactory(runCtx, prov, modSpec)
@@ -249,6 +259,7 @@ func GenerateInlineEdit(ctx context.Context, req InlineEditRequest) (InlineEditR
 
 	runCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	runCtx = modelx.WithWorkspace(runCtx, req.Workspace)
 	runCtx = modelx.WithSessionID(runCtx, "inline-edit-"+filepath.Base(req.FilePath))
 
 	llm, err := inlineModelFactory(runCtx, prov, modSpec)
