@@ -1326,14 +1326,38 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 	return idecore.ParseBuildProblems(rawOutput, workspace)
 }
 
-// --- Agente Residente Hive (Fase 1 · Somente Leitura) ---
+// --- Agente Residente Hive (Fase 2 · Sandbox e Cofre) ---
 
 // ResidentStatus returns the resident agent's live state (zero secrets).
 func (a *App) ResidentStatus() resident.Status {
 	if a.resident == nil {
-		return resident.Status{State: "ocioso", Phase: 1, ReadOnly: true, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
+		return resident.Status{State: "ocioso", Phase: 2, ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
 	}
 	return a.resident.Status()
+}
+
+// ResidentSavePolicy saves Phase 2 binary & outbound host allowlists locally.
+func (a *App) ResidentSavePolicy(allowedBinaries, allowedHosts []string) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SavePolicy(allowedBinaries, allowedHosts)
+}
+
+// ResidentSetSecret stores a named secret directly inside the OS credential vault.
+func (a *App) ResidentSetSecret(name, value string) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetSecret(name, value)
+}
+
+// ResidentDeleteSecret removes a named credential from the OS credential vault.
+func (a *App) ResidentDeleteSecret(name string) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.DeleteSecret(name)
 }
 
 // ResidentSaveConfig persists local resident preferences (provider, model, workstream).

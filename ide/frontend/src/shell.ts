@@ -230,7 +230,7 @@ export function mountShell() {
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
         <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
-        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente (Fase 1 · Somente Leitura)">hive: ocioso</button>
+        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente (Fase 2 · Sandbox e Cofre)">hive: ocioso</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>

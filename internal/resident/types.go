@@ -105,16 +105,44 @@ type ProjectRef struct {
 
 // Status reports the resident assistant's live state for the IDE UI (§11).
 type Status struct {
-	State      string `json:"state"` // "ocioso" | "pensando" | "aguardando você"
-	Phase      int    `json:"phase"`
-	ReadOnly   bool   `json:"readOnly"`
-	AccountID  string `json:"accountId"`
-	Workstream string `json:"workstream"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	MemoryDir  string `json:"memoryDir,omitempty"`
-	AuditPath  string `json:"auditPath,omitempty"`
-	LastError  string `json:"lastError,omitempty"`
+	State            string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
+	Phase            int      `json:"phase"`
+	ReadOnly         bool     `json:"readOnly"`
+	AccountID        string   `json:"accountId"`
+	Workstream       string   `json:"workstream"`
+	Provider         string   `json:"provider"`
+	Model            string   `json:"model"`
+	MemoryDir        string   `json:"memoryDir,omitempty"`
+	AuditPath        string   `json:"auditPath,omitempty"`
+	LastError        string   `json:"lastError,omitempty"`
+	SandboxAvailable bool     `json:"sandboxAvailable"`
+	SandboxMechanism string   `json:"sandboxMechanism,omitempty"`
+	SandboxReason    string   `json:"sandboxReason,omitempty"`
+	VaultAvailable   bool     `json:"vaultAvailable"`
+	VaultReason      string   `json:"vaultReason,omitempty"`
+	AllowedBinaries  []string `json:"allowedBinaries"`
+	AllowedHosts     []string `json:"allowedHosts"`
+	VaultSecrets     []string `json:"vaultSecrets"`
+}
+
+// Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.
+// Empty allowlists deny execution and outbound network by default; wildcard "*" is always ignored/rejected.
+type Policy struct {
+	Version         int       `json:"version"`
+	AllowedBinaries []string  `json:"allowedBinaries"`
+	AllowedHosts    []string  `json:"allowedHosts"`
+	UpdatedAt       time.Time `json:"updatedAt,omitempty"`
+}
+
+// ApprovalRequest describes an action awaiting human approval in the IDE or app.
+type ApprovalRequest struct {
+	ApprovalID string `json:"approvalId"`
+	ToolName   string `json:"toolName"`
+	Tier       Tier   `json:"tier"`
+	RiskLabel  string `json:"riskLabel"`
+	Origin     Origin `json:"origin"`
+	Target     string `json:"target"`
+	Prompt     string `json:"prompt"`
 }
 
 // Event is emitted during a resident turn (compatible with orchestrator.Event / SSE).
@@ -125,6 +153,9 @@ type Event struct {
 	Text         string `json:"text,omitempty"`
 	ToolName     string `json:"toolName,omitempty"`
 	Detail       string `json:"detail,omitempty"`
+	Gate         string `json:"gate,omitempty"`
+	RiskTier     string `json:"riskTier,omitempty"`
+	Origin       string `json:"origin,omitempty"`
 	ApprovalID   string `json:"approvalId,omitempty"`
 	Partial      bool   `json:"partial,omitempty"`
 	Thought      bool   `json:"thought,omitempty"`

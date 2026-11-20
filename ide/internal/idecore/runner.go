@@ -230,10 +230,24 @@ func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	}
 }
 
+// ApprovalMetadata enriches an approval_required event for the UI and remote app.
+type ApprovalMetadata struct {
+	Label    string
+	ToolName string
+	Detail   string
+	Gate     string
+}
+
 // RequestApproval emits an approval_required event with a unique approvalId and
 // blocks until the user responds for that specific approvalId or ctx is canceled.
 // Safe for concurrent tool calls on the same lane: each request gets its own slot.
 func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, prompt string) bool {
+	return m.RequestApprovalWithMeta(ctx, laneID, teamName, prompt, ApprovalMetadata{})
+}
+
+// RequestApprovalWithMeta behaves like RequestApproval while attaching risk tier,
+// tool name, and target detail so the IDE UI and app display what the agent wants to do.
+func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, teamName, prompt string, meta ApprovalMetadata) bool {
 	if m.Emit == nil {
 		return false
 	}
@@ -255,6 +269,10 @@ func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, 
 		m.mu.Unlock()
 	}()
 
+	label := strings.TrimSpace(meta.Label)
+	if label == "" {
+		label = "Permissão Necessária"
+	}
 	m.Emit(LaneEvent{
 		LaneID: laneID,
 		Team:   teamName,
@@ -262,7 +280,10 @@ func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, 
 			Kind:       "approval_required",
 			Stage:      "chief",
 			Author:     "chefe",
-			Label:      "Permissão Necessária",
+			Label:      label,
+			ToolName:   meta.ToolName,
+			Detail:     meta.Detail,
+			Gate:       meta.Gate,
 			Text:       prompt,
 			ApprovalID: approvalID,
 		},

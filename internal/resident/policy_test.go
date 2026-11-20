@@ -10,46 +10,63 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 	readCall := func(origin Origin) Call {
 		return Call{Name: "read_file", Args: map[string]any{"path": "README.md"}, Origin: origin}
 	}
-	nonReadTools := []struct {
+	// Phase 2 out-of-scope / unallowlisted / raw shell tools MUST always fail closed (Allow=false, Ask=false).
+	disallowedTools := []struct {
 		name string
+		args map[string]any
 		tier Tier
 	}{
-		{"write_file", TierWrite},
-		{"edit_file", TierWrite},
-		{"memory_write", TierWrite},
-		{"cron_add", TierWrite},
-		{"run_shell", TierExec},
-		{"exec", TierExec},
-		{"http_get", TierNetwork},
-		{"web_fetch", TierNetwork},
-		{"mcp_enable_server", TierNetwork},
-		{"read_secret", TierCredentials},
-		{"git_push", TierDestructive},
-		{"delete_file", TierDestructive},
-		{"desktop_click", TierDestructive},
-		{"unknown_evil_tool", TierDestructive},
+		{"run_shell", nil, TierExec},
+		{"exec", nil, TierExec},
+		{"cron_add", nil, TierWrite},
+		{"http_get", nil, TierNetwork},
+		{"web_fetch", nil, TierNetwork},
+		{"mcp_enable_server", nil, TierNetwork},
+		{"read_secret", nil, TierCredentials},
+		{"git_push", nil, TierDestructive},
+		{"desktop_click", nil, TierDestructive},
+		{"unknown_evil_tool", nil, TierDestructive},
+		{"exec_command", map[string]any{"argv": []string{"go", "version"}}, TierExec}, // empty allowlist denies
+		{"net_fetch", map[string]any{"url": "https://api.github.com"}, TierNetwork}, // empty allowlist denies
 	}
 
 	origins := []Origin{OriginLocal, OriginRemote, OriginRoutine, OriginSubagent}
 
-	// Phase 1: ANY non-read or unknown tool MUST be denied (Allow=false, Ask=false) across ALL origins.
 	for _, origin := range origins {
-		for _, tc := range nonReadTools {
-			dec := Decide(Call{Name: tc.name, Origin: origin})
+		for _, tc := range disallowedTools {
+			dec := Decide(Call{Name: tc.name, Args: tc.args, Origin: origin})
 			if dec.Allow || dec.Ask {
 				t.Errorf("Decide(%s, %s) = %+v, esperado Allow=false Ask=false (falha fechada)", origin, tc.name, dec)
 			}
-			gotTier, inPhase1 := ClassifyTool(Call{Name: tc.name, Origin: origin})
-			if inPhase1 {
-				t.Errorf("ClassifyTool(%s) retornou inPhase1=true; deveria ser false", tc.name)
-			}
+			gotTier, _ := ClassifyTool(Call{Name: tc.name, Args: tc.args, Origin: origin})
 			if gotTier != tc.tier {
 				t.Errorf("ClassifyTool(%s) tier = %s, esperado %s", tc.name, gotTier, tc.tier)
 			}
 		}
+
+		// Phase 2 write/destructive tools ALWAYS require human approval across every origin.
+		for _, gated := range []struct {
+			name string
+			args map[string]any
+			tier Tier
+		}{
+			{"write_file", map[string]any{"path": "notes.txt"}, TierWrite},
+			{"edit_file", map[string]any{"path": "notes.txt"}, TierWrite},
+			{"memory_write", map[string]any{"text": "prefiro Go"}, TierWrite},
+			{"delete_file", map[string]any{"path": "notes.txt"}, TierDestructive},
+		} {
+			dec := Decide(Call{Name: gated.name, Args: gated.args, Origin: origin})
+			if dec.Allow || !dec.Ask {
+				t.Errorf("Decide(%s, %s) = %+v, esperado Allow=false Ask=true", origin, gated.name, dec)
+			}
+			gotTier, allowed := ClassifyTool(Call{Name: gated.name, Args: gated.args, Origin: origin})
+			if !allowed || gotTier != gated.tier {
+				t.Errorf("ClassifyTool(%s) = (%s, %v), esperado (%s, true)", gated.name, gotTier, allowed, gated.tier)
+			}
+		}
 	}
 
-	// Phase 1 read tool matrix:
+	// Phase 2 read tool matrix:
 	if d := Decide(readCall(OriginLocal)); !d.Allow || d.Ask {
 		t.Fatalf("local read_file = %+v, esperado Allow=true Ask=false", d)
 	}

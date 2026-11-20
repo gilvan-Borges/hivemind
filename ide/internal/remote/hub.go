@@ -23,6 +23,9 @@ type ApprovalInfo struct {
 	Workspace  string    `json:"workspace"`
 	Prompt     string    `json:"prompt"`
 	Label      string    `json:"label,omitempty"`
+	ToolName   string    `json:"toolName,omitempty"`
+	Detail     string    `json:"detail,omitempty"`
+	RiskTier   string    `json:"riskTier,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
@@ -174,6 +177,9 @@ func (h *Hub) HandleLaneEvent(ev idecore.LaneEvent) {
 				Workspace:  ws,
 				Prompt:     e.Text,
 				Label:      e.Label,
+				ToolName:   e.ToolName,
+				Detail:     e.Detail,
+				RiskTier:   e.Gate,
 				CreatedAt:  time.Now().UTC(),
 			}
 		}

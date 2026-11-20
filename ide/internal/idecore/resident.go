@@ -12,16 +12,20 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 )
 
-// ResidentManager owns the Phase 1 read-only Hive resident assistant inside the
-// IDE and headless `hivemind serve` host (see docs/SPEC_HIVE_AGENT.md §3, §4).
+// ResidentManager owns the Phase 2 Hive resident assistant inside the
+// IDE and headless `hivemind serve` host (see docs/SPEC_HIVE_AGENT.md §3, §4, §12).
 type ResidentManager struct {
 	baseDir    string
 	sessions   *SessionManager
 	accountFn  func() (accountID, deviceID string)
 	projectsFn func() []resident.ProjectRef
 	audit      *resident.FileAuditLogger
+	sandbox    sandboxx.Runner
+	vault      secretx.Vault
 
 	mu        sync.Mutex
 	state     string // "ocioso" | "pensando" | "aguardando você"
@@ -38,6 +42,8 @@ type ResidentManagerOptions struct {
 	Sessions   *SessionManager
 	AccountFn  func() (accountID, deviceID string)
 	ProjectsFn func() []resident.ProjectRef
+	Sandbox    sandboxx.Runner
+	Vault      secretx.Vault
 	TestModel  model.LLM
 }
 
@@ -48,12 +54,22 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	if baseDir == "" {
 		baseDir = resident.DefaultBaseDir()
 	}
+	sb := opts.Sandbox
+	if sb == nil {
+		sb = sandboxx.NewOSRunner()
+	}
+	vault := opts.Vault
+	if vault == nil {
+		vault = secretx.NewOSVault()
+	}
 	return &ResidentManager{
 		baseDir:    baseDir,
 		sessions:   opts.Sessions,
 		accountFn:  opts.AccountFn,
 		projectsFn: opts.ProjectsFn,
 		audit:      resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
+		sandbox:    sb,
+		vault:      vault,
 		state:      "ocioso",
 		testModel:  opts.TestModel,
 	}
@@ -92,9 +108,24 @@ func (m *ResidentManager) knownProjects() []resident.ProjectRef {
 // Status returns the live resident state without leaking any secrets (§11).
 func (m *ResidentManager) Status() resident.Status {
 	cfg, _ := resident.LoadConfig(m.baseDir)
+	pol, _ := resident.LoadPolicy(m.baseDir)
 	prov, mod := resident.ResolveModelRoute(cfg)
 	acct, _ := m.currentAccount()
 	mem := resident.NewMemoryStore(m.baseDir, acct)
+
+	probe := sandboxx.ProbeResult{}
+	if m.sandbox != nil {
+		probe = m.sandbox.Probe()
+	}
+	vaultOK := false
+	vaultReason := "cofre não inicializado"
+	var vaultNames []string
+	if m.vault != nil {
+		vaultOK, vaultReason = m.vault.Available()
+		if vaultOK {
+			vaultNames, _ = m.vault.ListNames()
+		}
+	}
 
 	m.mu.Lock()
 	st := m.state
@@ -105,16 +136,24 @@ func (m *ResidentManager) Status() resident.Status {
 	}
 
 	return resident.Status{
-		State:      st,
-		Phase:      1,
-		ReadOnly:   true,
-		AccountID:  acct,
-		Workstream: resident.SanitizeWorkstream(cfg.Workstream),
-		Provider:   prov,
-		Model:      mod,
-		MemoryDir:  mem.AccountDir(),
-		AuditPath:  m.audit.Path(),
-		LastError:  lastErr,
+		State:            st,
+		Phase:            2,
+		ReadOnly:         false,
+		AccountID:        acct,
+		Workstream:       resident.SanitizeWorkstream(cfg.Workstream),
+		Provider:         prov,
+		Model:            mod,
+		MemoryDir:        mem.AccountDir(),
+		AuditPath:        m.audit.Path(),
+		LastError:        lastErr,
+		SandboxAvailable: probe.Available,
+		SandboxMechanism: probe.Mechanism,
+		SandboxReason:    probe.Reason,
+		VaultAvailable:   vaultOK,
+		VaultReason:      vaultReason,
+		AllowedBinaries:  pol.AllowedBinaries,
+		AllowedHosts:     pol.AllowedHosts,
+		VaultSecrets:     vaultNames,
 	}
 }
 
@@ -137,8 +176,52 @@ func (m *ResidentManager) SaveConfig(provider, modelName, workstream string) (re
 	return m.Status(), nil
 }
 
-// RunTurn executes one read-only resident turn and streams events through the
-// shared SessionManager emitter on fixed lane "resident" (Wails + Remote Bridge SSE).
+// Policy returns the current local fail-closed allowlists for binaries and hosts.
+func (m *ResidentManager) Policy() resident.Policy {
+	pol, err := resident.LoadPolicy(m.baseDir)
+	if err != nil {
+		return resident.Policy{Version: 2}
+	}
+	return pol
+}
+
+// SavePolicy validates and persists Phase 2 allowlists locally (never via remote HTTP).
+func (m *ResidentManager) SavePolicy(allowedBinaries, allowedHosts []string) (resident.Status, error) {
+	pol := resident.Policy{
+		Version:         2,
+		AllowedBinaries: allowedBinaries,
+		AllowedHosts:    allowedHosts,
+	}
+	if err := resident.SavePolicy(m.baseDir, pol); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
+// SetSecret stores a credential strictly in the OS vault (never returns the value).
+func (m *ResidentManager) SetSecret(name, secret string) (resident.Status, error) {
+	if m.vault == nil {
+		return m.Status(), secretx.ErrVaultUnavailable
+	}
+	if err := m.vault.Set(name, secret); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
+// DeleteSecret removes a named credential from the OS vault.
+func (m *ResidentManager) DeleteSecret(name string) (resident.Status, error) {
+	if m.vault == nil {
+		return m.Status(), secretx.ErrVaultUnavailable
+	}
+	if err := m.vault.Delete(name); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
+// RunTurn executes one resident turn and streams events through the shared
+// SessionManager emitter on fixed lane "resident" (Wails + Remote Bridge SSE).
 func (m *ResidentManager) RunTurn(
 	parentCtx context.Context,
 	workspaceDir, workstream, message string,
@@ -148,6 +231,7 @@ func (m *ResidentManager) RunTurn(
 	if err != nil {
 		return resident.TurnResult{}, err
 	}
+	pol, _ := resident.LoadPolicy(m.baseDir)
 	if strings.TrimSpace(workstream) == "" {
 		workstream = cfg.Workstream
 	}
@@ -173,14 +257,21 @@ func (m *ResidentManager) RunTurn(
 		m.mu.Unlock()
 	}()
 
-	approveFn := func(appCtx context.Context, _ string, prompt string) bool {
+	approveDetailed := func(appCtx context.Context, req resident.ApprovalRequest) bool {
 		if m.sessions == nil || m.sessions.Emit == nil {
 			return false
 		}
 		m.mu.Lock()
 		m.state = "aguardando você"
 		m.mu.Unlock()
-		ok := m.sessions.RequestApproval(appCtx, resident.LaneID, "hive-resident", prompt)
+		label := fmt.Sprintf("Hive Residente · Risco: %s", req.RiskLabel)
+		detail := fmt.Sprintf("risco:%s (%s) | origem:%s", req.RiskLabel, req.Tier, req.Origin)
+		ok := m.sessions.RequestApprovalWithMeta(appCtx, resident.LaneID, "hive-resident", req.Prompt, ApprovalMetadata{
+			Label:    label,
+			ToolName: req.ToolName,
+			Detail:   detail,
+			Gate:     string(req.Tier),
+		})
 		m.mu.Lock()
 		m.state = "pensando"
 		m.mu.Unlock()
@@ -189,18 +280,25 @@ func (m *ResidentManager) RunTurn(
 
 	prov, mod := resident.ResolveModelRoute(cfg)
 	runner := &resident.Runner{
-		BaseDir:      m.baseDir,
-		Config:       cfg,
-		Audit:        m.audit,
-		Memory:       mem,
-		ListProjects: m.knownProjects,
-		Approve:      approveFn,
-		Model:        m.testModel,
+		BaseDir:         m.baseDir,
+		Config:          cfg,
+		Policy:          &pol,
+		Sandbox:         m.sandbox,
+		Vault:           m.vault,
+		Audit:           m.audit,
+		Memory:          mem,
+		ListProjects:    m.knownProjects,
+		ApproveDetailed: approveDetailed,
+		Model:           m.testModel,
 		OnEvent: func(ev resident.Event) {
 			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
 				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
 			}
 			if m.sessions != nil && m.sessions.Emit != nil {
+				detail := ev.Detail
+				if ev.RiskTier != "" && detail != "" && !strings.Contains(detail, "risco:") {
+					detail = fmt.Sprintf("[%s] %s", ev.RiskTier, detail)
+				}
 				m.sessions.Emit(LaneEvent{
 					LaneID: resident.LaneID,
 					Team:   "hive-resident",
@@ -211,7 +309,7 @@ func (m *ResidentManager) RunTurn(
 						Label:        ev.Label,
 						Text:         ev.Text,
 						ToolName:     ev.ToolName,
-						Detail:       ev.Detail,
+						Detail:       detail,
 						ApprovalID:   ev.ApprovalID,
 						Partial:      ev.Partial,
 						Thought:      ev.Thought,
@@ -295,6 +393,10 @@ func (m *ResidentManager) AuditLog(limit int) ([]resident.AuditEntry, error) {
 // FormatHeadlessStatus formats the one-line status printed by `hivemind serve` (§11).
 func (m *ResidentManager) FormatHeadlessStatus() string {
 	st := m.Status()
-	return fmt.Sprintf("Hive Residente (Fase %d · somente leitura): %s · conta=%s · modelo=%s/%s",
-		st.Phase, st.State, st.AccountID, st.Provider, st.Model)
+	sb := st.SandboxMechanism
+	if !st.SandboxAvailable {
+		sb = "indisponível (falha fechada)"
+	}
+	return fmt.Sprintf("Hive Residente (Fase %d · sandbox=%s): %s · conta=%s · modelo=%s/%s",
+		st.Phase, sb, st.State, st.AccountID, st.Provider, st.Model)
 }

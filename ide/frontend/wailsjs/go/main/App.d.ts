@@ -191,11 +191,17 @@ export function ResidentClearSession(arg1:string):Promise<void>;
 
 export function ResidentDeleteMemory(arg1:string):Promise<boolean>;
 
+export function ResidentDeleteSecret(arg1:string):Promise<resident.Status>;
+
 export function ResidentListMemory(arg1:string):Promise<Array<resident.MemoryFact>>;
 
 export function ResidentSaveConfig(arg1:string,arg2:string,arg3:string):Promise<resident.Status>;
 
+export function ResidentSavePolicy(arg1:Array<string>,arg2:Array<string>):Promise<resident.Status>;
+
 export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
+
+export function ResidentSetSecret(arg1:string,arg2:string):Promise<resident.Status>;
 
 export function ResidentStartTurn(arg1:string,arg2:string,arg3:string):Promise<resident.TurnResult>;
 

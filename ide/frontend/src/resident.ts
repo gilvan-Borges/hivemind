@@ -8,7 +8,7 @@ import { api, setStatus, state, toast, toastError } from "./state";
 
 export const RESIDENT_TAB_KEY = "hive:resident";
 
-export type ResidentSubTab = "chat" | "memory" | "audit";
+export type ResidentSubTab = "chat" | "memory" | "security" | "audit";
 
 export const residentState = {
   status: null as ResidentStatus | null,
@@ -22,8 +22,39 @@ export const residentState = {
   memoryPinned: false,
   audit: [] as ResidentAuditEntry[],
   auditFilter: "",
+  binariesDraft: "",
+  hostsDraft: "",
+  secretNameDraft: "",
+  secretValueDraft: "",
+  policyDirty: false,
   loadedOnce: false,
 };
+
+function syncPolicyDraftsFromStatus(st: ResidentStatus | null): void {
+  if (!st || residentState.policyDirty) return;
+  residentState.binariesDraft = Array.isArray(st.allowedBinaries) ? st.allowedBinaries.join(", ") : "";
+  residentState.hostsDraft = Array.isArray(st.allowedHosts) ? st.allowedHosts.join(", ") : "";
+}
+
+function formatRiskBadge(tierRaw?: string): { tier: string; label: string; css: string } {
+  const t = (tierRaw || "").trim().toLowerCase();
+  switch (t) {
+    case "read":
+      return { tier: "read", label: "Risco Baixo · Leitura", css: "risk-read" };
+    case "write":
+      return { tier: "write", label: "Risco Médio · Escrita no Workspace", css: "risk-write" };
+    case "exec":
+      return { tier: "exec", label: "Risco Alto · Execução em Sandbox", css: "risk-exec" };
+    case "network":
+      return { tier: "network", label: "Risco Alto · Rede Externa (Allowlist)", css: "risk-network" };
+    case "credentials":
+      return { tier: "credentials", label: "Risco Crítico · Uso de Credencial do Cofre", css: "risk-credentials" };
+    case "destructive":
+      return { tier: "destructive", label: "Risco Crítico · Ação Destrutiva", css: "risk-destructive" };
+    default:
+      return { tier: t || "write", label: t ? `Risco · ${t}` : "Aprovação Necessária", css: "risk-write" };
+  }
+}
 
 export function openResidentTab(): void {
   const existing = state.editorTabs.find((t) => t.kind === "resident");
@@ -48,6 +79,7 @@ export async function refreshResidentStatus(): Promise<void> {
   try {
     const st = await backend.ResidentStatus();
     residentState.status = st;
+    syncPolicyDraftsFromStatus(st);
     if (!residentState.loadedOnce && st.workstream) {
       residentState.workstream = st.workstream;
     }
@@ -64,6 +96,7 @@ export async function refreshResidentData(): Promise<void> {
   try {
     const st = await backend.ResidentStatus();
     residentState.status = st;
+    syncPolicyDraftsFromStatus(st);
     if (!residentState.loadedOnce && st.workstream) {
       residentState.workstream = st.workstream;
     }
@@ -104,9 +137,12 @@ export function updateResidentStatusChip(): void {
   } else {
     chip.style.color = "var(--green)";
   }
+  const sbInfo = st?.sandboxAvailable
+    ? `Sandbox: ${st.sandboxMechanism || "ativa"}`
+    : "Sandbox: indisponível (falha fechada)";
   chip.title = st
-    ? `Hive Residente (Fase 1 · Somente Leitura) · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
-    : "Hive Residente (Fase 1 · Somente Leitura) — clique para abrir";
+    ? `Hive Residente (Fase ${st.phase || 2}) · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
+    : "Hive Residente (Fase 2 · Sandbox e Cofre) — clique para abrir";
 }
 
 function rerenderResidentIfOpen(): void {
@@ -130,13 +166,15 @@ export function handleResidentLaneEvent(payload: any): void {
       text: String(ev.text),
     });
   } else if (ev.kind === "tool_call") {
+    const risk = formatRiskBadge(String(ev.gate || ev.riskTier || ""));
     residentState.messages.push({
       id: `res-tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       kind: "tool",
-      label: "Leitura",
-      text: String(ev.toolName || "read"),
+      label: risk.label,
+      text: String(ev.toolName || "tool"),
       toolName: String(ev.toolName || ""),
       toolDetail: String(ev.detail || ""),
+      riskTier: risk.tier,
       active: true,
     });
   } else if (ev.kind === "tool_result") {
@@ -149,17 +187,21 @@ export function handleResidentLaneEvent(payload: any): void {
     }
   } else if (ev.kind === "approval_required") {
     if (residentState.status) residentState.status.state = "aguardando você";
+    const tierRaw = String(ev.gate || ev.riskTier || "");
     residentState.messages.push({
       id: `res-appr-${Date.now()}`,
       kind: "approval",
-      label: "Aprovação do Hive Residente",
+      label: String(ev.label || "Aprovação do Hive Residente"),
       text: String(ev.text || ""),
+      toolName: String(ev.toolName || ""),
+      toolDetail: String(ev.detail || ""),
+      riskTier: tierRaw,
       approvalId: String(ev.approvalId || ""),
     });
   } else if (ev.kind === "approval_resolved") {
     const target = residentState.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
     if (target) {
-      target.resolved = /recusada/.test(String(ev.text || "")) ? "denied" : "approved";
+      target.resolved = /recusada|negada/i.test(String(ev.text || "")) ? "denied" : "approved";
     }
   } else if (ev.kind === "text" && !ev.thought && ev.text) {
     const last = residentState.messages[residentState.messages.length - 1];
@@ -201,6 +243,12 @@ export function renderResidentViewHtml(): string {
   const mod = st?.model || "openrouter/auto";
   const stateLabel = residentState.running ? "pensando" : (st?.state || "ocioso");
   const activeWsName = state.project?.name || "nenhum workspace";
+  const sbOk = Boolean(st?.sandboxAvailable);
+  const sbText = sbOk
+    ? `Sandbox: ${st?.sandboxMechanism || "ativa"}`
+    : `Sandbox indisponível (falha fechada)`;
+  const vaultOk = Boolean(st?.vaultAvailable);
+  const pendingCount = residentState.messages.filter((m) => m.kind === "approval" && !m.resolved).length;
 
   return `
     <div class="resident-page">
@@ -209,7 +257,9 @@ export function renderResidentViewHtml(): string {
           <div class="resident-title-row">
             ${icons.sparkle}
             <h2>Hive Residente</h2>
-            <span class="resident-badge readonly">Fase 1 · Somente Leitura</span>
+            <span class="resident-badge readonly">Fase 2 · Sandbox Obrigatória</span>
+            <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}" title="${escapeHtml(st?.sandboxReason || sbText)}">${escapeHtml(sbText)}</span>
+            <span class="resident-badge ${vaultOk ? "risk-read" : "risk-write"}" title="${escapeHtml(st?.vaultReason || "Cofre do SO")}">${vaultOk ? "Cofre SO: ativo" : "Cofre SO: indisponível"}</span>
             <span class="resident-badge state-${stateLabel === "pensando" ? "running" : stateLabel === "aguardando você" ? "ask" : "idle"}">${escapeHtml(stateLabel)}</span>
           </div>
           <div class="dim">Conta local: <code>${escapeHtml(acct)}</code> · Workspace: <code>${escapeHtml(activeWsName)}</code> · Rota: <code>${escapeHtml(prov)}/${escapeHtml(mod)}</code></div>
@@ -227,7 +277,8 @@ export function renderResidentViewHtml(): string {
       </header>
 
       <div class="resident-subtabs">
-        <button type="button" class="drawer-tab ${residentState.subTab === "chat" ? "active" : ""}" data-res-tab="chat">Conversa</button>
+        <button type="button" class="drawer-tab ${residentState.subTab === "chat" ? "active" : ""}" data-res-tab="chat">Conversa${pendingCount > 0 ? ` (${pendingCount} aprovação)` : ""}</button>
+        <button type="button" class="drawer-tab ${residentState.subTab === "security" ? "active" : ""}" data-res-tab="security">Segurança & Cofre</button>
         <button type="button" class="drawer-tab ${residentState.subTab === "memory" ? "active" : ""}" data-res-tab="memory">Memória Pessoal (${residentState.memory.length})</button>
         <button type="button" class="drawer-tab ${residentState.subTab === "audit" ? "active" : ""}" data-res-tab="audit">Auditoria (${residentState.audit.length})</button>
         <div class="spacer"></div>
@@ -236,6 +287,7 @@ export function renderResidentViewHtml(): string {
       </div>
 
       ${residentState.subTab === "chat" ? renderResidentChatHtml() : ""}
+      ${residentState.subTab === "security" ? renderResidentSecurityHtml() : ""}
       ${residentState.subTab === "memory" ? renderResidentMemoryHtml(acct) : ""}
       ${residentState.subTab === "audit" ? renderResidentAuditHtml() : ""}
     </div>
@@ -247,34 +299,43 @@ function renderResidentChatHtml(): string {
     ? `
       <div class="chat-empty-state">
         <div class="chat-empty-icon">${icons.brandHero}</div>
-        <div class="chat-empty-title">Hive Residente pronto (somente leitura)</div>
-        <div class="chat-empty-sub">Ele pode ler arquivos do workspace, listar projetos e consultar sua memória pessoal local desta conta — sem escrita, shell ou ações destrutivas.</div>
+        <div class="chat-empty-title">Hive Residente pronto (Fase 2 · Sandbox do SO)</div>
+        <div class="chat-empty-sub">Leitura local no workspace é direta e auditada. Escrita de arquivos, execução de binários na allowlist (sempre em sandbox com argv explícito, sem sh -c) e rede na allowlist exigem sua aprovação no cartão abaixo.</div>
       </div>
     `
     : residentState.messages.map((m) => {
         if (m.kind === "tool") {
+          const risk = formatRiskBadge(m.riskTier);
           return `
             <div class="msg-card role-tool">
               <span class="msg-badge badge-tool">${escapeHtml(m.toolName || m.text)}</span>
+              <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
               <span class="dim">${escapeHtml(m.toolDetail || "")}</span>
             </div>
           `;
         }
         if (m.kind === "approval") {
+          const risk = formatRiskBadge(m.riskTier);
           const decided = m.resolved === "approved"
-            ? `<span class="tc-jira-pill ok">Aprovado</span>`
+            ? `<span class="tc-jira-pill ok">Aprovado pelo usuário</span>`
             : m.resolved === "denied"
-              ? `<span class="tc-jira-pill off">Recusado</span>`
+              ? `<span class="tc-jira-pill off">Negado pelo usuário</span>`
               : `
-                <div style="display:flex;gap:6px;margin-top:8px">
-                  <button type="button" class="mini primary" data-res-appr-ok="${escapeHtml(m.approvalId || "")}">Aprovar</button>
-                  <button type="button" class="mini danger" data-res-appr-no="${escapeHtml(m.approvalId || "")}">Recusar</button>
+                <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+                  <button type="button" class="mini primary" data-res-appr-ok="${escapeHtml(m.approvalId || "")}">Aprovar ação</button>
+                  <button type="button" class="mini danger" data-res-appr-no="${escapeHtml(m.approvalId || "")}">Negar</button>
+                  <span class="dim" style="font-size:11px">Sem resposta até o timeout = negação automática (falha fechada)</span>
                 </div>
               `;
           return `
-            <div class="msg-card role-plan">
-              <span class="msg-badge badge-system">${escapeHtml(m.label)}</span>
-              <div class="msg-body">${escapeHtml(m.text)}</div>
+            <div class="msg-card role-plan resident-approval-card">
+              <div class="resident-approval-meta">
+                <span class="msg-badge badge-system">${escapeHtml(m.label)}</span>
+                <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
+                ${m.toolName ? `<code>${escapeHtml(m.toolName)}</code>` : ""}
+                ${m.toolDetail ? `<span class="dim">Alvo: <code>${escapeHtml(m.toolDetail)}</code></span>` : ""}
+              </div>
+              <div class="msg-body" style="white-space:pre-wrap">${escapeHtml(m.text)}</div>
               ${decided}
             </div>
           `;
@@ -291,12 +352,79 @@ function renderResidentChatHtml(): string {
   return `
     <div class="resident-chat-body" id="res-chat-scroll">${msgsHtml}</div>
     <div class="resident-composer">
-      <textarea id="res-chat-input" rows="2" placeholder="Pergunte ao Hive Residente sobre o projeto, seus repositórios ou sua memória pessoal… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
+      <textarea id="res-chat-input" rows="2" placeholder="Peça ao Hive Residente para inspecionar, editar arquivos ou rodar um binário autorizado na sandbox… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
       <div class="resident-composer-actions">
-        <span class="dim">Leitura auditada em disco antes de executar · sem escrita/shell na Fase 1</span>
+        <span class="dim">Auditoria fsync antes de cada efeito · escrita/execução exigem aprovação + sandbox do SO · saída cercada contra prompt injection</span>
         <div class="spacer"></div>
         <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
         <button type="button" class="primary" id="btn-res-send" ${residentState.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+      </div>
+    </div>
+  `;
+}
+
+function renderResidentSecurityHtml(): string {
+  const st = residentState.status;
+  const secrets = Array.isArray(st?.vaultSecrets) ? st!.vaultSecrets! : [];
+  const sbOk = Boolean(st?.sandboxAvailable);
+  const vaultOk = Boolean(st?.vaultAvailable);
+
+  return `
+    <div class="resident-panel-body">
+      <div class="resident-security-grid">
+        <div class="resident-row-card">
+          <div class="resident-row-head">
+            <strong>Sandbox do Sistema Operacional</strong>
+            <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}">${sbOk ? "Ativa" : "Indisponível"}</span>
+          </div>
+          <div class="dim">Mecanismo: <code>${escapeHtml(st?.sandboxMechanism || "desconhecido")}</code></div>
+          <div class="dim">${escapeHtml(st?.sandboxReason || "Política falha fechada: sem sandbox aplicável, qualquer escrita ou execução é recusada imediatamente.")}</div>
+        </div>
+
+        <div class="resident-row-card">
+          <div class="resident-row-head">
+            <strong>Cofre do Sistema (Segredos)</strong>
+            <span class="resident-badge ${vaultOk ? "risk-read" : "risk-write"}">${vaultOk ? "Windows Credential Manager / DPAPI" : "Indisponível"}</span>
+          </div>
+          <div class="dim">Segredos nunca entram em prompt, log, auditoria ou evento SSE. Comandos que exibem token (ex.: <code>gh auth token</code>, <code>printenv</code>) são bloqueados.</div>
+        </div>
+      </div>
+
+      <div class="resident-row-card">
+        <div class="resident-row-head">
+          <strong>Política Local de Execução e Rede (Falha Fechada)</strong>
+          <span class="spacer"></span>
+          <button type="button" class="primary mini" id="btn-res-save-policy">Salvar Política</button>
+        </div>
+        <div class="dim">Configuração local em <code>%LOCALAPPDATA%\\HiveMind\\resident\\policy.json</code> (nunca alterável pelo modelo, repositório ou relay). Curinga <code>*</code> e shells (<code>sh</code>, <code>cmd</code>, <code>powershell</code>) são proibidos.</div>
+        <label class="dim" style="margin-top:6px">Binários autorizados para <code>exec_command</code> (separados por vírgula; vazio = bloqueia tudo):</label>
+        <input id="res-policy-binaries" placeholder="Ex.: git, go, npm" value="${escapeHtml(residentState.binariesDraft)}" />
+        <label class="dim" style="margin-top:6px">Domínios autorizados para <code>net_fetch</code> (separados por vírgula; vazio = rede bloqueada):</label>
+        <input id="res-policy-hosts" placeholder="Ex.: api.github.com, *.golang.org" value="${escapeHtml(residentState.hostsDraft)}" />
+      </div>
+
+      <div class="resident-row-card">
+        <div class="resident-row-head">
+          <strong>Credenciais no Cofre do Sistema (${secrets.length})</strong>
+        </div>
+        <div class="resident-mem-form">
+          <input id="res-secret-name" style="max-width:200px" placeholder="Nome lógico (ex.: github_ro)" value="${escapeHtml(residentState.secretNameDraft)}" />
+          <input id="res-secret-val" type="password" placeholder="Valor do segredo (gravado apenas no cofre do SO)…" value="${escapeHtml(residentState.secretValueDraft)}" />
+          <button type="button" class="primary mini" id="btn-res-secret-add">Guardar no Cofre</button>
+        </div>
+        <div class="resident-list" style="margin-top:8px">
+          ${secrets.length === 0
+            ? `<div class="dim">Nenhuma credencial cadastrada no cofre do residente.</div>`
+            : secrets.map((name) => `
+              <div class="resident-row-head" style="padding:4px 0;border-bottom:1px solid var(--border)">
+                <code>${escapeHtml(name)}</code>
+                <span class="tok-pill">somente referência lógica</span>
+                <span class="spacer"></span>
+                <button type="button" class="mini ghost" data-res-sec-del="${escapeHtml(name)}">Remover</button>
+              </div>
+            `).join("")
+          }
+        </div>
       </div>
     </div>
   `;
@@ -337,23 +465,26 @@ function renderResidentAuditHtml(): string {
   const q = residentState.auditFilter.trim().toLowerCase();
   const filtered = residentState.audit.filter((e) => {
     if (!q) return true;
-    return `${e.tool} ${e.origin} ${e.decision} ${e.outcome || ""} ${e.target || ""} ${e.reason || ""}`.toLowerCase().includes(q);
+    return `${e.tool} ${e.origin} ${e.decision} ${e.outcome || ""} ${e.target || ""} ${e.reason || ""} ${e.sandbox || ""}`.toLowerCase().includes(q);
   });
   return `
     <div class="resident-panel-body">
       <div class="resident-mem-form">
-        <input id="res-audit-filter" placeholder="Filtrar auditoria por ferramenta, origem, decisão ou alvo…" value="${escapeHtml(residentState.auditFilter)}" />
+        <input id="res-audit-filter" placeholder="Filtrar auditoria por ferramenta, classe de risco, sandbox, origem, decisão ou alvo…" value="${escapeHtml(residentState.auditFilter)}" />
       </div>
       <div class="resident-list">
         ${filtered.length === 0
           ? `<div class="dim" style="padding:12px">Nenhum registro de auditoria ainda.</div>`
-          : filtered.map((e) => `
+          : filtered.map((e) => {
+            const risk = formatRiskBadge(e.tier);
+            return `
             <div class="resident-row-card">
               <div class="resident-row-head">
                 <code>${escapeHtml(e.tool)}</code>
                 <span class="tok-pill">${escapeHtml(e.phase)}</span>
                 <span class="tok-pill">${escapeHtml(e.origin)}</span>
-                <span class="tok-pill">${escapeHtml(e.tier)}</span>
+                <span class="resident-badge ${risk.css}">${escapeHtml(e.tier)}</span>
+                ${e.sandbox ? `<span class="tok-pill">sandbox: ${escapeHtml(e.sandbox)}</span>` : ""}
                 <span class="tc-jira-pill ${e.decision === "allow" ? "ok" : "off"}">${escapeHtml(e.decision)}${e.outcome ? ` · ${escapeHtml(e.outcome)}` : ""}</span>
                 <span class="spacer"></span>
                 <span class="dim" style="font-family:var(--mono);font-size:10.5px">${escapeHtml(e.ts)}</span>
@@ -361,11 +492,19 @@ function renderResidentAuditHtml(): string {
               ${e.target ? `<div class="dim">Alvo: <code>${escapeHtml(e.target)}</code></div>` : ""}
               ${e.reason ? `<div class="dim">${escapeHtml(e.reason)}</div>` : ""}
             </div>
-          `).join("")
+          `;
+          }).join("")
         }
       </div>
     </div>
   `;
+}
+
+function splitCommaList(raw: string): string[] {
+  return raw
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 export function bindResidentViewEvents(): void {
@@ -466,6 +605,72 @@ export function bindResidentViewEvents(): void {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.resApprNo || "";
       if (id) await api()?.RespondApproval(id, false);
+    });
+  });
+
+  const binInput = document.getElementById("res-policy-binaries") as HTMLInputElement | null;
+  binInput?.addEventListener("input", () => {
+    residentState.binariesDraft = binInput.value;
+    residentState.policyDirty = true;
+  });
+  const hostInput = document.getElementById("res-policy-hosts") as HTMLInputElement | null;
+  hostInput?.addEventListener("input", () => {
+    residentState.hostsDraft = hostInput.value;
+    residentState.policyDirty = true;
+  });
+  document.getElementById("btn-res-save-policy")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.ResidentSavePolicy) return;
+    try {
+      const bins = splitCommaList(residentState.binariesDraft);
+      const hosts = splitCommaList(residentState.hostsDraft);
+      const st = await backend.ResidentSavePolicy(bins, hosts);
+      residentState.status = st;
+      residentState.policyDirty = false;
+      syncPolicyDraftsFromStatus(st);
+      toast("Política de segurança da Fase 2 salva.", "success");
+      rerenderResidentIfOpen();
+    } catch (err: any) {
+      toastError("salvar política do residente", err);
+    }
+  });
+
+  const secNameInput = document.getElementById("res-secret-name") as HTMLInputElement | null;
+  secNameInput?.addEventListener("input", () => {
+    residentState.secretNameDraft = secNameInput.value;
+  });
+  const secValInput = document.getElementById("res-secret-val") as HTMLInputElement | null;
+  secValInput?.addEventListener("input", () => {
+    residentState.secretValueDraft = secValInput.value;
+  });
+  document.getElementById("btn-res-secret-add")?.addEventListener("click", async () => {
+    const backend = api();
+    const name = residentState.secretNameDraft.trim();
+    const val = residentState.secretValueDraft;
+    if (!backend?.ResidentSetSecret || !name || !val) return;
+    try {
+      const st = await backend.ResidentSetSecret(name, val);
+      residentState.status = st;
+      residentState.secretNameDraft = "";
+      residentState.secretValueDraft = "";
+      toast(`Segredo '${name}' gravado no cofre do sistema.`, "success");
+      rerenderResidentIfOpen();
+    } catch (err: any) {
+      toastError("gravar segredo no cofre", err);
+    }
+  });
+  document.querySelectorAll<HTMLElement>("[data-res-sec-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.resSecDel || "";
+      if (!name || !api()?.ResidentDeleteSecret) return;
+      try {
+        const st = await api()!.ResidentDeleteSecret!(name);
+        residentState.status = st;
+        toast(`Segredo '${name}' removido do cofre.`, "success");
+        rerenderResidentIfOpen();
+      } catch (err: any) {
+        toastError("remover segredo do cofre", err);
+      }
     });
   });
 

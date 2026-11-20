@@ -214,6 +214,7 @@ export interface ChatMessage {
   resolved?: "approved" | "denied";
   approvalId?: string;
   gate?: "docs" | "jira";
+  riskTier?: string;
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
@@ -823,6 +824,14 @@ export interface ResidentStatus {
   memoryDir?: string;
   auditPath?: string;
   lastError?: string;
+  sandboxAvailable?: boolean;
+  sandboxMechanism?: string;
+  sandboxReason?: string;
+  vaultAvailable?: boolean;
+  vaultReason?: string;
+  allowedBinaries?: string[];
+  allowedHosts?: string[];
+  vaultSecrets?: string[];
 }
 
 export interface ResidentTurnResult {
@@ -998,6 +1007,9 @@ export interface WailsBackendApp {
   RemoveProjectSkill(workspace: string, name: string): Promise<void>;
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
+  ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
+  ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
+  ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;
   ResidentStartTurn?(workspace: string, workstream: string, message: string): Promise<ResidentTurnResult>;
   ResidentCancel?(): Promise<boolean>;
   ResidentSessionMessages?(workstream: string): Promise<ResidentLocalMessage[]>;
