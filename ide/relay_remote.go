@@ -15,10 +15,10 @@ func newRelayClient(a *App) *relayclient.Client {
 		return nil
 	}
 	client, err := relayclient.Load(relayclient.Options{
-		Handler:   a.mobile.server.Handler(),
-		Bearer:    a.mobile.server.Bearer,
-		Subscribe: a.mobile.hub.Subscribe,
-		Snapshot:  func() []remote.LaneSnapshot { return a.mobile.hub.Snapshots("") },
+		Handler:      a.mobile.server.Handler(),
+		PrepareLocal: a.mobile.server.AttachLocal,
+		Subscribe:    a.mobile.hub.Subscribe,
+		Snapshot:     func() []remote.LaneSnapshot { return a.mobile.hub.Snapshots("") },
 	})
 	if err != nil {
 		log.Printf("aviso: relay: %v", err)

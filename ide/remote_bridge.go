@@ -51,10 +51,11 @@ func (a *App) MobileBridgeStatus() remote.StatusInfo {
 
 // SetMobileBridgeEnabled turns the bridge on/off and persists the choice.
 func (a *App) SetMobileBridgeEnabled(on bool) (remote.StatusInfo, error) {
-	a.mobile.cfg.Enabled = on
-	if err := remote.SaveConfig(a.mobile.cfg); err != nil {
+	cfg, err := a.mobile.server.SetEnabled(on)
+	if err != nil {
 		return a.mobile.server.Status(), err
 	}
+	a.mobile.cfg = cfg
 	if on {
 		if err := a.mobile.server.Start(); err != nil {
 			return a.mobile.server.Status(), err
@@ -67,15 +68,13 @@ func (a *App) SetMobileBridgeEnabled(on bool) (remote.StatusInfo, error) {
 	return st, nil
 }
 
-// RotateMobileToken replaces the pairing token, instantly dropping every
-// connected device ("Rotacionar Token / Desconectar Celulares").
+// RotateMobileToken drops every paired device ("Rotacionar Token / Desconectar Celulares").
 func (a *App) RotateMobileToken() (remote.StatusInfo, error) {
-	cfg, err := remote.RotateToken()
+	cfg, err := a.mobile.server.RotateSession()
 	if err != nil {
 		return a.mobile.server.Status(), err
 	}
 	a.mobile.cfg = cfg
-	a.mobile.server.SetToken(cfg.Token)
 	if cfg.Enabled {
 		_ = a.mobile.server.Stop(context.Background())
 		if err := a.mobile.server.Start(); err != nil {

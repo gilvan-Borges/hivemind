@@ -2,8 +2,6 @@ package remote
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
+	"github.com/gilvan-Borges/HiveMind/relaywire"
 )
 
 // maxBodyBytes caps request bodies (base64 image attachments can be large).
@@ -26,24 +26,36 @@ type Server struct {
 	hub  *Hub
 	deps Deps
 
-	mu      sync.Mutex
-	cfg     Config
-	srv     *http.Server
-	port    int
-	urls    []string
-	host    string
-	version string
+	mu         sync.Mutex
+	boxMu      sync.Mutex
+	cfg        Config
+	srv        *http.Server
+	port       int
+	urls       []string
+	host       string
+	version    string
+	configPath string
+	secrets    secretx.Vault
+	box        *relaywire.KeyPair
+	offer      *pendingOffer
+	redeems    *redeemLimiter
+	local      *localCap
+	now        func() time.Time
 }
 
 // NewServer builds the bridge (not yet listening).
 func NewServer(hub *Hub, deps Deps, cfg Config) *Server {
 	host, _ := os.Hostname()
+	cfg.Token = ""
 	return &Server{
-		hub:     hub,
-		deps:    deps,
-		cfg:     cfg,
-		host:    host,
-		version: BridgeVersion,
+		hub:        hub,
+		deps:       deps,
+		cfg:        cfg,
+		host:       host,
+		version:    BridgeVersion,
+		configPath: configPathFn(),
+		redeems:    &redeemLimiter{by: map[string]*redeemFail{}},
+		local:      &localCap{},
 	}
 }
 
@@ -91,23 +103,42 @@ func (s *Server) Stop(ctx context.Context) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-// Bearer returns the LAN bridge token used to authorize in-process calls
-// (the relay client presents it locally; it never leaves the PC).
-func (s *Server) Bearer() string {
-	if s == nil {
-		return ""
-	}
+// SnapshotConfig returns the persisted view. The raw session token is never included.
+func (s *Server) SnapshotConfig() Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.Token
+	cfg := s.cfg
+	cfg.Token = ""
+	return cfg
 }
 
-// SetToken replaces the accepted bearer token (used after rotation while the
-// server is running; all previously paired devices are rejected immediately).
-func (s *Server) SetToken(token string) {
+// SetEnabled persists the opt-in flag without rewriting the session digest from a stale copy.
+func (s *Server) SetEnabled(on bool) (Config, error) {
 	s.mu.Lock()
-	s.cfg.Token = token
+	defer s.mu.Unlock()
+	s.cfg.Enabled = on
+	if err := saveConfig(s.configPath, s.cfg); err != nil {
+		return Config{}, err
+	}
+	cfg := s.cfg
+	cfg.Token = ""
+	return cfg, nil
+}
+
+// RotateSession invalidates every paired device and any outstanding offer.
+func (s *Server) RotateSession() (Config, error) {
+	s.mu.Lock()
+	path := s.configPath
 	s.mu.Unlock()
+	cfg, err := rotateAt(path)
+	if err != nil {
+		return Config{}, err
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.offer = nil
+	s.mu.Unlock()
+	return cfg, nil
 }
 
 // StatusInfo describes the bridge for the IDE status bar and modal.
@@ -143,23 +174,6 @@ func (s *Server) Status() StatusInfo {
 	}
 }
 
-// Pairing builds the QR pairing payload for the IDE modal.
-func (s *Server) Pairing() (PairingInfo, error) {
-	st := s.Status()
-	uri := BuildPairURI(st.URLs, s.cfg.Token, st.Host)
-	dataURL, err := QRDataURL(uri, 320)
-	if err != nil {
-		return PairingInfo{}, err
-	}
-	return PairingInfo{
-		URI:       uri,
-		URLs:      st.URLs,
-		Token:     s.cfg.Token,
-		Host:      st.Host,
-		QRDataURL: dataURL,
-	}, nil
-}
-
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
@@ -177,47 +191,14 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/autoreview/status", s.handleAutoReviewStatus)
 	mux.HandleFunc("POST /api/v1/autoreview/poll", s.handleAutoReviewPoll)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
-	return s.auth(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.authorize(w, r, mux)
+	})
 }
 
 // Handler exposes the composed http.Handler (tests use httptest).
 func (s *Server) Handler() http.Handler {
 	return s.handler()
-}
-
-func (s *Server) auth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/health" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !s.tokenOK(bearerToken(r)) {
-			writeErr(w, http.StatusUnauthorized, "não autorizado: token Bearer inválido")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) tokenOK(tok string) bool {
-	s.mu.Lock()
-	want := s.cfg.Token
-	s.mu.Unlock()
-	if tok == "" || want == "" {
-		return false
-	}
-	// Hash both sides so the comparison is constant-time regardless of length.
-	a := sha256.Sum256([]byte(tok))
-	b := sha256.Sum256([]byte(want))
-	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
-}
-
-func bearerToken(r *http.Request) string {
-	h := r.Header.Get("Authorization")
-	if len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
-		return strings.TrimSpace(h[7:])
-	}
-	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -476,9 +457,15 @@ func (s *Server) handleAutoReviewPoll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.deps.AutoReviewPoll(ws))
 }
 
-// handleEvents streams SSE events (lane_event, autoreview_status,
-// approval_resolved, ping) with automatic keep-alive.
+// handleEvents streams SSE. On the LAN each data line is a naclbox; the event
+// type sits inside the plaintext. In-process callers still see the clear frames.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if _, encrypted := r.Context().Value(peerKey{}).([32]byte); encrypted {
+		if _, err := s.ensureBox(); err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "internal", "cofre indisponível")
+			return
+		}
+	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		writeErr(w, http.StatusInternalServerError, "streaming não suportado")
@@ -492,9 +479,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch, unsub := s.hub.Subscribe()
 	defer unsub()
 
-	ioW := w.(interface{ Write([]byte) (int, error) })
-	_, _ = fmt.Fprintf(ioW, "event: connected\ndata: {\"ok\":true}\n\n")
-	fl.Flush()
+	connected, _ := json.Marshal(map[string]bool{"ok": true})
+	s.writeStream(w, fl, r, StreamEvent{Type: "connected", Data: connected})
 
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -506,12 +492,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			buf, _ := json.Marshal(ev)
-			_, _ = fmt.Fprintf(ioW, "event: %s\ndata: %s\n\n", ev.Type, buf)
-			fl.Flush()
+			s.writeStream(w, fl, r, ev)
 		case <-ticker.C:
-			_, _ = fmt.Fprint(ioW, ": ping\n\n")
-			fl.Flush()
+			s.writeStream(w, fl, r, StreamEvent{Type: "ping"})
 		}
 	}
 }

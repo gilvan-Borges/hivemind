@@ -51,6 +51,7 @@ func TestClientTunnelsEncryptedRPCAndEvent(t *testing.T) {
 
 	var mu sync.Mutex
 	var gotPath, gotAuth string
+	var prepared bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		gotPath = r.URL.RequestURI()
@@ -63,7 +64,12 @@ func TestClientTunnelsEncryptedRPCAndEvent(t *testing.T) {
 	client, err := Load(Options{
 		ConfigPath: filepath.Join(t.TempDir(), "relay.json"),
 		Handler:    handler,
-		Bearer:     func() string { return "token-da-lan" },
+		PrepareLocal: func(r *http.Request) *http.Request {
+			mu.Lock()
+			prepared = true
+			mu.Unlock()
+			return r
+		},
 		Subscribe: func() (<-chan remote.StreamEvent, func()) {
 			return events, func() {}
 		},
@@ -150,10 +156,10 @@ func TestClientTunnelsEncryptedRPCAndEvent(t *testing.T) {
 		t.Fatalf("resultado: %#v", opened)
 	}
 	mu.Lock()
-	path, auth := gotPath, gotAuth
+	path, auth, wasPrepared := gotPath, gotAuth, prepared
 	mu.Unlock()
-	if path != "/api/v1/projects?workspace=demo" || auth != "Bearer token-da-lan" {
-		t.Fatalf("bridge local: %s %s", path, auth)
+	if path != "/api/v1/projects?workspace=demo" || auth != "" || !wasPrepared {
+		t.Fatalf("bridge local: %s auth=%q prepared=%v", path, auth, wasPrepared)
 	}
 
 	events <- remote.StreamEvent{Type: "lane_event", Data: json.RawMessage(`{"marker":"` + marker + `"}`)}

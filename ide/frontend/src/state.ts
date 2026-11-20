@@ -61,6 +61,7 @@ export const state = {
   jiraProjects: [] as JiraProject[],
   jiraProjectsLoading: false,
   planMenuOpen: false,
+  composerMenuOpen: "" as "" | "mode" | "perm",
   goVersion: "",
   os: "windows",
   statusText: "Pronto",

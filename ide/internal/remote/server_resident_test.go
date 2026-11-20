@@ -14,6 +14,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 )
 
 func TestBridgeRejectsUnknownRunModeAndAcceptsResident(t *testing.T) {
@@ -72,17 +73,22 @@ func TestBridgeResidentRemoteRequiresApprovalOverExistingRoutes(t *testing.T) {
 		TestModel: scripted,
 	})
 	adapter := &Adapter{Sessions: sessions, Resident: resMgr, Hub: hub}
-	cfg, err := LoadConfigFrom(filepath.Join(t.TempDir(), "remote-bridge.json"))
+	path := filepath.Join(t.TempDir(), "remote-bridge.json")
+	cfg, err := LoadConfigFrom(path)
 	if err != nil {
 		t.Fatalf("LoadConfigFrom: %v", err)
 	}
 	srv := NewServer(hub, adapter, cfg)
+	srv.configPath = path
+	srv.secrets = secretx.NewMemoryVault()
+	srv.urls = []string{"http://127.0.0.1:47890"}
+	sess := pairDevice(t, srv)
 
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
 	// Start remote resident turn via existing POST /api/v1/runs/start (no new route, no new port).
-	rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", cfg.Token, map[string]any{
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", sess, map[string]any{
 		"laneId":    "resident",
 		"workspace": ws,
 		"objective": "o que diz o README?",
@@ -114,7 +120,7 @@ func TestBridgeResidentRemoteRequiresApprovalOverExistingRoutes(t *testing.T) {
 	}
 
 	// Resolve approval via existing POST /api/v1/approvals/resolve.
-	recAppr := doJSON(t, srv, http.MethodPost, "/api/v1/approvals/resolve", cfg.Token, map[string]any{
+	recAppr := doJSON(t, srv, http.MethodPost, "/api/v1/approvals/resolve", sess, map[string]any{
 		"approvalId": approvalID,
 		"approved":   true,
 	})

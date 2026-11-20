@@ -366,8 +366,9 @@ export function bindStaticShellEvents() {
   });
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
-    if (state.planMenuOpen && !target.closest("#plan-submenu") && !target.closest("[data-plan-caret]")) {
+    if ((state.planMenuOpen || state.composerMenuOpen) && !target.closest(".composer-select-wrap")) {
       state.planMenuOpen = false;
+      state.composerMenuOpen = "";
       renderComposerModeBar();
     }
     if (state.showFileMenu) {
