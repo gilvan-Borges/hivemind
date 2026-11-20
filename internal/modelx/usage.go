@@ -115,17 +115,29 @@ type usageStoreFile struct {
 }
 
 var (
-	usageMu                 sync.Mutex
-	usageFilePathFn         = defaultUsageFilePath
-	fetchAgyUsageFn         = FetchAgyUsage
-	fetchOpenCodeUsageFn    = FetchOpenCodeUsage
-	listAgyProfilesUsageFn  = listAgyProfilesForUsage
-	activateAgyProfileFn    = ActivateAgyProfileSession
-	readLiveAgyCredFn       = ReadLiveAgyOAuthCredential
-	writeLiveAgyCredFn      = WriteLiveAgyOAuthCredential
-	hasAgyVaultSessionFn    = HasAgyVaultSession
-	restoreLiveAgyCredFn    = EnsureLiveAgyCredentialRestored
+	usageMu                sync.Mutex
+	usageFilePathFn        = defaultUsageFilePath
+	usageFlushInterval     = 2 * time.Second
+	usageMemState          *usageMem
+	usageFlushTimer        *time.Timer
+	fetchAgyUsageFn        = FetchAgyUsage
+	fetchOpenCodeUsageFn   = FetchOpenCodeUsage
+	listAgyProfilesUsageFn = listAgyProfilesForUsage
+	activateAgyProfileFn   = ActivateAgyProfileSession
+	readLiveAgyCredFn      = ReadLiveAgyOAuthCredential
+	writeLiveAgyCredFn     = WriteLiveAgyOAuthCredential
+	hasAgyVaultSessionFn   = HasAgyVaultSession
+	restoreLiveAgyCredFn   = EnsureLiveAgyCredentialRestored
 )
+
+// usageMem buffers ledger events so RecordAIUsage does not rewrite the whole
+// JSON file on every call. A crash loses only the events since the last flush.
+type usageMem struct {
+	path    string
+	store   usageStoreFile
+	dirty   bool
+	modTime time.Time
+}
 
 func defaultUsageFilePath() (string, error) {
 	base, err := os.UserConfigDir()
@@ -189,33 +201,93 @@ func CanonicalUsageProvider(provider, modelSpec string) string {
 }
 
 func loadUsageStoreLocked() (usageStoreFile, string, error) {
-	path, err := usageFilePathFn()
-	if err != nil {
+	if err := ensureUsageLocked(); err != nil {
 		return usageStoreFile{}, "", err
 	}
+	return usageMemState.store, usageMemState.path, nil
+}
+
+func ensureUsageLocked() error {
+	path, err := usageFilePathFn()
+	if err != nil {
+		return err
+	}
+	if usageMemState != nil && usageMemState.path == path {
+		if !usageMemState.dirty {
+			if info, statErr := os.Stat(path); statErr == nil && info.ModTime().After(usageMemState.modTime) {
+				return loadUsageMemLocked(path)
+			}
+		}
+		return nil
+	}
+	if usageMemState != nil && usageMemState.dirty {
+		_ = flushUsageLocked()
+	}
+	return loadUsageMemLocked(path)
+}
+
+func loadUsageMemLocked(path string) error {
 	store := usageStoreFile{
 		Version: 1,
 		Limits:  make(map[string]ProviderLimits),
 	}
+	var mod time.Time
 	data, err := os.ReadFile(path)
 	if err == nil {
 		_ = json.Unmarshal(data, &store)
+		if store.Version == 0 {
+			store.Version = 1
+		}
 		if store.Limits == nil {
 			store.Limits = make(map[string]ProviderLimits)
 		}
+		if info, statErr := os.Stat(path); statErr == nil {
+			mod = info.ModTime()
+		}
 	}
-	return store, path, nil
+	usageMemState = &usageMem{path: path, store: store, modTime: mod}
+	return nil
 }
 
 func saveUsageStoreLocked(path string, store usageStoreFile) error {
+	if usageMemState == nil || usageMemState.path != path {
+		usageMemState = &usageMem{path: path, store: store, dirty: true}
+	} else {
+		usageMemState.store = store
+		usageMemState.dirty = true
+	}
+	return flushUsageLocked()
+}
+
+func flushUsageLocked() error {
+	if usageFlushTimer != nil {
+		usageFlushTimer.Stop()
+		usageFlushTimer = nil
+	}
+	if usageMemState == nil || !usageMemState.dirty {
+		return nil
+	}
 	cutoff := time.Now().Add(-31 * 24 * time.Hour)
-	pruned := store.Events[:0]
-	for _, ev := range store.Events {
+	pruned := make([]usageEvent, 0, len(usageMemState.store.Events))
+	for _, ev := range usageMemState.store.Events {
 		if !ev.Timestamp.Before(cutoff) {
 			pruned = append(pruned, ev)
 		}
 	}
-	store.Events = pruned
+	toSave := usageMemState.store
+	toSave.Events = pruned
+	if err := writeUsageAtomic(usageMemState.path, toSave); err != nil {
+		return err
+	}
+	usageMemState.store.Events = pruned
+	usageMemState.dirty = false
+	if info, statErr := os.Stat(usageMemState.path); statErr == nil {
+		usageMemState.modTime = info.ModTime()
+	}
+	return nil
+}
+
+func writeUsageAtomic(path string, store usageStoreFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -234,6 +306,35 @@ func saveUsageStoreLocked(path string, store usageStoreFile) error {
 	return nil
 }
 
+func scheduleUsageFlushLocked() {
+	if usageFlushTimer != nil {
+		return
+	}
+	usageFlushTimer = time.AfterFunc(usageFlushInterval, func() {
+		usageMu.Lock()
+		defer usageMu.Unlock()
+		_ = flushUsageLocked()
+	})
+}
+
+// FlushAIUsage writes any buffered usage events. Call it when the process closes.
+// Events still sitting in memory are the only ones a crash can drop.
+func FlushAIUsage() {
+	usageMu.Lock()
+	defer usageMu.Unlock()
+	_ = flushUsageLocked()
+}
+
+func resetUsageMemForTest() {
+	usageMu.Lock()
+	defer usageMu.Unlock()
+	if usageFlushTimer != nil {
+		usageFlushTimer.Stop()
+		usageFlushTimer = nil
+	}
+	usageMemState = nil
+}
+
 // RecordAIUsage appends one completed LLM call's token counts into the local HiveMind usage ledger.
 func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 	if totTok == 0 && (inTok > 0 || outTok > 0) {
@@ -245,11 +346,10 @@ func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 	bucket := CanonicalUsageProvider(provider, modelSpec)
 	usageMu.Lock()
 	defer usageMu.Unlock()
-	store, path, err := loadUsageStoreLocked()
-	if err != nil {
+	if err := ensureUsageLocked(); err != nil || usageMemState == nil {
 		return
 	}
-	store.Events = append(store.Events, usageEvent{
+	usageMemState.store.Events = append(usageMemState.store.Events, usageEvent{
 		Timestamp:    time.Now().UTC(),
 		Provider:     bucket,
 		Model:        strings.TrimSpace(modelSpec),
@@ -257,7 +357,8 @@ func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 		OutputTokens: outTok,
 		TotalTokens:  totTok,
 	})
-	_ = saveUsageStoreLocked(path, store)
+	usageMemState.dirty = true
+	scheduleUsageFlushLocked()
 }
 
 // SaveAIUsageLimits stores optional user-configured 5h and 7d reference token limits for a provider.

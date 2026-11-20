@@ -240,6 +240,7 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	a.watchers = make(map[string]*idecore.FileWatcher)
 	a.watcherMu.Unlock()
+	modelx.FlushAIUsage()
 }
 
 // WindowMinimize minimizes the IDE window.
