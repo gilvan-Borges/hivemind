@@ -79,12 +79,12 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		errClass := jev.ClassifyError(respErr)
-		if ctx.Err() != nil || (errClass == jev.ErrClassPolicy && !isUpstreamModel400(respErr)) {
+		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
 			yield(nil, fmt.Errorf("%s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
 			return
 		}
 
-		if w.health != nil && errClass != jev.ErrClassPolicy {
+		if w.health != nil {
 			w.health.RecordFailure(curChoice.Provider, curChoice.Model, errClass, time.Time{})
 		}
 

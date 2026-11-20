@@ -925,6 +925,19 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		instruction += "\n\n" + extra
 	}
 	keys := append([]string(nil), stateKeys...)
+	beforeModelCBs := []llmagent.BeforeModelCallback{
+		newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+	}
+	beforeToolCBs := []llmagent.BeforeToolCallback{
+		newRepeatReadGuardCallback(),
+	}
+	var afterToolCBs []llmagent.AfterToolCallback
+	if outputKey == "pm_plan" || outputKey == "tech_lead_plan" || outputKey == "architect_plan" {
+		beforeModelCBs = append(beforeModelCBs, newChiefToolStrippingModelCallback(defaultMaxTriageExploreCalls, 2, false))
+		triBefore, triAfter := newChiefTriageBudgetCallbacks(jiraKey, defaultMaxTriageExploreCalls)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, triAfter)
+	}
 	cfg := llmagent.Config{
 		Name:        adkName,
 		Description: roleLabel(a.Role) + " do time HiveMind.",
@@ -939,12 +952,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		DisallowTransferToPeers:  true,
 		Tools:                    roleTools,
 		OutputKey:                outputKey,
-		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
-		},
-		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
-			newRepeatReadGuardCallback(),
-		},
+		BeforeModelCallbacks:     beforeModelCBs,
+		BeforeToolCallbacks:      beforeToolCBs,
+		AfterToolCallbacks:       afterToolCBs,
 		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
 			var b strings.Builder
 			b.WriteString(instruction)
@@ -1085,18 +1095,38 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 			}
 		}
 	}
-	if r.NewModel != nil {
-		return r.NewModel(ctx, a)
+	buildOne := func(ag team.Agent) (model.LLM, error) {
+		if r.NewModel != nil {
+			return r.NewModel(ctx, ag)
+		}
+		if strings.EqualFold(strings.TrimSpace(ag.Provider), "jev") {
+			return NewJevModelFactory(JevFactoryOptions{
+				Workspace: r.Workspace,
+				Git:       r.Git,
+				Approve:   r.Approve,
+				OnEvent:   r.OnEvent,
+			})(ctx, ag)
+		}
+		return modelx.New(ctx, ag.Provider, ag.Model)
 	}
-	if strings.EqualFold(strings.TrimSpace(a.Provider), "jev") {
-		return NewJevModelFactory(JevFactoryOptions{
-			Workspace: r.Workspace,
-			Git:       r.Git,
-			Approve:   r.Approve,
-			OnEvent:   r.OnEvent,
-		})(ctx, a)
+	m, err := buildOne(a)
+	if err != nil && (a.Role == team.RoleQA || a.Role == team.RoleDeveloper || a.Role == team.RoleTechLead) {
+		// If a specialist agent (e.g. QA pinned to Cursor without CURSOR_API_KEY) fails to
+		// initialize due to missing credentials, fall back to the Chief's configured provider/model
+		// so the squad run does not abort mid-pipeline.
+		if jev.ClassifyError(err) == jev.ErrClassAuth {
+			chief := r.primaryChief()
+			if !strings.EqualFold(chief.Provider, a.Provider) || !strings.EqualFold(chief.Model, a.Model) {
+				fallback := a
+				fallback.Provider = chief.Provider
+				fallback.Model = chief.Model
+				if fm, fErr := buildOne(fallback); fErr == nil {
+					return fm, nil
+				}
+			}
+		}
 	}
-	return modelx.New(ctx, a.Provider, a.Model)
+	return m, err
 }
 
 func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode string) (session.Session, error) {
@@ -2538,6 +2568,13 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {
 		keepInTurn = 6
 	}
+	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
+		newInTurnCompactionCallback(keepInTurn),
+	}
+	if !sddDocs && !sddJira {
+		triageBeforeModelCBs = append(triageBeforeModelCBs,
+			newChiefToolStrippingModelCallback(defaultMaxTriageExploreCalls, 2, r.reviewRequested || isAutoReview))
+	}
 	triageAgent, err := llmagent.New(llmagent.Config{
 		Name:                     adkName,
 		Description:              "Triagem e coordenação do Chefe HiveMind.",
@@ -2548,11 +2585,9 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 		DisallowTransferToPeers:  true,
 		Tools:                    allTools,
 		Instruction:              triageInstr,
-		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			newInTurnCompactionCallback(keepInTurn),
-		},
-		BeforeToolCallbacks: beforeToolCBs,
-		AfterToolCallbacks:  afterToolCBs,
+		BeforeModelCallbacks:     triageBeforeModelCBs,
+		BeforeToolCallbacks:      beforeToolCBs,
+		AfterToolCallbacks:       afterToolCBs,
 	})
 	if err != nil {
 		return false, "", err

@@ -241,6 +241,9 @@ func selectBestInTier(
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
 			continue
 		}
+		if strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
+			continue
+		}
 		if e.Tier != "" && e.Tier != targetTier {
 			continue
 		}
@@ -361,6 +364,9 @@ func selectBestInTier(
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
+			continue
+		}
+		if strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
 			continue
 		}
 		if e.Tier != "" && e.Tier != targetTier {

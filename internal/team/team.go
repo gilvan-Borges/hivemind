@@ -238,7 +238,7 @@ func (s Settings) EffectiveMaxDevInputTokens() int64 {
 // (default 6, range 2..20).
 func (s Settings) EffectiveInTurnKeepToolResults() int {
 	if s.InTurnKeepToolResults <= 0 {
-		return 6
+		return 12
 	}
 	if s.InTurnKeepToolResults < 2 {
 		return 2

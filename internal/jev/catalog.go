@@ -275,25 +275,26 @@ func (s *CatalogStore) MergeSource(source string, entries []ModelEntry) {
 	}
 }
 
-// IsTrustedOpenRouterModel reports whether an OpenRouter model ID belongs to a
-// battle-tested coding and tool-calling family suitable for autonomous HiveMind agents.
-// Experimental/community ":free" endpoints, Baidu Ernie previews, Gemma, and small
-// chat-only models frequently fail with HTTP 400 Bad Request on multi-tool schemas.
-func IsTrustedOpenRouterModel(modelID string) bool {
+// isBlockedOpenRouterEndpoint reports whether an OpenRouter model ID is a ":free"
+// trial endpoint or an experimental/chat-only family known to fail with HTTP 400
+// on multi-tool agent schemas.
+func isBlockedOpenRouterEndpoint(modelID string) bool {
 	m := strings.ToLower(strings.TrimSpace(modelID))
-	if m == "" {
-		return false
-	}
-	// Never route autonomous multi-tool agent tasks to OpenRouter ":free" trial endpoints
-	// or known tool-incompatible preview families.
-	if strings.HasSuffix(m, ":free") ||
+	return strings.HasSuffix(m, ":free") ||
 		strings.Contains(m, "/ernie") ||
 		strings.HasPrefix(m, "baidu/") ||
+		strings.HasPrefix(m, "dots-studio/") ||
 		strings.Contains(m, "gemma") ||
 		strings.Contains(m, "llama-3.1-8b") ||
 		strings.Contains(m, "llama-3.2-") ||
 		strings.Contains(m, "vision-free") ||
-		strings.Contains(m, "roleplay") {
+		strings.Contains(m, "roleplay")
+}
+// IsTrustedOpenRouterModel reports whether an OpenRouter model ID belongs to a
+// battle-tested coding and tool-calling family suitable for autonomous HiveMind agents.
+func IsTrustedOpenRouterModel(modelID string) bool {
+	m := strings.ToLower(strings.TrimSpace(modelID))
+	if m == "" || isBlockedOpenRouterEndpoint(m) {
 		return false
 	}
 	trustedPrefixes := []string{

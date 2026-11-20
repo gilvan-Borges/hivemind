@@ -878,7 +878,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		MCP:                mcpHost,
 		Out:                io.Discard,
 		Err:                io.Discard,
-		EnableTriage:       normMode != "squad",
+		EnableTriage:       true,
 		EnableClosingChief: true,
 		NativeSkills:       nativeSkills,
 		NativeSkillsRoot:   nativeRoot,
