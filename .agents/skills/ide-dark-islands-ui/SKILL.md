@@ -2,38 +2,29 @@
 name: ide-dark-islands-ui
 description: >-
   Use this skill when designing, styling, refactoring, or reviewing dark-mode IDE interfaces,
-  desktop developer tools, code editors, or multi-panel workspaces inspired by Cursor 2.0
-  and JetBrains Islands Dark (IntelliJ New UI). Synthesizes anthropics/skills (frontend-design)
-  and nextlevelbuilder/ui-ux-pro-max-skill dark-mode standards.
+  desktop developer tools, code editors, or multi-panel workspaces in HiveMind (aligned with
+  .specify/memory/constitution.md and Havrus Obsidian & Brand Gold palette).
 ---
 
-# Dark Islands IDE Design System (Cursor 2.0 × JetBrains Islands UI)
+# HiveMind Dark Islands UI (SDD × Havrus Obsidian & Brand Gold)
 
-Apply these principles whenever creating or refining UI components, palettes, layouts, icons, or interactions in the HiveMind IDE.
+> Constituição completa e obrigatória: [`.specify/memory/constitution.md`](../../../.specify/memory/constitution.md)  
+> Paleta e paridade com `HiveMind-App`: [`docs/design/01-paleta-e-tokens-havrus.md`](../../../docs/design/01-paleta-e-tokens-havrus.md)  
+> Roteiro SDD passo a passo: [`.agents/skills/hivemind-design-sdd/SKILL.md`](../hivemind-design-sdd/SKILL.md)
 
-## 1. Architectural Surface Hierarchy ("Islands in Obsidian")
+## 1. Hierarquia de Superfícies (Camadas 0–4)
+- **Camada 0 · Fundo (`--surface-page: #050505`)**: Moldura externa (`--bg-frame`), barra de título e base.
+- **Camada 1 · Painéis (`--surface-panel: #0C0C0C`)**: Sidebars e trilhos recuados (`--bg-sidebar`, `--bg-deep`).
+- **Camada 2 · Conteúdo sólido (`--surface-card: #111111`)**: Cartões, listas, tabelas e mensagens (`--bg-card`).
+- **Camada 3 · Elevado (`--surface-elevated: #1F1F1F`)**: Modais, popovers, menus e seleções (`--bg-elevated`).
+- **Camada 4 · Campos (`--surface-input: #0A0A0A`)**: Inputs, selects e textareas (`--bg-input`).
 
-Inspired by **JetBrains Islands Dark** (`MainWindow.background` vs `ToolWindow.background`) and **Cursor 2.0 Abyssal Dark**:
+## 2. Ação, Acento e Sinais (WCAG >= 4.5:1)
+- **Ação primária**: `--action-primary: #F3F2F0` com texto `--action-primary-text: #090909`.
+- **Destaque de marca e foco**: Dourado Havrus (`--accent: #C6A15B`, `--accent-strong: #E8C881`, `--focus-ring`).
+- **Sinais semânticos**: Sucesso `--color-success: #10B981`, Perigo `--color-danger: #E58C98` (`--color-danger-text: #EBA2AC`), Aviso `--color-warning: #E2AE62`, Info `--color-info: #3B82F6` (`--color-info-text: #60A5FA`). Nunca depender só da cor.
 
-- **Outer Frame Moat (`--bg-frame: #07080c`)**: Deepest obsidian canvas anchoring the frameless titlebar, left activity rail, and bottom status bar without heavy divider lines.
-- **Floating Workspace Islands (`border-radius: 10px`)**: Separate the Left Tool Window, Center Editor/Mission-Control Canvas, and Right Multi-Agent Composer with a `5px` dark moat (`#07080c`), `1px solid rgba(255, 255, 255, 0.065)` crisp hairline border, and subtle top specular edge (`inset 0 1px 0 rgba(255, 255, 255, 0.04)`).
-- **Editor & Code Canvas (`--bg-deep: #0b0c12`)**: Ultra-low-glare abyssal surface optimized for syntax contrast during long coding sessions.
-- **Tool Windows & Sidebars (`--bg-sidebar: #0f111a`)**: Slightly warmer/lifted dark slate so side panels feel like cohesive islands rather than flat voids.
-- **Interactive Cards & Composer (`--bg-card: #141724`, `--bg-elevated: #1b1f30`)**: Reserved for agent cards, floating composer box, command palette, and active tabs.
-
-## 2. Semantic Accent & Contrast Rules (`ui-ux-pro-max`)
-
-- **Body & Code Contrast (`>= 4.5:1`)**:
-  - Primary foreground (`--text`): `#ecebf5`
-  - Secondary readable label (`--text-dim`): `#9196b0` (never gray-on-gray below `4.5:1`)
-  - Muted metadata (`--text-muted`): `#626784`
-- **Dual IDE Accents**:
-  - **AI / Multi-Agent Accent (Cursor Violet-Indigo)**: `--accent: #a78bfa`, `--accent-strong: #7c5cff`, `--bg-active: rgba(139, 92, 246, 0.15)`
-  - **IDE Run / VCS Accent (IntelliJ Blue & Play Green)**: `--jb-blue: #4c8dff`, `--green: #34d399` (Run/Test widget & QA approved), `--amber: #fbbf24` (warnings/budget), `--red: #fb7185` (errors/deletions)
-
-## 3. Typography & Anti-Template Discipline (`anthropics/frontend-design`)
-
-- **No Structural Emojis**: Never use emojis (`⚡`, `🚀`, `⚙️`, `●`) as structural UI icons. Always use crisp `1.75px`-stroke vector SVGs aligned to text baselines.
-- **Sentence-Case Section Titles**: Prefer clean, high-legibility labels and subtle pill counters over tracked-out ALL-CAPS eyebrows everywhere.
-- **Tabular Monospace Telemetry**: Always apply `font-variant-numeric: tabular-nums` on token counters, line gutters, diff stats, and durations so numbers never jitter during live streaming.
-- **Stable Micro-Interactions**: Keep hover/press transitions within `90–140ms` using background, border, or opacity — never layout-shifting transforms. Always preserve visible `:focus-visible` rings.
+## 3. Disciplina e Conferência
+- Zero emojis estruturais (`⚡`, `🚀`, `⚙️`) — usar exclusivamente os ícones vetoriais de `icons.ts`.
+- `font-variant-numeric: tabular-nums` em contadores de tokens, linhas e métricas.
+- Antes de abrir PR: rodar `npm run check:design`, `npm test` e `npm run build` em `ide/frontend`.
