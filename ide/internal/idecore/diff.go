@@ -332,9 +332,14 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 	if !g.BranchExists(ctx, workspaceDir, gitx.IntegrationBranch) {
 		return 0, nil
 	}
-	intWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
+	intWT := workspace.WorktreePath(workspaceDir, "_integracao")
 	if info, err := os.Stat(intWT); err != nil || !info.IsDir() {
-		return 0, nil
+		legacyWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
+		if lInfo, lErr := os.Stat(legacyWT); lErr == nil && lInfo.IsDir() {
+			intWT = legacyWT
+		} else {
+			return 0, nil
+		}
 	}
 	status, err := runGit(ctx, workspaceDir, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // AutoReviewLaneID is the dedicated IDE chat lane used by automatic Flow PR reviews
@@ -220,14 +221,14 @@ func BuildAutoReviewObjective(pr ProjectPullRequest, runTests bool, commentOnly 
 }
 
 // PrepareEphemeralPRWorktree checks out a PR's head into a disposable detached worktree
-// under .hivemind/worktrees/_autoreview_pr_<N> so tests can run without touching the
+// under the external workspace worktrees dir so tests can run without touching the
 // user's checkout or branch.
 func PrepareEphemeralPRWorktree(ctx context.Context, workspaceDir string, pr ProjectPullRequest) (string, func(), error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspaceDir) {
 		return "", func() {}, fmt.Errorf("workspace não é um repositório git")
 	}
-	wtRoot := filepath.Join(workspaceDir, ".hivemind", "worktrees")
+	wtRoot := workspace.WorktreesDir(workspaceDir)
 	if err := os.MkdirAll(wtRoot, 0o755); err != nil {
 		return "", func() {}, err
 	}
@@ -716,8 +717,8 @@ func countRunsLastHour(runs []time.Time, now time.Time) int {
 	return len(pruneRunsOlderThanHour(runs, now))
 }
 
-func autoReviewStatePath(workspace string) string {
-	return filepath.Join(workspace, ".hivemind", "auto-review-state.json")
+func autoReviewStatePath(workspaceDir string) string {
+	return workspace.AutoReviewStatePath(workspaceDir)
 }
 
 func loadAutoReviewDiskState(workspace string) autoReviewDiskState {

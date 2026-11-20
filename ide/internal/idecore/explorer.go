@@ -86,7 +86,7 @@ func ListDir(root, relDir string) ([]FileNode, error) {
 			Path:        full,
 			RelPath:     rel,
 			IsDir:       isDir,
-			HasChildren: isDir && name != ".hivemind",
+			HasChildren: isDir,
 		})
 	}
 	return nodes, nil
@@ -131,7 +131,7 @@ func readDirNodes(root, dir string, depth, maxDepth int) ([]FileNode, error) {
 			RelPath: rel,
 			IsDir:   entry.IsDir(),
 		}
-		if entry.IsDir() && depth+1 < maxDepth && name != ".hivemind" {
+		if entry.IsDir() && depth+1 < maxDepth {
 			children, err := readDirNodes(root, full, depth+1, maxDepth)
 			if err == nil {
 				node.Children = children

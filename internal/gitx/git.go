@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // Git is the subset of git the CLI needs.
@@ -67,20 +68,34 @@ func (g Local) BranchExists(ctx context.Context, dir, branch string) bool {
 	return err == nil
 }
 
-// EnsureWorktree creates .hivemind/worktrees/<agent> on branch when needed.
+// EnsureWorktree creates an external worktree (<AppDataRoot>/workspaces/<slug>/worktrees/<agent>)
+// on branch when needed, automatically removing any legacy in-repo .hivemind/worktrees/<agent> first.
 func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (string, error) {
-	wt := filepath.Join(repo, ".hivemind", "worktrees", agent)
+	legacyWT := filepath.Join(repo, ".hivemind", "worktrees", agent)
+	if _, err := os.Stat(legacyWT); err == nil {
+		_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", legacyWT)
+		_ = os.RemoveAll(legacyWT)
+		_, _ = g.Run(ctx, repo, "worktree", "prune")
+	}
+	legacyRoot := filepath.Join(repo, ".hivemind", "worktrees")
+	if entries, err := os.ReadDir(legacyRoot); err == nil && len(entries) == 0 {
+		_ = os.Remove(legacyRoot)
+	}
+
+	wt := workspace.WorktreePath(repo, agent)
 	if g.IsRepo(ctx, wt) {
 		return wt, nil
 	}
+	_ = os.RemoveAll(wt)
+	_, _ = g.Run(ctx, repo, "worktree", "prune")
 	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 		return "", err
 	}
 	var err error
 	if g.BranchExists(ctx, repo, branch) {
-		_, err = g.Run(ctx, repo, "worktree", "add", wt, branch)
+		_, err = g.Run(ctx, repo, "worktree", "add", "-f", wt, branch)
 	} else {
-		_, err = g.Run(ctx, repo, "worktree", "add", "-b", branch, wt, "HEAD")
+		_, err = g.Run(ctx, repo, "worktree", "add", "-f", "-b", branch, wt, "HEAD")
 	}
 	if err != nil {
 		return "", err

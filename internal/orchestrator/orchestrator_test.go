@@ -20,6 +20,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 type fakeJira struct {
@@ -161,15 +162,15 @@ func TestPipelineWithMocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v\nsaída:\n%s\ntraces:%v", err, out.String(), traceKeys(&traces))
 	}
-	a := filepath.Join(repo, ".hivemind", "worktrees", "dev_1", "a.txt")
-	b := filepath.Join(repo, ".hivemind", "worktrees", "dev_2", "b.txt")
+	a := filepath.Join(workspace.WorktreePath(repo, "dev_1"), "a.txt")
+	b := filepath.Join(workspace.WorktreePath(repo, "dev_2"), "b.txt")
 	for _, path := range []string{a, b} {
 		data, err := os.ReadFile(path)
 		if err != nil || string(data) != "olá\n" {
 			t.Fatalf("%s = %q %v\nsaída:\n%s", path, data, err, out.String())
 		}
 	}
-	deliveryWT := filepath.Join(repo, ".hivemind", "worktrees", "_integracao")
+	deliveryWT := workspace.WorktreePath(repo, "_integracao")
 	for _, rel := range []string{"a.txt", "b.txt"} {
 		data, err := os.ReadFile(filepath.Join(deliveryWT, rel))
 		if err != nil || string(data) != "olá\n" {
@@ -177,7 +178,7 @@ func TestPipelineWithMocks(t *testing.T) {
 		}
 	}
 	// Developers must NOT create commits in their draft worktrees; only Chief/Architect commits on deliveryWT.
-	devLog, err := g.Run(ctx, filepath.Join(repo, ".hivemind", "worktrees", "dev_1"), "log", "-1", "--pretty=%s")
+	devLog, err := g.Run(ctx, workspace.WorktreePath(repo, "dev_1"), "log", "-1", "--pretty=%s")
 	if err != nil || strings.Contains(devLog, "PROJ-1") {
 		t.Fatalf("dev worktree should not have committed PROJ-1: %q %v", devLog, err)
 	}
@@ -341,7 +342,7 @@ func TestDeliveryIsBlockedWithoutQAApproval(t *testing.T) {
 	if !strings.Contains(out.String(), "PENDENTE") {
 		t.Fatalf("mensagem de pendência ausente:\n%s", out.String())
 	}
-	deliveryWT := filepath.Join(repo, ".hivemind", "worktrees", "_integracao")
+	deliveryWT := workspace.WorktreePath(repo, "_integracao")
 	logDelivery, err := g.Run(ctx, deliveryWT, "log", "-1", "--pretty=%s")
 	if err != nil {
 		t.Fatal(err)
@@ -1763,14 +1764,15 @@ func TestTeamMemorySnippetInjectsSharedMemory(t *testing.T) {
 	if got := r.teamMemorySnippet(); got != "" {
 		t.Fatalf("primeiro run não deveria injetar nada; got = %q", got)
 	}
-	starter, err := os.ReadFile(filepath.Join(dir, ".hivemind", "MEMORY.md"))
+	memPath := workspace.MemoryPath(dir)
+	starter, err := os.ReadFile(memPath)
 	if err != nil || !strings.Contains(string(starter), "Memória Compartilhada") {
 		t.Fatalf("starter não foi criado: %v", err)
 	}
 
 	// Conhecimento caro do run anterior (ex.: o JDK 21 da T1) fica disponível.
 	note := "Testes do core: rode .\\gradlew.bat com JDK 21 (o JDK 25 padrão quebra o Gradle 8.x)."
-	if err := os.WriteFile(filepath.Join(dir, ".hivemind", "MEMORY.md"), []byte("# Mem\n\n"+note), 0o600); err != nil {
+	if err := os.WriteFile(memPath, []byte("# Mem\n\n"+note), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := r.teamMemorySnippet()
@@ -1779,7 +1781,7 @@ func TestTeamMemorySnippetInjectsSharedMemory(t *testing.T) {
 	}
 
 	// Arquivo vazio não injeta lixo.
-	if err := os.WriteFile(filepath.Join(dir, ".hivemind", "MEMORY.md"), []byte("   \n"), 0o600); err != nil {
+	if err := os.WriteFile(memPath, []byte("   \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.teamMemorySnippet(); got != "" {

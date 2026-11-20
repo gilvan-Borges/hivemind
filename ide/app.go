@@ -398,6 +398,8 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	idecore.CleanupLegacyProjectState(ctx, abs)
+
 	proj := ProjectInfo{
 		Root:   abs,
 		Name:   filepath.Base(abs),

@@ -469,13 +469,11 @@ func UpdateTeamAgentModel(workspace, teamName, agentName, modelSpec string) (tea
 	return cfg, nil
 }
 
-// EnsureWorkspaceMemory creates .hivemind/MEMORY.md with starter guidance if missing and returns its relative path.
-func EnsureWorkspaceMemory(workspace string) (string, error) {
+// EnsureWorkspaceMemory creates the external workspace MEMORY.md with starter guidance if missing
+// (migrating any legacy <workspace>/.hivemind/MEMORY.md) and returns its virtual relative path.
+func EnsureWorkspaceMemory(workspaceDir string) (string, error) {
 	rel := ".hivemind/MEMORY.md"
-	target, err := ResolveSafe(workspace, rel)
-	if err != nil {
-		return "", err
-	}
+	target := workspace.MemoryPath(workspaceDir)
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", err
 	}
@@ -493,10 +491,7 @@ func EnsureWorkspaceMemory(workspace string) (string, error) {
 }
 
 func loadWorkspaceMemorySnippet(workspaceDir string) string {
-	target, err := ResolveSafe(workspaceDir, ".hivemind/MEMORY.md")
-	if err != nil {
-		return ""
-	}
+	target := workspace.MemoryPath(workspaceDir)
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return ""
@@ -507,6 +502,26 @@ func loadWorkspaceMemorySnippet(workspaceDir string) string {
 	}
 	txt = strx.TruncateBytes(txt, 4096, "\n…")
 	return "\n[Memória Compartilhada do Time (.hivemind/MEMORY.md)]\n" + txt + "\n"
+}
+
+// CleanupLegacyProjectState migrates any legacy .hivemind/MEMORY.md, .hivemind/sessions,
+// and .hivemind/worktrees out of workspaceDir into the external user data dir, and prunes
+// merged worktrees so the project tree only keeps .hivemind/team.yaml and .hivemind/skills.
+func CleanupLegacyProjectState(ctx context.Context, workspaceDir string) {
+	if strings.TrimSpace(workspaceDir) == "" {
+		return
+	}
+	_ = workspace.MemoryPath(workspaceDir)
+	_ = workspace.SessionsDir(workspaceDir)
+	_ = workspace.AutoReviewStatePath(workspaceDir)
+	_ = workspace.LogsDir(workspaceDir)
+	g := gitx.Local{}
+	gitx.CleanupLegacyInRepoWorktrees(ctx, g, workspaceDir)
+	var baseBranch string
+	if cfg, err := team.Load(workspaceDir); err == nil {
+		baseBranch = cfg.Settings.BaseBranch
+	}
+	gitx.CleanupMergedWorktrees(ctx, g, workspaceDir, baseBranch)
 }
 
 func expandAtFileMentions(workspaceRoot, userText string) string {
@@ -712,10 +727,10 @@ func (m *SessionManager) RunTurnWithImages(
 // and automatically injects stack metadata + .hivemind/MEMORY.md shared team memory.
 func (m *SessionManager) RunTurnWithOptions(
 	parentCtx context.Context,
-	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
+	laneID, workspaceDir, teamName, objective, jiraKey, sessionID, runMode string,
 	images []ImageInput,
 ) (orchestrator.Result, error) {
-	cfg, err := team.Load(workspace)
+	cfg, err := team.Load(workspaceDir)
 	if err != nil {
 		return orchestrator.Result{}, fmt.Errorf("carregue ou configure uma equipe primeiro (.hivemind/team.yaml): %w", err)
 	}
@@ -733,9 +748,9 @@ func (m *SessionManager) RunTurnWithOptions(
 	if userText == "" && len(attachments) > 0 {
 		userText = "Analise a(s) imagem(ns) anexada(s)."
 	}
-	stack := DetectStack(workspace)
-	memBlock := loadWorkspaceMemorySnippet(workspace)
-	atBlock := expandAtFileMentions(workspace, userText)
+	stack := DetectStack(workspaceDir)
+	memBlock := loadWorkspaceMemorySnippet(workspaceDir)
+	atBlock := expandAtFileMentions(workspaceDir, userText)
 	fullObjective := stack.FormatForChief() + memBlock + atBlock + "\n[Objetivo do Usuário]\n" + userText
 
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -760,14 +775,14 @@ func (m *SessionManager) RunTurnWithOptions(
 		}
 	}()
 
-	store, err := sessionx.Open(workspace)
+	store, err := sessionx.Open(workspaceDir)
 	if err != nil {
 		return orchestrator.Result{}, err
 	}
 
 	var gh githubx.Client = githubx.Disabled{Reason: "sem remote origin"}
 	g := gitx.Local{}
-	if url, err := g.RemoteURL(ctx, workspace); err == nil {
+	if url, err := g.RemoteURL(ctx, workspaceDir); err == nil {
 		if owner, repo, ok := githubx.ParseRemote(url); ok {
 			gh = githubx.Detect(owner, repo)
 		}
@@ -775,9 +790,9 @@ func (m *SessionManager) RunTurnWithOptions(
 
 	var jira jirax.Client = jirax.Disabled{Reason: "Jira desabilitado"}
 	if cfg.Settings.JiraEnabled {
-		jira = jirax.FromWorkspace(workspace)
-	} else if res := jirax.ResolveForWorkspace(workspace); res.MatchMode != "isolated_none" {
-		if cand := jirax.FromWorkspace(workspace); cand.Enabled() {
+		jira = jirax.FromWorkspace(workspaceDir)
+	} else if res := jirax.ResolveForWorkspace(workspaceDir); res.MatchMode != "isolated_none" {
+		if cand := jirax.FromWorkspace(workspaceDir); cand.Enabled() {
 			jira = cand
 		}
 	}
@@ -797,7 +812,7 @@ func (m *SessionManager) RunTurnWithOptions(
 	nativeRoot := NativeSkillsDir()
 	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
-	mcpHost := mcpx.Start(ctx, workspace)
+	mcpHost := mcpx.Start(ctx, workspaceDir)
 	defer mcpHost.Close()
 
 	var routedMu sync.Mutex
@@ -829,7 +844,7 @@ func (m *SessionManager) RunTurnWithOptions(
 	}
 
 	runner := &orchestrator.Runner{
-		Workspace:          workspace,
+		Workspace:          workspaceDir,
 		Project:            cfg,
 		Team:               selected,
 		Git:                g,
@@ -848,7 +863,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		OnEvent:            recordLaneEvent,
 	}
 	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-		Workspace:   workspace,
+		Workspace:   workspaceDir,
 		Git:         g,
 		Approve:     budgetApprove,
 		ApproveGate: gateApprove,
@@ -865,7 +880,14 @@ func (m *SessionManager) RunTurnWithOptions(
 		// Never copy integration output over uncommitted user work. A dirty
 		// workspace makes SyncIntegrationToWorkspace return ErrWorkspaceDirty
 		// without touching a single file; the user is told what happened.
-		n, syncErr := SyncIntegrationToWorkspace(ctx, workspace)
+		n, syncErr := SyncIntegrationToWorkspace(ctx, workspaceDir)
+		if syncErr == nil {
+			// Once the delivery worktree is synced (or already pushed), clean up temporary worktrees.
+			if len(res.PullRequests) > 0 {
+				gitx.RemoveWorktree(ctx, g, workspaceDir, workspace.WorktreePath(workspaceDir, "_integracao"), "")
+			}
+			gitx.CleanupMergedWorktrees(ctx, g, workspaceDir, cfg.Settings.BaseBranch)
+		}
 		if m.Emit != nil {
 			switch {
 			case syncErr == nil && n > 0:

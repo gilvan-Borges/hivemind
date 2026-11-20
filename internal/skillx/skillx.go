@@ -15,8 +15,12 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
-// SkillsDir é o catálogo de skills relativo à raiz do workspace do projeto.
+// SkillsDir é o catálogo principal de skills relativo à raiz do workspace do projeto.
 const SkillsDir = ".agents/skills"
+
+// HiveMindSkillsDir permite que o usuário também guarde skills no projeto dentro de .hivemind/skills/<nome>/SKILL.md
+// (no estilo .claude/skills).
+const HiveMindSkillsDir = ".hivemind/skills"
 
 const (
 	maxDescriptionBytes = 240
@@ -39,10 +43,20 @@ type Skill struct {
 	Enabled bool `json:"enabled"`
 }
 
-// Load lê <root>/.agents/skills/*/SKILL.md e devolve o catálogo do projeto,
-// ordenado por nome. Retorna nil quando o diretório não existe.
+// Load lê <root>/.agents/skills/*/SKILL.md e <root>/.hivemind/skills/*/SKILL.md
+// e devolve o catálogo do projeto, ordenado por nome e sem duplicatas.
 func Load(root string) []Skill {
 	out := loadDir(filepath.Join(root, SkillsDir), SkillsDir, "project")
+	seen := make(map[string]bool, len(out))
+	for _, s := range out {
+		seen[s.Name] = true
+	}
+	for _, s := range loadDir(filepath.Join(root, filepath.FromSlash(HiveMindSkillsDir)), HiveMindSkillsDir, "project") {
+		if !seen[s.Name] {
+			seen[s.Name] = true
+			out = append(out, s)
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }

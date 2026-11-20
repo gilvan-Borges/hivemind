@@ -22,6 +22,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 const (
@@ -51,9 +52,10 @@ type Store struct {
 	indexLoaded bool
 }
 
-// Open creates the session directory if it does not exist.
-func Open(workspace string) (*Store, error) {
-	dir := filepath.Join(workspace, ".hivemind", "sessions")
+// Open creates the external session directory for workspaceRoot if it does not exist,
+// migrating any legacy <workspaceRoot>/.hivemind/sessions files automatically.
+func Open(workspaceRoot string) (*Store, error) {
+	dir := workspace.SessionsDir(workspaceRoot)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}

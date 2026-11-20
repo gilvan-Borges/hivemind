@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // Options opens the full-screen session.
@@ -19,13 +20,14 @@ type Options struct {
 	TeamName  string
 }
 
-// Run starts the alternate-screen TUI. Diagnostics go to .hivemind/logs.
+// Run starts the alternate-screen TUI. Diagnostics go to the external workspace logs directory.
 func Run(ctx context.Context, opt Options) error {
-	if err := os.MkdirAll(filepath.Join(opt.Workspace, ".hivemind", "logs"), 0o700); err != nil {
+	logsDir := workspace.LogsDir(opt.Workspace)
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
 		return err
 	}
 	_ = gitx.EnsureHiveIgnore(opt.Workspace)
-	logFile, err := os.OpenFile(filepath.Join(opt.Workspace, ".hivemind", "logs", "hivemind.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logFile, err := os.OpenFile(filepath.Join(logsDir, "hivemind.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err == nil {
 		log.SetOutput(logFile)
 		prevErr := os.Stderr

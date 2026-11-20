@@ -1257,6 +1257,7 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 	}
 
 	var notes []string
+	pushedToRemote := false
 	if (r.Project.Settings.AutoCommit || r.Project.Settings.AutoPR || r.prNumber > 0) && r.Git.IsRepo(ctx, commitRoot) {
 		if _, err := r.Git.CommitAll(ctx, commitRoot, names.CommitMessage(key, objective)); err != nil {
 			return fmt.Errorf("commit do Chefe/Arquiteto em %s: %w", commitBranch, err)
@@ -1274,6 +1275,7 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 			if err := r.Git.Push(ctx, commitRoot, "origin", commitBranch); err != nil {
 				return fmt.Errorf("push de revisão %s: %w", commitBranch, err)
 			}
+			pushedToRemote = true
 		}
 		if len(r.prReviewers) > 0 {
 			_ = r.GitHub.RequestReviewers(ctx, r.prNumber, r.prReviewers)
@@ -1285,6 +1287,7 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 			if err := r.Git.Push(ctx, commitRoot, "origin", commitBranch); err != nil {
 				return fmt.Errorf("push de %s: %w", commitBranch, err)
 			}
+			pushedToRemote = true
 			var pr githubx.PullRequest
 			if existing, _ := r.GitHub.FindOpenPullRequestByHead(ctx, commitBranch); existing != nil {
 				pr = *existing
@@ -1309,6 +1312,17 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 			fmt.Fprintf(r.Out, "Pull request: %s\n", pr.URL)
 		}
 	}
+
+	// Clean up developer draft worktrees once consolidated & pushed to remote (or merged),
+	// and always prune any already-merged worktrees.
+	if pushedToRemote {
+		for _, dev := range devs {
+			if dev.Root != "" && dev.Root != r.Workspace && dev.Root != commitRoot {
+				gitx.RemoveWorktree(ctx, r.Git, r.Workspace, dev.Root, dev.Branch)
+			}
+		}
+	}
+	gitx.CleanupMergedWorktrees(ctx, r.Git, r.Workspace, base)
 
 	if key != "" && r.Jira != nil && r.Jira.Enabled() {
 		body := fmt.Sprintf("HiveMind concluiu a sessão %s.", result.SessionID)

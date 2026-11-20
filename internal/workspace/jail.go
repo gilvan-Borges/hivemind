@@ -43,7 +43,14 @@ func ResolveWithOptions(root, rel string, opts Options) (string, error) {
 	if filepath.IsAbs(rel) {
 		candidate = filepath.Clean(rel)
 	} else {
+		nl := strings.ToLower(filepath.ToSlash(rel))
+		if (opts.AllowMemoryRead || opts.AllowHivemind) && (nl == ".hivemind/memory.md" || nl == "memory.md") {
+			return MemoryPath(rootAbs), nil
+		}
 		candidate = filepath.Clean(filepath.Join(rootAbs, rel))
+	}
+	if (opts.AllowMemoryRead || opts.AllowHivemind) && strings.EqualFold(filepath.Clean(candidate), filepath.Clean(MemoryPath(rootAbs))) {
+		return MemoryPath(rootAbs), nil
 	}
 	candidate, err = evalExistingPrefix(candidate)
 	if err != nil {

@@ -1202,6 +1202,10 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 			if err := d.GitHub.MergePullRequest(ctx, args.Number, args.Method, args.CommitTitle); err != nil {
 				return textResult{}, err
 			}
+			// Automatically clean up worktrees whose branch was just merged.
+			if d.Git != nil && strings.TrimSpace(pr.HeadRef) != "" {
+				gitx.CleanupMergedWorktrees(ctx, d.Git, d.Root, pr.BaseRef)
+			}
 			return textResult{Text: fmt.Sprintf("PR #%d mesclado com sucesso em %s", pr.Number, pr.BaseRef)}, nil
 		})
 		if err != nil {

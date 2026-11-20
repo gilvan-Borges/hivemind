@@ -240,6 +240,83 @@ func UpdateIntegrationRef(ctx context.Context, g Git, repo, deliveryWT string) {
 	}
 }
 
+// RemoveWorktree removes a single worktree path (and prunes git worktree metadata)
+// plus optionally deletes its draft branch when deleteBranch is non-empty.
+func RemoveWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch string) {
+	if strings.TrimSpace(repo) == "" || strings.TrimSpace(wtPath) == "" || filepath.Clean(wtPath) == filepath.Clean(repo) {
+		return
+	}
+	_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", wtPath)
+	_ = os.RemoveAll(wtPath)
+	_, _ = g.Run(ctx, repo, "worktree", "prune")
+	if br := strings.TrimSpace(deleteBranch); br != "" && br != IntegrationBranch && br != "main" && br != "master" && br != "homolog" {
+		_, _ = g.Run(ctx, repo, "branch", "-D", br)
+	}
+}
+
+// CleanupLegacyInRepoWorktrees removes any leftover <repo>/.hivemind/worktrees directory
+// from older versions of HiveMind and prunes git worktree administrative entries.
+func CleanupLegacyInRepoWorktrees(ctx context.Context, g Git, repo string) {
+	if strings.TrimSpace(repo) == "" {
+		return
+	}
+	legacyRoot := filepath.Join(repo, ".hivemind", "worktrees")
+	entries, err := os.ReadDir(legacyRoot)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		wt := filepath.Join(legacyRoot, e.Name())
+		_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", wt)
+		_ = os.RemoveAll(wt)
+	}
+	_ = os.RemoveAll(legacyRoot)
+	_, _ = g.Run(ctx, repo, "worktree", "prune")
+}
+
+// CleanupMergedWorktrees removes external worktrees whose branch has already been merged
+// into HEAD or origin/<baseBranch>, keeping the disk clean automatically.
+func CleanupMergedWorktrees(ctx context.Context, g Git, repo, baseBranch string) {
+	if strings.TrimSpace(repo) == "" || !g.IsRepo(ctx, repo) {
+		return
+	}
+	CleanupLegacyInRepoWorktrees(ctx, g, repo)
+	wtRoot := workspace.WorktreesDir(repo)
+	entries, err := os.ReadDir(wtRoot)
+	if err != nil {
+		return
+	}
+	baseRef := "HEAD"
+	if b := strings.TrimSpace(baseBranch); b != "" && g.BranchExists(ctx, repo, b) {
+		baseRef = b
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(wtRoot, e.Name())
+		if !g.IsRepo(ctx, wtPath) {
+			_ = os.RemoveAll(wtPath)
+			continue
+		}
+		// Never delete a worktree that still has uncommitted changes.
+		if st, sErr := g.Run(ctx, wtPath, "status", "--porcelain"); sErr != nil || strings.TrimSpace(st) != "" {
+			continue
+		}
+		br, bErr := g.CurrentBranch(ctx, wtPath)
+		if bErr != nil || br == "" || br == "HEAD" {
+			RemoveWorktree(ctx, g, repo, wtPath, "")
+			continue
+		}
+		// Check if branch has 0 commits ahead of baseRef (or integration branch).
+		aheadRaw, aErr := g.Run(ctx, repo, "rev-list", "--count", baseRef+".."+br)
+		if aErr == nil && strings.TrimSpace(aheadRaw) == "0" {
+			RemoveWorktree(ctx, g, repo, wtPath, br)
+		}
+	}
+	_, _ = g.Run(ctx, repo, "worktree", "prune")
+}
+
 func copyBetweenTrees(srcRoot, dstRoot, relSlash string) error {
 	relOS := filepath.FromSlash(relSlash)
 	src, err := workspace.Resolve(srcRoot, relOS)
