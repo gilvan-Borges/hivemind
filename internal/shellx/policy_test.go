@@ -128,4 +128,23 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	if shown.Allowed {
 		t.Fatal("--show-token não pode executar")
 	}
+	for _, raw := range []string{
+		`gh auth to'ken'`,
+		`gh auth "token"`,
+		`gh --hostname github.com auth token`,
+		`echo $(gh auth token)`,
+		`gh auth status --show-to'ken'`,
+	} {
+		dec := Evaluate(raw, []string{"gh", "echo", "*"})
+		if dec.Allowed || !strings.Contains(dec.Reason, "credencial") {
+			t.Fatalf("%q deveria ser recusado sem executar: %+v", raw, dec)
+		}
+		if strings.Contains(dec.Reason, "ghp_") || strings.Contains(dec.Reason, raw) {
+			t.Fatalf("motivo não pode repetir o comando: %+v", dec)
+		}
+	}
+	status := Evaluate("gh auth status", []string{"gh"})
+	if !status.Allowed || status.Dangerous {
+		t.Fatalf("gh auth status sem token continua leitura: %+v", status)
+	}
 }

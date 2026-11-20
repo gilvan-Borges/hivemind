@@ -200,12 +200,61 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 
 // printsCredential recusa comandos que imprimem um token. A recusa não
 // repete o comando, para o texto não ir parar no log nem no transcript.
+// Aspas e barras invertidas são removidas antes da checagem: `gh auth to'ken'`
+// é o mesmo comando que `gh auth token`.
 func printsCredential(command string) bool {
-	low := strings.ToLower(command)
-	if strings.Contains(low, "--show-token") {
+	flat := strings.ToLower(stripShellNoise(command))
+	if strings.Contains(flat, "--show-token") {
 		return true
 	}
-	return strings.Contains(low, "gh") && strings.Contains(low, "auth") && strings.Contains(low, "token")
+	fields := strings.Fields(flat)
+	for i := 0; i < len(fields); i++ {
+		if !isGHCommand(fields[i]) {
+			continue
+		}
+		sawAuth, sawToken := false, false
+		for j := i + 1; j < len(fields); j++ {
+			tok := strings.Trim(fields[j], "();|&")
+			if tok == "" || tok == "&&" || tok == "||" {
+				break
+			}
+			switch tok {
+			case "auth":
+				sawAuth = true
+			case "token":
+				sawToken = true
+			}
+		}
+		if sawAuth && sawToken {
+			return true
+		}
+	}
+	return false
+}
+
+func stripShellNoise(command string) string {
+	var b strings.Builder
+	b.Grow(len(command))
+	for _, r := range command {
+		switch r {
+		case '\'', '"', '\\':
+		case '`':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isGHCommand(tok string) bool {
+	tok = strings.Trim(tok, "$();|&")
+	tok = strings.TrimSuffix(tok, ".exe")
+	tok = strings.TrimSuffix(tok, ".cmd")
+	if i := strings.LastIndexAny(tok, `/\`); i >= 0 {
+		tok = tok[i+1:]
+	}
+	return tok == "gh"
 }
 
 func ghMutates(argv []string) bool {

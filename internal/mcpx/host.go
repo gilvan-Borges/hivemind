@@ -246,16 +246,20 @@ func Describe(cfg File) []ServerView {
 		if s.Enabled && s.Name == "context7" && strings.TrimSpace(os.Getenv("CONTEXT7_API_KEY")) == "" && views[i].Detail == "" {
 			views[i].Detail = "sem CONTEXT7_API_KEY: a conexão tenta sem chave. Se falhar, defina CONTEXT7_API_KEY."
 		}
-		if !s.Enabled || s.Transport != TransportStdio {
-			continue
+		if s.Enabled && s.Transport == TransportStdio {
+			if cmdName := strings.TrimSpace(s.Command); cmdName != "" {
+				if _, err := lookPath(cmdName); err != nil {
+					views[i].Status = "unavailable"
+					views[i].Detail = missingCommandDetail(s)
+				}
+			}
 		}
-		cmdName := strings.TrimSpace(s.Command)
-		if cmdName == "" {
-			continue
-		}
-		if _, err := lookPath(cmdName); err != nil {
-			views[i].Status = "unavailable"
-			views[i].Detail = missingCommandDetail(s)
+		// Sem credencial o connect recusa. A lista não pode dizer "ligado" antes disso.
+		if views[i].Status == "pending" {
+			if _, missing := expandServer(cloneServers([]Server{s})[0], ""); len(missing) > 0 {
+				views[i].Status = "needs-secret"
+				views[i].Detail = secretMessage(missing)
+			}
 		}
 	}
 	return views

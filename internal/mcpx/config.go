@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
@@ -354,7 +355,27 @@ func lookupEnv(key string) (string, bool) {
 // ghAuthToken é trocado nos testes. O padrão chama o gh e descarta o stderr.
 var ghAuthToken = readGHAuthToken
 
+var (
+	ghTokenMu     sync.Mutex
+	ghTokenCached string
+	ghTokenAt     time.Time
+	ghTokenTTL    = 2 * time.Minute
+)
+
+// readGHAuthToken guarda o token só na memória por alguns minutos.
+// A lista MCP e a conexão compartilham esse cache para não disparar `gh` a cada chamada.
 func readGHAuthToken() string {
+	ghTokenMu.Lock()
+	defer ghTokenMu.Unlock()
+	if !ghTokenAt.IsZero() && time.Since(ghTokenAt) < ghTokenTTL {
+		return ghTokenCached
+	}
+	ghTokenCached = execGHAuthToken()
+	ghTokenAt = time.Now()
+	return ghTokenCached
+}
+
+func execGHAuthToken() string {
 	ghBin, err := lookPath("gh")
 	if err != nil || strings.TrimSpace(ghBin) == "" {
 		return ""

@@ -217,6 +217,50 @@ func serverView(views []ServerView, name string) ServerView {
 	return ServerView{}
 }
 
+func TestDescribeGitHubWithoutCredentialIsUnavailable(t *testing.T) {
+	prev := ghAuthToken
+	ghAuthToken = func() string { return "" }
+	t.Cleanup(func() { ghAuthToken = prev })
+	t.Setenv("GITHUB_MCP_TOKEN", "")
+
+	servers := DefaultServers()
+	for i := range servers {
+		if servers[i].Name == "github" {
+			servers[i].Enabled = true
+		}
+	}
+	view := serverView(Describe(File{Servers: servers}), "github")
+	if view.Status != "needs-secret" || view.RuntimeLabel() != "indisponível" {
+		t.Fatalf("view = %+v", view)
+	}
+	if strings.Contains(fmt.Sprint(view), "ghp_") {
+		t.Fatalf("describe vazou token: %+v", view)
+	}
+}
+
+func TestDescribeGitHubWithGHTokenDoesNotLeakOrBlock(t *testing.T) {
+	const secret = "ghp_DESCRIBETOKEN"
+	prev := ghAuthToken
+	ghAuthToken = func() string { return secret }
+	t.Cleanup(func() { ghAuthToken = prev })
+	t.Setenv("GITHUB_MCP_TOKEN", "")
+
+	servers := DefaultServers()
+	for i := range servers {
+		if servers[i].Name == "github" {
+			servers[i].Enabled = true
+		}
+	}
+	view := serverView(Describe(File{Servers: servers}), "github")
+	if view.Status == "needs-secret" || view.RuntimeLabel() != "ligado" {
+		t.Fatalf("com sessão gh o interruptor segue ligado: %+v", view)
+	}
+	blob := view.Detail + view.Status + view.Description
+	if strings.Contains(blob, secret) {
+		t.Fatalf("token vazou no describe: %+v", view)
+	}
+}
+
 func TestGitHubMissingTokenNamesTheVariable(t *testing.T) {
 	prev := ghAuthToken
 	ghAuthToken = func() string { return "" }
