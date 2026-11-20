@@ -19,8 +19,8 @@ Na IDE, a barra lateral tem a vista MCP, com o mesmo interruptor e a opção "s�
 
 ## Ligados por padrão
 
-- **context7** — HTTP `https://mcp.context7.com/mcp`. Defina `CONTEXT7_API_KEY` (chave grátis no painel do Context7). Sem a variável o servidor não sobe e o erro fica no status, sem derrubar a execução.
-- **code-review-graph** — `uvx code-review-graph serve`, com o diretório de trabalho do projeto. Exige [uv](https://docs.astral.sh/uv/) e Python 3.10+. Na primeira vez, na pasta do projeto: `uvx code-review-graph build`. O banco `.code-review-graph/` não deve ir para o Git.
+- **context7** — HTTP `https://mcp.context7.com/mcp`. A conexão tenta sem chave. `CONTEXT7_API_KEY` (chave grátis no painel do Context7) entra no header só quando a variável existe. Se o servidor recusar a sessão anônima, o status fica `indisponível` e o texto pede para definir `CONTEXT7_API_KEY`. Isso não derruba a execução.
+- **code-review-graph** — `uvx code-review-graph serve`, com o diretório de trabalho do projeto. Exige [uv](https://docs.astral.sh/uv/) e Python 3.10+. Sem `uvx` no PATH o processo não sobe: o status fica `indisponível` (não "ligado") e a mensagem diz para instalar o uv ou desligar o servidor. Na primeira vez, na pasta do projeto: `uvx code-review-graph build`. O banco `.code-review-graph/` não deve ir para o Git.
 
 ## Desligados até alguém pedir
 
@@ -36,7 +36,7 @@ Pares que não ficam ligados juntos: Playwright com Chrome DevTools, e Code Revi
 
 O Toolbox só aceita `POSTGRES_HOST` em `127.0.0.1` ou `localhost`. O padrão já é `127.0.0.1`. Variáveis: `HIVEMIND_DEV_DB_NAME`, `HIVEMIND_DEV_DB_USER`, `HIVEMIND_DEV_DB_PASSWORD`. O HiveMind não usa Postgres para sessão. Não aponte isso para produção.
 
-O GitHub MCP usa o servidor remoto oficial (`https://api.githubcopilot.com/mcp/`) com o header `X-MCP-Toolsets: repos,issues,pull_requests`. O token é `GITHUB_MCP_TOKEN`, fino, só deste repositório, sem administração, segredos ou Actions. Não reuse um `GITHUB_TOKEN` amplo. O pacote npm antigo `@modelcontextprotocol/server-github` não é usado.
+O GitHub MCP usa o servidor remoto oficial (`https://api.githubcopilot.com/mcp/`) com o header `X-MCP-Toolsets: repos,issues,pull_requests`. O token preferido é `GITHUB_MCP_TOKEN`, fino, só deste repositório, sem administração, segredos ou Actions. Não reuse um `GITHUB_TOKEN` amplo. Se `GITHUB_MCP_TOKEN` não existir e o `gh` desta máquina estiver autenticado (`gh auth login`), o host lê `gh auth token` na hora de conectar. Esse valor fica só na memória da conexão: não é gravado no `mcp-servers.json`, não entra no log e some quando o processo do host fecha. Sem a variável e sem `gh` autenticado, o status fica `indisponível` e pede um dos dois. O pacote npm antigo `@modelcontextprotocol/server-github` não é usado.
 
 Figma usa `FIGMA_API_KEY`.
 

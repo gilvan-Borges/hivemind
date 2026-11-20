@@ -31,22 +31,34 @@ export function renderMCPSidebar(): string {
       <button class="icon-btn" id="btn-mcp-refresh" title="Atualizar">${icons.refresh}</button>
     </div>
     <div class="sidebar-body">
-      <div class="dim" style="margin-bottom:8px">Context7 e o Code Review Graph nascem ligados. O resto fica desligado até você pedir. Segredos ficam em variáveis de ambiente, não no Git.</div>
+      <div class="dim" style="margin-bottom:8px">Context7 nasce ligado e funciona sem chave. O Code Review Graph também nasce ligado, mas fica indisponível se uvx ou Python 3.10+ não estiverem instalados. O resto fica desligado até você pedir. Segredos ficam em variáveis de ambiente, não no Git.</div>
       ${rows || `<div class="dim">Nenhum servidor MCP.</div>`}
     </div>
   `;
 }
 
+function mcpBadge(s: MCPServerInfo): { label: string; on: boolean } {
+  switch (s.status) {
+    case "needs-secret":
+    case "error":
+    case "unavailable":
+      return { label: "indisponível", on: false };
+    default:
+      return s.enabled ? { label: "ligado", on: true } : { label: "desligado", on: false };
+  }
+}
+
 function mcpRow(s: MCPServerInfo): string {
+  const badge = mcpBadge(s);
   const on = s.enabled;
   return `
     <div class="skill-row">
       <div class="skill-row-head">
         <span class="skill-name">${escapeHtml(s.name)}</span>
-        <span class="skill-tag ${on ? "native" : "project"}">${on ? "ligado" : "desligado"}</span>
+        <span class="skill-tag ${badge.on ? "native" : "project"}">${escapeHtml(badge.label)}</span>
       </div>
       <div class="skill-desc">${escapeHtml(s.description || "")}</div>
-      <div class="skill-meta">${escapeHtml(s.transport)}${s.detail ? ` · ${escapeHtml(s.detail)}` : ""}</div>
+      <div class="skill-meta">${escapeHtml(s.transport)}${s.status ? ` · ${escapeHtml(s.status)}` : ""}${s.detail ? ` · ${escapeHtml(s.detail)}` : ""}</div>
       <div class="skill-actions">
         <button class="mini ${on ? "" : "primary"}" data-mcp-toggle="${escapeHtml(s.name)}" data-mcp-enabled="${on ? "1" : "0"}">
           ${on ? `${icons.minus}<span>Desligar</span>` : `${icons.plus}<span>Ligar</span>`}

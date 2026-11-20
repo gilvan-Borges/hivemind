@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 )
+
+// lookPath resolve o binário do servidor stdio. Testes substituem.
+var lookPath = exec.LookPath
 
 // session é a fatia do cliente MCP que o Host precisa. Os testes substituem o dial.
 type session interface {
@@ -86,15 +91,28 @@ func (h *Host) connect(ctx context.Context, s Server, temporary bool) error {
 		h.setStatus(s.Name, "off", err.Error())
 		return err
 	}
-	expanded, secretsOK := expandServer(cloneServers([]Server{s})[0], h.workspace)
-	if !secretsOK {
-		msg := "falta variável de ambiente referenciada na configuração (nada foi gravado no Git)"
+	expanded, missing := expandServer(cloneServers([]Server{s})[0], h.workspace)
+	if len(missing) > 0 {
+		msg := secretMessage(missing)
 		h.setStatus(s.Name, "needs-secret", msg)
 		return fmt.Errorf("%s: %s", s.Name, msg)
 	}
 	if err := validateLocal(expanded); err != nil {
 		h.setStatus(s.Name, "error", err.Error())
 		return err
+	}
+	if expanded.Transport == TransportStdio {
+		cmdName := strings.TrimSpace(expanded.Command)
+		if cmdName == "" {
+			err := fmt.Errorf("servidor %s sem comando", s.Name)
+			h.setStatus(s.Name, "error", err.Error())
+			return err
+		}
+		if _, err := lookPath(cmdName); err != nil {
+			msg := missingCommandDetail(expanded)
+			h.setStatus(s.Name, "unavailable", msg)
+			return fmt.Errorf("%s: %s", s.Name, msg)
+		}
 	}
 	if expanded.Env == nil {
 		expanded.Env = map[string]string{}
@@ -104,14 +122,16 @@ func (h *Host) connect(ctx context.Context, s Server, temporary bool) error {
 	}
 	sess, err := h.dial(ctx, expanded)
 	if err != nil {
-		h.setStatus(s.Name, "error", err.Error())
-		return err
+		msg := dialFailureDetail(s, err)
+		h.setStatus(s.Name, "error", msg)
+		return fmt.Errorf("%s: %s", s.Name, msg)
 	}
 	tools, err := sess.Tools(ctx)
 	if err != nil {
 		_ = sess.Close()
-		h.setStatus(s.Name, "error", err.Error())
-		return err
+		msg := dialFailureDetail(s, err)
+		h.setStatus(s.Name, "error", msg)
+		return fmt.Errorf("%s: %s", s.Name, msg)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -125,8 +145,28 @@ func (h *Host) connect(ctx context.Context, s Server, temporary bool) error {
 	if temporary {
 		h.temporary[s.Name] = true
 		h.detail[s.Name] = "ligado só nesta tarefa"
+	} else if s.Name == "context7" && strings.TrimSpace(os.Getenv("CONTEXT7_API_KEY")) == "" {
+		h.detail[s.Name] = "conectado sem CONTEXT7_API_KEY. Defina a variável se o servidor recusar ou se quiser cota maior."
 	}
 	return nil
+}
+
+func dialFailureDetail(s Server, err error) string {
+	msg := redactSecrets(err.Error())
+	if s.Name == "code-review-graph" {
+		msg += " Confira se uvx e Python 3.10+ estão instalados. O servidor não ficou ligado."
+	}
+	if s.Name == "context7" && strings.TrimSpace(os.Getenv("CONTEXT7_API_KEY")) == "" {
+		msg = "não conectou sem chave. Defina CONTEXT7_API_KEY. " + msg
+	}
+	return msg
+}
+
+func missingCommandDetail(s Server) string {
+	if s.Name == "code-review-graph" || strings.EqualFold(strings.TrimSpace(s.Command), "uvx") {
+		return "uvx não está no PATH. O Code Review Graph precisa de uv e Python 3.10+ (https://docs.astral.sh/uv/). Nesta execução ele fica desligado; instale o uv ou desligue o servidor no painel MCP."
+	}
+	return fmt.Sprintf("comando %q não está no PATH. O servidor fica desligado nesta execução.", s.Command)
 }
 
 // EnableForTask liga um servidor só nesta execução, sem gravar a preferência.
@@ -197,7 +237,28 @@ func (h *Host) Snapshot() []ServerView {
 
 // Describe lista servidores sem conectar. A IDE usa isto no painel.
 func Describe(cfg File) []ServerView {
-	return viewsFrom(cfg.Servers, nil, nil, nil)
+	views := viewsFrom(cfg.Servers, nil, nil, nil)
+	for i := range views {
+		if i >= len(cfg.Servers) {
+			continue
+		}
+		s := cfg.Servers[i]
+		if s.Enabled && s.Name == "context7" && strings.TrimSpace(os.Getenv("CONTEXT7_API_KEY")) == "" && views[i].Detail == "" {
+			views[i].Detail = "sem CONTEXT7_API_KEY: a conexão tenta sem chave. Se falhar, defina CONTEXT7_API_KEY."
+		}
+		if !s.Enabled || s.Transport != TransportStdio {
+			continue
+		}
+		cmdName := strings.TrimSpace(s.Command)
+		if cmdName == "" {
+			continue
+		}
+		if _, err := lookPath(cmdName); err != nil {
+			views[i].Status = "unavailable"
+			views[i].Detail = missingCommandDetail(s)
+		}
+	}
+	return views
 }
 
 func viewsFrom(servers []Server, status, detail map[string]string, tools map[string][]RemoteTool) []ServerView {
@@ -269,7 +330,7 @@ func (h *Host) setStatus(name, status, detail string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.status[name] = status
-	h.detail[name] = detail
+	h.detail[name] = redactSecrets(detail)
 }
 
 // ParseArgs interpreta o JSON de argumentos de mcp_call. Vazio vira mapa vazio.

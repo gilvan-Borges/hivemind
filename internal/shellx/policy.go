@@ -28,6 +28,9 @@ func Evaluate(command string, allowlist []string) Decision {
 	if command == "" {
 		return Decision{Reason: "comando vazio"}
 	}
+	if printsCredential(command) {
+		return Decision{Reason: "comando recusado: exporia uma credencial e não é executado"}
+	}
 	argv, shell, err := split(command)
 	if err != nil {
 		return Decision{Reason: err.Error()}
@@ -141,7 +144,8 @@ func aliasValueMutates(value string) bool {
 	return false
 }
 
-func firstSubcommand(args []string) string {	for i := 0; i < len(args); i++ {
+func firstSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
 		tok := strings.TrimSpace(args[i])
 		if tok == "" {
 			continue
@@ -175,6 +179,9 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 	if base == "git" && gitDangerous(argv) {
 		return true, "este subcomando do git reescreve histórico, executa hooks customizados ou envia com --force e precisa de confirmação"
 	}
+	if base == "gh" && ghMutates(argv) {
+		return true, "gh que altera issue, pull request, release ou repositório precisa de confirmação"
+	}
 	if ok, why := interpreterInlineDangerous(base, argv[1:]); ok {
 		return true, why
 	}
@@ -189,6 +196,39 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// printsCredential recusa comandos que imprimem um token. A recusa não
+// repete o comando, para o texto não ir parar no log nem no transcript.
+func printsCredential(command string) bool {
+	low := strings.ToLower(command)
+	if strings.Contains(low, "--show-token") {
+		return true
+	}
+	return strings.Contains(low, "gh") && strings.Contains(low, "auth") && strings.Contains(low, "token")
+}
+
+func ghMutates(argv []string) bool {
+	if len(argv) < 3 {
+		return false
+	}
+	top := strings.ToLower(argv[1])
+	act := strings.ToLower(argv[2])
+	switch top {
+	case "issue", "pr", "release", "repo", "gist", "workflow", "label", "secret", "variable", "project":
+		switch act {
+		case "comment", "create", "edit", "close", "reopen", "delete", "merge", "ready",
+			"lock", "unlock", "pin", "unpin", "transfer", "archive", "rename",
+			"set", "remove", "add", "run", "enable", "disable":
+			return true
+		}
+	case "auth":
+		switch act {
+		case "login", "logout", "refresh", "setup-git":
+			return true
+		}
+	}
+	return false
 }
 
 func interpreterInlineDangerous(base string, args []string) (bool, string) {

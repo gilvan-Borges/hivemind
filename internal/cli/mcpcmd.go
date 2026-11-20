@@ -32,11 +32,11 @@ func newMCPList() *cobra.Command {
 				return err
 			}
 			for _, view := range mcpx.Describe(cfg) {
-				state := "desligado"
-				if view.Enabled {
-					state = "ligado"
+				line := fmt.Sprintf("%s\t%s\t%s", view.Name, view.RuntimeLabel(), view.Description)
+				if strings.TrimSpace(view.Detail) != "" {
+					line += "\t" + view.Detail
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", view.Name, state, view.Description)
+				fmt.Fprintln(cmd.OutOrStdout(), line)
 			}
 			return nil
 		},
