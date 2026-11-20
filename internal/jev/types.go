@@ -1,5 +1,6 @@
 // Package jev implements the Jev model router: task classification, cached
-// model catalog, user/repo policy loading, and pure-Go scoring.
+// model catalog, user/repo policy loading, pure-Go scoring, and local
+// outcome learning (outcomes.jsonl).
 package jev
 
 import "time"
@@ -67,6 +68,9 @@ type Task struct {
 	QAStall            int
 	RepoKey            string
 	OnlyProvider       string
+	// Learn is an in-memory prior built from outcomes.jsonl. Nil keeps the
+	// catalog's static quality and the class's initial tier. Score never reads disk.
+	Learn *LearnSnapshot `json:"-"`
 }
 
 // Capabilities describes what a model supports inside HiveMind.
@@ -113,15 +117,15 @@ type ProviderHealth struct {
 
 // ProviderHealthView is the secret-safe status item emitted to the IDE and mobile SSE.
 type ProviderHealthView struct {
-	Provider          string `json:"provider"`
-	State             string `json:"state"` // "closed" | "open" | "half_open"
-	Reason            string `json:"reason,omitempty"`
-	Until             string `json:"until,omitempty"`
-	DailySpentMicro   int64  `json:"dailySpentMicroUsd,omitempty"`
-	DailyCapMicro     int64  `json:"dailyCapMicroUsd,omitempty"`
+	Provider          string  `json:"provider"`
+	State             string  `json:"state"` // "closed" | "open" | "half_open"
+	Reason            string  `json:"reason,omitempty"`
+	Until             string  `json:"until,omitempty"`
+	DailySpentMicro   int64   `json:"dailySpentMicroUsd,omitempty"`
+	DailyCapMicro     int64   `json:"dailyCapMicroUsd,omitempty"`
 	QuotaRemainingPct float64 `json:"quotaRemainingPct,omitempty"`
-	QuotaStale        bool   `json:"quotaStale,omitempty"`
-	HasCredential     bool   `json:"hasCredential"`
+	QuotaStale        bool    `json:"quotaStale,omitempty"`
+	HasCredential     bool    `json:"hasCredential"`
 }
 
 // HealthSnapshot holds in-memory credential presence, circuit states, and daily spend.

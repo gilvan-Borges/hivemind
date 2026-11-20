@@ -1,6 +1,6 @@
 # Spec — Jev, orquestrador de modelo e de saúde dos provedores
 
-**Status:** proposta. Nenhum código deste desenho existe em `main`.
+**Status:** fase 3 implementada em `internal/jev` (registro local, prior e de-escalada). Fases 4 e 5 seguem proposta.
 **Data:** 2026-11-20
 **Escopo:** o lado Hive deste repositório (`hivemind-go`): CLI, HiveMind IDE (Go + Wails) e o processo que `hivemind serve` já sobe. O app Android (`HiveMind-App`, outro repositório) só entra como cliente do contrato que já consome. Esta spec não desenha tela nativa do app. Desenha o que o host passa a emitir e o que o app precisa reconhecer.
 
@@ -452,7 +452,9 @@ Aceite:
 - Worktree suja por um Cursor que “morreu” não recebe segundo `NewCursor` nem um dev ADK sem `approval_required`.
 - `git status` depois do teste de ferramenta já aplicada mostra uma escrita só.
 
-### Fase 3 — Escalada, teto e aprendizado
+### Fase 3 — Escalada, teto e aprendizado — implementada
+
+Implementada em `internal/jev`. `outcomes.jsonl` fica no diretório de config do usuário (`outcomes.jsonl`, append-only, rotação em 20 MiB com um arquivo anterior). A linha guarda classe, provedor, modelo, custo estimado, latência e o veredito do QA; não guarda prompt, caminho nem segredo. Depois de 8 amostras do par provedor+modelo naquele `repoKey`, o `Score` usa metade do prior e metade da taxa de sucesso (amostra com mais de 30 dias fica de fora). Duas aprovações de QA seguidas no modelo escalado fazem a tarefa seguinte da mesma classe nascer uma faixa abaixo.
 
 Faixa sobe com `qa_request_changes` e com stall. Cartão quando o preço passa. `outcomes.jsonl` passa a influir depois de 8 amostras.
 

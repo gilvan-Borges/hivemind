@@ -82,19 +82,23 @@ func (r *Runner) resolveRepoKey(ctx context.Context) string {
 
 // JevFactoryOptions configures the Runner.NewModel factory returned by NewJevModelFactory.
 type JevFactoryOptions struct {
-	Workspace     string
-	Git           gitx.Git
-	Policy        *jev.Policy
-	Catalog       *jev.CatalogStore
-	HealthStore   *jev.HealthStore
-	Health        func() jev.HealthSnapshot
-	Creds         func() map[string]bool
-	BuildModel    func(ctx context.Context, provider, modelName string) (model.LLM, error)
-	Approve       func(string) bool
-	ApproveGate   func(gate, prompt string) bool
-	OnEvent       func(Event)
-	ExtraSecrets  []string
-	DisableWrap   bool
+	Workspace   string
+	Git         gitx.Git
+	Policy      *jev.Policy
+	Catalog     *jev.CatalogStore
+	HealthStore *jev.HealthStore
+	Health      func() jev.HealthSnapshot
+	// Outcomes records finished calls and QA verdicts. Nil opens the user-level
+	// file only together with the default health store. Injected health (tests)
+	// stays quiet unless a log is passed.
+	Outcomes     *jev.OutcomeLog
+	Creds        func() map[string]bool
+	BuildModel   func(ctx context.Context, provider, modelName string) (model.LLM, error)
+	Approve      func(string) bool
+	ApproveGate  func(gate, prompt string) bool
+	OnEvent      func(Event)
+	ExtraSecrets []string
+	DisableWrap  bool
 }
 
 // NewJevModelFactory returns a Runner.NewModel callback that wraps modelx.New
@@ -113,6 +117,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		catalog     *jev.CatalogStore
 		healthStore *jev.HealthStore
 		credsFn     func() map[string]bool
+		outcomes    *jev.OutcomeLog
 	)
 	init := func(workspace string) {
 		initOnce.Do(func() {
@@ -141,6 +146,13 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				healthStore = opts.HealthStore
 			} else if opts.Health == nil {
 				healthStore = modelx.DefaultJevHealthStore()
+			}
+			if opts.Outcomes != nil {
+				outcomes = opts.Outcomes
+			} else if opts.HealthStore == nil && opts.Health == nil {
+				if p, err := jev.OutcomesPath(); err == nil {
+					outcomes = jev.OpenOutcomeLog(p)
+				}
 			}
 			if opts.Creds != nil {
 				credsFn = opts.Creds
@@ -286,10 +298,10 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		agentPin := jev.AgentPin{Provider: provNorm, Model: a.Model}
 
 		var (
-			choice       jev.Choice
-			firstChoice  jev.Choice
-			firstErr     jev.ErrorClass
-			llm          model.LLM
+			choice      jev.Choice
+			firstChoice jev.Choice
+			firstErr    jev.ErrorClass
+			llm         model.LLM
 		)
 		for attempt := 0; attempt < 3; attempt++ {
 			healthFn := opts.Health
@@ -314,9 +326,10 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			}
 
 			router := &jev.Router{
-				Catalog: catalog,
-				Policy:  policy,
-				Health:  healthFn,
+				Catalog:  catalog,
+				Policy:   policy,
+				Health:   healthFn,
+				Outcomes: outcomes,
 			}
 			var ref jev.Refusal
 			choice, ref = router.Route(ctx, jev.RouteInput{
@@ -459,6 +472,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			repoPol:      repoPol,
 			catalog:      catalog,
 			health:       healthStore,
+			outcomes:     outcomes,
 			credsFn:      credsFn,
 			buildModel:   buildModel,
 			approve:      approveFn,

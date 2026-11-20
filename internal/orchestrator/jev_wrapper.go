@@ -28,6 +28,7 @@ type jevModelWrapper struct {
 	repoPol      jev.RepoPolicy
 	catalog      *jev.CatalogStore
 	health       *jev.HealthStore
+	outcomes     *jev.OutcomeLog
 	credsFn      func() map[string]bool
 	buildModel   func(ctx context.Context, provider, modelName string) (model.LLM, error)
 	approve      func(gate, prompt string) bool
@@ -73,13 +74,17 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 			snapChecked = true
 		}
 
+		started := time.Now()
 		respErr, deliveredToolCall, lastResp := w.invokeOnce(ctx, curLLM, req, stream, yield)
 		if respErr == nil {
 			w.recordSuccessAndSpend(curChoice, lastResp)
+			w.recordCall(curChoice, true, "", time.Since(started), lastResp, false)
+			w.noteQA(lastResp)
 			return
 		}
 
 		errClass := jev.ClassifyError(respErr)
+		w.recordCall(curChoice, false, errClass, time.Since(started), nil, false)
 		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
 			yield(nil, fmt.Errorf("%s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
 			return
@@ -122,12 +127,16 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		w.mu.Unlock()
 
 		// Retry the same LLMRequest ONCE on the failover model (Spec §9).
+		retryStart := time.Now()
 		retryErr, _, retryResp := w.invokeOnce(ctx, nextLLM, req, stream, yield)
 		if retryErr == nil {
 			w.recordSuccessAndSpend(nextChoice, retryResp)
+			w.recordCall(nextChoice, true, "", time.Since(retryStart), retryResp, true)
+			w.noteQA(retryResp)
 			return
 		}
 		retryClass := jev.ClassifyError(retryErr)
+		w.recordCall(nextChoice, false, retryClass, time.Since(retryStart), nil, true)
 		if retryClass != jev.ErrClassPolicy && ctx.Err() == nil && w.health != nil {
 			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, retryClass, time.Time{})
 		}
@@ -176,6 +185,9 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	task.HasPendingToolCall = hasPriorToolActivity(req)
 	if est := estimateRequestTokens(req); est > task.InputTokens {
 		task.InputTokens = est
+	}
+	if w.outcomes != nil {
+		task.Learn = w.outcomes.Snapshot(task.RepoKey)
 	}
 
 	creds := map[string]bool(nil)
@@ -243,6 +255,66 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	msg := "Todos os provedores elegíveis falharam durante o failover."
 	w.emitExhausted(msg)
 	return jev.Choice{}, nil, fmt.Errorf("%s", msg)
+}
+
+func (w *jevModelWrapper) recordCall(ch jev.Choice, ok bool, fail jev.ErrorClass, latency time.Duration, resp *model.LLMResponse, failover bool) {
+	if w.outcomes == nil || ch.Provider == "" || ch.Model == "" {
+		return
+	}
+	tokens := 0
+	if resp != nil && resp.UsageMetadata != nil {
+		tokens = int(resp.UsageMetadata.PromptTokenCount + resp.UsageMetadata.CandidatesTokenCount)
+		if tokens < 0 {
+			tokens = 0
+		}
+	}
+	failCode := ""
+	if !ok {
+		failCode = string(fail)
+		if failCode == "" {
+			failCode = "error"
+		}
+	}
+	_ = w.outcomes.Append(jev.Outcome{
+		RepoKey:           w.taskBase.RepoKey,
+		Role:              w.taskBase.Role,
+		Class:             w.taskBase.Class,
+		Complexity:        w.taskBase.Complexity,
+		Provider:          ch.Provider,
+		Model:             ch.Model,
+		Tier:              ch.Tier,
+		OK:                ok,
+		FailCode:          failCode,
+		Reason:            failCode,
+		Tokens:            tokens,
+		LatencyMs:         latency.Milliseconds(),
+		EstimatedMicroUSD: ch.EstimatedMicroUSD,
+		Failover:          failover,
+	})
+}
+
+func (w *jevModelWrapper) noteQA(resp *model.LLMResponse) {
+	if w.outcomes == nil || w.taskBase.Class != jev.ClassQA || resp == nil || resp.Content == nil {
+		return
+	}
+	approved, saw := false, false
+	for _, p := range resp.Content.Parts {
+		if p == nil || p.FunctionCall == nil {
+			continue
+		}
+		switch p.FunctionCall.Name {
+		case "qa_request_changes":
+			approved, saw = false, true
+		case "qa_approve":
+			if !saw {
+				approved, saw = true, true
+			}
+		}
+	}
+	if !saw {
+		return
+	}
+	_ = w.outcomes.NoteQA(w.taskBase.RepoKey, approved)
 }
 
 func (w *jevModelWrapper) recordSuccessAndSpend(ch jev.Choice, resp *model.LLMResponse) {

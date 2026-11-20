@@ -103,8 +103,22 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 			NeedsTools:  task.NeedsTools,
 		})
 	}
-	targetTier := initialTierFor(task.Class, task.Complexity)
+	naturalTier := initialTierFor(task.Class, task.Complexity)
+	targetTier := naturalTier
+	deescalated := false
+	if task.Learn != nil {
+		if next, ok := task.Learn.DropTier(task.Class, naturalTier); ok && next != naturalTier {
+			targetTier = next
+			deescalated = true
+		}
+	}
 	best, estMicro, refusal := selectBestInTier(task, catalog, policy, health, repoPolicy, targetTier)
+	// shortcut: faixa abaixo sem candidato (e sem teto) volta à faixa natural, quando a de-escalada deixar a tarefa sem modelo.
+	if deescalated && best == nil && refusal.Code != "budget" {
+		deescalated = false
+		targetTier = naturalTier
+		best, estMicro, refusal = selectBestInTier(task, catalog, policy, health, repoPolicy, targetTier)
+	}
 	if best == nil && task.Class == ClassVision && targetTier == TierCheap && refusal.Code != "budget" {
 		midBest, midEst, midRef := selectBestInTier(task, catalog, policy, health, repoPolicy, TierMid)
 		if midBest != nil {
@@ -161,6 +175,9 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 	}
 
 	reasons := buildReasons(task, *best, targetTier)
+	if deescalated {
+		reasons = append(reasons, "deescalated")
+	}
 	if crossProviderFallbackReason != "" {
 		reasons = append([]string{crossProviderFallbackReason}, reasons...)
 	} else if isOpenRouterReserveLocked(policy, health) && !strings.EqualFold(best.Provider, "openrouter") {
@@ -523,7 +540,11 @@ func selectBestInTier(
 			// get priority within their difficulty tier.
 			promoBonus = 0.22 * (float64(e.DiscountPct) / 50.0)
 		}
-		score := w.Quality*e.Quality - w.Cost*costNorm - w.Latency*latNorm + promoBonus
+		q := e.Quality
+		if task.Learn != nil {
+			q = task.Learn.Quality(e.Provider, e.Model, q)
+		}
+		score := w.Quality*q - w.Cost*costNorm - w.Latency*latNorm + promoBonus
 		if bestIdx < 0 || score > bestScore+1e-12 ||
 			(math.Abs(score-bestScore) <= 1e-12 && (estExact < bestCost || (estExact == bestCost && lat < bestLat))) {
 			bestIdx = i
@@ -747,9 +768,10 @@ type RouteInput struct {
 
 // Router holds the in-memory catalog store, policy, and credential/health callbacks.
 type Router struct {
-	Catalog *CatalogStore
-	Policy  Policy
-	Health  func() HealthSnapshot
+	Catalog  *CatalogStore
+	Policy   Policy
+	Health   func() HealthSnapshot
+	Outcomes *OutcomeLog
 }
 
 // Route triggers a non-blocking background refresh if stale and computes Choice
@@ -767,6 +789,9 @@ func (r *Router) Route(ctx context.Context, in RouteInput) (Choice, Refusal) {
 	health := HealthSnapshot{AgyRemainingPct: -1}
 	if r.Health != nil {
 		health = r.Health()
+	}
+	if r.Outcomes != nil && in.Task.Learn == nil {
+		in.Task.Learn = r.Outcomes.Snapshot(in.Task.RepoKey)
 	}
 	return Score(in.Task, cat, r.Policy, health, in.AgentPin, in.RepoPolicy)
 }
