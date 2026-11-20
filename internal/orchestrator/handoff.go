@@ -129,6 +129,45 @@ func (r *Runner) makeHandoffPackage(runID, from, to string) HandoffPackage {
 	}
 }
 
+// ExternalHandoff builds the sanitized package used when the resident hands
+// work to the squad. Shell lines are dropped and the objective is capped.
+func ExternalHandoff(runID, objective string, facts []string) HandoffPackage {
+	objective = sanitizeHandoffText(objective)
+	if len(objective) > handoffObjectiveMax {
+		objective = objective[:handoffObjectiveMax]
+	}
+	var clean []string
+	for _, fact := range facts {
+		line := strings.TrimSpace(sanitizeHandoffText(fact))
+		if line == "" {
+			continue
+		}
+		if len(line) > handoffFactMax {
+			line = line[:handoffFactMax]
+		}
+		clean = append(clean, line)
+		if len(clean) == handoffFactsMax {
+			break
+		}
+	}
+	sum := sha256.Sum256([]byte(objective + "\n" + strings.Join(clean, "\n")))
+	return HandoffPackage{
+		Schema:       1,
+		RunID:        safeRunID(runID),
+		FromRole:     "resident",
+		ToRole:       team.RoleDeveloper,
+		Objective:    objective,
+		Facts:        clean,
+		Files:        relativeOnly(clean),
+		DeliveryHash: hex.EncodeToString(sum[:]),
+	}
+}
+
+// DeliverExternalHandoff writes the sanitized package outside the chat transcript.
+func DeliverExternalHandoff(workspaceRoot string, pkg HandoffPackage) error {
+	return persistHandoff(workspaceRoot, pkg)
+}
+
 func sanitizeHandoffText(s string) string {
 	s = resident.RedactSecrets(s)
 	var kept []string

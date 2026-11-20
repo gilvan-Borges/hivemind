@@ -8,6 +8,7 @@ import (
 
 func TestDetectorRejectionIsReadTierAndOnce(t *testing.T) {
 	m := NewResidentManager(ResidentManagerOptions{BaseDir: t.TempDir()})
+	t.Cleanup(m.Close)
 	m.NoteDetectorRejected("bad.json", "json inválido", "fp-1")
 	m.NoteDetectorRejected("bad.json", "json inválido", "fp-1")
 	m.NoteDetectorRejected("bad.json", "detector recusado", "fp-2")

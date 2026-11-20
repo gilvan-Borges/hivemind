@@ -273,7 +273,7 @@ export interface TerminalEntry {
 }
 
 export interface EditorTab {
-  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident";
+  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident" | "ai-usage";
   relPath: string;
   name: string;
   content: string;
@@ -727,9 +727,17 @@ export interface AgyQuota {
   groups?: AgyQuotaGroup[];
 }
 
+export interface AgyAccountQuota {
+  profileId: string;
+  name: string;
+  email?: string;
+  quota: AgyQuota;
+}
+
 export interface AIUsageReport {
   generatedAt: string;
   agyQuota?: AgyQuota;
+  agyAccounts?: AgyAccountQuota[];
   openCodeQuota: OpenCodeQuota;
   providers: AIProviderUsage[];
 }
@@ -913,6 +921,11 @@ export interface ResidentStatus {
   allowedBinaries?: string[];
   allowedHosts?: string[];
   vaultSecrets?: string[];
+  eventTriggers?: boolean;
+  isolatedBrowser?: boolean;
+  isolatedBrowserReason?: string;
+  isolatedDesktop?: boolean;
+  isolatedDesktopReason?: string;
 }
 
 export interface ResidentTurnResult {
@@ -1101,6 +1114,7 @@ export interface WailsBackendApp {
   ExternalSessions?(): Promise<ExternalSession[]>;
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
+  ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;
@@ -1112,4 +1126,19 @@ export interface WailsBackendApp {
   ResidentAddMemory?(workstream: string, text: string, pinned: boolean): Promise<ResidentMemoryFact>;
   ResidentDeleteMemory?(id: string): Promise<boolean>;
   ResidentAuditLog?(limit: number): Promise<ResidentAuditEntry[]>;
+  ResidentListRoutines?(): Promise<ResidentRoutine[]>;
+  ResidentSaveRoutine?(expr: string, timezone: string, text: string, workstream: string, classes: string[]): Promise<ResidentRoutine>;
+  ResidentSetRoutineEnabled?(id: string, enabled: boolean): Promise<void>;
+  ResidentDeleteRoutine?(id: string): Promise<void>;
+  ResidentReviewSkill?(name: string): Promise<string>;
+}
+
+export interface ResidentRoutine {
+  id: string;
+  expr: string;
+  timezone?: string;
+  text: string;
+  workstream?: string;
+  classes?: string[];
+  enabled: boolean;
 }

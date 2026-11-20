@@ -21,6 +21,8 @@ export const MISSION_TAB_KEY = "mission:swarm";
 
 export const TEAM_CONFIG_TAB_KEY = "team:config";
 
+export const AI_USAGE_TAB_KEY = "ai:usage";
+
 export interface TeamConfigDraft {
   workspace: string;
   teamName: string;
@@ -91,8 +93,7 @@ export const state = {
   relayStatus: null as RelayStatus | null,
   relayLink: null as RelayLinkCode | null,
   relayDraft: { baseUrl: "", email: "", password: "", claim: "" },
-  aiUsageModal: {
-    open: false,
+  aiUsagePage: {
     loading: false,
     report: null as AIUsageReport | null,
     editingProvider: "",

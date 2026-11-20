@@ -1,12 +1,12 @@
 import { icons } from "./icons";
-import type { AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
+import type { AgyAccountQuota, AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
 import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
 import { refreshSkills } from "./models";
 import { updateStatusBar } from "./shell";
-import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
+import { AI_USAGE_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
 export async function runProvidersScan() {
@@ -1825,11 +1825,6 @@ export function renderModalLayer() {
     return;
   }
 
-  if (state.aiUsageModal.open) {
-    renderAIUsageModal(layer);
-    return;
-  }
-
   layer.innerHTML = "";
 }
 
@@ -1887,15 +1882,27 @@ export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
   `;
 }
 
-export async function openAIUsageModal() {
-  state.aiUsageModal.open = true;
-  state.aiUsageModal.loading = true;
-  state.aiUsageModal.editingProvider = "";
-  renderModalLayer();
+export async function openAIUsagePage() {
+  const existing = state.editorTabs.find((t) => t.relPath === AI_USAGE_TAB_KEY);
+  if (!existing) {
+    state.editorTabs.unshift({
+      kind: "ai-usage",
+      relPath: AI_USAGE_TAB_KEY,
+      name: "Uso & Limites das IAs",
+      content: "",
+      dirty: false,
+    });
+  }
+  state.activeEditorPath = AI_USAGE_TAB_KEY;
+  state.aiUsagePage.editingProvider = "";
+  state.aiUsagePage.loading = true;
+  renderEditorTabs();
+  renderEditorBody();
+
   const backend = api();
   if (!backend || !backend.GetAIUsage) {
-    state.aiUsageModal.loading = false;
-    renderModalLayer();
+    state.aiUsagePage.loading = false;
+    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
     return;
   }
   try {
@@ -1905,7 +1912,7 @@ export async function openAIUsageModal() {
       backend.GetJevPolicy ? backend.GetJevPolicy() : Promise.resolve(jevPolicyDraft),
     ]);
     if (policy) jevPolicyDraft = policy;
-    state.aiUsageModal.report = rep;
+    state.aiUsagePage.report = rep;
     if (Array.isArray(health)) {
       state.providerHealth = health;
       updateStatusBar();
@@ -1913,9 +1920,14 @@ export async function openAIUsageModal() {
   } catch (err: any) {
     toastError("carregar uso e limites das IAs", err);
   } finally {
-    state.aiUsageModal.loading = false;
-    if (state.aiUsageModal.open) renderModalLayer();
+    state.aiUsagePage.loading = false;
+    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
   }
+}
+
+/** @deprecated use openAIUsagePage */
+export async function openAIUsageModal() {
+  return openAIUsagePage();
 }
 
 function formatHealthUsdMicro(micro?: number): string {
@@ -1936,7 +1948,7 @@ export function renderJevProviderHealthPanelHtml(list: ProviderHealthView[], pro
         const spend = p.dailyCapMicroUsd && p.dailyCapMicroUsd > 0
           ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}/${formatHealthUsdMicro(p.dailyCapMicroUsd)}`
           : (p.dailySpentMicroUsd && p.dailySpentMicroUsd > 0 ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}` : "");
-        const note = quotaChipNote([p], state.aiUsageModal.report);
+        const note = quotaChipNote([p], state.aiUsagePage.report);
         const quota = note
           ? ` · ${note}${p.quotaStale ? " (desatual.)" : ""}`
           : (typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0
@@ -2097,8 +2109,81 @@ export function renderLocalWindowRowHtml(label: string, win: { inputTokens: numb
   `;
 }
 
+function renderAgyQuotaGroupsHtml(aq: { available?: boolean; groups?: { name: string; description?: string; buckets: { usedPercent: number; remainingPercent: number; window: string; name?: string; resetTime?: string }[] }[] } | undefined): string {
+  const groups = aq?.available && aq.groups && aq.groups.length > 0 ? aq.groups : [];
+  if (groups.length === 0) return "";
+  return groups.map((g) => {
+    const cleanDesc = (g.description || "").replace(/^Models within this group:\s*/i, "");
+    const rows = g.buckets.map((b) => {
+      const used = Math.round(b.usedPercent * 10) / 10;
+      const left = Math.round(b.remainingPercent * 10) / 10;
+      const lbl = b.window === "5h"
+        ? "Limite 5h"
+        : b.window === "weekly"
+          ? "Limite Semanal"
+          : b.name || "Limite";
+      return renderQuotaBarRowHtml(
+        lbl,
+        used,
+        `${used}% usado (${left}% livre)`,
+        formatResetCountdown(b.resetTime)
+      );
+    }).join("");
+    return `
+      <div class="aiu-agy-group">
+        <div class="aiu-agy-group-head">
+          <span class="aiu-agy-group-name">${escapeHtml(g.name)}</span>
+          ${cleanDesc && cleanDesc.length <= 110 ? `<span class="aiu-agy-group-desc">${escapeHtml(cleanDesc)}</span>` : ""}
+        </div>
+        ${rows}
+      </div>
+    `;
+  }).join("");
+}
+
+export function renderAgyAccountCardHtml(acc: AgyAccountQuota, local?: AIProviderUsage, showLocal = false): string {
+  const aq = acc.quota;
+  const groupsHtml = renderAgyQuotaGroupsHtml(aq);
+  const title = acc.email ? `${acc.name} · ${acc.email}` : acc.name;
+  const statusPill = aq.available
+    ? `<span class="flow-pill approved">API oficial (/usage)</span>`
+    : `<span class="flow-pill changes">Indisponível</span>`;
+  const localSub = showLocal && local
+    ? `
+      <div class="aiu-local-strip">
+        <span>Telemetria HiveMind (todas as contas agy):</span>
+        <strong>5h: ${formatTokens(local.window5h.totalTokens)} tok (${local.window5h.calls}x)</strong>
+        <span>·</span>
+        <strong>7d: ${formatTokens(local.windowWeekly.totalTokens)} tok (${local.windowWeekly.calls}x)</strong>
+      </div>
+    `
+    : "";
+  const body = groupsHtml
+    || (local
+      ? `
+        ${renderLocalWindowRowHtml("Janela de 5h", local.window5h, local.limits.fiveHourTokens || 0, 5)}
+        ${renderLocalWindowRowHtml("Janela Semanal (7 dias)", local.windowWeekly, local.limits.weeklyTokens || 0, 24 * 7)}
+      `
+      : `<div class="dim" style="font-size:11.5px">Sem cota oficial nesta conta.</div>`);
+  return `
+    <div class="aiu-card">
+      <div class="aiu-card-head">
+        <div class="aiu-card-title">
+          <strong>Antigravity · ${escapeHtml(title)}</strong>
+          ${statusPill}
+        </div>
+      </div>
+      <div class="aiu-card-body">
+        ${body}
+        ${localSub}
+      </div>
+      ${aq.detail ? `<div class="aiu-footnote">${escapeHtml(aq.detail)}</div>` : ""}
+    </div>
+  `;
+}
+
 export function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageReport): string {
-  const isEditing = state.aiUsageModal.editingProvider === p.provider;
+  const isEditing = state.aiUsagePage.editingProvider === p.provider;
   const isAgy = p.provider === "agy";
   const isOpenCodeGo = p.provider === "opencode-go";
   const isOpenCodeZen = p.provider === "opencode";
@@ -2109,11 +2194,11 @@ export function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageRepo
   let footnote = "";
 
   if (isAgy) {
-    const agyOk = Boolean(state.agyStatus?.LoggedIn) || Boolean(rep.agyQuota?.available);
     const aq = rep.agyQuota;
-    const groups = aq?.available && aq.groups && aq.groups.length > 0 ? aq.groups : [];
+    const groupsHtml = renderAgyQuotaGroupsHtml(aq);
+    const agyOk = Boolean(state.agyStatus?.LoggedIn) || Boolean(aq?.available);
     statusPill = agyOk
-      ? groups.length > 0
+      ? groupsHtml
         ? `<span class="flow-pill approved">API oficial (/usage)${state.models.length > 0 ? ` · ${state.models.length} modelos` : ""}</span>`
         : `<span class="flow-pill approved">Conectado · ${state.models.length} modelos</span>`
       : `<span class="flow-pill changes">Não autenticado</span>`;
@@ -2127,36 +2212,9 @@ export function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageRepo
       </div>
     `;
 
-    if (groups.length > 0) {
-      const groupsHtml = groups.map((g) => {
-        const cleanDesc = (g.description || "").replace(/^Models within this group:\s*/i, "");
-        const rows = g.buckets.map((b) => {
-          const used = Math.round(b.usedPercent * 10) / 10;
-          const left = Math.round(b.remainingPercent * 10) / 10;
-          const lbl = b.window === "5h"
-            ? "Limite 5h"
-            : b.window === "weekly"
-              ? "Limite Semanal"
-              : b.name || "Limite";
-          return renderQuotaBarRowHtml(
-            lbl,
-            used,
-            `${used}% usado (${left}% livre)`,
-            formatResetCountdown(b.resetTime)
-          );
-        }).join("");
-        return `
-          <div class="aiu-agy-group">
-            <div class="aiu-agy-group-head">
-              <span class="aiu-agy-group-name">${escapeHtml(g.name)}</span>
-              ${cleanDesc && cleanDesc.length <= 110 ? `<span class="aiu-agy-group-desc">${escapeHtml(cleanDesc)}</span>` : ""}
-            </div>
-            ${rows}
-          </div>
-        `;
-      }).join("");
+    if (groupsHtml) {
       bodyHtml = groupsHtml + localSub;
-      footnote = aq?.detail || "Cota oficial obtida via agy /usage (0 tokens consumidos)";
+      footnote = aq?.detail || "Cota oficial obtida via agy /usage";
     } else {
       bodyHtml = `
         ${renderLocalWindowRowHtml("Janela de 5h", p.window5h, p.limits.fiveHourTokens || 0, 5)}
@@ -2279,60 +2337,62 @@ export function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageRepo
   `;
 }
 
-export function renderAIUsageModal(layer: HTMLElement) {
-  const m = state.aiUsageModal;
+function renderAIUsageCardsHtml(rep: AIUsageReport | null, loading: boolean): string {
+  if (loading && !rep) {
+    return `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`;
+  }
+  if (!rep) {
+    return `<div class="dim" style="padding:20px;text-align:center">Não foi possível carregar os dados de uso.</div>`;
+  }
+  const accounts = Array.isArray(rep.agyAccounts) ? rep.agyAccounts : [];
+  const localAgy = rep.providers.find((p) => p.provider === "agy");
+  const cards: string[] = [];
+  if (accounts.length > 0) {
+    accounts.forEach((acc, idx) => {
+      cards.push(renderAgyAccountCardHtml(acc, localAgy, idx === 0));
+    });
+  }
+  for (const p of rep.providers) {
+    if (p.provider === "agy" && accounts.length > 0) continue;
+    cards.push(renderProviderUsageCardHtml(p, rep));
+  }
+  return cards.join("");
+}
+
+export function renderAIUsagePageHtml(): string {
+  const m = state.aiUsagePage;
   const rep = m.report;
-  layer.innerHTML = `
-    <div class="modal-backdrop" id="aiu-backdrop">
-      <div class="modal-box ai-usage-modal">
-        <div class="aiu-modal-head">
-          <div style="display:flex;align-items:center;gap:8px">
+  return `
+    <div class="ai-usage-page">
+      <div class="tc-header">
+        <div>
+          <div class="tc-title-row">
             <span class="aiu-head-icon">${icons.aiUsage}</span>
-            <div>
-              <h3 class="modal-title" style="margin:0">Uso & Limites das IAs</h3>
-              <div class="dim" style="font-size:11.5px">Acompanhe janelas de 5 horas e semanal do Antigravity, OpenCode e demais provedores.</div>
-            </div>
+            <h2>Uso & Limites das IAs</h2>
           </div>
-          <div style="display:flex;gap:6px;align-items:center">
-            <button type="button" class="mini" id="aiu-refresh" ${m.loading ? "disabled" : ""}>
-              ${m.loading ? icons.spinner : icons.refresh}
-              <span>Atualizar</span>
-            </button>
-            <button type="button" class="icon-btn" id="aiu-close" title="Fechar">${icons.closeSmall}</button>
-          </div>
+          <div class="dim" style="font-size:11.5px">Cada conta do Pool aparece em cartão próprio (ex.: várias Antigravity). Cotas oficiais + telemetria local.</div>
         </div>
-
-        <div class="aiu-cards-wrap">
-          ${renderJevPolicyEditorHtml(jevPolicyDraft)}
-          ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
-          ${m.loading && !rep
-            ? `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`
-            : !rep
-              ? `<div class="dim" style="padding:20px;text-align:center">Não foi possível carregar os dados de uso.</div>`
-              : rep.providers.map((p) => renderProviderUsageCardHtml(p, rep)).join("")
-          }
-        </div>
-
-        <div class="modal-footer" style="margin-top:12px">
-          <span class="dim" style="font-size:11px">Dados locais salvos em %AppData%\\HiveMind\\ai-usage.json</span>
-          <div class="spacer"></div>
-          <button type="button" class="primary" id="aiu-close-footer">Fechar</button>
+        <div class="tc-header-actions">
+          <button type="button" class="mini" id="aiu-refresh" ${m.loading ? "disabled" : ""}>
+            ${m.loading ? icons.spinner : icons.refresh}
+            <span>Atualizar</span>
+          </button>
         </div>
       </div>
+
+      <div class="aiu-cards-wrap">
+        ${renderJevPolicyEditorHtml(jevPolicyDraft)}
+        ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
+        ${renderAIUsageCardsHtml(rep, m.loading)}
+      </div>
+
+      <div class="dim" style="font-size:11px;padding:4px 2px">Dados locais em %AppData%\\HiveMind\\ai-usage.json</div>
     </div>
   `;
+}
 
-  const closeModal = () => {
-    state.aiUsageModal.open = false;
-    state.aiUsageModal.editingProvider = "";
-    renderModalLayer();
-  };
-  document.getElementById("aiu-close")?.addEventListener("click", closeModal);
-  document.getElementById("aiu-close-footer")?.addEventListener("click", closeModal);
-  document.getElementById("aiu-backdrop")?.addEventListener("click", (e) => {
-    if ((e.target as HTMLElement).id === "aiu-backdrop") closeModal();
-  });
-  document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsageModal());
+export function bindAIUsagePageEvents() {
+  document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsagePage());
   document.getElementById("aiu-save-jev-policy")?.addEventListener("click", async () => {
     const backend = api();
     if (!backend?.SaveJevPolicy) return;
@@ -2376,7 +2436,7 @@ export function renderAIUsageModal(layer: HTMLElement) {
     const b = api();
     if (!b?.ProbeProviders) return;
     state.providerHealthProbing = true;
-    renderModalLayer();
+    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
     try {
       const views = await b.ProbeProviders();
       if (Array.isArray(views)) {
@@ -2387,37 +2447,36 @@ export function renderAIUsageModal(layer: HTMLElement) {
       toastError("sondar provedores Jev", err);
     } finally {
       state.providerHealthProbing = false;
-      if (state.aiUsageModal.open) renderModalLayer();
+      if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
     }
   });
   document.getElementById("aiu-open-opencode-cfg")?.addEventListener("click", () => {
-    state.aiUsageModal.open = false;
     openOpenCodeModal();
   });
 
-  layer.querySelectorAll("[data-aiu-edit-limits]").forEach((btn) => {
+  document.querySelectorAll("[data-aiu-edit-limits]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const prov = (btn as HTMLElement).dataset.aiuEditLimits || "";
-      state.aiUsageModal.editingProvider = state.aiUsageModal.editingProvider === prov ? "" : prov;
-      renderModalLayer();
+      state.aiUsagePage.editingProvider = state.aiUsagePage.editingProvider === prov ? "" : prov;
+      if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
     });
   });
 
   document.getElementById("aiu-limit-cancel")?.addEventListener("click", () => {
-    state.aiUsageModal.editingProvider = "";
-    renderModalLayer();
+    state.aiUsagePage.editingProvider = "";
+    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
   });
 
-  layer.querySelectorAll("[data-aiu-save-limits]").forEach((btn) => {
+  document.querySelectorAll("[data-aiu-save-limits]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const prov = (btn as HTMLElement).dataset.aiuSaveLimits || "";
       const v5h = Math.max(0, parseInt((document.getElementById("aiu-limit-5h") as HTMLInputElement | null)?.value || "0", 10) || 0);
       const v7d = Math.max(0, parseInt((document.getElementById("aiu-limit-7d") as HTMLInputElement | null)?.value || "0", 10) || 0);
       if (!api()?.SaveAIUsageLimits) return;
       try {
-        state.aiUsageModal.report = await api()!.SaveAIUsageLimits(prov, v5h, v7d);
-        state.aiUsageModal.editingProvider = "";
-        renderModalLayer();
+        state.aiUsagePage.report = await api()!.SaveAIUsageLimits(prov, v5h, v7d);
+        state.aiUsagePage.editingProvider = "";
+        if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
         toast("Metas de uso atualizadas.", "success");
       } catch (err: any) {
         toastError("salvar metas de uso", err);

@@ -114,8 +114,10 @@ func (g Local) CommitAll(ctx context.Context, dir, message string) (bool, error)
 		return false, nil
 	}
 	// Never stage HiveMind's own state (.hivemind/sessions, worktrees, MEMORY.md).
-	// git add -A would also fail when a worktree is nested under .hivemind/.
-	if _, err := g.Run(ctx, dir, "add", "-A", "--", ".", ":(exclude).hivemind", ":(exclude).hivemind/**"); err != nil {
+	// Do not use :(exclude).hivemind pathspecs: when the directory exists and is
+	// already gitignored, `git add` exits 1 ("paths are ignored").
+	_ = EnsureHiveIgnore(dir)
+	if _, err := g.Run(ctx, dir, "add", "-A", "--", "."); err != nil {
 		return false, err
 	}
 	staged, err := g.Run(ctx, dir, "diff", "--cached", "--name-only")
