@@ -18,7 +18,7 @@ import (
 const (
 	defaultInTurnKeepToolResults = 8
 	inTurnCompactThresholdBytes  = 600
-	inTurnPreviewBytes           = 240
+	inTurnPreviewBytes           = 420
 )
 
 var compactableInTurnTools = map[string]bool{
@@ -106,10 +106,11 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent int) (compactedCo
 	if len(responses) > keepRecent {
 		cutoff := len(responses) - keepRecent
 		for _, loc := range responses[:cutoff] {
-			// NEVER compact any response from the latest tool-response message:
-			// a parallel batch of 7-10 read_file calls must be seen in full by
+			// NEVER compact any response from the latest tool-response turn
+			// (whether grouped in lastRespContentIdx or split across Contents after lastCallContentIdx):
+			// a parallel batch of 7-10 tool calls must be seen in full by
 			// the model on the very next turn, or it enters a re-read loop.
-			if loc.contentIdx == lastRespContentIdx {
+			if loc.contentIdx == lastRespContentIdx || (lastCallContentIdx >= 0 && loc.contentIdx > lastCallContentIdx) {
 				continue
 			}
 			if toCompactResp[loc.contentIdx] == nil {
@@ -318,7 +319,7 @@ func buildCompactNotice(toolName, label, raw string) string {
 	if toolName == "read_file" {
 		hint = "já lido neste turno; NÃO releia o mesmo trecho — avance na tarefa ou leia outra faixa start_line/end_line só se realmente faltar um detalhe"
 	} else if toolName == "github_pr_diff" {
-		hint = "chame novamente com o parâmetro file apenas se precisar inspecionar um arquivo específico"
+		hint = "diff já lido em turno anterior; NÃO chame github_pr_diff novamente para o mesmo arquivo — use as informações já analisadas"
 	}
 	return fmt.Sprintf("%s\n[saída anterior de %s compactada: %d linhas / %s — %s]", preview, label, lines, sizeLabel, hint)
 }
@@ -344,11 +345,15 @@ func formatCompactTarget(name string, args map[string]any) string {
 
 // newRepeatReadGuardCallback returns a BeforeToolCallback that prevents an agent
 // from entering a re-read death spiral (calling read_file on the exact same
-// file/range 3+ times without modifying the file in between). Any edit_file or
-// write_file on that path resets its read counter immediately.
+// file/range 3+ times, or shifting line ranges on the same file 4+ times without
+// modifying the file in between, or repeating the same github_pr_diff / search_text).
+// Any edit_file or write_file on that path resets its read counter immediately.
 func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 	var mu sync.Mutex
 	reads := make(map[string]int)
+	fileTotalReads := make(map[string]int)
+	diffCalls := make(map[string]int)
+	searchCalls := make(map[string]int)
 
 	normPath := func(raw any) string {
 		s := strings.TrimSpace(fmt.Sprint(raw))
@@ -374,6 +379,7 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 						delete(reads, k)
 					}
 				}
+				delete(fileTotalReads, p)
 				mu.Unlock()
 			}
 			return nil, nil
@@ -390,12 +396,45 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 			mu.Lock()
 			reads[key]++
 			n := reads[key]
+			fileTotalReads[p]++
+			totalFileN := fileTotalReads[p]
 			mu.Unlock()
 
-			if n >= 3 {
+			if n >= 3 || totalFileN >= 5 {
 				return map[string]any{
-					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já leu exatamente este mesmo trecho de %s (%d-%d) %d vezes neste turno sem editar o arquivo. NÃO releia novamente — use as informações já obtidas (e o dossiê [chief_context_brief] / [chief_plan]) e avance agora para edit_file/write_file ou conclua a tarefa.", args["path"], start, end, n-1),
+					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já leu %s (%d-%d) %d vezes neste turno sem editar o arquivo. NÃO releia novamente (nem deslocando poucas linhas) — use as informações já obtidas (e o dossiê [chief_context_brief] / [chief_plan]) e avance agora para edit_file/write_file ou conclua a tarefa.", args["path"], start, end, max(n-1, totalFileN-1)),
 				}, nil
+			}
+
+		case "github_pr_diff":
+			num := parseIntArg(args["number"])
+			file := normPath(args["file"])
+			key := fmt.Sprintf("%d::%s", num, file)
+			mu.Lock()
+			diffCalls[key]++
+			n := diffCalls[key]
+			mu.Unlock()
+			if n >= 2 {
+				return map[string]any{
+					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já consultou github_pr_diff para PR #%d (%s) neste turno. NÃO chame github_pr_diff repetidamente para o mesmo arquivo — use o diff já recebido e prossiga para a decisão final.", num, file),
+				}, nil
+			}
+
+		case "search_text":
+			q := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["query"])))
+			p := normPath(args["path"])
+			g := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["glob"])))
+			if q != "" && q != "<nil>" {
+				key := fmt.Sprintf("%s::%s::%s", q, p, g)
+				mu.Lock()
+				searchCalls[key]++
+				n := searchCalls[key]
+				mu.Unlock()
+				if n >= 2 {
+					return map[string]any{
+						"text": fmt.Sprintf("AVISO ANTI-LOOP: você já executou search_text(%q) neste mesmo escopo. NÃO repita a mesma busca — avance com os resultados já obtidos.", q),
+					}, nil
+				}
 			}
 		}
 		return nil, nil

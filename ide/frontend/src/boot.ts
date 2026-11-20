@@ -172,14 +172,13 @@ export async function boot() {
       const sameTarget = last && last.kind === "tool" && last.label === toolLabel
         && last.toolName === ev.toolName
         && ((last.toolDetail || "").trim() === incomingDetail);
-      if (sameTarget) {
+      if (sameTarget && !last.active) {
         const match = last.text.match(/×(\d+)$/);
         const count = match ? parseInt(match[1], 10) + 1 : 2;
         last.text = `${baseText} ×${count}`;
         last.active = true;
         if (!last.startedAt) last.startedAt = Date.now();
       } else {
-        markToolsDone(lane);
         lane.messages.push({
           id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "tool",
@@ -193,7 +192,7 @@ export async function boot() {
         });
       }
     } else if (ev.kind === "tool_result") {
-      markToolsDone(lane, ev.detail);
+      markToolsDone(lane, ev.detail || "", ev.toolName);
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
       markToolsDone(lane);
       markThinkingDone(lane);

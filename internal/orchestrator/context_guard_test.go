@@ -311,3 +311,78 @@ func TestRepeatReadGuardBlocksThirdIdenticalReadAndResetsOnEdit(t *testing.T) {
 		t.Fatalf("read after edit_file should pass again, got res=%v err=%v", res2, err)
 	}
 }
+
+func TestRepeatReadGuardBlocksShiftedRangesAndRepeatedPRDiff(t *testing.T) {
+	cb := newRepeatReadGuardCallback()
+	readTool := stubNamedTool{name: "read_file"}
+	diffTool := stubNamedTool{name: "github_pr_diff"}
+
+	// Shifting line ranges on the same file (1-40, 2-33, 5-33, 10-40) must trigger anti-loop on 5th read.
+	for i := 1; i <= 4; i++ {
+		res, err := cb(nil, readTool, map[string]any{
+			"path":       "specs/018-provedor-asaas/plan.md",
+			"start_line": 250 + i,
+			"end_line":   290 + i,
+		})
+		if err != nil || res != nil {
+			t.Fatalf("shifted read #%d should pass, got res=%v err=%v", i, res, err)
+		}
+	}
+	res5, err := cb(nil, readTool, map[string]any{
+		"path":       "specs/018-provedor-asaas/plan.md",
+		"start_line": 266,
+		"end_line":   276,
+	})
+	if err != nil || res5 == nil || !strings.Contains(fmt.Sprint(res5["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("5th shifted read on same file must trigger anti-loop, got res=%v err=%v", res5, err)
+	}
+
+	// Calling github_pr_diff twice for the same PR and file must trigger anti-loop on the 2nd call.
+	diffArgs := map[string]any{"number": 730, "file": "specs/018-provedor-asaas/spec.md"}
+	if res, err := cb(nil, diffTool, diffArgs); err != nil || res != nil {
+		t.Fatalf("1st github_pr_diff should pass, got res=%v err=%v", res, err)
+	}
+	resDiff2, err := cb(nil, diffTool, diffArgs)
+	if err != nil || resDiff2 == nil || !strings.Contains(fmt.Sprint(resDiff2["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("2nd identical github_pr_diff should trigger anti-loop, got res=%v err=%v", resDiff2, err)
+	}
+}
+
+func TestPRReviewGuardCallbacksAndExtractPRNumber(t *testing.T) {
+	if got := extractReviewPRNumber("Revisar PR #730 de @joaomarqu3ss — docs(spec-018)"); got != 730 {
+		t.Fatalf("extractReviewPRNumber = %d, want 730", got)
+	}
+	if !isGeneratedOrLockfile("frontend/package-lock.json") || isGeneratedOrLockfile("specs/018/spec.md") {
+		t.Fatal("unexpected isGeneratedOrLockfile classification")
+	}
+
+	before, after := newPRReviewGuardCallbacks(730, true, 3)
+	getPRTool := stubNamedTool{name: "github_get_pr"}
+	diffTool := stubNamedTool{name: "github_pr_diff"}
+	readTool := stubNamedTool{name: "read_file"}
+	reviewTool := stubNamedTool{name: "github_review_pr"}
+
+	// Preloaded PR metadata and full diff are short-circuited immediately.
+	if res, _ := before(nil, getPRTool, map[string]any{"number": 730}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
+		t.Fatalf("expected github_get_pr cache hit, got %v", res)
+	}
+	if res, _ := before(nil, diffTool, map[string]any{"number": 730}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
+		t.Fatalf("expected github_pr_diff cache hit when allPatchesComplete=true, got %v", res)
+	}
+
+	// Up to maxExploreCalls=3 repository reads pass; 4th is blocked.
+	for i := 1; i <= 3; i++ {
+		if res, _ := before(nil, readTool, map[string]any{"path": fmt.Sprintf("a%d.java", i)}); res != nil {
+			t.Fatalf("explore read #%d should pass, got %v", i, res)
+		}
+	}
+	if res, _ := before(nil, readTool, map[string]any{"path": "a4.java"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "ORÇAMENTO DE VERIFICAÇÃO") {
+		t.Fatalf("4th explore read should be blocked by review budget, got %v", res)
+	}
+
+	// Once github_review_pr succeeds, any further tool call is blocked.
+	_, _ = after(nil, reviewTool, nil, map[string]any{"text": "ok"}, nil)
+	if res, _ := before(nil, readTool, map[string]any{"path": "a1.java"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "já foi enviada") {
+		t.Fatalf("expected post-review tool block, got %v", res)
+	}
+}

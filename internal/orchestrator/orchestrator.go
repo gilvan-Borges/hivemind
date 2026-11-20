@@ -1987,6 +1987,31 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	sddJira := runMode == "plan:sdd-jira"
 	isAutoReview := runMode == "auto-review"
 
+	var (
+		preloadedPR        int
+		preloadedOwnPR     bool
+		preloadedAllDiffs  bool
+	)
+	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
+		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
+			dossier, isOwn, allComplete := buildPreHydratedPRDossier(ctx, r.GitHub, prNum)
+			if dossier != "" {
+				preloadedPR = prNum
+				preloadedOwnPR = isOwn
+				preloadedAllDiffs = allComplete
+				_ = sessionx.CompactOldToolOutputs(sess, 2)
+				if msg != nil && len(msg.Parts) > 0 && msg.Parts[0] != nil {
+					clonedParts := make([]*genai.Part, len(msg.Parts))
+					copy(clonedParts, msg.Parts)
+					firstCopy := *clonedParts[0]
+					firstCopy.Text += dossier
+					clonedParts[0] = &firstCopy
+					msg = &genai.Content{Role: msg.Role, Parts: clonedParts}
+				}
+			}
+		}
+	}
+
 	toolRoot := r.Workspace
 	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
 		toolRoot = r.ReviewRoot
@@ -2339,19 +2364,19 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if r.reviewRequested {
 		govRules += `
 
-PROTOCOLO DE REVISÃO PROFUNDA & ECONÔMICA DE PR:
-1. Comece por github_get_pr + github_pr_files (ou github_pr_diff) + github_ci_status em paralelo.
-2. Quando houver dúvida fora do diff (DTOs, rotas, permissões, contratos de API, catracas ou testes), investigue o projeto inteiro livremente — mas use search_text e find_files para localizar símbolos/arquivos em 1 chamada e read_file com start_line/end_line para ler apenas os trechos relevantes.
-3. Agrupe leituras independentes em chamadas paralelas no mesmo turno.
-4. Após cada bloco de leituras, sintetize em 1-2 linhas o que confirmou antes de seguir, preservando as conclusões mesmo quando leituras antigas forem compactadas automaticamente.`
+PROTOCOLO DE REVISÃO DIFF-FIRST & ORÇAMENTO RÍGIDO DE TOKENS (PADRÃO ANTHROPIC):
+1. ZERO-ROUNDTRIP: quando a seção [Dossiê Pré-Carregado do PR #N] estiver presente na mensagem, os metadados, revisões anteriores, comentários inline/gerais, status do CI, lista de arquivos e os patches [PATCH COMPLETO] JÁ estão carregados. NÃO chame github_get_pr, github_pr_files, github_ci_status nem github_pr_diff para arquivos já marcados como [PATCH COMPLETO].
+2. DIFF-FIRST: avalie diretamente os hunks do diff pré-carregado. Se o PR for de documentação/spec ou se o diff já for autossuficiente para validar a consistência, publique o parecer IMEDIATAMENTE com github_review_pr sem gastar turnos lendo o repositório.
+3. VERIFICAÇÃO CIRÚRGICA (MÁX. 1 A 2 TURNOS): só consulte arquivos fora do diff quando houver risco real de quebra de contrato (assinatura de método/DTO, rota, permissão ou regra RN citada). Faça todas as buscas/leituras estritamente necessárias em 1 único lote paralelo (máx. 4-6 chamadas no total) e NUNCA releia o mesmo arquivo deslocando faixas de linha.
+4. FECHAMENTO IMEDIATO: assim que concluir a verificação (no máximo no 2º ou 3º turno), chame github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT) e encerre com um resumo executivo curto.`
 	}
 
 	var triageInstr string
 	switch runMode {
 	case "auto-review":
-		testRule := "Execução de testes desabilitada nesta configuração (faça auditoria estática completa no diff e no projeto)."
+		testRule := "Execução de testes desabilitada nesta configuração (faça auditoria estática focada no diff pré-carregado)."
 		if r.Project.Settings.AutoReview.EffectiveRunTests() {
-			testRule = "Testes habilitados em worktree isolada da branch do PR: você PODE rodar comandos de teste/build da stack via run_shell (ex.: testes afetados pelo PR) e citar os resultados objetivos no parecer. Operações de commit, push ou merge via shell são bloqueadas."
+			testRule = "Testes habilitados em worktree isolada da branch do PR: quando o PR alterar código executável, você PODE rodar o teste afetado via run_shell e citar o resultado objetivo no parecer. Se o PR alterar apenas documentação/specs (.md), NÃO rode suite de testes."
 		}
 		actionRule := "Publique o parecer adequado com github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT conforme os achados técnicos)."
 		if r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only" {
@@ -2362,13 +2387,13 @@ PROTOCOLO DE REVISÃO PROFUNDA & ECONÔMICA DE PR:
 Você é o Chefe da equipe (%s) operando em MODO REVISÃO AUTOMÁTICA DE FLUXO (autônomo, SEM MERGE).
 REGRAS ABSOLUTAS DESTE MODO:
 1. NUNCA tente mesclar o PR (github_merge_pr foi fisicamente removida; o merge é decisão humana).
-2. Inspecione o PR com github_get_pr + github_pr_files + github_pr_diff + github_ci_status.
-3. Quando houver dúvida fora do diff, investigue o repositório inteiro livremente usando search_text, find_files e read_file(start_line, end_line).
+2. Analise primeiro o [Dossiê Pré-Carregado do PR] já injetado na mensagem (metadados, comentários, CI e patches). Só chame github_pr_diff(file=...) para arquivos marcados como [PARCIAL] ou [PATCH OMITIDO].
+3. Só faça leituras fora do diff (search_text / read_file com start_line..end_line) se houver dúvida concreta de contrato/bug, agrupando em 1 único turno paralelo (orçamento máximo de %d verificações).
 4. %s
 5. %s
 6. Ao final, devolva um resumo curto e objetivo do veredito registrado no GitHub.
 %s`,
-			chief.Instructions, chief.Name, testRule, actionRule, govRules)
+			chief.Instructions, chief.Name, defaultMaxReviewExploreCalls, testRule, actionRule, govRules)
 	case "direct":
 		triageInstr = fmt.Sprintf(`%s
 
@@ -2470,6 +2495,19 @@ REGRA DE TRIAGEM:
 	}
 
 	adkName := names.ADK(chief.Name + "_triage")
+	beforeToolCBs := []llmagent.BeforeToolCallback{
+		newRepeatReadGuardCallback(),
+	}
+	var afterToolCBs []llmagent.AfterToolCallback
+	if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
+		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, revAfter)
+	}
+	keepInTurn := r.Project.Settings.EffectiveInTurnKeepToolResults()
+	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {
+		keepInTurn = 6
+	}
 	triageAgent, err := llmagent.New(llmagent.Config{
 		Name:                     adkName,
 		Description:              "Triagem e coordenação do Chefe HiveMind.",
@@ -2481,11 +2519,10 @@ REGRA DE TRIAGEM:
 		Tools:                    allTools,
 		Instruction:              triageInstr,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+			newInTurnCompactionCallback(keepInTurn),
 		},
-		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
-			newRepeatReadGuardCallback(),
-		},
+		BeforeToolCallbacks: beforeToolCBs,
+		AfterToolCallbacks:  afterToolCBs,
 	})
 	if err != nil {
 		return false, "", err

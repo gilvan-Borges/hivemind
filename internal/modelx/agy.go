@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -408,6 +409,8 @@ type agyToolCall struct {
 	Arguments any    `json:"arguments"`
 }
 
+var agyCallSeq uint64
+
 func (e agyEnvelope) toResponse(structured bool) (*model.LLMResponse, error) {
 	text := strings.TrimSpace(e.Response)
 	var calls []agyToolCall
@@ -420,15 +423,17 @@ func (e agyEnvelope) toResponse(structured bool) (*model.LLMResponse, error) {
 		calls = decision.ToolCalls
 	}
 	parts := make([]*genai.Part, 0, len(calls)+1)
+	turnSeq := atomic.AddUint64(&agyCallSeq, 1)
 	for i, call := range calls {
 		name := strings.TrimSpace(call.Name)
 		if name == "" {
 			continue
 		}
-		id := call.ID
-		if id == "" {
-			id = fmt.Sprintf("agy-%d", i+1)
-		}
+		// Always assign a globally unique FunctionCall.ID per turn and per call index.
+		// Never reuse "agy-1" across turns or trust LLM-provided IDs: ADK v2 indexes
+		// FunctionResponses by ID across the entire session history, so duplicate IDs
+		// cause ADK to overwrite/swap tool outputs between turns and collapse parallel calls.
+		id := fmt.Sprintf("agy-%d-%d", turnSeq, i+1)
 		args, err := call.argumentMap()
 		if err != nil {
 			return nil, fmt.Errorf("argumentos da ferramenta %s: %w", name, err)

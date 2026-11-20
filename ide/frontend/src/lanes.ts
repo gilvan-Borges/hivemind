@@ -117,8 +117,26 @@ export function markThinkingDone(lane: TeamLane) {
   }
 }
 
-export function markToolsDone(lane: TeamLane, resultDetail?: string) {
+export function markToolsDone(lane: TeamLane, resultDetail?: string, toolName?: string) {
   const now = Date.now();
+  if (resultDetail !== undefined) {
+    // Match a single tool_result to the earliest active tool message for that toolName
+    // (or the earliest active tool message still awaiting output) so parallel tool batches
+    // pair 1-to-1 instead of collapsing all outputs onto the last row.
+    const target = lane.messages.find(
+      (m) => m.kind === "tool" && m.active && !m.toolOutput && (!toolName || m.toolName === toolName),
+    ) || lane.messages.find((m) => m.kind === "tool" && m.active);
+    if (target) {
+      target.active = false;
+      if (target.startedAt && !target.durationMs) {
+        target.durationMs = Math.max(1, now - target.startedAt);
+      }
+      if (resultDetail) {
+        target.toolOutput = target.toolOutput ? `${target.toolOutput}\n${resultDetail}` : resultDetail;
+      }
+      return;
+    }
+  }
   for (const m of lane.messages) {
     if (m.kind === "tool" && m.active) {
       m.active = false;
