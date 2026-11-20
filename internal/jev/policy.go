@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -45,6 +46,7 @@ type RolePin struct {
 type Policy struct {
 	Version                 int                     `json:"version"`
 	Enabled                 bool                    `json:"enabled"`
+	ClassifyEnabled         bool                    `json:"classifyEnabled,omitempty"`
 	Weights                 Weights                 `json:"weights"`
 	AutoEscalateUSD         float64                 `json:"autoEscalateUsd"`
 	MaxEscalateRatio        float64                 `json:"maxEscalateRatio"`
@@ -311,6 +313,45 @@ func (p Policy) isDataClassAllowed(dc DataClass) bool {
 		}
 	}
 	return false
+}
+
+// ValidatePolicy rejects weights, caps and data classes the local editor must not store.
+func ValidatePolicy(pol Policy) error {
+	w := pol.Weights
+	if math.IsNaN(w.Quality) || math.IsNaN(w.Cost) || math.IsNaN(w.Latency) {
+		return fmt.Errorf("pesos inválidos")
+	}
+	if w.Quality < 0 || w.Cost < 0 || w.Latency < 0 || w.Quality+w.Cost+w.Latency <= 0 {
+		return fmt.Errorf("pesos inválidos")
+	}
+	if pol.AutoEscalateUSD < 0 || pol.MaxEscalateRatio < 0 {
+		return fmt.Errorf("teto de escalada inválido")
+	}
+	for _, dc := range pol.AllowDataClass {
+		switch dc {
+		case DataClassCLIAccount, DataClassHTTPAPI, DataClassWorkspaceAgent:
+		default:
+			return fmt.Errorf("classe de dado desconhecida: %s", dc)
+		}
+	}
+	for name, v := range pol.DailyUSD {
+		if v < 0 || math.IsNaN(v) || strings.Contains(name, "/") || strings.Contains(name, "..") {
+			return fmt.Errorf("teto diário inválido para %s", name)
+		}
+	}
+	return nil
+}
+
+// SavePolicy writes the user-level policy.json. A repository file cannot call this.
+func SavePolicy(pol Policy) error {
+	if err := ValidatePolicy(pol); err != nil {
+		return err
+	}
+	path, err := PolicyPath()
+	if err != nil {
+		return err
+	}
+	return SavePolicyTo(path, pol)
 }
 
 func (p Policy) isProviderDenied(provider, repoKey string, repoPolicy RepoPolicy) bool {

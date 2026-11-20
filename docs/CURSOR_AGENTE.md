@@ -18,12 +18,12 @@ O rótulo deixa claro que isto é um agente, não um modelo cru. Ele grava arqui
 ## O que o processo faz
 
 ```text
-agent --model <id> -p --output-format stream-json --stream-partial-output --trust --sandbox enabled --workspace <pasta> "…"
+agent --model <id> -p --output-format stream-json --stream-partial-output --sandbox enabled --workspace <pasta> "…"
 ```
 
-`auto` omite `--model`. A chave vai no ambiente do processo, nunca nos argumentos. O pedido longo fica em `.hivemind/cursor-task.md` (a pasta já está no `.gitignore`) e é apagado ao terminar. Uma imagem anexada no chat é gravada em `.hivemind/cursor-images/` e o caminho entra no pedido, para o CLI poder lê-la. Esses arquivos também são apagados ao terminar.
+`auto` omite `--model`. `--trust` e `--force` só entram quando o modo de permissão do time é `full_access`. Nos outros modos o CLI headless recusa o que exigiria aprovação. A sandbox do CLI permanece ligada onde o binário a suporta (macOS e Linux). No Windows o CLI não tem sandbox (`--sandbox disabled`, senão o processo aborta) e a IDE mostra esse aviso junto da escolha de permissão: sem `full_access`, edição que pediria aprovação é recusada. A chave vai no ambiente do processo, nunca nos argumentos. O pedido longo fica em `.hivemind/cursor-task.md` (a pasta já está no `.gitignore`) e é apagado ao terminar. Uma imagem anexada no chat é gravada em `.hivemind/cursor-images/` e o caminho entra no pedido, para o CLI poder lê-la. Esses arquivos também são apagados ao terminar.
 
-O texto e o nome das ferramentas (sem o corpo dos arquivos) entram no mesmo fluxo de eventos da execução. A IDE e o app mobile, pelo Remote Bridge, mostram esses eventos. O modo headless não consegue parar para perguntar: o que exigiria aprovação é recusado pelo CLI. Não passamos `--force`.
+O texto e o nome das ferramentas (sem o corpo dos arquivos) entram no mesmo fluxo de eventos da execução. A IDE e o app mobile, pelo Remote Bridge, mostram esses eventos. O modo headless não consegue parar para perguntar: o que exigiria aprovação é recusado pelo CLI.
 
 ## Limitações
 

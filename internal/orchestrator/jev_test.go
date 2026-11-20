@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -264,5 +266,94 @@ func TestJevModelFactoryProviderScopedOpenRouterAuto(t *testing.T) {
 		if calledProvider != "openrouter" || calledModel != "deepseek/deepseek-chat" {
 			t.Fatalf("spec %+v expected Jev to pick openrouter/deepseek/deepseek-chat (ignoring static agy/gemini seeds), got %s/%s", spec, calledProvider, calledModel)
 		}
+	}
+}
+
+func TestClassifierStaysOffUnlessEnabled(t *testing.T) {
+	long := strings.Repeat("lorem ipsum dolor sit amet ", 40)
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{
+		Step: "dev_report", ObjectiveLen: len(long), Objective: long, InputTokens: 3000,
+	})
+	newFactory := func(enabled bool) (func(context.Context, team.Agent) (model.LLM, error), *int) {
+		pol := jev.DefaultPolicy()
+		pol.ClassifyEnabled = enabled
+		cat := jev.NewCatalogStore(t.TempDir()+"/catalog.json", nil)
+		cat.MergeSource("openrouter", []jev.ModelEntry{{
+			Provider:           "openrouter",
+			Model:              "deepseek/deepseek-chat",
+			ContextLength:      128_000,
+			PromptMicroUSD:     0.14,
+			CompletionMicroUSD: 0.28,
+			Capabilities:       jev.Capabilities{Tools: true},
+			Tier:               jev.TierCheap,
+			DataClass:          jev.DataClassHTTPAPI,
+		}})
+		calls := 0
+		factory := NewJevModelFactory(JevFactoryOptions{
+			Policy:  &pol,
+			Catalog: cat,
+			Health: func() jev.HealthSnapshot {
+				return jev.HealthSnapshot{Credentials: map[string]bool{"openrouter": true}, AgyRemainingPct: -1}
+			},
+			BuildModel: func(context.Context, string, string) (model.LLM, error) {
+				return &modelx.Scripted{}, nil
+			},
+			Classify: func(_ context.Context, objective string) (string, error) {
+				calls++
+				if strings.Contains(objective, "policy.json") || strings.Contains(objective, "sk-") {
+					t.Fatal("classificador recebeu policy ou chave")
+				}
+				return "compre o modelo caro", nil
+			},
+		})
+		return factory, &calls
+	}
+	off, offCalls := newFactory(false)
+	if _, err := off(ctx, team.Agent{Name: "n", Role: "analyst", Provider: "jev", Model: "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	if *offCalls != 0 {
+		t.Fatalf("flag desligada fez %d chamadas", *offCalls)
+	}
+	on, onCalls := newFactory(true)
+	if _, err := on(ctx, team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	if *onCalls != 0 {
+		t.Fatalf("papel claro não deveria classificar, calls=%d", *onCalls)
+	}
+	if _, err := on(ctx, team.Agent{Name: "n", Role: "analyst", Provider: "jev", Model: "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	if *onCalls != 1 {
+		t.Fatalf("confiança baixa deveria chamar uma vez, calls=%d", *onCalls)
+	}
+}
+
+func TestRepoDenyCursorSkipsBuildEvenWhenPinned(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".hivemind"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("deny_providers: [cursor]\n")
+	if err := os.WriteFile(filepath.Join(ws, ".hivemind", "jev.yaml"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pol := jev.DefaultPolicy()
+	built := 0
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy: &pol,
+		BuildModel: func(context.Context, string, string) (model.LLM, error) {
+			built++
+			return &modelx.Scripted{}, nil
+		},
+	})
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{Workspace: ws, Step: "dev_report"})
+	_, err := factory(ctx, team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "cursor", Model: "auto"})
+	if err == nil {
+		t.Fatal("pin cursor com deny_providers deveria falhar")
+	}
+	if built != 0 {
+		t.Fatalf("NewCursor não pode ser construído com o provedor negado, build=%d", built)
 	}
 }

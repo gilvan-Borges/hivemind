@@ -15,6 +15,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
@@ -94,6 +95,9 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 	if query == "" {
 		return "", fmt.Errorf("informe o parâmetro query para search_text")
 	}
+	if pathsec.IsSensitivePath(args.Path) {
+		return "", fmt.Errorf("busca recusada: %s é um arquivo sensível (credencial, chave ou .env)", args.Path)
+	}
 	searchDir, absRoot, err := resolveSearchBase(root, args.Path, true)
 	if err != nil {
 		return "", err
@@ -146,7 +150,7 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 
 		name := entry.Name()
 		if entry.IsDir() {
-			if path != searchDir && searchIgnoredDirs[strings.ToLower(name)] {
+			if path != searchDir && (searchIgnoredDirs[strings.ToLower(name)] || pathsec.IsSensitivePath(name)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -166,6 +170,9 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
+		if pathsec.IsSensitivePath(relSlash) || pathsec.IsSensitivePath(path) {
+			return nil
+		}
 		if glob != "" && !matchGlob(glob, name, relSlash) {
 			return nil
 		}

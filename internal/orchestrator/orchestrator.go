@@ -319,6 +319,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 
 	r.Project.Normalize()
+	ctx = modelx.WithPermissionMode(ctx, r.Project.Settings.EffectivePermissionMode())
 
 	r.integration = ""
 	r.deliveryRoot = ""
@@ -906,6 +907,7 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		RunMode:      runMode,
 		Step:         outputKey,
 		ObjectiveLen: len(r.objectiveText),
+		Objective:    r.objectiveText,
 		InputTokens:  inTok,
 		HasImages:    r.hasImages,
 		NeedsTools:   true,
@@ -2156,6 +2158,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		RunMode:      runMode,
 		Step:         triageStep,
 		ObjectiveLen: len(r.objectiveText),
+		Objective:    r.objectiveText,
 		InputTokens:  jev.EstimateFirstStepInputTokens(len(r.objectiveText), len(r.teamMemorySnippet()), true),
 		HasImages:    r.hasImages || hasImageContent(msg),
 		NeedsTools:   true,

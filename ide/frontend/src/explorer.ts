@@ -1,6 +1,6 @@
 import { fileBadge, icons } from "./icons";
 import type { AgentRuntime, ChatMessage, FileNode, PermissionMode, ProjectWorkspaceContext } from "./types";
-import { escapeHtml, exactTokens, formatTokens, matchAgentRuntime, permissionModeLabel, roleLabelPt } from "./utils";
+import { escapeHtml, exactTokens, formatTokens, matchAgentRuntime, permissionModeLabel, reasonPhrase, roleLabelPt } from "./utils";
 import { refreshSessions } from "./boot";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
@@ -455,6 +455,7 @@ export function renderLeftSidebar() {
             <option value="auto_edit" ${permMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
             <option value="full_access" ${permMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
           </select>
+          ${state.cursorCLI?.sandboxWarning ? `<div class="dim" style="font-size:10.5px;margin-top:4px;line-height:1.4">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
         </div>
         <button class="mini" id="btn-team-memory" style="width:100%;margin-bottom:8px;justify-content:flex-start">
           ${icons.memory}
@@ -707,7 +708,7 @@ export function renderAgentCardsHtml(agents: AgentRuntime[]): string {
         disabled: Boolean(lane?.running),
         compact: true,
       })}
-      ${a.routeModel ? `<div class="agent-meta" style="color:var(--muted)">Jev: ${escapeHtml(a.routeModel)}${a.routeTier ? ` (${escapeHtml(a.routeTier)})` : ""}</div>` : ""}
+      ${a.routeModel ? `<div class="agent-meta" style="color:var(--muted)">Jev: ${escapeHtml(a.routeModel)}${a.routeTier ? ` (${escapeHtml(a.routeTier)})` : ""}${a.routeReasons?.length ? ` · ${escapeHtml(reasonPhrase(a.routeReasons))}` : ""}</div>` : ""}
       ${a.tool ? `<div class="agent-meta" style="color:var(--green)">Ferramenta: ${escapeHtml(a.tool)}</div>` : ""}
       ${a.tokens > 0
         ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`

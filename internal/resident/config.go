@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/adk/v2/model"
 
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
@@ -121,12 +122,125 @@ func ResolveModelRoute(cfg Config) (provider, modelName string) {
 	return normProv, m
 }
 
-// BuildLLM constructs the ADK model via internal/modelx for the resident turn.
-func BuildLLM(ctx context.Context, cfg Config) (model.LLM, string, string, error) {
-	prov, mod := ResolveModelRoute(cfg)
-	llm, err := modelx.New(ctx, prov, mod)
-	if err != nil {
-		return nil, prov, mod, fmt.Errorf("inicializar modelo do residente (%s / %s): %w", prov, mod, err)
+// BuildLLM asks Jev for the route and only then builds the model.
+// An explicit provider+model is a pin. auto goes through Score.
+func BuildLLM(ctx context.Context, baseDir string, cfg Config) (model.LLM, string, string, error) {
+	return buildThroughJev(ctx, cfg, jevRouteDeps{tokens: LoadRouteTokens(baseDir)})
+}
+
+type jevRouteDeps struct {
+	build   func(ctx context.Context, provider, modelName string) (model.LLM, error)
+	catalog *jev.Catalog
+	health  func() jev.HealthSnapshot
+	tokens  int
+	policy  *jev.Policy
+}
+
+func buildThroughJev(ctx context.Context, cfg Config, deps jevRouteDeps) (model.LLM, string, string, error) {
+	build := deps.build
+	if build == nil {
+		build = modelx.New
 	}
-	return llm, prov, mod, nil
+	pol := jev.DefaultPolicy()
+	if deps.policy != nil {
+		pol = *deps.policy
+	} else if loaded, err := jev.LoadPolicy(); err == nil {
+		pol = loaded
+	}
+	tokens := deps.tokens
+	class, comp := adjustResidentRoute(tokens)
+	pin := jev.AgentPin{Provider: "jev", Model: "auto"}
+	if explicitResidentPin(cfg) {
+		prov, mod := ResolveModelRoute(cfg)
+		pin = jev.AgentPin{Provider: prov, Model: mod}
+	}
+	cat := jev.DefaultStaticCatalog()
+	if deps.catalog != nil {
+		cat = *deps.catalog
+	}
+	health := jev.HealthSnapshot{AgyRemainingPct: -1}
+	if deps.health != nil {
+		health = deps.health()
+	} else if pres := modelx.JevCredentialPresence(); pres != nil {
+		health.Credentials = pres
+	}
+	choice, ref := jev.Score(jev.Task{
+		Role:        "resident",
+		Class:       class,
+		Complexity:  comp,
+		InputTokens: tokens,
+		NeedsTools:  true,
+	}, cat, pol, health, pin, jev.RepoPolicy{})
+	if ref.Code != "" {
+		return nil, "", "", fmt.Errorf("jev recusou a rota do residente (%s)", ref.Code)
+	}
+	llm, err := build(ctx, choice.Provider, choice.Model)
+	if err != nil {
+		return nil, choice.Provider, choice.Model, fmt.Errorf("inicializar modelo do residente (%s / %s): %w", choice.Provider, choice.Model, err)
+	}
+	return llm, choice.Provider, choice.Model, nil
+}
+
+func explicitResidentPin(cfg Config) bool {
+	p := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	m := strings.TrimSpace(cfg.Model)
+	if p == "" || p == "auto" || p == "jev" {
+		return false
+	}
+	return m != "" && !strings.EqualFold(m, "auto")
+}
+
+// adjustResidentRoute shifts the next auto route from the last measured input.
+// Under 20k tokens stays trivial. Above 100k is a hard coding step.
+func adjustResidentRoute(inputTokens int) (jev.Class, jev.Complexity) {
+	switch {
+	case inputTokens > 100_000:
+		return jev.ClassCoding, jev.ComplexityHigh
+	case inputTokens > 20_000:
+		return jev.ClassCoding, jev.ComplexityMedium
+	default:
+		return jev.ClassTrivial, jev.ComplexityLow
+	}
+}
+
+func routeStatsPath(baseDir string) string {
+	if strings.TrimSpace(baseDir) == "" {
+		baseDir = DefaultBaseDir()
+	}
+	return filepath.Join(baseDir, "route-stats.json")
+}
+
+// SaveRouteTokens records the last turn's input size for the next auto route.
+func SaveRouteTokens(baseDir string, inputTokens int64) error {
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	raw, err := json.Marshal(map[string]int64{"lastInputTokens": inputTokens})
+	if err != nil {
+		return err
+	}
+	path := routeStatsPath(baseDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadRouteTokens returns the last saved input size. Missing file is zero.
+func LoadRouteTokens(baseDir string) int {
+	data, err := os.ReadFile(routeStatsPath(baseDir))
+	if err != nil {
+		return 0
+	}
+	var body struct {
+		LastInputTokens int `json:"lastInputTokens"`
+	}
+	if json.Unmarshal(data, &body) != nil || body.LastInputTokens < 0 {
+		return 0
+	}
+	return body.LastInputTokens
 }

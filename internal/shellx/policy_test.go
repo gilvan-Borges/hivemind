@@ -148,3 +148,32 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 		t.Fatalf("gh auth status sem token continua leitura: %+v", status)
 	}
 }
+
+func TestShellMetacharactersRequireConfirmation(t *testing.T) {
+	allow := []string{"go", "git", "echo"}
+	plain := Evaluate("go test ./...", allow)
+	if plain.UseShell || plain.Dangerous || !plain.Allowed {
+		t.Fatalf("comando simples: %+v", plain)
+	}
+	for _, raw := range []string{
+		"go test ./... && echo ok",
+		"go test ./... || echo fail",
+		"echo a; echo b",
+		"echo hi | findstr x",
+		"echo $(go env GOPATH)",
+		"echo `go env GOPATH`",
+		"go test ./... > out.txt",
+		"echo hi < in.txt",
+	} {
+		dec := Evaluate(raw, allow)
+		if !dec.UseShell || !dec.Dangerous || !dec.Allowed {
+			t.Fatalf("%q deveria ser allowlisted, perigoso e via shell: %+v", raw, dec)
+		}
+		if !HasShellMetacharacters(raw) {
+			t.Fatalf("HasShellMetacharacters(%q) = false", raw)
+		}
+	}
+	if HasShellMetacharacters("go test ./...") {
+		t.Fatal("go test não tem metacaractere")
+	}
+}
