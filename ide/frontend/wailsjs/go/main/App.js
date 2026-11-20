@@ -342,6 +342,22 @@ export function ResidentDeleteMemory(arg1) {
   return window['go']['main']['App']['ResidentDeleteMemory'](arg1);
 }
 
+export function ResidentDeleteSecret(arg1) {
+  return window['go']['main']['App']['ResidentDeleteSecret'](arg1);
+}
+
+export function ResidentSavePolicy(arg1, arg2) {
+  return window['go']['main']['App']['ResidentSavePolicy'](arg1, arg2);
+}
+
+export function ResidentSetSecret(arg1, arg2) {
+  return window['go']['main']['App']['ResidentSetSecret'](arg1, arg2);
+}
+
+export function ResidentDeleteSecret(arg1) {
+  return window['go']['main']['App']['ResidentDeleteSecret'](arg1);
+}
+
 export function ResidentListMemory(arg1) {
   return window['go']['main']['App']['ResidentListMemory'](arg1);
 }
@@ -350,8 +366,16 @@ export function ResidentSaveConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResidentSaveConfig'](arg1, arg2, arg3);
 }
 
+export function ResidentSavePolicy(arg1, arg2) {
+  return window['go']['main']['App']['ResidentSavePolicy'](arg1, arg2);
+}
+
 export function ResidentSessionMessages(arg1) {
   return window['go']['main']['App']['ResidentSessionMessages'](arg1);
+}
+
+export function ResidentSetSecret(arg1, arg2) {
+  return window['go']['main']['App']['ResidentSetSecret'](arg1, arg2);
 }
 
 export function ResidentStartTurn(arg1, arg2, arg3) {

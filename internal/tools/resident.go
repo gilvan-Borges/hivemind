@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"google.golang.org/adk/v2/agent"
@@ -152,6 +153,212 @@ func ForResidentReadOnly(broker ResidentBroker) ([]tool.Tool, error) {
 	}
 
 	return out, nil
+}
+
+type residentMemoryWriteArgs struct {
+	Workstream string `json:"workstream,omitempty" jsonschema:"Workstream onde o fato será salvo."`
+	Key        string `json:"key" jsonschema:"Identificador curto e estável do fato pessoal."`
+	Text       string `json:"text" jsonschema:"Conteúdo factual conciso a registrar na memória pessoal local (nunca segredos)."`
+	Pin        bool   `json:"pin,omitempty" jsonschema:"Fixa este fato no contexto futuro do workstream."`
+}
+
+type residentMemoryForgetArgs struct {
+	Workstream string `json:"workstream,omitempty" jsonschema:"Workstream do fato a remover."`
+	Key        string `json:"key" jsonschema:"Chave exata do fato pessoal a esquecer."`
+}
+
+type residentExecArgs struct {
+	Argv       []string `json:"argv" jsonschema:"Lista explícita [executavel, arg1, arg2...] sem shell (nunca use string única ou sh -c)."`
+	TimeoutSec int      `json:"timeout_sec,omitempty" jsonschema:"Tempo limite opcional em segundos (padrão 60, máximo 120)."`
+}
+
+type residentNetFetchArgs struct {
+	URL            string `json:"url" jsonschema:"URL https/http em host explicitamente liberado na allowlist de rede."`
+	Method         string `json:"method,omitempty" jsonschema:"Método HTTP seguro (GET ou HEAD)."`
+	CredentialName string `json:"credential_name,omitempty" jsonschema:"Nome opcional de credencial salva no cofre do sistema (enviada apenas no cabeçalho Authorization sem expor o valor)."`
+}
+
+// ForResidentPhase2 returns the Phase 2 toolset for the Hive resident agent:
+// all Phase 1 read tools plus gated workspace writes, surgical edits, deletions,
+// personal memory mutation, sandboxed explicit-argv execution, and allowlisted network fetch.
+// Every call passes exclusively through broker.Execute (never raw OS access here).
+func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
+	out, err := ForResidentReadOnly(broker)
+	if err != nil {
+		return nil, err
+	}
+	add := func(t tool.Tool, err error) error {
+		if err != nil {
+			return err
+		}
+		out = append(out, t)
+		return nil
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "write_file",
+		Description: "Cria ou substitui um arquivo de texto no workspace ativo (exige aprovação humana e sandbox ativa).",
+	}, func(ctx agent.Context, args writeArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "write_file", map[string]any{
+			"path":    args.Path,
+			"content": args.Content,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "edit_file",
+		Description: "Edita cirurgicamente um arquivo existente no workspace substituindo old_text por new_text (exige aprovação humana e sandbox ativa).",
+	}, func(ctx agent.Context, args editArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "edit_file", map[string]any{
+			"path":        args.Path,
+			"old_text":    args.OldText,
+			"new_text":    args.NewText,
+			"replace_all": args.ReplaceAll,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "delete_file",
+		Description: "Remove um arquivo específico do workspace ativo (ação destrutiva: sempre exige aprovação humana).",
+	}, func(ctx agent.Context, args pathArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "delete_file", map[string]any{"path": args.Path})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "memory_write",
+		Description: "Salva ou atualiza um fato na memória pessoal local desta conta (exige aprovação humana).",
+	}, func(ctx agent.Context, args residentMemoryWriteArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "memory_write", map[string]any{
+			"workstream": args.Workstream,
+			"key":        args.Key,
+			"text":       args.Text,
+			"pin":        args.Pin,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "memory_forget",
+		Description: "Remove um fato específico da memória pessoal local desta conta (exige aprovação humana).",
+	}, func(ctx agent.Context, args residentMemoryForgetArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "memory_forget", map[string]any{
+			"workstream": args.Workstream,
+			"key":        args.Key,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "exec_command",
+		Description: "Executa um binário autorizado dentro da sandbox obrigatória do SO usando argv explícito (sem shell, exige aprovação humana).",
+	}, func(ctx agent.Context, args residentExecArgs) (textResult, error) {
+		m := map[string]any{"argv": args.Argv}
+		if args.TimeoutSec > 0 {
+			m["timeout_sec"] = args.TimeoutSec
+		}
+		res, err := broker.Execute(ctx, "exec_command", m)
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "net_fetch",
+		Description: "Faz uma requisição HTTP/HTTPS GET ou HEAD exclusivamente para hosts na allowlist configurada (exige aprovação humana).",
+	}, func(ctx agent.Context, args residentNetFetchArgs) (textResult, error) {
+		m := map[string]any{
+			"url":             args.URL,
+			"method":          args.Method,
+			"credential_name": args.CredentialName,
+		}
+		res, err := broker.Execute(ctx, "net_fetch", m)
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// WriteFileWorkspace writes a text file jailed inside root (1 MiB cap).
+func WriteFileWorkspace(root, rel, content string) (string, error) {
+	if len(content) > 1<<20 {
+		return "", fmt.Errorf("conteúdo acima de 1 MiB")
+	}
+	path, err := workspace.Resolve(root, rel)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return "arquivo gravado: " + rel, nil
+}
+
+// EditFileWorkspace applies a surgical edit jailed inside root.
+func EditFileWorkspace(root, rel, oldText, newText string, replaceAll bool) (string, error) {
+	return editFileSurgical(root, editArgs{
+		Path:       rel,
+		OldText:    oldText,
+		NewText:    newText,
+		ReplaceAll: replaceAll,
+	})
+}
+
+// DeleteFileWorkspace deletes a single regular file jailed inside root.
+func DeleteFileWorkspace(root, rel string) (string, error) {
+	path, err := workspace.Resolve(root, rel)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("delete_file não remove diretórios inteiros: %s", rel)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return "arquivo removido: " + rel, nil
 }
 
 // ReadFileReadOnly reads a jailed workspace file (reusing the same range and

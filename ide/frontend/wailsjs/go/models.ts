@@ -1775,6 +1775,14 @@ export namespace resident {
 	    memoryDir?: string;
 	    auditPath?: string;
 	    lastError?: string;
+	    sandboxAvailable?: boolean;
+	    sandboxMechanism?: string;
+	    sandboxReason?: string;
+	    vaultAvailable?: boolean;
+	    vaultReason?: string;
+	    allowedBinaries?: string[];
+	    allowedHosts?: string[];
+	    vaultSecrets?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -1792,6 +1800,14 @@ export namespace resident {
 	        this.memoryDir = source["memoryDir"];
 	        this.auditPath = source["auditPath"];
 	        this.lastError = source["lastError"];
+	        this.sandboxAvailable = source["sandboxAvailable"];
+	        this.sandboxMechanism = source["sandboxMechanism"];
+	        this.sandboxReason = source["sandboxReason"];
+	        this.vaultAvailable = source["vaultAvailable"];
+	        this.vaultReason = source["vaultReason"];
+	        this.allowedBinaries = source["allowedBinaries"];
+	        this.allowedHosts = source["allowedHosts"];
+	        this.vaultSecrets = source["vaultSecrets"];
 	    }
 	}
 	export class TurnResult {

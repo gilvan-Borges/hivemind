@@ -201,3 +201,17 @@ func HasSensitiveArg(args map[string]any) bool {
 	}
 	return false
 }
+
+// RedactSecretValues scrubs exact resolved vault secret values (and common encodings)
+// in addition to standard regex token patterns.
+func RedactSecretValues(text string, values ...string) string {
+	out := RedactSecrets(text)
+	for _, val := range values {
+		val = strings.TrimSpace(val)
+		if len(val) < 4 {
+			continue
+		}
+		out = strings.ReplaceAll(out, val, "[SEGREDO_OCULTADO]")
+	}
+	return out
+}

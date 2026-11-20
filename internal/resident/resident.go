@@ -3,6 +3,7 @@ package resident
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
 )
 
@@ -24,22 +27,27 @@ const (
 	MaxInputTokensPerTurn = 80000
 )
 
-// Runner executes Phase 1 read-only turns of the Hive resident agent.
-// It never opens network sockets, never spawns MCP servers, and routes every
-// tool invocation through the fail-closed Broker.
+// Runner executes Phase 2 resident turns with fail-closed OS sandboxing,
+// vault secret protection, and human-gated tool execution via Broker.
 type Runner struct {
-	BaseDir      string
-	Config       Config
-	Audit        AuditWriter
-	Memory       *MemoryStore
-	ListProjects func() []ProjectRef
-	Approve      ApprovalFunc
-	OnEvent      func(Event)
+	BaseDir         string
+	Config          Config
+	Policy          *Policy
+	Sandbox         sandboxx.Runner
+	Vault           secretx.Vault
+	HTTPClient      *http.Client
+	ApprovalTimeout time.Duration
+	Audit           AuditWriter
+	Memory          *MemoryStore
+	ListProjects    func() []ProjectRef
+	Approve         ApprovalFunc
+	ApproveDetailed ApprovalDetailFunc
+	OnEvent         func(Event)
 	// Model optionally injects a pre-built model.LLM (e.g. modelx.Scripted in tests).
 	Model model.LLM
 	// Streaming defaults to agent.StreamingModeSSE when zero.
 	Streaming agent.StreamingMode
-	// CustomHandlers optionally overrides broker read handlers in unit tests.
+	// CustomHandlers optionally overrides broker handlers in unit tests.
 	CustomHandlers map[string]ToolHandler
 	// LastBroker exposes the broker used in the most recent RunTurn (useful in tests).
 	LastBroker *Broker
@@ -101,30 +109,43 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		}
 	}
 
+	pol := Policy{}
+	if r.Policy != nil {
+		pol = *r.Policy
+	} else if loadedPol, polErr := LoadPolicy(baseDir); polErr == nil {
+		pol = loadedPol
+	}
+
 	broker := NewBroker(BrokerConfig{
-		Workspace:      req.Workspace,
-		Workstream:     ws,
-		Origin:         origin,
-		AccountID:      accountID,
-		DeviceID:       req.DeviceID,
-		Audit:          audit,
-		Memory:         mem,
-		ListProjects:   r.ListProjects,
-		Approve:        r.Approve,
-		OnToolEvent:    r.emit,
-		CustomHandlers: r.CustomHandlers,
+		Workspace:       req.Workspace,
+		Workstream:      ws,
+		Origin:          origin,
+		AccountID:       accountID,
+		DeviceID:        req.DeviceID,
+		Policy:          pol,
+		Sandbox:         r.Sandbox,
+		Vault:           r.Vault,
+		HTTPClient:      r.HTTPClient,
+		ApprovalTimeout: r.ApprovalTimeout,
+		Audit:           audit,
+		Memory:          mem,
+		ListProjects:    r.ListProjects,
+		Approve:         r.Approve,
+		ApproveDetailed: r.ApproveDetailed,
+		OnToolEvent:     r.emit,
+		CustomHandlers:  r.CustomHandlers,
 	})
 	r.LastBroker = broker
 
-	adkTools, err := tools.ForResidentReadOnly(broker)
+	adkTools, err := tools.ForResidentPhase2(broker)
 	if err != nil {
-		return TurnResult{}, fmt.Errorf("registrar ferramentas somente leitura do residente: %w", err)
+		return TurnResult{}, fmt.Errorf("registrar ferramentas do residente: %w", err)
 	}
 
 	ag, err := llmagent.New(llmagent.Config{
 		Name:        "hive_resident",
 		Model:       llm,
-		Description: "Assistente residente pessoal Hive (Fase 1 · Somente Leitura).",
+		Description: "Assistente residente pessoal Hive (Fase 2 · Ações na Sandbox).",
 		Instruction: SystemPrompt(),
 		Tools:       adkTools,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
