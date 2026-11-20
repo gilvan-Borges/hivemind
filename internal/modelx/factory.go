@@ -52,7 +52,7 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 
 func newGemini(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	cfg := &genai.ClientConfig{}
-	useVertex := provider == "vertex" || strings.EqualFold(resolveEnvForContext(ctx, "gemini", "GOOGLE_GENAI_USE_VERTEXAI"), "true") || envTruthy("GOOGLE_GENAI_USE_VERTEXAI")
+	useVertex := provider == "vertex" || flagTruthy(resolveEnvForContext(ctx, "gemini", "GOOGLE_GENAI_USE_VERTEXAI"))
 	if useVertex {
 		project := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT")
 		if project == "" {
@@ -78,7 +78,7 @@ func newGemini(ctx context.Context, provider, modelName string) (model.LLM, erro
 }
 
 func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ANTHROPIC_BACKEND")), "vertex") {
+	if strings.EqualFold(strings.TrimSpace(resolveEnvForContext(ctx, "anthropic", "ANTHROPIC_BACKEND")), "vertex") {
 		project := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT")
 		if project == "" {
 			return nil, fmt.Errorf("defina GOOGLE_CLOUD_PROJECT para Claude no Vertex AI")
@@ -157,7 +157,7 @@ func openRouterCheckAuth(ctx context.Context, key, base string) error {
 		return nil
 	case http.StatusUnauthorized:
 		hint := "confira OPENROUTER_API_KEY em https://openrouter.ai/keys — a chave salva na IDE pode estar antiga/revogada; abra o menu do app → Chaves de API e salve a chave atual"
-		if strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) != "" {
+		if envKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")); envKey != "" && envKey == key {
 			hint = "a variável de ambiente OPENROUTER_API_KEY está definida no sistema e TEM prioridade sobre a chave salva na IDE — e o OpenRouter a rejeitou; remova/corrija a variável de ambiente (ou salve a chave correta na IDE e remova a variável) em Configurações do Windows → Variáveis de Ambiente"
 		}
 		return fmt.Errorf("OpenRouter rejeitou a chave (HTTP 401 Unauthorized): %s", hint)
@@ -202,7 +202,11 @@ func firstEnv(keys ...string) string {
 }
 
 func envTruthy(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	return flagTruthy(os.Getenv(key))
+}
+
+func flagTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "y", "on":
 		return true
 	default:

@@ -146,18 +146,13 @@ func LoadOpenCodeCredentials() (apiKey, baseURL, source string) {
 		source = "env"
 	}
 
-	if path, err := credentialsFilePath(); err == nil {
-		if data, err := os.ReadFile(path); err == nil {
-			var creds storedCredentials
-			if json.Unmarshal(data, &creds) == nil {
-				if apiKey == "" && strings.TrimSpace(creds.OpenCodeAPIKey) != "" {
-					apiKey = strings.TrimSpace(creds.OpenCodeAPIKey)
-					source = "config"
-				}
-				if baseURL == "" && strings.TrimSpace(creds.OpenCodeBaseURL) != "" {
-					baseURL = strings.TrimSpace(creds.OpenCodeBaseURL)
-				}
-			}
+	if fileKey, fileBase := readOpenCodeFile(); fileKey != "" || fileBase != "" {
+		if apiKey == "" && fileKey != "" {
+			apiKey = fileKey
+			source = "config"
+		}
+		if baseURL == "" && fileBase != "" {
+			baseURL = fileBase
 		}
 	}
 
@@ -186,14 +181,63 @@ func SaveOpenCodeCredentials(apiKey, baseURL string) error {
 	} else {
 		creds.OpenCodeBaseURL = cleanURL
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := writeSecretFile(path, append(data, '\n')); err != nil {
+		return err
+	}
+	ocFileMu.Lock()
+	ocFileCache.ok = false
+	ocFileMu.Unlock()
+	return nil
+}
+
+var (
+	ocFileMu    sync.Mutex
+	ocFileCache struct {
+		path string
+		mod  time.Time
+		size int64
+		key  string
+		base string
+		ok   bool
+	}
+)
+
+func readOpenCodeFile() (string, string) {
+	path, err := credentialsFilePath()
+	if err != nil {
+		return "", ""
+	}
+	ocFileMu.Lock()
+	defer ocFileMu.Unlock()
+	info, err := os.Stat(path)
+	if err != nil {
+		ocFileCache.ok = false
+		return "", ""
+	}
+	if ocFileCache.ok && ocFileCache.path == path && ocFileCache.size == info.Size() && ocFileCache.mod.Equal(info.ModTime()) {
+		return ocFileCache.key, ocFileCache.base
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		ocFileCache.ok = false
+		return "", ""
+	}
+	var creds storedCredentials
+	if json.Unmarshal(data, &creds) != nil {
+		ocFileCache.ok = false
+		return "", ""
+	}
+	ocFileCache.path = path
+	ocFileCache.mod = info.ModTime()
+	ocFileCache.size = info.Size()
+	ocFileCache.key = strings.TrimSpace(creds.OpenCodeAPIKey)
+	ocFileCache.base = strings.TrimSpace(creds.OpenCodeBaseURL)
+	ocFileCache.ok = true
+	return ocFileCache.key, ocFileCache.base
 }
 
 func maskAPIKey(key string) string {
@@ -204,7 +248,7 @@ func maskAPIKey(key string) string {
 	if len(k) <= 8 {
 		return "****"
 	}
-	return k[:4] + "…" + k[len(k)-4:]
+	return "****" + k[len(k)-4:]
 }
 
 // ParseOpenCodeSpec splits a model spec into tier ("go" or "zen") and raw model ID.
@@ -325,14 +369,25 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 			modelID = "big-pickle"
 		}
 	}
-	apiKey, zenBaseURL, _ := LoadOpenCodeCredentials()
-	if prof, _, _ := ResolveProfile(ctx, "opencode"); prof != nil && len(prof.Env) > 0 {
-		if k := firstNonEmpty(prof.Env["OPENCODE_API_KEY"], prof.Env["OPENCODE_ZEN_API_KEY"]); k != "" {
-			apiKey = k
+	prof, mode, _ := ResolveProfile(ctx, "opencode")
+	if mode == "isolated" {
+		return nil, fmt.Errorf("nenhum token OpenCode vinculado a esta organização")
+	}
+	var apiKey, zenBaseURL string
+	profileOnly := prof != nil && (len(prof.OrgPatterns) > 0 || mode == "auto_org" || mode == "manual" || mode == "override")
+	if prof != nil {
+		apiKey = firstNonEmpty(profileEnvValue(prof, "OPENCODE_API_KEY"), profileEnvValue(prof, "OPENCODE_ZEN_API_KEY"))
+		zenBaseURL = strings.TrimRight(strings.TrimSpace(profileEnvValue(prof, "OPENCODE_BASE_URL")), "/")
+	}
+	if apiKey == "" && !profileOnly {
+		fileKey, fileBase, _ := LoadOpenCodeCredentials()
+		apiKey = fileKey
+		if zenBaseURL == "" {
+			zenBaseURL = fileBase
 		}
-		if b := strings.TrimRight(strings.TrimSpace(prof.Env["OPENCODE_BASE_URL"]), "/"); b != "" {
-			zenBaseURL = b
-		}
+	}
+	if zenBaseURL == "" {
+		zenBaseURL = OpenCodeDefaultBaseURL
 	}
 	if apiKey == "" {
 		if isOpenCodeFreeModel(modelID) {

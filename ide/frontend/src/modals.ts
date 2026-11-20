@@ -484,7 +484,9 @@ export function renderModalLayer() {
             const pvProfiles = profilesList.filter((p) => p.provider === pv);
             const activeLabel = info?.profileName
               ? `${escapeHtml(info.profileName)} (${info.matchMode === "auto_org" ? `auto: ${escapeHtml(info.matchedRule || detectedOrg)}` : info.matchMode})`
-              : "Global / Ambiente";
+              : info?.matchMode === "isolated"
+                ? "Isolado (sem conta desta org)"
+                : "Global / Ambiente";
             return `
               <div>
                 <strong>${escapeHtml(provLabels[pv])}</strong>

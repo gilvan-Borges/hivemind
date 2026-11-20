@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -268,5 +269,105 @@ func TestMultiOrgJiraIsolation(t *testing.T) {
 	rVOff := ResolveForWorkspace(wsVibetex)
 	if rVOff.MatchMode != "isolated_none" || FromWorkspace(wsVibetex).Enabled() {
 		t.Fatalf("expected manual none to disable vibetex Jira, got %+v", rVOff)
+	}
+	for _, s := range rV.Profiles {
+		if strings.Contains(s.TokenMasked, "tok-vibetex") || strings.Contains(s.TokenMasked, "tok-empb") {
+			t.Fatalf("profile summary leaked a token: %+v", s)
+		}
+	}
+}
+
+func TestJiraIsolationIgnoresEnvLegacyAndDefault(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	for _, k := range []string{"JIRA_BASE_URL", "JIRA_HOST", "JIRA_URL", "JIRA_EMAIL", "JIRA_USERNAME", "JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_URL", "ATLASSIAN_DOMAIN", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "JIRA_PROJECT"} {
+		t.Setenv(k, "")
+	}
+
+	wsOrg := filepath.Join(tmp, "org3")
+	gitDir := filepath.Join(wsOrg, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = https://github.com/org3/app.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wsV := filepath.Join(tmp, "vibetex-app")
+	if err := os.MkdirAll(filepath.Join(wsV, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsV, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:vibetex/app.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveProfile(JiraProfile{
+		ID: "legacy", Name: "Legado", BaseURL: "https://legacy.atlassian.net",
+		Email: "legacy@example.com", Token: "legacy-token-abcdef", IsDefault: true,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveProfile(JiraProfile{
+		ID: "vibetex", Name: "Vibetex", BaseURL: "https://vibetex.atlassian.net",
+		Email: "a@vibetex.com", Token: "vibetex-token-zzzz", OrgPatterns: []string{"vibetex"},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("JIRA_BASE_URL", "https://env.atlassian.net")
+	t.Setenv("JIRA_EMAIL", "env@example.com")
+	t.Setenv("JIRA_API_TOKEN", "env-token-should-not-leak")
+
+	got := ResolveForWorkspace(wsOrg)
+	if got.MatchMode != "isolated_none" || got.Token != "" || got.Email != "" || FromWorkspace(wsOrg).Enabled() {
+		t.Fatalf("org3 got another org's Jira: %+v", got)
+	}
+	matched := ResolveForWorkspace(wsV)
+	if matched.Token != "vibetex-token-zzzz" || matched.Email != "a@vibetex.com" || matched.MatchMode != "auto_org" {
+		t.Fatalf("env mixed into the matched profile: %+v", matched)
+	}
+	if err := BindWorkspace(wsV, "none"); err != nil {
+		t.Fatal(err)
+	}
+	off := ResolveForWorkspace(wsV)
+	if off.MatchMode != "isolated_none" || off.Token != "" || FromWorkspace(wsV).Enabled() {
+		t.Fatalf("none binding lost to env: %+v", off)
+	}
+
+	path, err := jiraConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("jira file mode = %v", info.Mode().Perm())
+	}
+}
+
+func TestLegacyJiraFileMigration(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	for _, k := range []string{"JIRA_BASE_URL", "JIRA_HOST", "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_DOMAIN", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "JIRA_PROJECT"} {
+		t.Setenv(k, "")
+	}
+	dir := filepath.Join(tmp, "HiveMind")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"base_url":"https://old.atlassian.net/jira/software/projects/OLD/boards/1","email":"a@old.com","token":"legacy-token-abcdef","default_project":"old"}`)
+	path := filepath.Join(dir, "jira-connector.json")
+	if err := os.WriteFile(path, legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveForWorkspace("")
+	if got.BaseURL != "https://old.atlassian.net" || got.Email != "a@old.com" || got.Token != "legacy-token-abcdef" || got.DefaultProject != "OLD" {
+		t.Fatalf("legacy file not migrated: %+v", got)
+	}
+	if len(got.Profiles) != 1 || strings.Contains(got.Profiles[0].TokenMasked, "legacy-token") {
+		t.Fatalf("legacy token leaked in summary: %+v", got.Profiles)
 	}
 }

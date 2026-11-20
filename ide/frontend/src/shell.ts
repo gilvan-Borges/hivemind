@@ -848,6 +848,10 @@ export function updateStatusBar() {
       agyEl.textContent = `agy: …${profBadge}`;
       agyEl.style.color = "";
       agyEl.title = "Verificando Antigravity CLI (agy)…";
+    } else if (resolvedAgy?.matchMode === "isolated") {
+      agyEl.textContent = "agy: isolado";
+      agyEl.style.color = "var(--text-dim)";
+      agyEl.title = "Nenhuma conta AGY vinculada a esta organização. A sessão global não será usada.";
     } else if (state.agyStatus.LoggedIn) {
       agyEl.textContent = resolvedAgy?.profileName
         ? `agy: ${resolvedAgy.profileName}`

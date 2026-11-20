@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/gilvan-Borges/HiveMind/internal/orgx"
@@ -120,6 +122,17 @@ type ResolvedCredentials struct {
 	Profiles          []JiraProfileSummary
 }
 
+var (
+	jiraMu   sync.Mutex
+	jiraBlob struct {
+		path string
+		mod  time.Time
+		size int64
+		raw  []byte
+		ok   bool
+	}
+)
+
 func jiraConfigPath() (string, error) {
 	if base, err := os.UserConfigDir(); err == nil && strings.TrimSpace(base) != "" {
 		return filepath.Join(base, "HiveMind", "jira-connector.json"), nil
@@ -132,12 +145,39 @@ func jiraConfigPath() (string, error) {
 }
 
 func readJiraFile() storedJiraFile {
+	jiraMu.Lock()
+	defer jiraMu.Unlock()
+	return parseJiraDoc(readJiraBytesLocked())
+}
+
+func readJiraBytesLocked() []byte {
 	path, err := jiraConfigPath()
 	if err != nil {
-		return storedJiraFile{}
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		jiraBlob.ok = false
+		return nil
+	}
+	if jiraBlob.ok && jiraBlob.path == path && jiraBlob.size == info.Size() && jiraBlob.mod.Equal(info.ModTime()) && jiraBlob.raw != nil {
+		return jiraBlob.raw
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		jiraBlob.ok = false
+		return nil
+	}
+	jiraBlob.path = path
+	jiraBlob.mod = info.ModTime()
+	jiraBlob.size = info.Size()
+	jiraBlob.raw = append([]byte(nil), data...)
+	jiraBlob.ok = true
+	return jiraBlob.raw
+}
+
+func parseJiraDoc(data []byte) storedJiraFile {
+	if len(data) == 0 {
 		return storedJiraFile{}
 	}
 	var doc storedJiraFile
@@ -179,6 +219,12 @@ func readJiraFile() storedJiraFile {
 }
 
 func writeJiraFile(doc storedJiraFile) error {
+	jiraMu.Lock()
+	defer jiraMu.Unlock()
+	return writeJiraFileLocked(doc)
+}
+
+func writeJiraFileLocked(doc storedJiraFile) error {
 	path, err := jiraConfigPath()
 	if err != nil {
 		return err
@@ -205,14 +251,67 @@ func writeJiraFile(doc storedJiraFile) error {
 		doc.Token = ""
 		doc.DefaultProject = ""
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	data = append(data, '\n')
+	if err := writeSecretFile(path, data); err != nil {
+		jiraBlob.ok = false
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		jiraBlob.ok = false
+		return nil
+	}
+	jiraBlob.path = path
+	jiraBlob.mod = info.ModTime()
+	jiraBlob.size = info.Size()
+	jiraBlob.raw = append([]byte(nil), data...)
+	jiraBlob.ok = true
+	return nil
+}
+
+func writeSecretFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".jira-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmpName, path); err2 != nil {
+			return err2
+		}
+	}
+	cleanup = false
+	return os.Chmod(path, 0o600)
 }
 
 func summarizeProfiles(list []JiraProfile) []JiraProfileSummary {
@@ -265,12 +364,12 @@ func LoadCredentials() (baseURL, email, token, defaultProject, source string) {
 }
 
 // ResolveForWorkspace resolves Jira Cloud credentials with strict multi-org isolation:
-// 1. Environment variables (JIRA_*)
-// 2. Explicit workspace binding (pinned profile ID or "none" to isolate org without Jira)
-// 3. Auto-detection of Git organization / workspace path against profile org_patterns
-// 4. Org isolation guard (if profiles define org_patterns and detected workspace does not match,
-//    do NOT leak another org's Jira; only use explicit IsDefault fallback or workspace-local MCP)
-// 5. Fallback to active/single stored profile, then MCP discovery.
+//  1. Explicit workspace opt-out ("none") — beats environment variables
+//  2. Explicit pin of a profile — that profile only, no env mixing
+//  3. Auto-detection of Git organization against profile org_patterns
+//  4. Fail closed when any profile is org-scoped and nothing matched: no env,
+//     no legacy flat file, no default profile, no parent/home MCP
+//  5. Legacy single-tenant (no org patterns): env, then the stored profile, then MCP
 func ResolveForWorkspace(workspace string) ResolvedCredentials {
 	doc := readJiraFile()
 	ws := strings.TrimSpace(workspace)
@@ -290,33 +389,11 @@ func ResolveForWorkspace(workspace string) ResolvedCredentials {
 	envToken := firstNonEmptyEnv("JIRA_API_TOKEN", "JIRA_TOKEN", "ATLASSIAN_API_TOKEN")
 	envProj := strings.ToUpper(firstNonEmptyEnv("JIRA_PROJECT"))
 
-	if envBase != "" && envEmail != "" && envToken != "" {
-		res.BaseURL = envBase
-		res.Email = envEmail
-		res.Token = envToken
-		res.DefaultProject = envProj
-		res.Source = "env"
-		res.MatchMode = "env"
-		return res
-	}
-
-	applyProfile := func(p *JiraProfile, mode, rule string) ResolvedCredentials {
+	applyProfileOnly := func(p *JiraProfile, mode, rule string) ResolvedCredentials {
 		res.BaseURL = p.BaseURL
 		res.Email = p.Email
 		res.Token = p.Token
 		res.DefaultProject = p.DefaultProject
-		if envBase != "" {
-			res.BaseURL = envBase
-		}
-		if envEmail != "" {
-			res.Email = envEmail
-		}
-		if envToken != "" {
-			res.Token = envToken
-		}
-		if envProj != "" {
-			res.DefaultProject = envProj
-		}
 		res.ProfileID = p.ID
 		res.ProfileName = p.Name
 		res.MatchMode = mode
@@ -327,7 +404,7 @@ func ResolveForWorkspace(workspace string) ResolvedCredentials {
 		return res
 	}
 
-	// 2. Explicit manual workspace binding ("none" disables Jira cleanly for this repo/org).
+	// Opt-out is absolute: a full JIRA_* environment must not re-enable this workspace.
 	if strings.EqualFold(res.BindingMode, "none") {
 		res.Source = "none"
 		res.MatchMode = "isolated_none"
@@ -335,59 +412,87 @@ func ResolveForWorkspace(workspace string) ResolvedCredentials {
 	}
 	if res.BindingMode != "" {
 		if p := findProfileByID(doc.Profiles, res.BindingMode); p != nil {
-			return applyProfile(p, "manual", "")
+			return applyProfileOnly(p, "manual", "")
 		}
 	}
 
-	// 3. Auto-match against configured org_patterns.
 	hasOrgScopedProfiles := false
 	for i := range doc.Profiles {
-		if len(doc.Profiles[i].OrgPatterns) > 0 {
-			hasOrgScopedProfiles = true
-			if ws != "" {
-				if matched, pat := orgx.MatchPatterns(orgID, doc.Profiles[i].OrgPatterns); matched {
-					return applyProfile(&doc.Profiles[i], "auto_org", pat)
-				}
-			}
+		if len(doc.Profiles[i].OrgPatterns) == 0 {
+			continue
+		}
+		hasOrgScopedProfiles = true
+		if ws == "" {
+			continue
+		}
+		if matched, pat := orgx.MatchPatterns(orgID, doc.Profiles[i].OrgPatterns); matched {
+			return applyProfileOnly(&doc.Profiles[i], "auto_org", pat)
 		}
 	}
 
-	// 4. Org isolation: if workspace has an identity and user configured org-scoped profiles
-	// without matching, allow only an explicitly marked IsDefault profile (or workspace-local MCP).
-	if hasOrgScopedProfiles && ws != "" {
-		for i := range doc.Profiles {
-			if doc.Profiles[i].IsDefault && len(doc.Profiles[i].OrgPatterns) == 0 {
-				return applyProfile(&doc.Profiles[i], "default", "")
+	// Org-scoped profiles exist and this workspace did not match one.
+	// Do not fall through to env, the legacy flat file, IsDefault, or another org's MCP.
+	if hasOrgScopedProfiles {
+		if ws != "" {
+			if mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := detectWorkspaceLocalMCPConfig(ws); mcpBase != "" && mcpEmail != "" && mcpToken != "" {
+				res.BaseURL = mcpBase
+				res.Email = mcpEmail
+				res.Token = mcpToken
+				res.DefaultProject = mcpProj
+				res.Source = "mcp:" + filepath.Base(mcpPath)
+				res.MatchMode = "mcp"
+				return res
 			}
-		}
-		if mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := detectWorkspaceLocalMCPConfig(ws); mcpBase != "" && mcpEmail != "" && mcpToken != "" {
-			res.BaseURL = firstNonEmpty(envBase, mcpBase)
-			res.Email = firstNonEmpty(envEmail, mcpEmail)
-			res.Token = firstNonEmpty(envToken, mcpToken)
-			res.DefaultProject = firstNonEmpty(envProj, mcpProj)
-			res.Source = "mcp:" + filepath.Base(mcpPath)
-			res.MatchMode = "mcp"
-			return res
 		}
 		res.Source = "none"
 		res.MatchMode = "isolated_none"
 		return res
 	}
 
-	// 5. Legacy / single-profile fallback (active profile, then first complete profile).
+	// Legacy single-tenant: complete env wins, then the stored profile with partial env fill, then MCP.
+	if envBase != "" && envEmail != "" && envToken != "" {
+		res.BaseURL = envBase
+		res.Email = envEmail
+		res.Token = envToken
+		res.DefaultProject = envProj
+		res.Source = "env"
+		res.MatchMode = "env"
+		return res
+	}
+	applyLegacy := func(p *JiraProfile) ResolvedCredentials {
+		out := applyProfileOnly(p, "default", "")
+		if envBase != "" {
+			out.BaseURL = envBase
+		}
+		if envEmail != "" {
+			out.Email = envEmail
+		}
+		if envToken != "" {
+			out.Token = envToken
+		}
+		if envProj != "" {
+			out.DefaultProject = envProj
+		}
+		if out.BaseURL != "" && out.Email != "" && out.Token != "" {
+			out.Source = "config"
+			if envBase != "" && envEmail != "" && envToken != "" {
+				out.Source = "env"
+			}
+		}
+		return out
+	}
 	if p := findProfileByID(doc.Profiles, doc.ActiveProfile); p != nil {
-		return applyProfile(p, "default", "")
+		return applyLegacy(p)
 	}
 	for i := range doc.Profiles {
 		if doc.Profiles[i].IsDefault {
-			return applyProfile(&doc.Profiles[i], "default", "")
+			return applyLegacy(&doc.Profiles[i])
 		}
 	}
 	if len(doc.Profiles) > 0 {
-		return applyProfile(&doc.Profiles[0], "default", "")
+		return applyLegacy(&doc.Profiles[0])
 	}
 
-	// 6. Global / workspace MCP discovery fallback.
 	mcpBase, mcpEmail, mcpToken, mcpProj, mcpPath := DetectMCPConfig(ws)
 	res.BaseURL = firstNonEmpty(envBase, mcpBase)
 	res.Email = firstNonEmpty(envEmail, mcpEmail)
@@ -627,7 +732,9 @@ func SaveCredentials(baseURL, email, token, defaultProject string, clear bool) e
 // SaveProfile creates or updates a named Jira profile. Blank Token preserves any previously
 // stored token for that profile ID. When bindWorkspace is non-empty, pins that workspace to this profile.
 func SaveProfile(input JiraProfile, bindWorkspace string) error {
-	doc := readJiraFile()
+	jiraMu.Lock()
+	defer jiraMu.Unlock()
+	doc := parseJiraDoc(readJiraBytesLocked())
 	id := sanitizeProfileID(input.ID)
 	if id == "" {
 		id = sanitizeProfileID(input.Name)
@@ -703,7 +810,7 @@ func SaveProfile(input JiraProfile, bindWorkspace string) error {
 		}
 		doc.WorkspaceBindings[wsKey] = id
 	}
-	return writeJiraFile(doc)
+	return writeJiraFileLocked(doc)
 }
 
 // DeleteProfile removes a Jira profile by ID and clears workspace bindings referencing it.
@@ -712,7 +819,9 @@ func DeleteProfile(profileID string) error {
 	if target == "" {
 		return fmt.Errorf("id do perfil inválido")
 	}
-	doc := readJiraFile()
+	jiraMu.Lock()
+	defer jiraMu.Unlock()
+	doc := parseJiraDoc(readJiraBytesLocked())
 	filtered := make([]JiraProfile, 0, len(doc.Profiles))
 	for _, p := range doc.Profiles {
 		if strings.ToLower(strings.TrimSpace(p.ID)) != target {
@@ -731,7 +840,7 @@ func DeleteProfile(profileID string) error {
 			delete(doc.WorkspaceBindings, k)
 		}
 	}
-	return writeJiraFile(doc)
+	return writeJiraFileLocked(doc)
 }
 
 // BindWorkspace sets how a workspace resolves its Jira profile:
@@ -743,7 +852,9 @@ func BindWorkspace(workspace, target string) error {
 	if wsKey == "" {
 		return fmt.Errorf("workspace vazio")
 	}
-	doc := readJiraFile()
+	jiraMu.Lock()
+	defer jiraMu.Unlock()
+	doc := parseJiraDoc(readJiraBytesLocked())
 	if doc.WorkspaceBindings == nil {
 		doc.WorkspaceBindings = map[string]string{}
 	}
@@ -760,7 +871,7 @@ func BindWorkspace(workspace, target string) error {
 		}
 		doc.WorkspaceBindings[wsKey] = p.ID
 	}
-	return writeJiraFile(doc)
+	return writeJiraFileLocked(doc)
 }
 
 // CheckConnection validates the active Jira credentials live against GET /rest/api/3/myself.
@@ -906,7 +1017,7 @@ func maskJiraToken(tok string) string {
 	if len(k) <= 8 {
 		return "****"
 	}
-	return k[:4] + "…" + k[len(k)-4:]
+	return "****" + k[len(k)-4:]
 }
 
 func deriveProfileName(baseURL, fallback string) string {

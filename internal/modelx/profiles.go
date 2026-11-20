@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/gilvan-Borges/HiveMind/internal/orgx"
@@ -83,6 +84,13 @@ type profileOverrideCtxKey struct{}
 var (
 	profilesMu         sync.Mutex
 	profilesFilePathFn = defaultProfilesFilePath
+	profilesBlob       struct {
+		path string
+		mod  time.Time
+		size int64
+		raw  []byte
+		ok   bool
+	}
 )
 
 func defaultProfilesFilePath() (string, error) {
@@ -169,12 +177,32 @@ func loadProfilesLocked() (storedProfilesFile, error) {
 	if err != nil {
 		return out, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
+	info, statErr := os.Stat(path)
+	var data []byte
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			profilesBlob.ok = false
 			return out, nil
 		}
-		return out, err
+		return out, statErr
+	}
+	if profilesBlob.ok && profilesBlob.path == path && profilesBlob.size == info.Size() && profilesBlob.mod.Equal(info.ModTime()) && profilesBlob.raw != nil {
+		data = profilesBlob.raw
+	} else {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				profilesBlob.ok = false
+				return out, nil
+			}
+			return out, err
+		}
+		profilesBlob.path = path
+		profilesBlob.mod = info.ModTime()
+		profilesBlob.size = info.Size()
+		profilesBlob.raw = append([]byte(nil), data...)
+		profilesBlob.ok = true
+		data = profilesBlob.raw
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return out, err
@@ -191,21 +219,25 @@ func saveProfilesLocked(doc storedProfilesFile) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	data = append(data, '\n')
+	if err := writeSecretFile(path, data); err != nil {
+		profilesBlob.ok = false
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return os.WriteFile(path, data, 0o600)
+	info, err := os.Stat(path)
+	if err != nil {
+		profilesBlob.ok = false
+		return nil
 	}
+	profilesBlob.path = path
+	profilesBlob.mod = info.ModTime()
+	profilesBlob.size = info.Size()
+	profilesBlob.raw = append([]byte(nil), data...)
+	profilesBlob.ok = true
 	return nil
 }
 
@@ -234,6 +266,8 @@ func HasAgyADCCredentials(configDir string) bool {
 }
 
 // ResolveProfile selects the active profile for provider given ctx's workspace/override.
+// mode "isolated" means org-scoped profiles exist and this workspace must not receive
+// another org's account, the default profile, or the global env/api-keys store.
 func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, string, string) {
 	prov := NormalizeProfileProvider(provider)
 	if prov == "" {
@@ -249,8 +283,7 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 	byID := func(id string) *ProviderProfile {
 		for i := range doc.Profiles {
 			if doc.Profiles[i].Provider == prov && strings.EqualFold(doc.Profiles[i].ID, id) {
-				cp := doc.Profiles[i]
-				return &cp
+				return prepareProfile(doc.Profiles[i])
 			}
 		}
 		return nil
@@ -266,7 +299,7 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 	ws := WorkspaceFromContext(ctx)
 	wsKey := orgx.NormalizeWorkspaceKey(ws)
 
-	// 2. Explicit workspace binding.
+	// 2. Explicit workspace binding. "global" is an opt-in to the legacy env store.
 	if wsKey != "" && doc.WorkspaceBindings != nil {
 		if provMap := doc.WorkspaceBindings[wsKey]; provMap != nil {
 			pinned := strings.TrimSpace(provMap[prov])
@@ -281,7 +314,7 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 		}
 	}
 
-	// 3. Auto-match against organization / workspace patterns.
+	hasOrgScoped := false
 	if ws != "" {
 		orgID := orgx.Detect(ws)
 		for i := range doc.Profiles {
@@ -289,35 +322,99 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 			if p.Provider != prov || len(p.OrgPatterns) == 0 {
 				continue
 			}
+			hasOrgScoped = true
 			if matched, pat := orgx.MatchPatterns(orgID, p.OrgPatterns); matched {
-				cp := p
-				return &cp, "auto_org", pat
+				return prepareProfile(p), "auto_org", pat
+			}
+		}
+	} else {
+		for i := range doc.Profiles {
+			if doc.Profiles[i].Provider == prov && len(doc.Profiles[i].OrgPatterns) > 0 {
+				hasOrgScoped = true
+				break
 			}
 		}
 	}
+	if hasOrgScoped {
+		return nil, "isolated", ""
+	}
 
-	// 4. Explicit default profile for this provider.
 	for i := range doc.Profiles {
 		if doc.Profiles[i].Provider == prov && doc.Profiles[i].IsDefault {
-			cp := doc.Profiles[i]
-			return &cp, "default", ""
+			return prepareProfile(doc.Profiles[i]), "default", ""
 		}
 	}
 	return nil, "global", ""
 }
 
+func prepareProfile(p ProviderProfile) *ProviderProfile {
+	if len(p.Env) > 0 {
+		env := make(map[string]string, len(p.Env))
+		for k, v := range p.Env {
+			uk := strings.ToUpper(strings.TrimSpace(k))
+			if uk == "" {
+				continue
+			}
+			env[uk] = v
+		}
+		p.Env = env
+	}
+	if p.Provider == "agy" && strings.EqualFold(strings.TrimSpace(p.AuthMode), "adc") {
+		if p.Env == nil {
+			p.Env = map[string]string{}
+		}
+		if dir, err := AgyADCConfigDir(p.ID); err == nil && dir != "" {
+			p.Env["CLOUDSDK_CONFIG"] = dir
+			p.Env["AGY_ADC_AUTH"] = "true"
+		}
+	}
+	return &p
+}
+
+// CredentialIsolated reports that provider must not use another org's account or the global key store.
+func CredentialIsolated(ctx context.Context, provider string) bool {
+	_, mode, _ := ResolveProfile(ctx, provider)
+	return mode == "isolated"
+}
+
+// ResolveEnv returns the workspace-aware setting. An isolated org gets an empty string
+// instead of another profile, the process environment, or api-keys.json.
+func ResolveEnv(ctx context.Context, provider string, names ...string) string {
+	return resolveEnvForContext(ctx, provider, names...)
+}
+
 // resolveEnvForContext returns the profile-scoped setting when a profile resolves for
 // (ctx, provider) and defines one of names, otherwise falling back to env/global store.
 func resolveEnvForContext(ctx context.Context, provider string, names ...string) string {
-	if prof, _, _ := ResolveProfile(ctx, provider); prof != nil && len(prof.Env) > 0 {
+	prof, mode, _ := ResolveProfile(ctx, provider)
+	if mode == "isolated" {
+		return ""
+	}
+	if prof != nil {
 		for _, n := range names {
-			key := strings.ToUpper(strings.TrimSpace(n))
-			if val := strings.TrimSpace(prof.Env[key]); val != "" {
+			if val := profileEnvValue(prof, n); val != "" {
 				return val
 			}
 		}
+		// A selected org/manual profile must not borrow a global key it does not define.
+		if len(prof.OrgPatterns) > 0 || mode == "auto_org" || mode == "manual" || mode == "override" {
+			return ""
+		}
 	}
 	return FirstEnvOrStored(names...)
+}
+
+func profileEnvValue(p *ProviderProfile, name string) string {
+	if p == nil || len(p.Env) == 0 {
+		return ""
+	}
+	want := strings.ToUpper(strings.TrimSpace(name))
+	for k, v := range p.Env {
+		if strings.EqualFold(strings.TrimSpace(k), want) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // ListProfilesOverview returns a secret-safe overview of all saved provider profiles
@@ -400,9 +497,9 @@ func evaluateProfileReadiness(p ProviderProfile) (bool, string) {
 	case "agy":
 		switch strings.ToLower(strings.TrimSpace(p.AuthMode)) {
 		case "adc":
-			cfgDir := strings.TrimSpace(p.Env["CLOUDSDK_CONFIG"])
+			cfgDir, _ := AgyADCConfigDir(p.ID)
 			if cfgDir == "" {
-				cfgDir, _ = AgyADCConfigDir(p.ID)
+				cfgDir = strings.TrimSpace(p.Env["CLOUDSDK_CONFIG"])
 			}
 			if HasAgyADCCredentials(cfgDir) {
 				return true, "Google Cloud ADC pronto (" + cfgDir + ")"
@@ -518,13 +615,13 @@ func SaveProviderProfile(req SaveProfileRequest) (ProfilesOverview, error) {
 
 	if prov == "agy" && authMode == "adc" {
 		nextEnv["AGY_ADC_AUTH"] = "true"
-		if strings.TrimSpace(nextEnv["CLOUDSDK_CONFIG"]) == "" {
-			if dir, derr := AgyADCConfigDir(id); derr == nil && dir != "" {
-				_ = os.MkdirAll(dir, 0o700)
-				nextEnv["CLOUDSDK_CONFIG"] = dir
-			}
+		// Always the per-profile directory. A caller-supplied CLOUDSDK_CONFIG
+		// could point every account at the shared gcloud ADC dir.
+		if dir, derr := AgyADCConfigDir(id); derr == nil && dir != "" {
+			_ = os.MkdirAll(dir, 0o700)
+			nextEnv["CLOUDSDK_CONFIG"] = dir
 		} else {
-			_ = os.MkdirAll(nextEnv["CLOUDSDK_CONFIG"], 0o700)
+			delete(nextEnv, "CLOUDSDK_CONFIG")
 		}
 	}
 
@@ -683,7 +780,29 @@ func isSecretKeyName(name string) bool {
 	return strings.Contains(u, "KEY") ||
 		strings.Contains(u, "TOKEN") ||
 		strings.Contains(u, "SECRET") ||
-		strings.Contains(u, "PASSWORD")
+		strings.Contains(u, "PASSWORD") ||
+		strings.Contains(u, "PASSWD") ||
+		strings.Contains(u, "CREDENTIAL") ||
+		strings.Contains(u, "PRIVATE")
+}
+
+// stripInheritedSecrets drops credential-bearing variables from a child process
+// environment so an org-scoped account does not inherit another org's keys.
+func stripInheritedSecrets(base []string) []string {
+	out := make([]string, 0, len(base))
+	for _, entry := range base {
+		k, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		name := strings.ToUpper(strings.TrimSpace(k))
+		if isSecretKeyName(name) || strings.HasPrefix(name, "JIRA_") || strings.HasPrefix(name, "ATLASSIAN_") || name == "CLOUDSDK_CONFIG" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func sanitizeSlug(raw string) string {

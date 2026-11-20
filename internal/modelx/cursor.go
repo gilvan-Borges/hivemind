@@ -54,12 +54,13 @@ type CursorStatus struct {
 // workspace itself. HiveMind only streams its text and tool notices. ADK does
 // not re-run those tools.
 type Cursor struct {
-	Bin     string
-	Model   string
-	Dir     string
-	Timeout time.Duration
-	Key     string
-	Env     map[string]string
+	Bin        string
+	Model      string
+	Dir        string
+	Timeout    time.Duration
+	Key        string
+	Env        map[string]string
+	IsolateEnv bool
 }
 
 // LookCursor finds the official CLI. HIVEMIND_CURSOR_AGENT_PATH, when set,
@@ -107,7 +108,10 @@ func ProbeCursor() CursorStatus {
 // NewCursor builds the adapter. The key is read from the environment first,
 // then from api-keys.json. The model id "auto" lets the Cursor CLI choose.
 func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
-	prof, _, _ := ResolveProfile(ctx, "cursor")
+	prof, mode, _ := ResolveProfile(ctx, "cursor")
+	if mode == "isolated" {
+		return nil, fmt.Errorf("nenhuma conta Cursor vinculada a esta organização")
+	}
 	key := resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina CURSOR_API_KEY para usar o Cursor (painel Cursor → API Keys). A variável de ambiente tem prioridade sobre a chave salva na IDE")
@@ -117,15 +121,20 @@ func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
 		return nil, err
 	}
 	var envMap map[string]string
-	if prof != nil && len(prof.Env) > 0 {
-		envMap = prof.Env
+	isolate := false
+	if prof != nil {
+		isolate = len(prof.OrgPatterns) > 0
+		if len(prof.Env) > 0 {
+			envMap = prof.Env
+		}
 	}
 	return &Cursor{
-		Bin:   bin,
-		Model: cursorModelID(modelName),
-		Dir:   agentDirFrom(ctx),
-		Key:   key,
-		Env:   envMap,
+		Bin:        bin,
+		Model:      cursorModelID(modelName),
+		Dir:        agentDirFrom(ctx),
+		Key:        key,
+		Env:        envMap,
+		IsolateEnv: isolate,
 	}, nil
 }
 
@@ -205,7 +214,11 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	args := cursorArgs(c.Model, dir)
 	cmd := cursorCommand(runCtx, bin, args)
 	cmd.Dir = dir
-	cmd.Env = mergeEnv(cursorChildEnv(os.Environ(), c.Key), c.Env)
+	baseEnv := os.Environ()
+	if c.IsolateEnv {
+		baseEnv = stripInheritedSecrets(baseEnv)
+	}
+	cmd.Env = mergeEnv(cursorChildEnv(baseEnv, c.Key), c.Env)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
