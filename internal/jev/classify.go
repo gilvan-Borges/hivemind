@@ -12,6 +12,7 @@ type ClassifyInput struct {
 	RunMode      string
 	Step         string
 	ObjectiveLen int
+	Objective    string
 	InputTokens  int
 	HasImage     bool
 	QAStall      int

@@ -22,6 +22,7 @@ type jevRouteHint struct {
 	RunMode      string
 	Step         string
 	ObjectiveLen int
+	Objective    string
 	InputTokens  int
 	HasImages    bool
 	NeedsTools   bool
@@ -47,6 +48,20 @@ func jevRouteHintFrom(ctx context.Context) (jevRouteHint, bool) {
 	}
 	h, ok := ctx.Value(jevRouteHintKey{}).(jevRouteHint)
 	return h, ok
+}
+
+func classifyObjective(ctx context.Context, build func(context.Context, string, string) (model.LLM, error), injected func(context.Context, string) (string, error), objective string) (string, error) {
+	if injected != nil {
+		return injected(ctx, objective)
+	}
+	if build == nil || strings.TrimSpace(objective) == "" {
+		return "", nil
+	}
+	llm, err := build(ctx, "opencode", "deepseek-v4.1-flash")
+	if err != nil {
+		return "", err
+	}
+	return jev.CompleteClassifier(ctx, llm, objective)
 }
 
 func hasImageAttachments(atts []Attachment) bool {
@@ -99,6 +114,9 @@ type JevFactoryOptions struct {
 	OnEvent      func(Event)
 	ExtraSecrets []string
 	DisableWrap  bool
+	// Classify is the optional cheap-model reply. Nil builds one cheap model,
+	// and only when policy.ClassifyEnabled is on and confidence is low.
+	Classify func(ctx context.Context, objective string) (string, error)
 }
 
 // NewJevModelFactory returns a Runner.NewModel callback that wraps modelx.New
@@ -246,16 +264,26 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		if inTok <= 0 {
 			inTok = jev.EstimateFirstStepInputTokens(hint.ObjectiveLen, 0, true)
 		}
-		class, comp := jev.Classify(jev.ClassifyInput{
+		classIn := jev.ClassifyInput{
 			Role:         role,
 			RunMode:      hint.RunMode,
 			Step:         hint.Step,
 			ObjectiveLen: hint.ObjectiveLen,
+			Objective:    hint.Objective,
 			InputTokens:  inTok,
 			HasImage:     hint.HasImages,
 			QAStall:      hint.QAStall,
 			NeedsTools:   hint.NeedsTools || role == team.RoleDeveloper || role == team.RoleQA,
-		})
+		}
+		class, comp := jev.Classify(classIn)
+		if policy.ClassifyEnabled && jev.LowConfidence(classIn) {
+			raw, err := classifyObjective(ctx, buildModel, opts.Classify, hint.Objective)
+			if err == nil {
+				if nextClass, nextComp, ok := jev.ParseClassifier(raw); ok {
+					class, comp = nextClass, nextComp
+				}
+			}
+		}
 		task := jev.Task{
 			Role:        role,
 			RunMode:     hint.RunMode,

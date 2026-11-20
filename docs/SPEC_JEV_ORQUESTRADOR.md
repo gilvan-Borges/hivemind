@@ -477,7 +477,9 @@ Aceite:
 - Evento `provider_health` aparece no `httptest` de `ide/internal/remote/server_test.go` e não contém segredo.
 - Repo com `deny_providers: [cursor]` não constrói `NewCursor`, mesmo com pin `cursor` no agente.
 
-### Fase 5 — Classificador opcional
+### Fase 5 — Classificador opcional — implementada
+
+`classifyEnabled` nasce falso. Com a flag desligada não há chamada extra. Ligada, só um objetivo longo, sem verbo reconhecível e com papel ambíguo, pede uma resposta ao modelo barato. A resposta tem de ser duas palavras da lista fechada. Qualquer outro texto mantém o heurístico. O pedido leva o objetivo, não a policy e não a chave. O `Score` não espera essa chamada.
 
 Desligado por padrão. Uma chamada no modelo barato, fora dos 5 ms do `Score`, só na confiança baixa. Enum inválido cai no heurístico.
 
