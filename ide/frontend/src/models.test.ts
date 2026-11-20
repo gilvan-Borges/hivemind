@@ -123,4 +123,27 @@ describe("seletor de provedor Jev", () => {
     expect(chip.title).toContain("OpenRouter");
     state.providersScan = null;
   });
+
+  it("avisa no chip quando a cota restante chega a 20% e mantém abaixo de 10%", () => {
+    state.providersScan = {
+      scannedAt: "2026-11-20T20:00:00Z",
+      totalProviders: 1,
+      connectedProviders: 1,
+      totalAccounts: 1,
+      providers: [
+        { id: "agy", name: "Antigravity (Google)", found: true, connected: true, statusLabel: "Conectado", detail: "ok", modelCount: 1, accounts: [] },
+      ],
+    };
+    state.aiUsageModal.report = null;
+    state.providerHealth = [{ provider: "agy", state: "closed", hasCredential: true, quotaRemainingPct: 19 }];
+    expect(computeUnifiedProviderChip().text).toContain("aviso");
+    state.providerHealth = [{ provider: "agy", state: "closed", hasCredential: true, quotaRemainingPct: 9 }];
+    expect(computeUnifiedProviderChip().text).toContain("aviso");
+    state.providerHealth = [{ provider: "cursor", state: "closed", hasCredential: true, quotaRemainingPct: -1 }];
+    const unmeasured = computeUnifiedProviderChip().text;
+    expect(unmeasured).toContain("cota não medida");
+    expect(unmeasured).not.toMatch(/\d+%/);
+    state.providerHealth = [];
+    state.providersScan = null;
+  });
 });

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -539,5 +540,63 @@ func TestHeadlessDoesNotPrintSessionToken(t *testing.T) {
 	}
 	if !strings.Contains(text, "Válida até ") {
 		t.Fatalf("banner sem expiração: %s", text)
+	}
+}
+
+func TestRunHeadlessProbeRespectsSixtySeconds(t *testing.T) {
+	// Relógio falso: a sonda do headless é a mesma de 60s da IDE, sem segundo failover.
+	path := filepath.Join(t.TempDir(), "remote-bridge.json")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	if err := os.WriteFile(path, []byte(`{"port":`+strconv.Itoa(port)+`,"enabled":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := configPathFn
+	configPathFn = func() string { return path }
+	defer func() { configPathFn = oldPath }()
+
+	ticks := make(chan time.Time, 2)
+	headlessProbeTicks = func() <-chan time.Time { return ticks }
+	defer func() { headlessProbeTicks = nil }()
+	var n atomic.Int32
+	oldProbe := headlessProbeFn
+	headlessProbeFn = func(context.Context, *Hub) { n.Add(1) }
+	defer func() { headlessProbeFn = oldProbe }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- RunHeadless(ctx, "") }()
+	defer func() {
+		cancel()
+		select {
+		case <-errc:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for n.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+	if n.Load() != 1 {
+		t.Fatalf("sonda inicial não rodou: %d", n.Load())
+	}
+	base := time.Now()
+	ticks <- base.Add(10 * time.Second)
+	time.Sleep(40 * time.Millisecond)
+	if n.Load() != 1 {
+		t.Fatalf("tick dentro de 60s não deveria sondar de novo: %d", n.Load())
+	}
+	ticks <- base.Add(headlessProbeEvery + time.Second)
+	deadline = time.Now().Add(2 * time.Second)
+	for n.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n.Load() != 2 {
+		t.Fatalf("tick de 60s deveria sondar: %d", n.Load())
 	}
 }

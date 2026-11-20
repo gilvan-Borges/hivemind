@@ -1880,9 +1880,12 @@ export function renderJevProviderHealthPanelHtml(list: ProviderHealthView[], pro
         const spend = p.dailyCapMicroUsd && p.dailyCapMicroUsd > 0
           ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}/${formatHealthUsdMicro(p.dailyCapMicroUsd)}`
           : (p.dailySpentMicroUsd && p.dailySpentMicroUsd > 0 ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}` : "");
-        const quota = typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0
-          ? ` · cota ${Math.round(p.quotaRemainingPct)}%${p.quotaStale ? " (desatual.)" : ""}`
-          : "";
+        const note = quotaChipNote([p], state.aiUsageModal.report);
+        const quota = note
+          ? ` · ${note}${p.quotaStale ? " (desatual.)" : ""}`
+          : (typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0
+            ? ` · cota ${Math.round(p.quotaRemainingPct)}%${p.quotaStale ? " (desatual.)" : ""}`
+            : "");
         return `
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-subtle)">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11.5px">
@@ -1948,6 +1951,41 @@ export function formatRollingReleaseCountdown(oldestAt?: string, windowHours = 5
   const days = Math.floor(hrs / 24);
   const remHrs = hrs % 24;
   return `próxima liberação em ${days}d ${remHrs}h`;
+}
+
+function manualRemainingPct(report: AIUsageReport | null, provider: string): number | null {
+  const row = report?.providers?.find((p) => p.provider === provider);
+  if (!row) return null;
+  const left: number[] = [];
+  const five = row.limits?.fiveHourTokens || 0;
+  const week = row.limits?.weeklyTokens || 0;
+  if (five > 0) left.push((1 - row.window5h.totalTokens / five) * 100);
+  if (week > 0) left.push((1 - row.windowWeekly.totalTokens / week) * 100);
+  if (left.length === 0) return null;
+  return Math.min(...left);
+}
+
+// quotaChipNote is the status text for a measured remainder (<=20% warns) or an unmeasured provider.
+export function quotaChipNote(health: ProviderHealthView[], report: AIUsageReport | null): string {
+  let warn = "";
+  let unmeasured = false;
+  for (const p of health) {
+    const official = typeof p.quotaRemainingPct === "number" ? p.quotaRemainingPct : -1;
+    if (official >= 0) {
+      if (official <= 20) warn = `aviso ${Math.round(official)}%`;
+      continue;
+    }
+    const manual = manualRemainingPct(report, p.provider);
+    if (manual != null) {
+      if (manual <= 20) warn = `aviso ${Math.round(manual)}%`;
+      continue;
+    }
+    unmeasured = true;
+  }
+  const parts: string[] = [];
+  if (warn) parts.push(warn);
+  if (unmeasured) parts.push("cota não medida");
+  return parts.join(" · ");
 }
 
 export function usageBarTone(pct: number): string {

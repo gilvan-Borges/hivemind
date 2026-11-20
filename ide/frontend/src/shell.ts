@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openJiraModal, openMobileModal, openProvidersScanModal, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
@@ -800,6 +800,13 @@ export function updateHeaderAndStatusBar() {
   updateStatusBar();
 }
 
+function withQuotaNote(chip: { text: string; color: string; title: string }): { text: string; color: string; title: string } {
+  const note = quotaChipNote(state.providerHealth || [], state.aiUsageModal.report);
+  if (!note) return chip;
+  const color = note.startsWith("aviso") && chip.color === "var(--green)" ? "var(--amber)" : chip.color;
+  return { text: `${chip.text} · ${note}`, color, title: `${chip.title} · ${note}` };
+}
+
 export function computeUnifiedProviderChip(): { text: string; color: string; title: string } {
   const scan = state.providersScan;
   const health = state.providerHealth || [];
@@ -832,39 +839,39 @@ export function computeUnifiedProviderChip(): { text: string; color: string; tit
   const activeCount = connectedNames.length;
 
   if (!scan && !state.agyStatus && !state.openCodeStatus && configuredHealth.length === 0) {
-    return {
+    return withQuotaNote({
       text: "provedor: …",
       color: "var(--text-dim)",
       title: "Verificando provedores e contas — clique para abrir o Pool de Provedores",
-    };
+    });
   }
   if (activeCount === 0) {
-    return {
+    return withQuotaNote({
       text: "provedor: off",
       color: "var(--amber)",
       title: "Nenhum provedor conectado ainda — clique para configurar contas ou fazer varredura",
-    };
+    });
   }
   if (configuredHealth.length > 0 && openCount === configuredHealth.length) {
-    return {
+    return withQuotaNote({
       text: `provedor: ${openCount} pausa`,
       color: "var(--red)",
       title: `Todos os provedores estão em pausa/cooldown (${connectedNames.join(", ")}) — clique para abrir o Pool de Provedores`,
-    };
+    });
   }
   if (openCount > 0 || halfCount > 0) {
     const warn = openCount > 0 ? `${openCount} pausa` : `${halfCount} sonda`;
-    return {
+    return withQuotaNote({
       text: `provedor: ${activeCount} (${warn})`,
       color: "var(--amber)",
       title: `Conectados: ${connectedNames.join(", ")} · ${totalAccounts} conta(s) · clique para abrir o Pool de Provedores`,
-    };
+    });
   }
-  return {
+  return withQuotaNote({
     text: `provedor: ${activeCount}`,
     color: "var(--green)",
     title: `Provedores conectados (${activeCount}): ${connectedNames.join(", ")}${totalAccounts > 0 ? ` · ${totalAccounts} conta(s)` : ""} — clique para abrir o Pool de Provedores`,
-  };
+  });
 }
 
 export function updateStatusBar() {

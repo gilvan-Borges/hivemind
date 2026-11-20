@@ -8,8 +8,59 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
+	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
+
+const headlessProbeEvery = 60 * time.Second
+
+// headlessProbeTicks, when set, replaces the 60s ticker (tests pass a fake clock).
+var headlessProbeTicks func() <-chan time.Time
+
+// headlessProbeFn is the same recovery probe the IDE runs. Tests may replace it.
+var headlessProbeFn = func(ctx context.Context, hub *Hub) {
+	if hub == nil {
+		return
+	}
+	views := modelx.ProbeAllProvidersHealth(ctx, modelx.DefaultJevHealthStore(), jev.DefaultPolicy())
+	hub.HandleProviderHealth(views, false)
+}
+
+func startHeadlessHealthProbe(ctx context.Context, hub *Hub) {
+	var ticks <-chan time.Time
+	stop := func() {}
+	if headlessProbeTicks != nil {
+		ticks = headlessProbeTicks()
+	} else {
+		t := time.NewTicker(headlessProbeEvery)
+		ticks = t.C
+		stop = t.Stop
+	}
+	go func() {
+		defer stop()
+		last := time.Now()
+		headlessProbeFn(ctx, hub)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now, ok := <-ticks:
+				if !ok {
+					return
+				}
+				if now.IsZero() {
+					now = time.Now()
+				}
+				if now.Sub(last) < headlessProbeEvery {
+					continue
+				}
+				last = now
+				headlessProbeFn(ctx, hub)
+			}
+		}
+	}()
+}
 
 // RunHeadless starts the Remote Bridge without the IDE window — the backend
 // of `hivemind serve`. It blocks until ctx is canceled (Ctrl+C).
@@ -39,6 +90,7 @@ func RunHeadless(ctx context.Context, workspace string) error {
 		return err
 	}
 	defer func() { _ = srv.Stop(context.Background()) }()
+	startHeadlessHealthProbe(ctx, hub)
 
 	st := srv.Status()
 	fmt.Printf("\nHiveMind Remote Bridge (headless) · v%s\n", st.Version)
