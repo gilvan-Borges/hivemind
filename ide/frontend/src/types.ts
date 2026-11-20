@@ -929,7 +929,8 @@ export interface ResidentAuditEntry {
   decision: string;
   approvalId?: string;
   sandbox?: string;
-  target?: string;
+  targetClass?: string;
+  targetHash?: string;
   outcome?: string;
   errorClass?: string;
   reason?: string;

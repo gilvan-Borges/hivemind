@@ -2068,7 +2068,8 @@ export namespace resident {
 	    decision: string;
 	    approvalId?: string;
 	    sandbox?: string;
-	    target?: string;
+	    targetClass?: string;
+	    targetHash?: string;
 	    outcome?: string;
 	    errorClass?: string;
 	    reason?: string;
@@ -2090,7 +2091,8 @@ export namespace resident {
 	        this.decision = source["decision"];
 	        this.approvalId = source["approvalId"];
 	        this.sandbox = source["sandbox"];
-	        this.target = source["target"];
+	        this.targetClass = source["targetClass"];
+	        this.targetHash = source["targetHash"];
 	        this.outcome = source["outcome"];
 	        this.errorClass = source["errorClass"];
 	        this.reason = source["reason"];

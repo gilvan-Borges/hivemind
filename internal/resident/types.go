@@ -56,21 +56,23 @@ type Decision struct {
 // Decision lines are synced to disk BEFORE any tool execution; outcome lines
 // share the same ApprovalID/CallID and are written AFTER execution.
 type AuditEntry struct {
-	Timestamp  string `json:"ts"`
-	Phase      string `json:"phase"` // "decision" | "outcome"
-	AccountID  string `json:"accountId"`
-	DeviceID   string `json:"deviceId,omitempty"`
-	Origin     Origin `json:"origin"`
-	Workstream string `json:"workstream,omitempty"`
-	Tool       string `json:"tool"`
-	Tier       Tier   `json:"tier"`
-	Decision   string `json:"decision"` // "allow" | "deny" | "ask"
-	ApprovalID string `json:"approvalId,omitempty"`
-	Sandbox    string `json:"sandbox,omitempty"` // "not_required" | "applied" | "unavailable"
-	Target     string `json:"target,omitempty"`
-	Outcome    string `json:"outcome,omitempty"` // "ok" | "error" | "denied"
-	ErrorClass string `json:"errorClass,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Timestamp   string `json:"ts"`
+	Phase       string `json:"phase"` // "decision" | "outcome"
+	AccountID   string `json:"accountId"`
+	DeviceID    string `json:"deviceId,omitempty"`
+	Origin      Origin `json:"origin"`
+	Workstream  string `json:"workstream,omitempty"`
+	Tool        string `json:"tool"`
+	Tier        Tier   `json:"tier"`
+	Decision    string `json:"decision"` // "allow" | "deny" | "ask"
+	ApprovalID  string `json:"approvalId,omitempty"`
+	Sandbox     string `json:"sandbox,omitempty"` // "not_required" | "applied" | "unavailable"
+	Target      string `json:"target,omitempty"`  // cru só até a gravação; o JSONL durável não leva caminho nem argv
+	TargetClass string `json:"targetClass,omitempty"`
+	TargetHash  string `json:"targetHash,omitempty"`
+	Outcome     string `json:"outcome,omitempty"` // "ok" | "error" | "denied"
+	ErrorClass  string `json:"errorClass,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // Config is persisted in %LOCALAPPDATA%\HiveMind\resident\resident.json (mode 0600).

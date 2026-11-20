@@ -173,3 +173,36 @@ func TestFileAuditLoggerPersistsRedactsAndRotates(t *testing.T) {
 		t.Fatal("esperado arquivo rotacionado .bak após exceder maxBytes")
 	}
 }
+
+func TestExecAuditDropsArgv(t *testing.T) {
+	// ide/internal não entra aqui: o JSONL durável de internal/resident/audit.go
+	// guarda classe e hash, não o argv.
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	logger := NewFileAuditLogger(auditPath)
+	const argv = "git status --porcelain C:\\segredo\\repo"
+	if err := logger.RecordDecision(AuditEntry{
+		Origin:   OriginLocal,
+		Tool:     "exec_command",
+		Tier:     TierExec,
+		Decision: "allow",
+		Target:   argv,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "git") || strings.Contains(text, "segredo") || strings.Contains(text, `"target":`) {
+		t.Fatalf("argv ou caminho no audit.jsonl: %s", text)
+	}
+	if !strings.Contains(text, `"targetClass":"exec"`) || !strings.Contains(text, `"targetHash":"`) {
+		t.Fatalf("faltou classe ou hash: %s", text)
+	}
+	entries, err := logger.ReadRecent(5)
+	if err != nil || len(entries) != 1 || entries[0].Target != "" || entries[0].TargetClass != "exec" || len(entries[0].TargetHash) != 16 {
+		t.Fatalf("leitura: %+v err=%v", entries, err)
+	}
+}

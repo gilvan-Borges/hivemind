@@ -465,7 +465,7 @@ function renderResidentAuditHtml(): string {
   const q = residentState.auditFilter.trim().toLowerCase();
   const filtered = residentState.audit.filter((e) => {
     if (!q) return true;
-    return `${e.tool} ${e.origin} ${e.decision} ${e.outcome || ""} ${e.target || ""} ${e.reason || ""} ${e.sandbox || ""}`.toLowerCase().includes(q);
+    return `${e.tool} ${e.origin} ${e.decision} ${e.outcome || ""} ${e.targetClass || ""} ${e.reason || ""} ${e.sandbox || ""}`.toLowerCase().includes(q);
   });
   return `
     <div class="resident-panel-body">
@@ -489,7 +489,7 @@ function renderResidentAuditHtml(): string {
                 <span class="spacer"></span>
                 <span class="dim" style="font-family:var(--mono);font-size:10.5px">${escapeHtml(e.ts)}</span>
               </div>
-              ${e.target ? `<div class="dim">Alvo: <code>${escapeHtml(e.target)}</code></div>` : ""}
+              ${e.targetClass ? `<div class="dim">Classe: <code>${escapeHtml(e.targetClass)}</code>${e.targetHash ? ` · ${escapeHtml(e.targetHash)}` : ""}</div>` : ""}
               ${e.reason ? `<div class="dim">${escapeHtml(e.reason)}</div>` : ""}
             </div>
           `;

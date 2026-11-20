@@ -2,6 +2,8 @@ package resident
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,10 +73,7 @@ func (l *FileAuditLogger) appendSync(entry AuditEntry) error {
 	if entry.AccountID == "" {
 		entry.AccountID = DefaultAccountID
 	}
-	// Guarantee no secret leaks into audit records (§12.4, §12.7).
-	entry.Target = RedactTarget(entry.Target)
-	entry.Reason = RedactSecrets(entry.Reason)
-	entry.ErrorClass = RedactSecrets(entry.ErrorClass)
+	entry = durableAudit(entry)
 
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
 		return fmt.Errorf("criar diretório de auditoria: %w", err)
@@ -106,6 +105,38 @@ func (l *FileAuditLogger) appendSync(entry AuditEntry) error {
 		return fmt.Errorf("fechar auditoria: %w", err)
 	}
 	return nil
+}
+
+func durableAudit(entry AuditEntry) AuditEntry {
+	raw := entry.Target
+	entry.TargetClass = targetClass(entry.Tool, raw)
+	if raw != "" {
+		sum := sha256.Sum256([]byte(raw))
+		entry.TargetHash = hex.EncodeToString(sum[:8])
+		entry.Reason = strings.ReplaceAll(entry.Reason, raw, "")
+	}
+	entry.Target = ""
+	entry.Reason = RedactSecrets(strings.TrimSpace(entry.Reason))
+	entry.ErrorClass = RedactSecrets(entry.ErrorClass)
+	return entry
+}
+
+func targetClass(tool, raw string) string {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "exec_command":
+		return "exec"
+	case "net_fetch":
+		return "url"
+	case "memory_search", "memory_write", "memory_forget":
+		return "memory"
+	case "read_file", "list_dir", "write_file", "edit_file", "delete_file", "search_text", "find_files":
+		return "file"
+	default:
+		if strings.Contains(strings.ToLower(raw), "://") {
+			return "url"
+		}
+		return "other"
+	}
 }
 
 func (l *FileAuditLogger) rotateIfNeededLocked() error {
@@ -159,6 +190,8 @@ func (l *FileAuditLogger) ReadRecent(limit int) ([]AuditEntry, error) {
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
 			continue
 		}
+		// Linha antiga pode ter caminho em target. A UI não recebe esse campo.
+		e.Target = ""
 		all = append(all, e)
 	}
 	if err := sc.Err(); err != nil {
