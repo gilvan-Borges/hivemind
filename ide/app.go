@@ -13,6 +13,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
+	"github.com/gilvan-Borges/HiveMind/internal/extsess"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
@@ -26,29 +27,29 @@ import (
 
 // App exposes backend capabilities to the Wails frontend.
 type App struct {
-	ctx              context.Context
-	initialDir       string
-	smokeCheck       bool
-	sessions         *idecore.SessionManager
-	autoReview       *idecore.AutoReviewManager
-	pty              *idecore.PTYManager
-	lsp              *idecore.LSPManager
-	fileIndex        *idecore.FileIndex
-	mu               sync.Mutex
-	agyStatus        modelx.AgyStatus
-	modelsCache      []modelx.AgyModel
-	agyCachedAt      time.Time
-	openCodeStatus   modelx.OpenCodeStatus
-	openCodeGoModels []modelx.AgyModel
-	openCodeModels   []modelx.AgyModel
-	openCodeCachedAt time.Time
-	termMu           sync.Mutex
-	termCancels      map[string]context.CancelFunc
-	inlineMu         sync.Mutex
-	ghostCancel      context.CancelFunc
-	editCancel       context.CancelFunc
-	watcherMu        sync.Mutex
-	watchers         map[string]*idecore.FileWatcher
+	ctx                 context.Context
+	initialDir          string
+	smokeCheck          bool
+	sessions            *idecore.SessionManager
+	autoReview          *idecore.AutoReviewManager
+	pty                 *idecore.PTYManager
+	lsp                 *idecore.LSPManager
+	fileIndex           *idecore.FileIndex
+	mu                  sync.Mutex
+	agyStatus           modelx.AgyStatus
+	modelsCache         []modelx.AgyModel
+	agyCachedAt         time.Time
+	openCodeStatus      modelx.OpenCodeStatus
+	openCodeGoModels    []modelx.AgyModel
+	openCodeModels      []modelx.AgyModel
+	openCodeCachedAt    time.Time
+	termMu              sync.Mutex
+	termCancels         map[string]context.CancelFunc
+	inlineMu            sync.Mutex
+	ghostCancel         context.CancelFunc
+	editCancel          context.CancelFunc
+	watcherMu           sync.Mutex
+	watchers            map[string]*idecore.FileWatcher
 	mobile              *mobileBridge
 	relay               *relayclient.Client
 	resident            *idecore.ResidentManager
@@ -1486,6 +1487,16 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 }
 
 // --- Agente Residente Hive (Fase 2 · Sandbox e Cofre) ---
+
+// ExternalSessions lists outside processes by executable name. It does not control them.
+func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
+	extsess.OnReject = func(r extsess.Reject) {
+		if a != nil && a.resident != nil {
+			a.resident.NoteDetectorRejected(r.ID, r.Reason, r.Fingerprint)
+		}
+	}
+	return extsess.List()
+}
 
 // ResidentStatus returns the resident agent's live state (zero secrets).
 func (a *App) ResidentStatus() resident.Status {
