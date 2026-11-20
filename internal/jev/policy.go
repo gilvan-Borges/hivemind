@@ -46,6 +46,7 @@ type RolePin struct {
 type Policy struct {
 	Version                 int                     `json:"version"`
 	Enabled                 bool                    `json:"enabled"`
+	ClassifyEnabled         bool                    `json:"classifyEnabled,omitempty"`
 	Weights                 Weights                 `json:"weights"`
 	AutoEscalateUSD         float64                 `json:"autoEscalateUsd"`
 	MaxEscalateRatio        float64                 `json:"maxEscalateRatio"`
