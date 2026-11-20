@@ -27,6 +27,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
@@ -43,21 +44,27 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind         string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending"
-	Stage        string   `json:"stage,omitempty"`
-	Author       string   `json:"author,omitempty"`
-	Label        string   `json:"label,omitempty"`
-	Text         string   `json:"text,omitempty"`
-	ToolName     string   `json:"toolName,omitempty"`
-	Detail       string   `json:"detail,omitempty"`
-	Devs         []string `json:"devs,omitempty"`
-	Gate         string   `json:"gate,omitempty"`       // "docs" | "jira" — gates SDD exibidos como cards de aprovação no chat
-	ApprovalID   string   `json:"approvalId,omitempty"` // identificador único da aprovação pendente (permite aprovações concorrentes na mesma lane)
-	Partial      bool     `json:"partial,omitempty"`
-	Thought      bool     `json:"thought,omitempty"`
-	InputTokens  int32    `json:"inputTokens,omitempty"`
-	OutputTokens int32    `json:"outputTokens,omitempty"`
-	Tokens       int32    `json:"tokens,omitempty"`
+	Kind              string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route"
+	Stage             string   `json:"stage,omitempty"`
+	Author            string   `json:"author,omitempty"`
+	Label             string   `json:"label,omitempty"`
+	Text              string   `json:"text,omitempty"`
+	ToolName          string   `json:"toolName,omitempty"`
+	Detail            string   `json:"detail,omitempty"`
+	Devs              []string `json:"devs,omitempty"`
+	Gate              string   `json:"gate,omitempty"`       // "docs" | "jira" | "budget"
+	ApprovalID        string   `json:"approvalId,omitempty"` // identificador único da aprovação pendente (permite aprovações concorrentes na mesma lane)
+	Partial           bool     `json:"partial,omitempty"`
+	Thought           bool     `json:"thought,omitempty"`
+	InputTokens       int32    `json:"inputTokens,omitempty"`
+	OutputTokens      int32    `json:"outputTokens,omitempty"`
+	Tokens            int32    `json:"tokens,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	Model             string   `json:"model,omitempty"`
+	Tier              string   `json:"tier,omitempty"`
+	Reasons           []string `json:"reasons,omitempty"`
+	EstimatedMicroUSD int64    `json:"estimatedMicroUsd,omitempty"`
+	DecisionMicros    int64    `json:"decisionMicros,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
@@ -115,6 +122,8 @@ type Runner struct {
 	turnTotalTokens  int64
 	qaLastStatus     string
 	qaStallCount     int
+	hasImages        bool
+	jevRepo          string
 	devBudgets       map[string]*devTurnBudget
 }
 
@@ -319,6 +328,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.turnTotalTokens = 0
 	r.qaLastStatus = ""
 	r.qaStallCount = 0
+	r.hasImages = hasImageAttachments(req.Attachments)
+	r.jevRepo = r.resolveRepoKey(ctx)
 	r.resetDevBudgets()
 
 	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
@@ -857,6 +868,31 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
 	ctx = modelx.WithAgentDir(ctx, root)
+	label := roleLabel(a.Role) + " · " + a.Name
+	inTok := int(r.turnInputTokens)
+	if inTok <= 0 {
+		inTok = jev.EstimateFirstStepInputTokens(len(r.objectiveText)+len(extra)+len(r.chiefPlan), len(r.teamMemorySnippet()), true)
+	}
+	runMode := ""
+	if r.autoReviewMode {
+		runMode = "auto-review"
+	}
+	ctx = withJevRouteHint(ctx, jevRouteHint{
+		RunMode:      runMode,
+		Step:         outputKey,
+		ObjectiveLen: len(r.objectiveText),
+		InputTokens:  inTok,
+		HasImages:    r.hasImages,
+		NeedsTools:   true,
+		QAStall:      r.qaStallCount,
+		Workspace:    r.Workspace,
+		RepoKey:      r.jevRepo,
+		Author:       adkName,
+		Label:        label,
+		Stage:        inferStage(adkName, label),
+		Approve:      r.Approve,
+		OnEvent:      r.OnEvent,
+	})
 	llm, err := r.modelFor(ctx, a)
 	if err != nil {
 		return nil, fmt.Errorf("modelo de %s (provedor %s): %w", a.Name, a.Provider, err)
@@ -1046,6 +1082,13 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	}
 	if r.NewModel != nil {
 		return r.NewModel(ctx, a)
+	}
+	if strings.EqualFold(strings.TrimSpace(a.Provider), "jev") {
+		return NewJevModelFactory(JevFactoryOptions{
+			Workspace: r.Workspace,
+			Approve:   r.Approve,
+			OnEvent:   r.OnEvent,
+		})(ctx, a)
 	}
 	return modelx.New(ctx, a.Provider, a.Model)
 }
@@ -1853,7 +1896,24 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
 		toolRoot = r.ReviewRoot
 	}
-	llm, err := r.modelFor(modelx.WithAgentDir(ctx, toolRoot), chief)
+	triageCtx := modelx.WithAgentDir(ctx, toolRoot)
+	triageCtx = withJevRouteHint(triageCtx, jevRouteHint{
+		RunMode:      runMode,
+		Step:         "triage_chief",
+		ObjectiveLen: len(r.objectiveText),
+		InputTokens:  jev.EstimateFirstStepInputTokens(len(r.objectiveText), len(r.teamMemorySnippet()), true),
+		HasImages:    r.hasImages || hasImageContent(msg),
+		NeedsTools:   true,
+		QAStall:      r.qaStallCount,
+		Workspace:    r.Workspace,
+		RepoKey:      r.jevRepo,
+		Author:       chief.Name,
+		Label:        roleLabel(chief.Role) + " · " + chief.Name,
+		Stage:        "chief",
+		Approve:      r.Approve,
+		OnEvent:      r.OnEvent,
+	})
+	llm, err := r.modelFor(triageCtx, chief)
 	if err != nil {
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}

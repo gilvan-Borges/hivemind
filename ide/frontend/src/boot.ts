@@ -55,6 +55,23 @@ export async function boot() {
 
     if (ev.kind === "stage") {
       updateAgentStatus(lane, ev.author, ev.label, "running");
+    } else if (ev.kind === "model_route") {
+      const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
+      const chosen = ev.provider && ev.model ? `${ev.provider}/${ev.model}` : String(ev.model || "");
+      if (ag && chosen) {
+        ag.routeModel = chosen;
+        ag.routeTier = ev.tier ? String(ev.tier) : undefined;
+        ag.routeReasons = Array.isArray(ev.reasons) ? ev.reasons.map(String) : undefined;
+      }
+      const routeText = String(ev.text || (chosen ? `Jev escolheu ${chosen}` : "")).trim();
+      if (routeText) {
+        lane.messages.push({
+          id: `route-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "system",
+          label: "Rota Jev",
+          text: routeText,
+        });
+      }
     } else if (ev.kind === "usage") {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);

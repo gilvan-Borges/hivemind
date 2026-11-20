@@ -24,4 +24,19 @@ func TestNormalizeProviderOpenRouter(t *testing.T) {
 	if got := NormalizeProvider("", "claude-sonnet-4-5"); got != "anthropic" {
 		t.Fatalf("plain claude id must infer anthropic, got %q", got)
 	}
+	if got := NormalizeProvider("jev", "auto"); got != "jev" {
+		t.Fatalf("explicit jev provider must stay jev, got %q", got)
+	}
+	if got := NormalizeProvider("", "jev:auto"); got != "jev" {
+		t.Fatalf("jev:auto must infer jev, got %q", got)
+	}
+	tErr := Team{
+		Name: "x",
+		Agents: []Agent{
+			{Name: "jev", Role: RoleDeveloper, Provider: "gemini", Model: "gemini-flash-latest"},
+		},
+	}.Validate()
+	if tErr == nil {
+		t.Fatal("expected reserved agent name jev to fail validation")
+	}
 }

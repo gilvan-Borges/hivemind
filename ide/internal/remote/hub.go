@@ -28,14 +28,20 @@ type ApprovalInfo struct {
 
 // LaneEventItem is a capped transcript entry of a lane's active turn.
 type LaneEventItem struct {
-	Kind     string `json:"kind"`
-	Stage    string `json:"stage,omitempty"`
-	Author   string `json:"author,omitempty"`
-	Label    string `json:"label,omitempty"`
-	Text     string `json:"text,omitempty"`
-	ToolName string `json:"toolName,omitempty"`
-	Tokens   int64  `json:"tokens,omitempty"`
-	At       string `json:"at,omitempty"`
+	Kind              string   `json:"kind"`
+	Stage             string   `json:"stage,omitempty"`
+	Author            string   `json:"author,omitempty"`
+	Label             string   `json:"label,omitempty"`
+	Text              string   `json:"text,omitempty"`
+	ToolName          string   `json:"toolName,omitempty"`
+	Tokens            int64    `json:"tokens,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	Model             string   `json:"model,omitempty"`
+	Tier              string   `json:"tier,omitempty"`
+	Reasons           []string `json:"reasons,omitempty"`
+	EstimatedMicroUSD int64    `json:"estimatedMicroUsd,omitempty"`
+	DecisionMicros    int64    `json:"decisionMicros,omitempty"`
+	At                string   `json:"at,omitempty"`
 }
 
 // LaneSnapshot is the live state of one (workspace, laneId) pair.
@@ -182,14 +188,20 @@ func (h *Hub) HandleLaneEvent(ev idecore.LaneEvent) {
 	}
 	if e.Kind != "usage" {
 		item := LaneEventItem{
-			Kind:     e.Kind,
-			Stage:    e.Stage,
-			Author:   e.Author,
-			Label:    e.Label,
-			Text:     e.Text,
-			ToolName: e.ToolName,
-			Tokens:   int64(e.Tokens),
-			At:       at,
+			Kind:              e.Kind,
+			Stage:             e.Stage,
+			Author:            e.Author,
+			Label:             e.Label,
+			Text:              e.Text,
+			ToolName:          e.ToolName,
+			Tokens:            int64(e.Tokens),
+			Provider:          e.Provider,
+			Model:             e.Model,
+			Tier:              e.Tier,
+			Reasons:           append([]string(nil), e.Reasons...),
+			EstimatedMicroUSD: e.EstimatedMicroUSD,
+			DecisionMicros:    e.DecisionMicros,
+			At:                at,
 		}
 		s.RecentEvents = append(s.RecentEvents, item)
 		if len(s.RecentEvents) > maxRecentEvents {

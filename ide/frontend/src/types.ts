@@ -229,6 +229,9 @@ export interface AgentRuntime {
   name: string;
   role: string;
   model: string;
+  routeModel?: string;
+  routeTier?: string;
+  routeReasons?: string[];
   status: "idle" | "running" | "done" | "error";
   tool?: string;
   runningSince?: number;

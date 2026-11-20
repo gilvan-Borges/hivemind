@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
@@ -121,6 +122,34 @@ func TestHubSubscribeAndBroadcast(t *testing.T) {
 	ev := <-ch
 	if ev.Type != "lane_event" {
 		t.Fatalf("evento errado: %+v", ev)
+	}
+	hub.HandleLaneEvent(idecore.LaneEvent{
+		LaneID: "l1",
+		Team:   "t",
+		Event: orchestrator.Event{
+			Kind:              "model_route",
+			Stage:             "dev",
+			Author:            "dev",
+			Provider:          "openrouter",
+			Model:             "deepseek/deepseek-chat",
+			Tier:              "cheap",
+			Reasons:           []string{"cheap_default"},
+			EstimatedMicroUSD: 120,
+			DecisionMicros:    250,
+			Text:              "Jev escolheu openrouter/deepseek/deepseek-chat (faixa cheap · cheap_default)",
+		},
+	})
+	routeEv := <-ch
+	if routeEv.Type != "lane_event" || !strings.Contains(string(routeEv.Data), `"kind":"model_route"`) || !strings.Contains(string(routeEv.Data), `"provider":"openrouter"`) {
+		t.Fatalf("evento model_route inválido no SSE: %s", string(routeEv.Data))
+	}
+	snaps := hub.Snapshots("C:/w")
+	if len(snaps) != 1 || len(snaps[0].RecentEvents) == 0 {
+		t.Fatalf("recentEvents não registrou model_route: %+v", snaps)
+	}
+	last := snaps[0].RecentEvents[len(snaps[0].RecentEvents)-1]
+	if last.Kind != "model_route" || last.Provider != "openrouter" || last.Model != "deepseek/deepseek-chat" {
+		t.Fatalf("item model_route errado no snapshot: %+v", last)
 	}
 	unsub()
 	_, ok := <-ch

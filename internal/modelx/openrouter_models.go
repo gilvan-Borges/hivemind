@@ -19,6 +19,8 @@ type OpenRouterModel struct {
 	ContextLength   int64   `json:"contextLength,omitempty"`
 	PromptPrice     float64 `json:"promptPrice,omitempty"`
 	CompletionPrice float64 `json:"completionPrice,omitempty"`
+	SupportsTools   bool    `json:"supportsTools,omitempty"`
+	SupportsVision  bool    `json:"supportsVision,omitempty"`
 }
 
 const openRouterModelsTTL = 30 * time.Minute
@@ -63,10 +65,15 @@ func OpenRouterModels(ctx context.Context) ([]OpenRouterModel, error) {
 	}
 	var raw struct {
 		Data []struct {
-			ID            string `json:"id"`
-			Name          string `json:"name"`
-			ContextLength int64  `json:"context_length"`
-			Pricing       struct {
+			ID                  string   `json:"id"`
+			Name                string   `json:"name"`
+			ContextLength       int64    `json:"context_length"`
+			SupportedParameters []string `json:"supported_parameters"`
+			Architecture        struct {
+				Modality        string   `json:"modality"`
+				InputModalities []string `json:"input_modalities"`
+			} `json:"architecture"`
+			Pricing struct {
 				Prompt     string `json:"prompt"`
 				Completion string `json:"completion"`
 			} `json:"pricing"`
@@ -81,12 +88,28 @@ func OpenRouterModels(ctx context.Context) ([]OpenRouterModel, error) {
 		if id == "" {
 			continue
 		}
+		supportsTools := len(m.SupportedParameters) == 0
+		for _, p := range m.SupportedParameters {
+			if strings.EqualFold(strings.TrimSpace(p), "tools") {
+				supportsTools = true
+				break
+			}
+		}
+		supportsVision := strings.Contains(strings.ToLower(m.Architecture.Modality), "image")
+		for _, mod := range m.Architecture.InputModalities {
+			if strings.EqualFold(strings.TrimSpace(mod), "image") {
+				supportsVision = true
+				break
+			}
+		}
 		out = append(out, OpenRouterModel{
 			ID:              id,
 			Name:            strings.TrimSpace(m.Name),
 			ContextLength:   m.ContextLength,
 			PromptPrice:     parseORPrice(m.Pricing.Prompt),
 			CompletionPrice: parseORPrice(m.Pricing.Completion),
+			SupportsTools:   supportsTools,
+			SupportsVision:  supportsVision,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

@@ -128,6 +128,8 @@ func defaultUsageFilePath() (string, error) {
 func CanonicalUsageProvider(provider, modelSpec string) string {
 	m := strings.ToLower(strings.TrimSpace(modelSpec))
 	switch {
+	case strings.HasPrefix(m, "cursor:") || strings.HasPrefix(m, "cursor/") || m == "cursor":
+		return "cursor"
 	case strings.HasPrefix(m, "opencode-go:") || strings.HasPrefix(m, "opencode-go/") || m == "opencode-go":
 		return "opencode-go"
 	case strings.HasPrefix(m, "opencode:") || strings.HasPrefix(m, "opencode/") || strings.HasPrefix(m, "zen:") || m == "opencode":
@@ -137,6 +139,8 @@ func CanonicalUsageProvider(provider, modelSpec string) string {
 	}
 	p := strings.ToLower(strings.TrimSpace(provider))
 	switch p {
+	case "cursor":
+		return "cursor"
 	case "agy", "antigravity":
 		return "agy"
 	case "opencode-go", "opencode_go":
@@ -556,6 +560,7 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 
 	labels := map[string]string{
 		"agy":         "Antigravity CLI (agy)",
+		"cursor":      "Cursor CLI (agent)",
 		"opencode-go": "OpenCode Go",
 		"opencode":    "OpenCode Zen",
 		"gemini":      "Google Gemini",
@@ -563,7 +568,7 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 		"openai":      "OpenAI / Grok",
 		"openrouter":  "OpenRouter",
 	}
-	order := []string{"agy", "opencode-go", "opencode", "gemini", "anthropic", "openai", "openrouter"}
+	order := []string{"agy", "cursor", "opencode-go", "opencode", "gemini", "anthropic", "openai", "openrouter"}
 	byProv := make(map[string]*AIProviderUsage, len(order))
 	for _, p := range order {
 		byProv[p] = &AIProviderUsage{

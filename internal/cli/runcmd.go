@@ -95,7 +95,17 @@ func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string
 		Out:              cmd.OutOrStdout(),
 		Err:              cmd.ErrOrStderr(),
 		Streaming:        agent.StreamingModeSSE,
+		OnEvent: func(ev orchestrator.Event) {
+			if ev.Kind == "model_route" && ev.Text != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "[jev] %s\n", ev.Text)
+			}
+		},
 	}
+	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
+		Workspace: dir,
+		Approve:   approve,
+		OnEvent:   runner.OnEvent,
+	})
 	res, runErr := runner.Run(cmd.Context(), orchestrator.Request{
 		Objective: objective,
 		JiraKey:   jiraKey,
