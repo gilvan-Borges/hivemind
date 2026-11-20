@@ -111,11 +111,7 @@ func formatMCPList(views []mcpx.ServerView) string {
 	}
 	var b strings.Builder
 	for _, v := range views {
-		state := "desligado"
-		if v.Enabled || v.Status == "ready" {
-			state = "ligado"
-		}
-		fmt.Fprintf(&b, "- %s [%s, %s]: %s\n", v.Name, state, v.Status, v.Description)
+		fmt.Fprintf(&b, "- %s [%s]: %s\n", v.Name, v.RuntimeLabel(), v.Description)
 		if v.Detail != "" {
 			fmt.Fprintf(&b, "  %s\n", v.Detail)
 		}

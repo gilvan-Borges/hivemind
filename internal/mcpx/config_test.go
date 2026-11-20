@@ -107,4 +107,19 @@ func TestExpandKeepsPlaceholdersOutOfDisk(t *testing.T) {
 	if ok {
 		t.Fatal("variável ausente deveria falhar a expansão")
 	}
+	optional, missing := expandKeys("Bearer ${env?:CONTEXT7_API_KEY_AUSENTE}", "")
+	if len(missing) != 0 || strings.TrimSpace(optional) != "Bearer" {
+		t.Fatalf("opcional = %q missing=%v", optional, missing)
+	}
+	prev := ghAuthToken
+	ghAuthToken = func() string { return "" }
+	t.Cleanup(func() { ghAuthToken = prev })
+	t.Setenv("GITHUB_MCP_TOKEN", "")
+	_, missing = expandKeys("Bearer ${env:GITHUB_MCP_TOKEN}", "")
+	if len(missing) != 1 || missing[0] != "GITHUB_MCP_TOKEN" {
+		t.Fatalf("missing = %v", missing)
+	}
+	if !strings.Contains(secretMessage(missing), "gh auth login") {
+		t.Fatal(secretMessage(missing))
+	}
 }

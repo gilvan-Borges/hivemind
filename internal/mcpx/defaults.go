@@ -1,8 +1,10 @@
 package mcpx
 
 // DefaultServers é o catálogo que o produto conhece.
-// Context7 e o Code Review Graph nascem ligados. O resto fica presente e
-// desligado: o processo não sobe e o esquema das ferramentas não entra no
+// Context7 e o Code Review Graph nascem ligados na configuração. O processo
+// do grafo não sobe quando uvx não está no PATH, e o Context7 conecta sem
+// chave (a variável só entra no header quando existe). O resto fica presente
+// e desligado: o processo não sobe e o esquema das ferramentas não entra no
 // contexto do agente até alguém ligar.
 func DefaultServers() []Server {
 	return []Server{
@@ -12,7 +14,7 @@ func DefaultServers() []Server {
 			Transport:   TransportHTTP,
 			URL:         "https://mcp.context7.com/mcp",
 			Headers: map[string]string{
-				"Authorization": "Bearer ${env:CONTEXT7_API_KEY}",
+				"Authorization": "Bearer ${env?:CONTEXT7_API_KEY}",
 			},
 			Enabled: true,
 			Builtin: true,

@@ -1929,6 +1929,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		DisableMerge:           isAutoReview,
 		ReviewCommentOnly:      isAutoReview && r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only",
 		AllowReadOnlyTestShell: isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests(),
+		NoShell:                isAutoReview && !r.Project.Settings.AutoReview.EffectiveRunTests(),
 		DocsOnlyWrite:          sddDocs || sddJira,
 		ReviewRequestedInObj:   r.reviewRequested || isAutoReview,
 		Allowlist:              r.Project.Settings.ShellAllowlist,
@@ -2340,6 +2341,8 @@ REGRA DE TRIAGEM:
 %s`,
 			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
 	}
+
+	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão. Se o usuário pedir para rodar um comando (gh, testes, build), chame run_shell. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."
 
 	if catalogBlock := skillx.CatalogBlock(r.skills, r.NativeSkills); catalogBlock != "" {
 		triageInstr += "\n\n" + catalogBlock +

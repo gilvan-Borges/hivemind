@@ -28,6 +28,9 @@ func Evaluate(command string, allowlist []string) Decision {
 	if command == "" {
 		return Decision{Reason: "comando vazio"}
 	}
+	if printsCredential(command) {
+		return Decision{Reason: "comando recusado: exporia uma credencial e não é executado"}
+	}
 	argv, shell, err := split(command)
 	if err != nil {
 		return Decision{Reason: err.Error()}
@@ -141,7 +144,8 @@ func aliasValueMutates(value string) bool {
 	return false
 }
 
-func firstSubcommand(args []string) string {	for i := 0; i < len(args); i++ {
+func firstSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
 		tok := strings.TrimSpace(args[i])
 		if tok == "" {
 			continue
@@ -175,6 +179,9 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 	if base == "git" && gitDangerous(argv) {
 		return true, "este subcomando do git reescreve histórico, executa hooks customizados ou envia com --force e precisa de confirmação"
 	}
+	if base == "gh" && ghMutates(argv) {
+		return true, "gh que altera issue, pull request, release ou repositório precisa de confirmação"
+	}
 	if ok, why := interpreterInlineDangerous(base, argv[1:]); ok {
 		return true, why
 	}
@@ -189,6 +196,88 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// printsCredential recusa comandos que imprimem um token. A recusa não
+// repete o comando, para o texto não ir parar no log nem no transcript.
+// Aspas e barras invertidas são removidas antes da checagem: `gh auth to'ken'`
+// é o mesmo comando que `gh auth token`.
+func printsCredential(command string) bool {
+	flat := strings.ToLower(stripShellNoise(command))
+	if strings.Contains(flat, "--show-token") {
+		return true
+	}
+	fields := strings.Fields(flat)
+	for i := 0; i < len(fields); i++ {
+		if !isGHCommand(fields[i]) {
+			continue
+		}
+		sawAuth, sawToken := false, false
+		for j := i + 1; j < len(fields); j++ {
+			tok := strings.Trim(fields[j], "();|&")
+			if tok == "" || tok == "&&" || tok == "||" {
+				break
+			}
+			switch tok {
+			case "auth":
+				sawAuth = true
+			case "token":
+				sawToken = true
+			}
+		}
+		if sawAuth && sawToken {
+			return true
+		}
+	}
+	return false
+}
+
+func stripShellNoise(command string) string {
+	var b strings.Builder
+	b.Grow(len(command))
+	for _, r := range command {
+		switch r {
+		case '\'', '"', '\\':
+		case '`':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isGHCommand(tok string) bool {
+	tok = strings.Trim(tok, "$();|&")
+	tok = strings.TrimSuffix(tok, ".exe")
+	tok = strings.TrimSuffix(tok, ".cmd")
+	if i := strings.LastIndexAny(tok, `/\`); i >= 0 {
+		tok = tok[i+1:]
+	}
+	return tok == "gh"
+}
+
+func ghMutates(argv []string) bool {
+	if len(argv) < 3 {
+		return false
+	}
+	top := strings.ToLower(argv[1])
+	act := strings.ToLower(argv[2])
+	switch top {
+	case "issue", "pr", "release", "repo", "gist", "workflow", "label", "secret", "variable", "project":
+		switch act {
+		case "comment", "create", "edit", "close", "reopen", "delete", "merge", "ready",
+			"lock", "unlock", "pin", "unpin", "transfer", "archive", "rename",
+			"set", "remove", "add", "run", "enable", "disable":
+			return true
+		}
+	case "auth":
+		switch act {
+		case "login", "logout", "refresh", "setup-git":
+			return true
+		}
+	}
+	return false
 }
 
 func interpreterInlineDangerous(base string, args []string) (bool, string) {
