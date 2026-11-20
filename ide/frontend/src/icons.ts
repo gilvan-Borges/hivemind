@@ -38,14 +38,15 @@ export const icons = {
     <circle cx="5.2" cy="16.3" r="1.0" fill="#e9d5ff"/>
     <circle cx="18.8" cy="16.3" r="1.0" fill="#e9d5ff"/>
   </svg>`,
-  explorer: ms("folder_open", 17, true),
-  team: ms("groups", 17, true),
-  swarm: ms("hub", 17, true),
-  gitBranch: ms("alt_route", 17, true),
+  // Activity bar: outline (estilo traço fino, próximo do Lucide do IPG) sem sair de Material Symbols (D6).
+  explorer: ms("folder_open", 17),
+  team: ms("groups", 17),
+  swarm: ms("hub", 17),
+  gitBranch: ms("alt_route", 17),
   gitSmall: ms("alt_route", 12),
-  settings: ms("settings", 17, true),
+  settings: ms("settings", 17),
   search: ms("search", 13),
-  searchLarge: ms("search", 17, true),
+  searchLarge: ms("search", 17),
   refresh: ms("refresh", 13),
   folderClosed: ms("folder", 15, true),
   folderOpen: ms("folder_open", 15, true),
@@ -76,10 +77,12 @@ export const icons = {
   image: ms("image", 14),
   terminal: ms("terminal", 14),
   sessions: ms("history", 17),
-  skills: ms("extension", 17, true),
-  mcp: ms("hub", 17),
+  skills: ms("extension", 17),
+  // Antes: hub (colidia com swarm). dns = servidores MCP.
+  mcp: ms("dns", 17),
   download: ms("download", 13),
-  tokens: ms("bolt", 12),
+  // Antes: bolt (colidia com bolt). generating_tokens = consumo.
+  tokens: ms("generating_tokens", 12),
   editPen: ms("edit", 12),
   newFile: ms("note_add", 13),
   newFolder: ms("create_new_folder", 13),
@@ -94,7 +97,8 @@ export const icons = {
   sync: ms("sync", 13),
   target: ms("adjust", 12),
   cloud: ms("cloud", 12),
-  aiUsage: ms("auto_awesome", 18, true),
+  // Antes: auto_awesome (colidia com sparkle). monitoring = uso & limites.
+  aiUsage: ms("monitoring", 18),
 };
 
 export function fileBadge(name: string): string {
