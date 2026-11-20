@@ -627,6 +627,22 @@ func (a *App) LoginAgyProfile(profileID string) (string, error) {
 	return modelx.LaunchAgyADCLogin(profileID)
 }
 
+// ConnectNewAgyGoogleAccount backs up the current Antigravity Google OAuth session into its
+// isolated profile folder, clears the live slot, opens the browser Google OAuth login flow via
+// `agy`, and automatically registers the new Google account by its email (`id_token_email`).
+func (a *App) ConnectNewAgyGoogleAccount(workspace string) (modelx.ProfilesOverview, error) {
+	return modelx.ConnectNewAgyGoogleAccount(workspace)
+}
+
+// ActivateAgyAccount switches the live Antigravity Google OAuth session to the saved isolated
+// session of profileID (preserving the previous account's session in its own folder).
+func (a *App) ActivateAgyAccount(profileID, workspace string) (modelx.ProfilesOverview, error) {
+	if err := modelx.ActivateAgyProfileSession(profileID); err != nil {
+		return modelx.ListProfilesOverview(workspace), err
+	}
+	return modelx.ListProfilesOverview(workspace), nil
+}
+
 // ListOpenRouterModels returns the full public OpenRouter catalog (cached ~30min).
 func (a *App) ListOpenRouterModels() ([]modelx.OpenRouterModel, error) {
 	return modelx.OpenRouterModels(a.ctx)

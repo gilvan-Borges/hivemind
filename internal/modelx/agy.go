@@ -52,6 +52,8 @@ type Agy struct {
 	// IsolateEnv strips inherited API keys and CLOUDSDK_CONFIG before applying Env,
 	// so an org-scoped or ADC account does not see another org's credentials.
 	IsolateEnv bool
+	// ProfileID identifies which isolated AGY OAuth vault session to activate before running.
+	ProfileID string
 }
 
 // AgyStatus is what `hivemind doctor` prints about the CLI. It never includes
@@ -174,8 +176,10 @@ func NewAgyForContext(ctx context.Context, bin, modelName string) (*Agy, error) 
 		return nil, fmt.Errorf("nenhuma conta AGY vinculada a esta organização")
 	}
 	var envMap map[string]string
+	var profileID string
 	isolate := false
 	if prof != nil {
+		profileID = prof.ID
 		isolate = len(prof.OrgPatterns) > 0 || strings.EqualFold(prof.AuthMode, "adc")
 		if len(prof.Env) > 0 {
 			envMap = make(map[string]string, len(prof.Env))
@@ -211,7 +215,7 @@ func NewAgyForContext(ctx context.Context, bin, modelName string) (*Agy, error) 
 		}
 		bin = found
 	}
-	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout, Env: envMap, IsolateEnv: isolate}, nil
+	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout, Env: envMap, IsolateEnv: isolate, ProfileID: profileID}, nil
 }
 
 // Name implements model.LLM.
@@ -233,6 +237,11 @@ func (a *Agy) GenerateContent(ctx context.Context, req *model.LLMRequest, _ bool
 func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 	if a.Bin == "" {
 		return nil, fmt.Errorf("não encontrei o comando agy no PATH. Instale o Google Antigravity CLI e entre com `agy`")
+	}
+	if a.ProfileID != "" {
+		if ok, _ := HasAgyVaultSession(a.ProfileID); ok {
+			_ = ActivateAgyProfileSession(a.ProfileID)
+		}
 	}
 	decls := toolDecls(req)
 	timeout := a.Timeout

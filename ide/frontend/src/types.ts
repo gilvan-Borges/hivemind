@@ -972,6 +972,8 @@ export interface WailsBackendApp {
   DeleteProviderProfile?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   BindProviderWorkspace?(workspace: string, provider: string, profileID: string): Promise<ProfilesOverview>;
   LoginAgyProfile?(profileID: string): Promise<string>;
+  ConnectNewAgyGoogleAccount?(workspace: string): Promise<ProfilesOverview>;
+  ActivateAgyAccount?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
   RotateMobileToken?(): Promise<MobileBridgeStatus>;

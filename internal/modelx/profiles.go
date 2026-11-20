@@ -423,6 +423,10 @@ func profileEnvValue(p *ProviderProfile, name string) string {
 // ListProfilesOverview returns a secret-safe overview of all saved provider profiles
 // plus how each supported provider resolves for workspace.
 func ListProfilesOverview(workspace string) ProfilesOverview {
+	// Automatically sync and back up the currently active Antigravity Google OAuth account
+	// (identified by its id_token_email) into its isolated profile vault folder.
+	_, _ = SyncCurrentLiveAgyAccountToProfiles()
+
 	ws := strings.TrimSpace(workspace)
 	orgID := orgx.Detect(ws)
 
@@ -499,6 +503,14 @@ func evaluateProfileReadiness(p ProviderProfile) (bool, string) {
 	switch p.Provider {
 	case "agy":
 		switch strings.ToLower(strings.TrimSpace(p.AuthMode)) {
+		case "vault":
+			if ok, email := HasAgyVaultSession(p.ID); ok {
+				if email != "" {
+					return true, "Conta Google conectada e salva em pasta isolada (" + email + ")"
+				}
+				return true, "Sessão OAuth Google salva em pasta isolada"
+			}
+			return false, "Clique em Conectar com Google para autenticar esta conta"
 		case "adc":
 			cfgDir, _ := AgyADCConfigDir(p.ID)
 			if cfgDir == "" {
@@ -507,13 +519,19 @@ func evaluateProfileReadiness(p ProviderProfile) (bool, string) {
 			if HasAgyADCCredentials(cfgDir) {
 				return true, "Google Cloud ADC pronto (" + cfgDir + ")"
 			}
-			return false, fmt.Sprintf("Rode `set CLOUDSDK_CONFIG=%s` e `gcloud auth application-default login` para autenticar esta conta", cfgDir)
+			if ok, email := HasAgyVaultSession(p.ID); ok {
+				return true, "Conta Google conectada (" + email + ")"
+			}
+			return false, "Clique em Conectar com Google para autenticar esta conta"
 		case "env":
 			if len(p.Env) > 0 || strings.TrimSpace(p.Command) != "" {
 				return true, "Ambiente/binário customizado"
 			}
 			return false, "Defina variáveis de ambiente ou caminho do binário"
 		default:
+			if ok, email := HasAgyVaultSession(p.ID); ok && email != "" {
+				return true, "Conta Google conectada (" + email + ")"
+			}
 			return AgyAvailable(), "Usa a sessão `agy` ativa no sistema"
 		}
 	case "cursor":
