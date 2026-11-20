@@ -875,6 +875,7 @@ export interface RelayLinkCode {
 export interface JevPolicy {
   version: number;
   enabled: boolean;
+  classifyEnabled?: boolean;
   weights: { quality: number; cost: number; latency: number };
   autoEscalateUsd: number;
   maxEscalateRatio: number;
