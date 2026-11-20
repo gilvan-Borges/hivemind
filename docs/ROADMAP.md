@@ -101,6 +101,8 @@ Sem data; entra o que o dogfooding contínuo apontar, em ordem provável:
 
 Proposta à parte, ainda sem código e sem fase própria: [SPEC_HIVE_AGENT.md](SPEC_HIVE_AGENT.md) (agente residente). Não entra na fila antes de a fase anterior fechar no dogfooding.
 
+Proposta à parte, ainda sem código e sem fase própria: [SPEC_JEV_ORQUESTRADOR.md](SPEC_JEV_ORQUESTRADOR.md) (roteamento de modelo e failover de provedor). O achado de roteamento citado na Fase 1 aponta para cá; não entra na fila antes de a fase anterior fechar no dogfooding.
+
 ---
 
 ## Débitos transversais (não pertencem a uma fase; corrigir ao tocar o código)
