@@ -384,6 +384,20 @@ func TestFlushMergesLedgerWrittenByAnotherProcess(t *testing.T) {
 	}
 }
 
+func TestMergeUsageKeepsIdenticalCalls(t *testing.T) {
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	same := usageEvent{Timestamp: ts, Provider: "agy", Model: "agy:x", InputTokens: 1, OutputTokens: 1, TotalTokens: 2}
+	disk := usageStoreFile{
+		Version: 1,
+		Events:  []usageEvent{same},
+		Limits:  map[string]ProviderLimits{},
+	}
+	merged := mergeUsage(disk, []usageEvent{same, same}, nil)
+	if len(merged.Events) != 3 {
+		t.Fatalf("duas chamadas iguais não podem ser descartadas: %+v", merged.Events)
+	}
+}
+
 func BenchmarkRecordAIUsage(b *testing.B) {
 	tmp := filepath.Join(b.TempDir(), "ai-usage.json")
 	prevPath := usageFilePathFn

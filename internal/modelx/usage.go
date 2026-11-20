@@ -319,12 +319,9 @@ func mergeUsage(disk usageStoreFile, pending []usageEvent, edits map[string]limi
 	if disk.Limits == nil {
 		disk.Limits = make(map[string]ProviderLimits)
 	}
-	for _, ev := range pending {
-		if containsUsageEvent(disk.Events, ev) {
-			continue
-		}
-		disk.Events = append(disk.Events, ev)
-	}
+	// pending só tem o que este processo ainda não gravou. Duas chamadas iguais
+	// no mesmo instante são dois eventos; comparar com o disco apagaria a segunda.
+	disk.Events = append(disk.Events, pending...)
 	for bucket, edit := range edits {
 		if edit.remove {
 			delete(disk.Limits, bucket)
@@ -333,16 +330,6 @@ func mergeUsage(disk usageStoreFile, pending []usageEvent, edits map[string]limi
 		disk.Limits[bucket] = edit.value
 	}
 	return disk
-}
-
-func containsUsageEvent(events []usageEvent, ev usageEvent) bool {
-	for _, got := range events {
-		if got.Timestamp.Equal(ev.Timestamp) && got.Provider == ev.Provider && got.Model == ev.Model &&
-			got.InputTokens == ev.InputTokens && got.OutputTokens == ev.OutputTokens && got.TotalTokens == ev.TotalTokens {
-			return true
-		}
-	}
-	return false
 }
 
 func writeUsageAtomic(path string, store usageStoreFile) error {
