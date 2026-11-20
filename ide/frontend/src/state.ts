@@ -102,6 +102,8 @@ export const state = {
   doctorModal: null as AgyStatus | null,
   apiKeysStatus: {} as Record<string, string>,
   apiKeysTab: "profiles" as "profiles" | "global",
+  agyOAuthWaitingCode: false,
+  agyOAuthSubmitting: false,
   jiraEditingProfileId: null as string | null,
   profilesOverview: null as ProfilesOverview | null,
   profileEditor: {

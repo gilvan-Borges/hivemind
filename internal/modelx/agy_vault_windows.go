@@ -3,6 +3,7 @@ package modelx
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 const (
@@ -44,6 +47,13 @@ var (
 	procCredFree    = advapi32DLL.NewProc("CredFree")
 
 	agyVaultSwitchMu sync.Mutex
+
+	pendingAgyLoginMu     sync.Mutex
+	pendingAgyCmd         *exec.Cmd
+	pendingAgyStdin       io.WriteCloser
+	pendingAgyBackupBlob  []byte
+	pendingAgyBackupEmail string
+	pendingAgyActive      bool
 )
 
 type agyOAuthCredMeta struct {
@@ -277,11 +287,45 @@ func ActivateAgyProfileSession(profileID string) error {
 	return WriteLiveAgyOAuthCredential(targetBlob)
 }
 
+// EnsureLiveAgyCredentialRestored guarantees that if the live "gemini:antigravity"
+// slot is empty (and no OAuth code entry is currently in progress), the primary saved
+// AGY vault account (e.g. Conta #1) is automatically restored from its isolated folder.
+func EnsureLiveAgyCredentialRestored() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	pendingAgyLoginMu.Lock()
+	inLogin := pendingAgyActive
+	pendingAgyLoginMu.Unlock()
+	if inLogin {
+		return
+	}
+	if raw, _, err := ReadLiveAgyOAuthCredential(); err == nil && len(raw) > 0 {
+		return
+	}
+	profilesMu.Lock()
+	doc, err := loadProfilesLocked()
+	profilesMu.Unlock()
+	if err != nil {
+		return
+	}
+	for _, p := range doc.Profiles {
+		if p.Provider != "agy" {
+			continue
+		}
+		if vpath, verr := AgyProfileVaultPath(p.ID); verr == nil && vpath != "" {
+			if blob, rerr := os.ReadFile(vpath); rerr == nil && len(blob) > 0 {
+				_ = WriteLiveAgyOAuthCredential(blob)
+				return
+			}
+		}
+	}
+}
+
 // ConnectNewAgyGoogleAccount backs up the current AGY Google account into its isolated
-// folder, clears the live credential slot so the new login doesn't overwrite the old one
-// without backup, launches `agy` in a terminal window to trigger Google OAuth login in the
-// browser, and watches for the new Google account (`id_token_email`). If the user closes
-// the window without logging in, the previous account is automatically restored.
+// folder, clears the live credential slot, and starts `agy models` in the background with
+// an open stdin pipe so `agy` opens the browser to `antigravity.google/oauth-callback` and
+// waits for the user to paste the authorization code (`4/0A...`) directly inside the HiveMind modal.
 func ConnectNewAgyGoogleAccount(workspace string) (ProfilesOverview, error) {
 	// 1. Snapshot current account so it is 100% preserved in its isolated folder.
 	prevRaw, prevEmail, _ := ReadLiveAgyOAuthCredential()
@@ -294,34 +338,128 @@ func ConnectNewAgyGoogleAccount(workspace string) (ProfilesOverview, error) {
 		return ListProfilesOverview(workspace), err
 	}
 
-	// 2. Clear live slot so agy prompts for Google sign-in in the browser.
+	// Kill any stale pending login process first.
+	pendingAgyLoginMu.Lock()
+	if pendingAgyStdin != nil {
+		_ = pendingAgyStdin.Close()
+		pendingAgyStdin = nil
+	}
+	if pendingAgyCmd != nil && pendingAgyCmd.Process != nil {
+		_ = pendingAgyCmd.Process.Kill()
+		pendingAgyCmd = nil
+	}
+	if len(prevRaw) > 0 {
+		pendingAgyBackupBlob = prevRaw
+		pendingAgyBackupEmail = prevEmail
+	}
+	pendingAgyActive = true
+	pendingAgyLoginMu.Unlock()
+
+	// 2. Clear live slot so agy opens the browser for Google OAuth sign-in.
 	_ = DeleteLiveAgyOAuthCredential()
 
-	// 3. Launch interactive agy login window.
-	if runtime.GOOS == "windows" {
-		title := "Conectar Nova Conta Google - Antigravity (HiveMind)"
-		cmdLine := fmt.Sprintf(`echo ============================================================ && echo   CONECTAR NOVA CONTA GOOGLE NO ANTIGRAVITY (HIVEMIND) && echo   Sua conta anterior (%s) ja foi salva em pasta isolada! && echo   Conclua o login no navegador com a nova conta Google. && echo ============================================================ && "%s" models`, prevEmail, agyBin)
-		cmd := exec.Command("cmd.exe", "/c", "start", title, "cmd.exe", "/c", cmdLine)
-		_ = cmd.Start()
+	// 3. Start `agy models` headless with a piped stdin ready to receive the `4/0A...` code from the modal.
+	cmd := exec.Command(agyBin, "models")
+	procx.HideWindow(cmd)
+	stdinPipe, pipeErr := cmd.StdinPipe()
+	if pipeErr != nil {
+		pendingAgyLoginMu.Lock()
+		pendingAgyActive = false
+		pendingAgyLoginMu.Unlock()
+		EnsureLiveAgyCredentialRestored()
+		return ListProfilesOverview(workspace), fmt.Errorf("preparar pipe OAuth do agy: %w", pipeErr)
+	}
+	if startErr := cmd.Start(); startErr != nil {
+		_ = stdinPipe.Close()
+		pendingAgyLoginMu.Lock()
+		pendingAgyActive = false
+		pendingAgyLoginMu.Unlock()
+		EnsureLiveAgyCredentialRestored()
+		return ListProfilesOverview(workspace), fmt.Errorf("iniciar login OAuth do agy: %w", startErr)
 	}
 
-	// 4. Watch in background for up to 3 minutes: as soon as the new Google account
-	// completes OAuth, save it into its own isolated folder by email!
-	go func(backupBlob []byte, oldEmail string) {
-		deadline := time.Now().Add(3 * time.Minute)
-		for time.Now().Before(deadline) {
-			time.Sleep(1200 * time.Millisecond)
-			raw, email, rerr := ReadLiveAgyOAuthCredential()
-			if rerr == nil && len(raw) > 0 && email != "" {
-				_, _ = SyncCurrentLiveAgyAccountToProfiles()
-				return
-			}
-		}
-		// Timeout reached without a new login: restore previous account so the user is not left logged out.
-		if _, _, rerr := ReadLiveAgyOAuthCredential(); rerr != nil && len(backupBlob) > 0 {
-			_ = WriteLiveAgyOAuthCredential(backupBlob)
-		}
-	}(prevRaw, prevEmail)
+	pendingAgyLoginMu.Lock()
+	pendingAgyCmd = cmd
+	pendingAgyStdin = stdinPipe
+	pendingAgyLoginMu.Unlock()
+
+	go func(c *exec.Cmd) {
+		_ = c.Wait()
+	}(cmd)
 
 	return ListProfilesOverview(workspace), nil
+}
+
+// SubmitAgyOAuthCode sends the authorization code (`4/0A...`) copied from
+// `antigravity.google/oauth-callback` into the waiting `agy` process stdin, waits for `agy`
+// to finish the token exchange, reads the new account's `id_token_email`, and saves its
+// OAuth session into its isolated `%APPDATA%\HiveMind\agy-profiles\<id>\oauth-session.json` folder.
+func SubmitAgyOAuthCode(code, workspace string) (ProfilesOverview, error) {
+	cleanCode := strings.TrimSpace(code)
+	if cleanCode == "" {
+		return ListProfilesOverview(workspace), fmt.Errorf("cole o código de autenticação gerado pelo Google Antigravity (ex: 4/0A...)")
+	}
+
+	pendingAgyLoginMu.Lock()
+	stdin := pendingAgyStdin
+	pendingAgyStdin = nil
+	pendingAgyLoginMu.Unlock()
+
+	if stdin == nil {
+		return ListProfilesOverview(workspace), fmt.Errorf("nenhuma sessão de login aguardando código; clique em '+ Logar Nova Conta Google' novamente")
+	}
+
+	_, writeErr := io.WriteString(stdin, cleanCode+"\n")
+	_ = stdin.Close()
+	if writeErr != nil {
+		CancelAgyOAuthLogin(workspace)
+		return ListProfilesOverview(workspace), fmt.Errorf("enviar código OAuth para o agy: %w", writeErr)
+	}
+
+	// Poll up to 20s for agy to complete the OAuth token exchange and write "gemini:antigravity".
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(350 * time.Millisecond)
+		raw, email, rerr := ReadLiveAgyOAuthCredential()
+		if rerr == nil && len(raw) > 0 {
+			pendingAgyLoginMu.Lock()
+			pendingAgyActive = false
+			pendingAgyCmd = nil
+			pendingAgyBackupBlob = nil
+			pendingAgyLoginMu.Unlock()
+
+			_, _ = SyncCurrentLiveAgyAccountToProfiles()
+			_ = email
+			return ListProfilesOverview(workspace), nil
+		}
+	}
+
+	// If token exchange failed (e.g. invalid/expired code), restore backup account so nothing is lost.
+	CancelAgyOAuthLogin(workspace)
+	return ListProfilesOverview(workspace), fmt.Errorf("o código informado não pôde ser validado pelo Google Antigravity (verifique se copiou o código completo e tente novamente)")
+}
+
+// CancelAgyOAuthLogin aborts an in-progress Google OAuth login and immediately restores
+// the previous Google account into the live "gemini:antigravity" slot.
+func CancelAgyOAuthLogin(workspace string) ProfilesOverview {
+	pendingAgyLoginMu.Lock()
+	if pendingAgyStdin != nil {
+		_ = pendingAgyStdin.Close()
+		pendingAgyStdin = nil
+	}
+	if pendingAgyCmd != nil && pendingAgyCmd.Process != nil {
+		_ = pendingAgyCmd.Process.Kill()
+		pendingAgyCmd = nil
+	}
+	backup := pendingAgyBackupBlob
+	pendingAgyBackupBlob = nil
+	pendingAgyActive = false
+	pendingAgyLoginMu.Unlock()
+
+	if len(backup) > 0 {
+		_ = WriteLiveAgyOAuthCredential(backup)
+	} else {
+		EnsureLiveAgyCredentialRestored()
+	}
+	return ListProfilesOverview(workspace)
 }

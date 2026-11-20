@@ -423,8 +423,8 @@ func profileEnvValue(p *ProviderProfile, name string) string {
 // ListProfilesOverview returns a secret-safe overview of all saved provider profiles
 // plus how each supported provider resolves for workspace.
 func ListProfilesOverview(workspace string) ProfilesOverview {
-	// Automatically sync and back up the currently active Antigravity Google OAuth account
-	// (identified by its id_token_email) into its isolated profile vault folder.
+	// Ensure live credential slot is restored from vault if empty, and sync active account.
+	EnsureLiveAgyCredentialRestored()
 	_, _ = SyncCurrentLiveAgyAccountToProfiles()
 
 	ws := strings.TrimSpace(workspace)

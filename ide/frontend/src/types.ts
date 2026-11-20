@@ -973,6 +973,8 @@ export interface WailsBackendApp {
   BindProviderWorkspace?(workspace: string, provider: string, profileID: string): Promise<ProfilesOverview>;
   LoginAgyProfile?(profileID: string): Promise<string>;
   ConnectNewAgyGoogleAccount?(workspace: string): Promise<ProfilesOverview>;
+  SubmitAgyOAuthCode?(code: string, workspace: string): Promise<ProfilesOverview>;
+  CancelAgyOAuthLogin?(workspace: string): Promise<ProfilesOverview>;
   ActivateAgyAccount?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;

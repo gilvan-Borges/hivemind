@@ -547,9 +547,27 @@ export function renderModalLayer() {
                     </div>
                   </div>
                   <button type="button" class="primary" id="btn-connect-google-agy" style="padding:7px 14px;font-weight:600;font-size:12.5px;border-radius:8px;flex-shrink:0">
-                    ${icons.sparkle}<span>+ Logar Nova Conta Google</span>
+                    ${icons.sparkle}<span>${state.agyOAuthWaitingCode ? "Reabrir Login Google" : "+ Logar Nova Conta Google"}</span>
                   </button>
                 </div>
+
+                ${state.agyOAuthWaitingCode ? `
+                  <div style="padding:12px 14px;border-radius:10px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.55);display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                      <strong style="font-size:12.5px;color:#7dd3fc">Passo 2 · Cole o código gerado pelo Google Antigravity</strong>
+                      <button type="button" class="mini" id="btn-cancel-agy-oauth">Cancelar</button>
+                    </div>
+                    <div class="dim" style="font-size:11.5px;line-height:1.45">
+                      1. Na página <code>antigravity.google/oauth-callback</code> que abriu no navegador, clique em <strong>Copy to Clipboard</strong>.<br/>
+                      2. Clique em <strong>Colar &amp; Conectar</strong> abaixo (ou cole o código <code>4/0A…</code> no campo e confirme):
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      <input id="agy-oauth-code-input" type="text" value="${escapeHtml(state.agyOAuthCodeInput || "")}" placeholder="Cole aqui o código 4/0AUn6Hd9..." style="flex:1;font-family:var(--font-mono);font-size:12px" />
+                      <button type="button" class="mini" id="btn-paste-agy-oauth" title="Colar da área de transferência e conectar">Colar &amp; Conectar</button>
+                      <button type="button" class="primary mini" id="btn-submit-agy-oauth">${icons.check}<span>Confirmar Código</span></button>
+                    </div>
+                  </div>
+                ` : ""}
 
                 ${agyAccounts.length === 0 ? `
                   <div style="padding:14px;border-radius:10px;background:rgba(0,0,0,0.22);border:1px dashed var(--border);text-align:center;font-size:12px;color:var(--text-dim)">
@@ -655,6 +673,12 @@ export function renderModalLayer() {
     `;
 
     const closeAk = () => {
+      if (state.agyOAuthWaitingCode) {
+        const backend = api();
+        state.agyOAuthWaitingCode = false;
+        state.agyOAuthCodeInput = "";
+        void backend?.CancelAgyOAuthLogin?.(wsRoot);
+      }
       state.showAPIKeysModal = false;
       state.profileEditor.open = false;
       renderModalLayer();
@@ -676,39 +700,17 @@ export function renderModalLayer() {
       const backend = api();
       if (!backend?.ConnectNewAgyGoogleAccount) return;
       const btn = document.getElementById("btn-connect-google-agy") as HTMLButtonElement | null;
-      const prevCount = agyAccounts.length;
-      const prevIds = new Set(agyAccounts.map((a) => a.id));
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = `${icons.spinner}<span>Aguardando login Google no navegador…</span>`;
+        btn.innerHTML = `${icons.spinner}<span>Abrindo login Google no navegador…</span>`;
       }
       try {
         state.profilesOverview = await backend.ConnectNewAgyGoogleAccount(wsRoot);
-        toast("Conclua o login com sua conta Google na janela que abriu. Sua conta anterior já está salva em pasta isolada!", "info");
-        // Poll every 1.5s for up to 90s to detect the new Google account by email as soon as OAuth finishes!
-        let checks = 0;
-        const timer = window.setInterval(async () => {
-          checks++;
-          if (!state.showAPIKeysModal || checks > 60 || !backend.GetProviderProfilesOverview) {
-            window.clearInterval(timer);
-            return;
-          }
-          try {
-            const latest = await backend.GetProviderProfilesOverview(wsRoot);
-            const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
-            const added = newAgy.find((p) => !prevIds.has(p.id));
-            if (added || newAgy.length > prevCount) {
-              window.clearInterval(timer);
-              state.profilesOverview = latest;
-              updateStatusBar();
-              updateMissionBoardIfOpen();
-              renderModalLayer();
-              toast(`Nova conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
-            }
-          } catch {
-            // ignore poll error
-          }
-        }, 1500);
+        state.agyOAuthWaitingCode = true;
+        state.agyOAuthCodeInput = "";
+        renderModalLayer();
+        (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.focus();
+        toast("Copie o código 4/0A... da página do Google Antigravity que abriu e clique em 'Colar & Conectar'!", "info");
       } catch (err: any) {
         toastError("iniciar login Google do Antigravity", err);
         if (btn) {
@@ -716,6 +718,83 @@ export function renderModalLayer() {
           btn.innerHTML = `${icons.sparkle}<span>+ Logar Nova Conta Google</span>`;
         }
       }
+    });
+
+    const submitAgyOAuthCodeFlow = async (rawCode: string) => {
+      const backend = api();
+      if (!backend?.SubmitAgyOAuthCode) return;
+      const code = rawCode.trim();
+      if (!code) {
+        toast("Cole o código 4/0A... gerado na página do Google Antigravity.", "error");
+        return;
+      }
+      const submitBtn = document.getElementById("btn-submit-agy-oauth") as HTMLButtonElement | null;
+      const pasteBtn = document.getElementById("btn-paste-agy-oauth") as HTMLButtonElement | null;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `${icons.spinner}<span>Validando código…</span>`;
+      }
+      if (pasteBtn) pasteBtn.disabled = true;
+      try {
+        const prevIds = new Set(agyAccounts.map((a) => a.id));
+        const latest = await backend.SubmitAgyOAuthCode(code, wsRoot);
+        state.profilesOverview = latest;
+        state.agyOAuthWaitingCode = false;
+        state.agyOAuthCodeInput = "";
+        const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
+        const added = newAgy.find((p) => !prevIds.has(p.id)) || newAgy[newAgy.length - 1];
+        if (added && wsRoot && backend.BindProviderWorkspace) {
+          state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, "agy", added.id);
+        }
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        renderModalLayer();
+        toast(`Conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
+      } catch (err: any) {
+        toastError("validar código OAuth do Google Antigravity", err);
+        renderModalLayer();
+      }
+    };
+
+    document.getElementById("agy-oauth-code-input")?.addEventListener("input", (e) => {
+      state.agyOAuthCodeInput = (e.target as HTMLInputElement).value;
+    });
+    document.getElementById("agy-oauth-code-input")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+        void submitAgyOAuthCodeFlow(val);
+      }
+    });
+    document.getElementById("btn-submit-agy-oauth")?.addEventListener("click", () => {
+      const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+      void submitAgyOAuthCodeFlow(val);
+    });
+    document.getElementById("btn-paste-agy-oauth")?.addEventListener("click", async () => {
+      try {
+        const clip = await navigator.clipboard.readText();
+        if (clip && clip.trim()) {
+          state.agyOAuthCodeInput = clip.trim();
+          const inp = document.getElementById("agy-oauth-code-input") as HTMLInputElement | null;
+          if (inp) inp.value = state.agyOAuthCodeInput;
+          await submitAgyOAuthCodeFlow(state.agyOAuthCodeInput);
+          return;
+        }
+      } catch {
+        // clipboard permission fallback
+      }
+      const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+      await submitAgyOAuthCodeFlow(val);
+    });
+    document.getElementById("btn-cancel-agy-oauth")?.addEventListener("click", async () => {
+      const backend = api();
+      state.agyOAuthWaitingCode = false;
+      state.agyOAuthCodeInput = "";
+      if (backend?.CancelAgyOAuthLogin) {
+        state.profilesOverview = await backend.CancelAgyOAuthLogin(wsRoot);
+      }
+      renderModalLayer();
+      toast("Login cancelado. Sua conta Google anterior continua ativa.", "info");
     });
 
     document.querySelectorAll<HTMLElement>("[data-activate-agy-account]").forEach((btn) => {

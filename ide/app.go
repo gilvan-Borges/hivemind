@@ -629,9 +629,21 @@ func (a *App) LoginAgyProfile(profileID string) (string, error) {
 
 // ConnectNewAgyGoogleAccount backs up the current Antigravity Google OAuth session into its
 // isolated profile folder, clears the live slot, opens the browser Google OAuth login flow via
-// `agy`, and automatically registers the new Google account by its email (`id_token_email`).
+// `agy`, and waits for the user to paste the authorization code (`4/0A...`) in the modal.
 func (a *App) ConnectNewAgyGoogleAccount(workspace string) (modelx.ProfilesOverview, error) {
 	return modelx.ConnectNewAgyGoogleAccount(workspace)
+}
+
+// SubmitAgyOAuthCode completes the Google OAuth flow by sending the authorization code (`4/0A...`)
+// copied from `antigravity.google/oauth-callback` to the waiting `agy` process, then saves the
+// new Google account by its email (`id_token_email`) into its isolated vault folder.
+func (a *App) SubmitAgyOAuthCode(code, workspace string) (modelx.ProfilesOverview, error) {
+	return modelx.SubmitAgyOAuthCode(code, workspace)
+}
+
+// CancelAgyOAuthLogin cancels an in-progress Google OAuth login and restores the previous account.
+func (a *App) CancelAgyOAuthLogin(workspace string) modelx.ProfilesOverview {
+	return modelx.CancelAgyOAuthLogin(workspace)
 }
 
 // ActivateAgyAccount switches the live Antigravity Google OAuth session to the saved isolated

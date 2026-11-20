@@ -35,3 +35,13 @@ func ActivateAgyProfileSession(profileID string) error {
 func ConnectNewAgyGoogleAccount(workspace string) (ProfilesOverview, error) {
 	return ListProfilesOverview(workspace), fmt.Errorf("login multi-conta automático disponível no Windows")
 }
+
+func EnsureLiveAgyCredentialRestored() {}
+
+func SubmitAgyOAuthCode(code, workspace string) (ProfilesOverview, error) {
+	return ListProfilesOverview(workspace), fmt.Errorf("login multi-conta automático disponível no Windows")
+}
+
+func CancelAgyOAuthLogin(workspace string) ProfilesOverview {
+	return ListProfilesOverview(workspace)
+}
