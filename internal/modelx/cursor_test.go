@@ -51,6 +51,28 @@ func TestParseCursorStreamSkipsDuplicateFlushes(t *testing.T) {
 	}
 }
 
+func TestNewCursorRejectsForeignModelBeforeCLI(t *testing.T) {
+	for _, id := range []string{
+		"openrouter/particle-ai/particle-1:free",
+		"deepseek/deepseek-v4.1-flash",
+		"particle-ai/particle-1:free",
+	} {
+		_, err := NewCursor(context.Background(), id)
+		if err == nil {
+			t.Fatalf("%s deveria falhar antes de procurar o CLI", id)
+		}
+		if !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), "não é enviado ao CLI") {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if !strings.Contains(err.Error(), "cursor/"+id) {
+			t.Fatalf("erro sem provedor/modelo: %v", err)
+		}
+	}
+	if foreignCursorModel("auto") || foreignCursorModel("composer-2.5") || foreignCursorModel("sonnet-4.5") {
+		t.Fatal("slug do Cursor foi tratado como id de outro provedor")
+	}
+}
+
 func TestCursorArgsOmitAutoAndNeverCarryTheKey(t *testing.T) {
 	secret := "crsr_supersecretvalue"
 	args := cursorArgs("auto", `C:\projetos\meu app`)

@@ -217,6 +217,73 @@ func TestJevFailoverInvalidAuthKeyAtBuildAndGenerate(t *testing.T) {
 	}
 }
 
+func TestJevIncompatibleModel400FailsOverOnce(t *testing.T) {
+	cat, hs, pol := newTwoProviderTestEnv(t, 0.02)
+	var calls atomic.Int32
+	var events []Event
+	const leaked = "openrouter/particle-ai/particle-1:free"
+	const secret = "sk-or-v1-secretkeyvalue"
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy:      &pol,
+		Catalog:     cat,
+		HealthStore: hs,
+		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true, "opencode": true} },
+		BuildModel: func(_ context.Context, _, mod string) (model.LLM, error) {
+			if mod == "cheap/a" {
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					calls.Add(1)
+					return nil, errors.New("cursor/" + leaked + ": modelo incompatível com o provedor Cursor: OpenAI API error: 400 Bad Request: model \"" + leaked + "\" is not a Cursor model " + secret)
+				}}, nil
+			}
+			return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+				return modelx.Text("ok de " + mod), nil
+			}}, nil
+		},
+		OnEvent: func(ev Event) { events = append(events, ev) },
+	})
+	llm, err := factory(context.Background(), team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotText string
+	var gotErr error
+	for r, gErr := range llm.GenerateContent(context.Background(), &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("oi", genai.RoleUser)},
+	}, false) {
+		if gErr != nil {
+			gotErr = gErr
+		}
+		if r != nil && r.Content != nil && len(r.Content.Parts) > 0 {
+			gotText = r.Content.Parts[0].Text
+		}
+	}
+	if gotErr != nil {
+		t.Fatalf("400 de modelo incompatível deveria ir ao próximo candidato, veio %v", gotErr)
+	}
+	if gotText != "ok de cheap/b" {
+		t.Fatalf("texto = %q, built events=%+v", gotText, events)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("o modelo incompatível foi chamado %d vezes; a mesma requisição não pode repetir", calls.Load())
+	}
+	snap := hs.Snapshot(nil, nil)
+	if snap.Circuits["openrouter"].Circuit == jev.CircuitOpen {
+		t.Fatal("400 de um modelo não pode abrir o circuito do provedor inteiro")
+	}
+	if snap.ModelCircuits[jevKey("openrouter", "cheap/a")].Circuit != jev.CircuitOpen {
+		t.Fatalf("circuito do modelo: %+v", snap.ModelCircuits)
+	}
+	for _, ev := range events {
+		if strings.Contains(ev.Text, secret) {
+			t.Fatalf("evento vazou a chave: %+v", ev)
+		}
+	}
+}
+
+func jevKey(provider, model string) string {
+	return strings.ToLower(provider) + "\x00" + model
+}
+
 func TestJev400PolicyDoesNotFailover(t *testing.T) {
 	cat, hs, pol := newTwoProviderTestEnv(t, 0.02)
 	buildCalls := 0

@@ -4,11 +4,29 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
+
+func TestSanitizeDropsCursorVendorModelID(t *testing.T) {
+	out := sanitizeEntries("cursor", []ModelEntry{
+		{Provider: "cursor", Model: "auto"},
+		{Provider: "cursor", Model: "composer-2.5"},
+		{Provider: "cursor", Model: "openrouter/particle-ai/particle-1:free"},
+		{Provider: "cursor", Model: "deepseek/deepseek-v4.1-flash"},
+	}, time.Now())
+	for _, e := range out {
+		if strings.Contains(e.Model, "/") {
+			t.Fatalf("id de outro provedor permaneceu no catálogo cursor: %s", e.Model)
+		}
+	}
+	if len(out) != 2 {
+		t.Fatalf("esperava auto e composer, veio %+v", out)
+	}
+}
 
 func TestClassifyError(t *testing.T) {
 	cases := []struct {
@@ -20,6 +38,9 @@ func TestClassifyError(t *testing.T) {
 		{"canceled", context.Canceled, ErrClassPolicy},
 		{"deadline", context.DeadlineExceeded, ErrClassOutage},
 		{"400 bad request", errors.New("HTTP 400 Bad Request: invalid_argument"), ErrClassPolicy},
+		{"orphaned tool", errors.New("OpenAI API error: 400 Bad Request: missing tool_call_id"), ErrClassPolicy},
+		{"cursor foreign model", errors.New("cursor/openrouter/particle-ai/particle-1:free: modelo incompatível com o provedor Cursor: OpenAI API error: 400 Bad Request: model is not a Cursor model"), ErrClassModel},
+		{"stripped openai 400", errors.New("OpenAI API error: 400 Bad Request"), ErrClassModel},
 		{"jail refusal", errors.New("caminho recusado fora do workspace"), ErrClassPolicy},
 		{"402 quota", errors.New("OpenRouter respondeu 402: créditos insuficientes"), ErrClassQuota},
 		{"agy resource exhausted", errors.New("agy esgotou a quota/créditos (429 RESOURCE_EXHAUSTED)"), ErrClassQuota},

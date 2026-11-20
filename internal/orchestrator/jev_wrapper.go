@@ -86,7 +86,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		errClass := jev.ClassifyError(respErr)
 		w.recordCall(curChoice, false, errClass, time.Since(started), nil, false)
 		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
-			yield(nil, fmt.Errorf("%s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
+			yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
 			return
 		}
 
@@ -96,7 +96,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 
 		// Do not repeat a GenerateContent call that already handed a tool call to ADK.
 		if deliveredToolCall {
-			yield(nil, fmt.Errorf("%s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
+			yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
 			return
 		}
 
@@ -140,8 +140,12 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		if retryClass != jev.ErrClassPolicy && ctx.Err() == nil && w.health != nil {
 			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, retryClass, time.Time{})
 		}
-		yield(nil, fmt.Errorf("%s", jev.RedactSecrets(retryErr.Error(), w.extraSecrets...)))
+		yield(nil, fmt.Errorf("%s", w.explain(nextChoice, retryErr)))
 	}
+}
+
+func (w *jevModelWrapper) explain(ch jev.Choice, err error) string {
+	return modelx.FormatUpstreamError(ch.Provider, ch.Model, err, w.extraSecrets...)
 }
 
 func (w *jevModelWrapper) invokeOnce(
@@ -397,17 +401,6 @@ func (w *jevModelWrapper) emitExhausted(text string) {
 
 func pairKey(provider, model string) string {
 	return strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.TrimSpace(model)
-}
-
-func isUpstreamModel400(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "400 bad request") ||
-		strings.Contains(msg, "http 400") ||
-		strings.Contains(msg, "status 400") ||
-		strings.Contains(msg, "invalid_argument")
 }
 
 func responseHasToolCall(resp *model.LLMResponse) bool {
