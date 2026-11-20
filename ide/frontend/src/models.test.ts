@@ -134,7 +134,7 @@ describe("seletor de provedor Jev", () => {
         { id: "agy", name: "Antigravity (Google)", found: true, connected: true, statusLabel: "Conectado", detail: "ok", modelCount: 1, accounts: [] },
       ],
     };
-    state.aiUsageModal.report = null;
+    state.aiUsagePage.report = null;
     state.providerHealth = [{ provider: "agy", state: "closed", hasCredential: true, quotaRemainingPct: 19 }];
     expect(computeUnifiedProviderChip().text).toContain("aviso");
     state.providerHealth = [{ provider: "agy", state: "closed", hasCredential: true, quotaRemainingPct: 9 }];

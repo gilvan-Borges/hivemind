@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent"
@@ -51,6 +52,22 @@ type Runner struct {
 	CustomHandlers map[string]ToolHandler
 	// LastBroker exposes the broker used in the most recent RunTurn (useful in tests).
 	LastBroker *Broker
+	// Child is set on a spawned subagent. A child cannot spawn, schedule or hand off.
+	Child bool
+	// SkillsDir is the native skill catalog. Project skills are never read.
+	SkillsDir string
+	// AllowedTiers narrows a routine or a subagent. Empty means no extra narrow.
+	AllowedTiers []Tier
+	// ParentTier is the class ceiling inherited by a subagent.
+	ParentTier Tier
+	// PermissionMode reads team.yaml. The model cannot supply this value.
+	PermissionMode func(workspace string) string
+	// SquadHandoff starts a squad lane after the host sanitizes the package.
+	SquadHandoff func(ctx context.Context, h SquadHandoff) (string, error)
+	// OnRoutineSaved rearms the in-process timer after cron_add.
+	OnRoutineSaved func()
+	gateOnce       sync.Once
+	gate           *spawnGate
 }
 
 // RunTurn executes one read-only resident turn and returns the final response
@@ -96,6 +113,11 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	if err != nil {
 		return TurnResult{}, err
 	}
+	if !r.Child {
+		if block := SkillBlock(r.SkillsDir, baseDir); block != "" {
+			userPrompt += "\n\n" + block
+		}
+	}
 	promptBuildMs := time.Since(promptStart).Milliseconds()
 
 	// Resolve LLM (injected in tests or constructed via internal/modelx).
@@ -116,17 +138,23 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		pol = loadedPol
 	}
 
+	approvalTimeout := r.ApprovalTimeout
+	if origin == OriginRoutine && approvalTimeout == 0 {
+		approvalTimeout = 15 * time.Minute
+	}
+	parentTier := r.ParentTier
 	broker := NewBroker(BrokerConfig{
 		Workspace:       req.Workspace,
 		Workstream:      ws,
 		Origin:          origin,
+		ParentTier:      parentTier,
 		AccountID:       accountID,
 		DeviceID:        req.DeviceID,
 		Policy:          pol,
 		Sandbox:         r.Sandbox,
 		Vault:           r.Vault,
 		HTTPClient:      r.HTTPClient,
-		ApprovalTimeout: r.ApprovalTimeout,
+		ApprovalTimeout: approvalTimeout,
 		Audit:           audit,
 		Memory:          mem,
 		ListProjects:    r.ListProjects,
@@ -134,10 +162,21 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		ApproveDetailed: r.ApproveDetailed,
 		OnToolEvent:     r.emit,
 		CustomHandlers:  r.CustomHandlers,
+		Phase3:          !r.Child,
+		AllowedTiers:    append([]Tier(nil), r.AllowedTiers...),
+		PermissionMode:  r.PermissionMode,
+		Spawn:           r.runSpawn,
+		SquadHandoff:    r.SquadHandoff,
+		BaseDir:         baseDir,
+		OnRoutineSaved:  r.OnRoutineSaved,
 	})
 	r.LastBroker = broker
 
-	adkTools, err := tools.ForResidentPhase2(broker)
+	buildTools := tools.ForResidentPhase2
+	if !r.Child {
+		buildTools = tools.ForResidentPhase3
+	}
+	adkTools, err := buildTools(broker)
 	if err != nil {
 		return TurnResult{}, fmt.Errorf("registrar ferramentas do residente: %w", err)
 	}
@@ -347,6 +386,148 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		ToolCalls:     broker.CallCount(),
 		PromptBuildMs: promptBuildMs,
 	}, nil
+}
+
+type spawnGate struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (g *spawnGate) enter() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.n >= 2 {
+		return false
+	}
+	g.n++
+	return true
+}
+
+func (g *spawnGate) leave() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.n > 0 {
+		g.n--
+	}
+}
+
+func (r *Runner) slots() *spawnGate {
+	r.gateOnce.Do(func() {
+		if r.gate == nil {
+			r.gate = &spawnGate{}
+		}
+	})
+	return r.gate
+}
+
+func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes []string) (string, error) {
+	if r.Child {
+		return "", fmt.Errorf("subagente não pode criar outro subagente")
+	}
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		return "", fmt.Errorf("objetivo do subagente vazio")
+	}
+	root, err := spawnRoot(r.lastWorkspace(), roots)
+	if err != nil {
+		return "", err
+	}
+	allowed, err := parseClassList(classes)
+	if err != nil {
+		return "", err
+	}
+	if !r.slots().enter() {
+		return "", fmt.Errorf("limite de 2 subagentes ao mesmo tempo")
+	}
+	defer r.slots().leave()
+
+	child := &Runner{
+		BaseDir:         r.BaseDir,
+		Config:          r.Config,
+		Policy:          r.Policy,
+		Sandbox:         r.Sandbox,
+		Vault:           r.Vault,
+		HTTPClient:      r.HTTPClient,
+		ApprovalTimeout: r.ApprovalTimeout,
+		Audit:           r.Audit,
+		Memory:          r.Memory,
+		ListProjects:    r.ListProjects,
+		Approve:         r.Approve,
+		ApproveDetailed: r.ApproveDetailed,
+		OnEvent:         r.OnEvent,
+		Model:           r.Model,
+		Streaming:       agent.StreamingModeNone,
+		Child:           true,
+		ParentTier:      ceilingTier(allowed),
+		AllowedTiers:    allowed,
+		gate:            r.slots(),
+	}
+	res, err := child.RunTurn(ctx, TurnRequest{
+		Message:    objective,
+		Workspace:  root,
+		Workstream: r.lastWorkstream(),
+		Origin:     OriginSubagent,
+		AccountID:  r.lastAccount(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.FinalText, nil
+}
+
+func (r *Runner) lastWorkspace() string {
+	if r.LastBroker != nil {
+		return r.LastBroker.cfg.Workspace
+	}
+	return ""
+}
+
+func (r *Runner) lastWorkstream() string {
+	if r.LastBroker != nil {
+		return r.LastBroker.cfg.Workstream
+	}
+	return ""
+}
+
+func (r *Runner) lastAccount() string {
+	if r.LastBroker != nil {
+		return r.LastBroker.cfg.AccountID
+	}
+	return DefaultAccountID
+}
+
+func spawnRoot(parent string, roots []string) (string, error) {
+	if len(roots) == 0 || strings.TrimSpace(roots[0]) == "" {
+		return parent, nil
+	}
+	root := strings.TrimSpace(roots[0])
+	if strings.Contains(root, "..") {
+		return "", fmt.Errorf("raiz do subagente inválida")
+	}
+	if !filepath.IsAbs(root) {
+		if parent == "" {
+			return "", fmt.Errorf("raiz do subagente inválida")
+		}
+		root = filepath.Join(parent, root)
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func ceilingTier(list []Tier) Tier {
+	if len(list) == 0 {
+		return ""
+	}
+	best := list[0]
+	for _, t := range list[1:] {
+		if tierRank(t) > tierRank(best) {
+			best = t
+		}
+	}
+	return best
 }
 
 func (r *Runner) emit(ev Event) {

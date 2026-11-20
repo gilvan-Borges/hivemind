@@ -77,18 +77,79 @@ func TestParseAgyUsageJSON(t *testing.T) {
 	}
 }
 
+func TestGetAIUsageReportListsEachAgyAccount(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "ai-usage.json")
+	prevPath := usageFilePathFn
+	prevAgy := fetchAgyUsageFn
+	prevOC := fetchOpenCodeUsageFn
+	prevList := listAgyProfilesUsageFn
+	prevAct := activateAgyProfileFn
+	prevRead := readLiveAgyCredFn
+	prevWrite := writeLiveAgyCredFn
+	prevHas := hasAgyVaultSessionFn
+	prevRest := restoreLiveAgyCredFn
+	usageFilePathFn = func() (string, error) { return tmp, nil }
+	listAgyProfilesUsageFn = func() []ProviderProfileSummary {
+		return []ProviderProfileSummary{
+			{ID: "agy-a", Provider: "agy", Name: "Conta A"},
+			{ID: "agy-b", Provider: "agy", Name: "Conta B"},
+			{ID: "agy-c", Provider: "agy", Name: "Conta C"},
+		}
+	}
+	calls := 0
+	activateAgyProfileFn = func(id string) error { return nil }
+	readLiveAgyCredFn = func() ([]byte, string, error) { return []byte("prev"), "prev@x", nil }
+	wrote := ""
+	writeLiveAgyCredFn = func(raw []byte) error { wrote = string(raw); return nil }
+	hasAgyVaultSessionFn = func(id string) (bool, string) { return true, id + "@ex.com" }
+	restoreLiveAgyCredFn = func() {}
+	fetchAgyUsageFn = func(context.Context) AgyQuota {
+		calls++
+		return AgyQuota{Available: true, Detail: "ok"}
+	}
+	fetchOpenCodeUsageFn = func(context.Context) OpenCodeQuota { return OpenCodeQuota{} }
+	t.Cleanup(func() {
+		usageFilePathFn = prevPath
+		fetchAgyUsageFn = prevAgy
+		fetchOpenCodeUsageFn = prevOC
+		listAgyProfilesUsageFn = prevList
+		activateAgyProfileFn = prevAct
+		readLiveAgyCredFn = prevRead
+		writeLiveAgyCredFn = prevWrite
+		hasAgyVaultSessionFn = prevHas
+		restoreLiveAgyCredFn = prevRest
+	})
+
+	rep := GetAIUsageReport(context.Background())
+	if len(rep.AgyAccounts) != 3 {
+		t.Fatalf("agy accounts: %+v", rep.AgyAccounts)
+	}
+	if calls != 3 {
+		t.Fatalf("usage fetches = %d", calls)
+	}
+	if wrote != "prev" {
+		t.Fatalf("live cred not restored: %q", wrote)
+	}
+	if rep.AgyAccounts[0].Name != "Conta A" || rep.AgyAccounts[2].Email != "agy-c@ex.com" {
+		t.Fatalf("account labels: %+v", rep.AgyAccounts)
+	}
+}
+
 func TestRecordAIUsageAndLimits(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "ai-usage.json")
 	prevPath := usageFilePathFn
 	prevAgy := fetchAgyUsageFn
 	prevOC := fetchOpenCodeUsageFn
+	prevList := listAgyProfilesUsageFn
 	usageFilePathFn = func() (string, error) { return tmp, nil }
+	listAgyProfilesUsageFn = func() []ProviderProfileSummary { return nil }
 	fetchAgyUsageFn = func(context.Context) AgyQuota { return AgyQuota{Available: true} }
 	fetchOpenCodeUsageFn = func(context.Context) OpenCodeQuota { return OpenCodeQuota{Available: true} }
 	t.Cleanup(func() {
 		usageFilePathFn = prevPath
 		fetchAgyUsageFn = prevAgy
 		fetchOpenCodeUsageFn = prevOC
+		listAgyProfilesUsageFn = prevList
 	})
 
 	RecordAIUsage("agy", "agy:gemini-4-neon-high", 1200, 300, 1500)

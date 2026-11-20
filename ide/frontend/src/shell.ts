@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
@@ -389,7 +389,7 @@ export function bindStaticShellEvents() {
   });
 
   document.getElementById("act-ai-usage")?.addEventListener("click", () => {
-    void openAIUsageModal();
+    void openAIUsagePage();
   });
   document.getElementById("act-wizard")?.addEventListener("click", () => {
     void openTeamConfigTab();
@@ -801,7 +801,7 @@ export function updateHeaderAndStatusBar() {
 }
 
 function withQuotaNote(chip: { text: string; color: string; title: string }): { text: string; color: string; title: string } {
-  const note = quotaChipNote(state.providerHealth || [], state.aiUsageModal.report);
+  const note = quotaChipNote(state.providerHealth || [], state.aiUsagePage.report);
   if (!note) return chip;
   const color = note.startsWith("aviso") && chip.color === "var(--green)" ? "var(--amber)" : chip.color;
   return { text: `${chip.text} · ${note}`, color, title: `${chip.title} · ${note}` };

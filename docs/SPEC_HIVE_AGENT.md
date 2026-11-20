@@ -1,6 +1,6 @@
 # Spec — Agente residente Hive
 
-**Status:** proposta. Nenhum código deste desenho existe em `main`.
+**Status:** fases 1 a 3 implementadas. Fase 3: rotina estruturada (`cron_add`, sem comando de shell), no máximo dois subagentes, skill nativa só com hash revisado e handoff sanitizado para o squad. Fases 4 e 5 seguem.
 **Data:** 2026-11-19
 **Escopo:** só o lado Hive deste repositório (`hivemind-go`): CLI, HiveMind IDE (Go + Wails) e o processo que `hivemind serve` já sobe. O app Android (`HiveMind-App`, outro repositório) é cliente remoto. Esta spec não descreve tela, linguagem nem armazenamento interno do app. Descreve o contrato que o app já consome e o único acréscimo que o host precisa aceitar dentro desse contrato.
 
@@ -162,7 +162,7 @@ O agendador é um `time.Timer` dentro de `internal/resident`. A próxima execuç
 
 Um registro é estruturado: `id`, expressão de cinco campos, fuso, texto que a pessoa salvou, workstream, manifesto de classes permitidas, `enabled`. Não há campo de comando de shell. O executor nunca chama `sh -lc`.
 
-Quem cria, pausa e apaga é a UI local. Não existe ferramenta `cron_add`. Mensagem chegando do app pode pedir “me lembra amanhã”, e o residente responde com um pedido de aprovação para gravar o registro. Sem aprovação, nada é gravado. Disparo da rotina usa `Origin: routine`: cada ferramenta do turno pede aprovação de novo, mesmo que o registro tenha sido aprovado. O manifesto só estreita (pode dizer “este registro nunca pede rede”). Não alarga. Timeout de aprovação da rotina: 15 minutos, depois nega e audita. Se o celular e a IDE estiverem os dois sem ninguém, a rotina fica pendente até o timeout e não corre no escuro.
+Quem cria, pausa e apaga é a UI local. A ferramenta `cron_add` só grava o mesmo registro estruturado, depois de aprovação humana, e não aceita comando. Mensagem chegando do app pode pedir “me lembra amanhã”, e o residente responde com um pedido de aprovação para gravar o registro. Sem aprovação, nada é gravado. Disparo da rotina usa `Origin: routine`: cada ferramenta do turno pede aprovação de novo, mesmo que o registro tenha sido aprovado. O manifesto só estreita (pode dizer “este registro nunca pede rede”). Não alarga. Timeout de aprovação da rotina: 15 minutos, depois nega e audita. Se o celular e a IDE estiverem os dois sem ninguém, a rotina fica pendente até o timeout e não corre no escuro.
 
 Evento (arquivo salvos pelo watcher que já existe em `ide/internal/idecore/watcher.go`, fim de lane, aprovação pendente) só acorda o residente se a pessoa ligou esse gatilho na UI. Acordar não executa ferramenta.
 
@@ -391,7 +391,9 @@ Aceite:
 - Sem AppContainer, o mesmo comando recusa no Windows. No CI Linux, sem `bwrap`, o teste de falha fechada passa; o teste que exige `bwrap` fica com `t.Skip` explícito quando o binário não está no runner.
 - Valor gravado no cofre não aparece em `LaneEvent` nem em `audit.jsonl`.
 
-### Fase 3 — Remoto, rotina, skill, subagente
+### Fase 3 — Remoto, rotina, skill, subagente — implementada
+
+Implementada em `internal/resident`. `cron_add` grava um registro com expressão de cinco campos, fuso e texto; não há campo de comando e o processo não chama o agendador do sistema. O disparo usa um `time.Timer` e origem `routine`. `spawn_subagent` abre no máximo dois filhos ao mesmo tempo, com teto de classe do pai; o filho não cria rotina, não cria outro subagente e não faz handoff. Skill de projeto fica de fora. Skill nativa entra no prompt só quando o hash SHA-256 gravado na revisão ainda bate com o arquivo. `delegate_to_hive_team` pede aprovação, mostra o `permission_mode` do time e entrega o pacote já sanitizado do handoff do squad.
 
 `runMode: "resident"` no bridge. Rotinas estruturadas. Hash de skill. Dois subagentes no máximo. Handoff para o squad com cartão que mostra o `permission_mode`. Cliente HTTP do broker com allowlist.
 
@@ -405,9 +407,9 @@ Aceite:
 - Host fora da allowlist, e nome que resolve para `169.254.169.254` ou loopback, recusam.
 - Cancelar pelo app (`runs/cancel`) mata o turno e os filhos.
 
-### Fase 4 — Browser e desktop isolados
+### Fase 4 — Browser e desktop isolados — recusados até haver espaço de verdade
 
-Windows Sandbox sob demanda, perfil limpo, rede conforme a allowlist do espaço. Sem o recurso de SO, a ferramenta não aparece habilitada. Desktop da sessão real continua inexistente. Binário `cua` externo é opcional e não é dependência.
+O processo isolado de `exec` (AppContainer + Job Object no Windows, bwrap + seccomp no Linux) não é um browser com perfil limpo nem um desktop separado. Não há filtro de egress para um processo gráfico, e um clique na sessão real sairia do isolamento. `browser_open`, `desktop_click` e `desktop_type` ficam desligados: a política recusa sem perguntar, o broker não chama o sandbox e o caminho de perfil vindo do modelo é ignorado. Quando o espaço existir de fato, a ferramenta só sobe dentro dele. Sem esse espaço, nada roda. A sessão real não recebe clique. O perfil do browser da pessoa não é argumento.
 
 Aceite:
 

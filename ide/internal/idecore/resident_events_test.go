@@ -11,6 +11,7 @@ func TestResidentEventTriggerIsOptIn(t *testing.T) {
 		notes = append(notes, ev.Event.Kind+":"+ev.Event.Text)
 	})
 	m := NewResidentManager(ResidentManagerOptions{BaseDir: t.TempDir(), Sessions: sessions})
+	t.Cleanup(m.Close)
 	m.NoteHostEvent("arquivo")
 	if len(notes) != 0 {
 		t.Fatalf("gatilho desligado acordou o residente: %#v", notes)

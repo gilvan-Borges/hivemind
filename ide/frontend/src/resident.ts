@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import { renderMarkdownLite } from "./markdown";
-import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentStatus } from "./types";
+import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { updateStatusBar } from "./shell";
@@ -21,6 +21,7 @@ export const residentState = {
   memoryDraft: "",
   memoryPinned: false,
   audit: [] as ResidentAuditEntry[],
+  routines: [] as ResidentRoutine[],
   externalSessions: [] as ExternalSession[],
   auditFilter: "",
   binariesDraft: "",
@@ -145,10 +146,11 @@ export async function refreshResidentData(): Promise<void> {
       residentState.workstream = st.workstream;
     }
     const ws = residentState.workstream || st.workstream || "geral";
-    const [sessionMsgs, memList, auditList] = await Promise.all([
+    const [sessionMsgs, memList, auditList, routines] = await Promise.all([
       backend.ResidentSessionMessages?.(ws).catch(() => []) ?? Promise.resolve([]),
       backend.ResidentListMemory?.(ws).catch(() => []) ?? Promise.resolve([]),
       backend.ResidentAuditLog?.(80).catch(() => []) ?? Promise.resolve([]),
+      backend.ResidentListRoutines?.().catch(() => []) ?? Promise.resolve([]),
     ]);
     if (!residentState.loadedOnce && residentState.messages.length === 0 && Array.isArray(sessionMsgs) && sessionMsgs.length > 0) {
       residentState.messages = sessionMsgs.map((m, idx) => ({
@@ -160,6 +162,7 @@ export async function refreshResidentData(): Promise<void> {
     }
     residentState.memory = Array.isArray(memList) ? memList : [];
     residentState.audit = Array.isArray(auditList) ? auditList : [];
+    residentState.routines = Array.isArray(routines) ? routines : [];
     await refreshExternalSessions();
     residentState.loadedOnce = true;
     updateResidentStatusChip();
@@ -420,6 +423,15 @@ function renderResidentSecurityHtml(): string {
       <div class="resident-security-grid">
         <div class="resident-row-card">
           <div class="resident-row-head">
+            <strong>Browser e desktop isolados</strong>
+            <span class="resident-badge risk-destructive">Desligados</span>
+          </div>
+          <div class="dim">${escapeHtml(st?.isolatedBrowserReason || "Browser isolado recusado: não há espaço com egress filtrado.")}</div>
+          <div class="dim">${escapeHtml(st?.isolatedDesktopReason || "Desktop isolado recusado: a sessão real não é alvo.")}</div>
+        </div>
+
+        <div class="resident-row-card">
+          <div class="resident-row-head">
             <strong>Sandbox do Sistema Operacional</strong>
             <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}">${sbOk ? "Ativa" : "Indisponível"}</span>
           </div>
@@ -481,6 +493,44 @@ function renderResidentSecurityHtml(): string {
             `).join("")
           }
         </div>
+      </div>
+
+      <div class="resident-row-card">
+        <div class="resident-row-head">
+          <strong>Rotinas</strong>
+          <span class="dim">sem comando</span>
+          <span class="spacer"></span>
+          <button type="button" class="primary mini" id="btn-res-routine-add">Gravar rotina</button>
+        </div>
+        <div class="dim">Expressão de cinco campos, fuso e texto. O modelo só grava isto depois de aprovação. Não há campo de comando.</div>
+        <div class="resident-mem-form">
+          <input id="res-routine-expr" placeholder="0 9 * * 1-5" />
+          <input id="res-routine-tz" placeholder="America/Sao_Paulo" />
+          <input id="res-routine-text" placeholder="Texto que a rotina envia" />
+        </div>
+        <div class="resident-list" style="margin-top:8px">
+          ${residentState.routines.length === 0
+            ? `<div class="dim">Nenhuma rotina.</div>`
+            : residentState.routines.map((rt) => `
+              <div class="resident-row-head" style="padding:4px 0;border-bottom:1px solid var(--border)">
+                <code>${escapeHtml(rt.expr)}</code>
+                <span class="dim">${escapeHtml(rt.text)}</span>
+                <span class="spacer"></span>
+                <button type="button" class="mini ghost" data-res-routine-toggle="${escapeHtml(rt.id)}" data-enabled="${rt.enabled ? "1" : "0"}">${rt.enabled ? "Pausar" : "Retomar"}</button>
+                <button type="button" class="mini ghost" data-res-routine-del="${escapeHtml(rt.id)}">Apagar</button>
+              </div>
+            `).join("")}
+        </div>
+      </div>
+
+      <div class="resident-row-card">
+        <div class="resident-row-head">
+          <strong>Revisão de skill nativa</strong>
+          <span class="spacer"></span>
+          <button type="button" class="primary mini" id="btn-res-skill-review">Revisar</button>
+        </div>
+        <div class="dim">Grava o hash da skill nativa. Hash diferente tira a skill do residente até nova revisão. Skill de projeto não entra.</div>
+        <input id="res-skill-name" placeholder="nome da skill nativa" />
       </div>
     </div>
   `;
@@ -732,6 +782,57 @@ export function bindResidentViewEvents(): void {
         toastError("remover segredo do cofre", err);
       }
     });
+  });
+
+  document.getElementById("btn-res-routine-add")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.ResidentSaveRoutine) return;
+    const expr = (document.getElementById("res-routine-expr") as HTMLInputElement | null)?.value.trim() || "";
+    const timezone = (document.getElementById("res-routine-tz") as HTMLInputElement | null)?.value.trim() || "";
+    const text = (document.getElementById("res-routine-text") as HTMLInputElement | null)?.value.trim() || "";
+    try {
+      await backend.ResidentSaveRoutine(expr, timezone, text, residentState.workstream, []);
+      toast("Rotina gravada.", "success");
+      await refreshResidentData();
+    } catch (err: any) {
+      toastError("gravar rotina", err);
+    }
+  });
+  document.querySelectorAll<HTMLElement>("[data-res-routine-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.resRoutineDel || "";
+      if (!id || !api()?.ResidentDeleteRoutine) return;
+      try {
+        await api()!.ResidentDeleteRoutine!(id);
+        await refreshResidentData();
+      } catch (err: any) {
+        toastError("apagar rotina", err);
+      }
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-res-routine-toggle]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.resRoutineToggle || "";
+      const enabled = btn.dataset.enabled !== "1";
+      if (!id || !api()?.ResidentSetRoutineEnabled) return;
+      try {
+        await api()!.ResidentSetRoutineEnabled!(id, enabled);
+        await refreshResidentData();
+      } catch (err: any) {
+        toastError("atualizar rotina", err);
+      }
+    });
+  });
+  document.getElementById("btn-res-skill-review")?.addEventListener("click", async () => {
+    const backend = api();
+    const name = (document.getElementById("res-skill-name") as HTMLInputElement | null)?.value.trim() || "";
+    if (!backend?.ResidentReviewSkill || !name) return;
+    try {
+      await backend.ResidentReviewSkill(name);
+      toast(`Skill ${name} revisada.`, "success");
+    } catch (err: any) {
+      toastError("revisar skill", err);
+    }
   });
 
   const memInput = document.getElementById("res-mem-input") as HTMLInputElement | null;

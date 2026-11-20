@@ -314,6 +314,93 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 	return out, nil
 }
 
+type residentCronArgs struct {
+	Expr       string   `json:"expr" jsonschema:"Expressão de cinco campos (minuto hora dia mês dia-da-semana). Sem comando."`
+	Timezone   string   `json:"timezone,omitempty" jsonschema:"Fuso IANA opcional, por exemplo America/Sao_Paulo."`
+	Text       string   `json:"text" jsonschema:"Texto que a rotina envia ao residente. Não é um comando."`
+	Workstream string   `json:"workstream,omitempty" jsonschema:"Workstream da rotina."`
+	Classes    []string `json:"classes,omitempty" jsonschema:"Classes permitidas. Só estreita. Vazio não amplia."`
+}
+
+type residentSpawnArgs struct {
+	Objective string   `json:"objective" jsonschema:"Encargo objetivo do subagente, sem o transcript."`
+	Roots     []string `json:"roots,omitempty" jsonschema:"Raízes de arquivo que o subagente pode usar."`
+	Classes   []string `json:"classes,omitempty" jsonschema:"Classes máximas do subagente. Só estreita."`
+}
+
+type residentHandoffArgs struct {
+	Objective string   `json:"objective" jsonschema:"Objetivo sanitizado que o time de código deve executar."`
+	Facts     []string `json:"facts,omitempty" jsonschema:"Fatos curtos já lidos. Sem comando de shell."`
+	Team      string   `json:"team,omitempty" jsonschema:"Nome do time em team.yaml. Vazio usa o time ativo."`
+}
+
+// ForResidentPhase3 adds structured routines, one-level subagents and a squad
+// handoff. Every call still goes through the broker. There is no shell cron.
+func ForResidentPhase3(broker ResidentBroker) ([]tool.Tool, error) {
+	out, err := ForResidentPhase2(broker)
+	if err != nil {
+		return nil, err
+	}
+	add := func(t tool.Tool, err error) error {
+		if err != nil {
+			return err
+		}
+		out = append(out, t)
+		return nil
+	}
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "cron_add",
+		Description: "Grava uma rotina estruturada (expressão de 5 campos, fuso e texto). Não aceita comando de shell e pede aprovação humana.",
+	}, func(ctx agent.Context, args residentCronArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "cron_add", map[string]any{
+			"expr":       args.Expr,
+			"timezone":   args.Timezone,
+			"text":       args.Text,
+			"workstream": args.Workstream,
+			"classes":    args.Classes,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "spawn_subagent",
+		Description: "Abre um subagente com objetivo, raízes e classes. No máximo dois ao mesmo tempo. O filho não cria rotina nem outro subagente.",
+	}, func(ctx agent.Context, args residentSpawnArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "spawn_subagent", map[string]any{
+			"objective": args.Objective,
+			"roots":     args.Roots,
+			"classes":   args.Classes,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "delegate_to_hive_team",
+		Description: "Pede aprovação e entrega um objetivo sanitizado ao time de código. O cartão mostra o permission_mode daquele time.",
+	}, func(ctx agent.Context, args residentHandoffArgs) (textResult, error) {
+		res, err := broker.Execute(ctx, "delegate_to_hive_team", map[string]any{
+			"objective": args.Objective,
+			"facts":     args.Facts,
+			"team":      args.Team,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WriteFileWorkspace writes a text file jailed inside root (1 MiB cap).
 func WriteFileWorkspace(root, rel, content string) (string, error) {
 	if len(content) > 1<<20 {

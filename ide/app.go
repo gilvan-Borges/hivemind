@@ -1612,6 +1612,53 @@ func (a *App) ResidentDeleteMemory(id string) (bool, error) {
 	return a.resident.DeleteMemory(id)
 }
 
+// ResidentListRoutines returns structured routines. There is no command field.
+func (a *App) ResidentListRoutines() ([]resident.Routine, error) {
+	if a.resident == nil {
+		return nil, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.ListRoutines()
+}
+
+// ResidentSaveRoutine stores one routine from the local UI and rearms the timer.
+func (a *App) ResidentSaveRoutine(expr, timezone, text, workstream string, classes []string) (resident.Routine, error) {
+	if a.resident == nil {
+		return resident.Routine{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SaveRoutine(resident.Routine{
+		Expr:       expr,
+		Timezone:   timezone,
+		Text:       text,
+		Workstream: workstream,
+		Classes:    classes,
+		Enabled:    true,
+	})
+}
+
+// ResidentSetRoutineEnabled pauses or resumes one routine.
+func (a *App) ResidentSetRoutineEnabled(id string, enabled bool) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetRoutineEnabled(id, enabled)
+}
+
+// ResidentDeleteRoutine removes one routine.
+func (a *App) ResidentDeleteRoutine(id string) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.DeleteRoutine(id)
+}
+
+// ResidentReviewSkill stores the SHA-256 of a native skill the person reviewed.
+func (a *App) ResidentReviewSkill(name string) (string, error) {
+	if a.resident == nil {
+		return "", fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.ReviewSkill(name)
+}
+
 // ResidentAuditLog returns recent audit entries (read-only).
 func (a *App) ResidentAuditLog(limit int) ([]resident.AuditEntry, error) {
 	if a.resident == nil {

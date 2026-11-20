@@ -87,3 +87,59 @@ func TestCommitAllExcludesHivemindState(t *testing.T) {
 		t.Fatalf("expected novo.txt committed:\n%s", tracked)
 	}
 }
+
+// Regression: .hivemind/ already in .gitignore + directory on disk used to make
+// `git add … :(exclude).hivemind` exit 1 ("paths are ignored").
+func TestCommitAllWithExistingHivemindIgnore(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git não está instalado")
+	}
+	repo := t.TempDir()
+	ctx := context.Background()
+	g := Local{}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "HiveMind"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if _, err := g.Run(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".hivemind/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("oi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".hivemind", "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".hivemind", "sessions", "s1.json"), []byte(`{"secret":"token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Run(ctx, repo, "add", "README.md", ".gitignore"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Run(ctx, repo, "commit", "-m", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "novo.txt"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := g.CommitAll(ctx, repo, "feat: novo")
+	if err != nil || !committed {
+		t.Fatalf("CommitAll = %v, %v", committed, err)
+	}
+	tracked, err := g.Run(ctx, repo, "ls-files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tracked, ".hivemind") {
+		t.Fatalf(".hivemind must never be committed:\n%s", tracked)
+	}
+	if !strings.Contains(tracked, "novo.txt") {
+		t.Fatalf("expected novo.txt committed:\n%s", tracked)
+	}
+}
