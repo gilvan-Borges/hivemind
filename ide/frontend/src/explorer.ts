@@ -131,7 +131,7 @@ export function treeFolderColor(name: string): string {
   if (low === "examples" || low === "assets" || low === "public" || low === "images" || low === "icons" || low === "design-tokens") return "#2dd4bf";
   if (low === "tests" || low === "test" || low === "__tests__" || low === "e2e") return "#34d399";
   if (low === "scripts" || low === "hooks" || low === "tools") return "#f59e0b";
-  if (low === ".github" || low === ".hivemind" || low === ".agents" || low === ".claude" || low === ".specify" || low === "deploy" || low === "postgres") return "#a78bfa";
+  if (low === ".github" || low === ".hivemind" || low === ".agents" || low === ".claude" || low === ".specify" || low === "deploy" || low === "postgres") return "var(--accent)";
   return "#8fa3bf";
 }
 

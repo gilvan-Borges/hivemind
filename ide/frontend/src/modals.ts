@@ -627,7 +627,7 @@ export function renderModalLayer() {
           <div style="overflow-y:auto;padding-right:4px;flex:1;display:flex;flex-direction:column;gap:12px">
             ${tab === "profiles" ? `
               <!-- Card Principal: Contas Google Antigravity (agy) -->
-              <div style="padding:14px 16px;border-radius:12px;background:linear-gradient(180deg, rgba(56,189,248,0.08), rgba(167,139,250,0.04));border:1px solid rgba(56,189,248,0.28);display:flex;flex-direction:column;gap:12px">
+              <div style="padding:14px 16px;border-radius:12px;background:linear-gradient(180deg, rgba(56,189,248,0.08), var(--accent-subtle));border:1px solid rgba(56,189,248,0.28);display:flex;flex-direction:column;gap:12px">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
                   <div style="display:flex;align-items:center;gap:10px">
                     <div style="width:36px;height:36px;border-radius:10px;background:rgba(56,189,248,0.16);border:1px solid rgba(56,189,248,0.4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#7dd3fc;flex-shrink:0">G</div>
@@ -673,7 +673,7 @@ export function renderModalLayer() {
                       return `
                         <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid ${isActiveNow ? "rgba(52,211,153,0.45)" : "var(--border)"};display:flex;align-items:center;justify-content:space-between;gap:10px">
                           <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
-                            <div style="width:32px;height:32px;border-radius:50%;background:${idx === 0 ? "rgba(52,211,153,0.18)" : "rgba(167,139,250,0.18)"};border:1px solid ${idx === 0 ? "rgba(52,211,153,0.45)" : "rgba(167,139,250,0.45)"};color:${idx === 0 ? "#6ee7b7" : "#ddd6fe"};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">${escapeHtml(initial)}</div>
+                            <div style="width:32px;height:32px;border-radius:50%;background:${idx === 0 ? "rgba(52,211,153,0.18)" : "var(--accent-subtle)"};border:1px solid ${idx === 0 ? "rgba(52,211,153,0.45)" : "var(--accent-border)"};color:${idx === 0 ? "#6ee7b7" : "var(--accent-strong)"};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">${escapeHtml(initial)}</div>
                             <div style="min-width:0;flex:1">
                               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                                 <strong style="font-size:13px;color:var(--text)">${escapeHtml(email)}</strong>

@@ -788,6 +788,11 @@ func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []Model
 		if prov == "openrouter" && isBlockedOpenRouterEndpoint(mod) {
 			continue
 		}
+		// Um id "vendor/model" no provedor cursor é vazamento da rota OpenRouter.
+		// O CLI receberia esse id em --model e a API do Cursor responde 400.
+		if prov == "cursor" && strings.Contains(mod, "/") {
+			continue
+		}
 		key := catalogKey(prov, mod)
 		if seen[key] {
 			continue

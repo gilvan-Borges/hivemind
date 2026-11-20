@@ -14,7 +14,7 @@
   #define CliExePath RepoRoot + "\dist\hivemind.exe"
 #endif
 #ifndef IconPath
-  #define IconPath RepoRoot + "\assets\hivemind.ico"
+  #define IconPath RepoRoot + "\assets\brand\hivemind.ico"
 #endif
 #ifndef OutputDir
   #define OutputDir RepoRoot + "\dist"

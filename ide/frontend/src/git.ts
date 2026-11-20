@@ -114,7 +114,7 @@ export async function refreshDiffs() {
   }
 }
 
-export const GRAPH_PALETTE = ["#4c8dff", "#fbbf24", "#ec4899", "#34d399", "#a78bfa", "#f97316"];
+export const GRAPH_PALETTE = ["#4c8dff", "#fbbf24", "#ec4899", "#34d399", "var(--accent)", "#f97316"];
 
 export function buildGraphRowSvgs(commits: GitGraphCommit[]): string[] {
   const lanes: Array<string | null> = [];

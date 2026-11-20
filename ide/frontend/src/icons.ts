@@ -7,37 +7,8 @@ const svg = (d: string, size = 15, extra = "") =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 
 export const icons = {
-  brand: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="hm-hex" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stop-color="#c4b5fd"/>
-        <stop offset="100%" stop-color="#7c5cff"/>
-      </linearGradient>
-    </defs>
-    <path d="M12 2.4L16.3 4.9V9.8L12 12.2L7.7 9.8V4.9L12 2.4Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
-    <path d="M7.7 9.8L12 12.2V17.1L7.7 19.6L3.4 17.1V12.2L7.7 9.8Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
-    <path d="M16.3 9.8L20.6 12.2V17.1L16.3 19.6L12 17.1V12.2L16.3 9.8Z" stroke="url(#hm-hex)" stroke-width="1.55" stroke-linejoin="round"/>
-    <line x1="12" y1="4.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
-    <line x1="5.6" y1="15.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
-    <line x1="18.4" y1="15.8" x2="12" y2="12.2" stroke="#a78bfa" stroke-width="1.2"/>
-    <circle cx="12" cy="12.2" r="2.3" fill="#4c8dff"/>
-    <circle cx="12" cy="2.9" r="1.2" fill="#e9d5ff"/>
-    <circle cx="3.9" cy="16.8" r="1.2" fill="#e9d5ff"/>
-    <circle cx="20.1" cy="16.8" r="1.2" fill="#e9d5ff"/>
-  </svg>`,
-  brandHero: `<svg width="44" height="44" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <rect x="1" y="1" width="22" height="22" rx="6" fill="#0d101a" stroke="rgba(167,139,250,0.35)" stroke-width="1"/>
-    <path d="M12 4.2L15.6 6.3V10.4L12 12.4L8.4 10.4V6.3L12 4.2Z" stroke="#a78bfa" stroke-width="1.35" stroke-linejoin="round"/>
-    <path d="M8.4 10.4L12 12.4V16.5L8.4 18.6L4.8 16.5V12.4L8.4 10.4Z" stroke="#8b5cf6" stroke-width="1.35" stroke-linejoin="round"/>
-    <path d="M15.6 10.4L19.2 12.4V16.5L15.6 18.6L12 16.5V12.4L15.6 10.4Z" stroke="#8b5cf6" stroke-width="1.35" stroke-linejoin="round"/>
-    <line x1="12" y1="6.3" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
-    <line x1="6.7" y1="15.5" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
-    <line x1="17.3" y1="15.5" x2="12" y2="12.4" stroke="#a78bfa" stroke-width="1.05"/>
-    <circle cx="12" cy="12.4" r="2.0" fill="#4c8dff"/>
-    <circle cx="12" cy="4.6" r="1.0" fill="#e9d5ff"/>
-    <circle cx="5.2" cy="16.3" r="1.0" fill="#e9d5ff"/>
-    <circle cx="18.8" cy="16.3" r="1.0" fill="#e9d5ff"/>
-  </svg>`,
+  brand: `<img class="brand-mark" src="/brand/hivemind-icon.png" width="18" height="18" alt="" />`,
+  brandHero: `<img class="brand-hero-mark" src="/brand/hivemind-icon.png" width="72" height="72" alt="" />`,
   // Activity bar: outline (estilo traço fino, próximo do Lucide do IPG) sem sair de Material Symbols (D6).
   explorer: ms("folder_open", 17),
   team: ms("groups", 17),
@@ -107,7 +78,7 @@ export function fileBadge(name: string): string {
   const map: Record<string, [string, string]> = {
     go: ["GO", "#22d3ee"],
     java: ["JV", "#f59e0b"],
-    kt: ["KT", "#a78bfa"],
+    kt: ["KT", "var(--accent)"],
     ts: ["TS", "#3b82f6"],
     mts: ["TS", "#3b82f6"],
     tsx: ["TX", "#38bdf8"],
@@ -118,15 +89,15 @@ export function fileBadge(name: string): string {
     json: ["{}", "#fbbf24"],
     yaml: ["YM", "#f472b6"],
     yml: ["YM", "#f472b6"],
-    toml: ["TM", "#c084fc"],
+    toml: ["TM", "var(--accent)"],
     xml: ["XM", "#fb923c"],
     md: ["MD", "#38bdf8"],
     mdx: ["MD", "#38bdf8"],
-    css: ["CS", "#a78bfa"],
+    css: ["CS", "var(--accent)"],
     scss: ["SC", "#f472b6"],
-    less: ["LS", "#818cf8"],
+    less: ["LS", "var(--accent)"],
     html: ["HT", "#f97316"],
-    sql: ["SQ", "#818cf8"],
+    sql: ["SQ", "var(--accent)"],
     cmd: [">_", "#f97316"],
     bat: [">_", "#f97316"],
     ps1: [">_", "#38bdf8"],

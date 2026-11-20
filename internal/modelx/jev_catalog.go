@@ -158,7 +158,7 @@ func fetchJevCursor(ctx context.Context) ([]jev.ModelEntry, error) {
 	out := make([]jev.ModelEntry, 0, len(list))
 	for _, m := range list {
 		slug := strings.TrimSpace(m.Slug)
-		if slug == "" {
+		if slug == "" || strings.Contains(slug, "/") {
 			continue
 		}
 		tier := jev.TierMid

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/hivemind-logo-horizontal.png" alt="HiveMind" width="420" />
+</p>
+
 # HiveMind
 
 Time de software multiagente no terminal e no desktop: você descreve o objetivo na pasta do projeto e o time planeja, implementa e revisa.
