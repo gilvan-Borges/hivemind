@@ -6,7 +6,7 @@ import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from
 import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
-import { refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
+import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { handleResidentLaneEvent, refreshResidentStatus } from "./resident";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -60,6 +60,23 @@ export async function boot() {
 
     if (ev.kind === "stage") {
       updateAgentStatus(lane, ev.author, ev.label, "running");
+    } else if (ev.kind === "model_route") {
+      const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
+      const chosen = ev.provider && ev.model ? `${ev.provider}/${ev.model}` : String(ev.model || "");
+      if (ag && chosen) {
+        ag.routeModel = chosen;
+        ag.routeTier = ev.tier ? String(ev.tier) : undefined;
+        ag.routeReasons = Array.isArray(ev.reasons) ? ev.reasons.map(String) : undefined;
+      }
+      const routeText = String(ev.text || (chosen ? `Jev escolheu ${chosen}` : "")).trim();
+      if (routeText) {
+        lane.messages.push({
+          id: `route-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "system",
+          label: "Rota Jev",
+          text: routeText,
+        });
+      }
     } else if (ev.kind === "usage") {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);
@@ -398,6 +415,7 @@ export function bootstrapAsync(rootDir?: string) {
 
   void refreshInlineAIStatus();
   void refreshJiraStatusAndProjects();
+  void refreshProviderProfiles();
 
   backend.MobileBridgeStatus?.().then((st) => {
     state.mobileStatus = st;
@@ -482,6 +500,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
     renderRightPane();
     setStatus(`Projeto em foco: ${proj.root}`);
     refreshDiffs();
+    void refreshJiraStatusAndProjects();
+    void refreshProviderProfiles();
     return;
   }
 

@@ -3,12 +3,21 @@
 package mcpx
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 const (
@@ -278,12 +287,20 @@ func cloneMap(in map[string]string) map[string]string {
 }
 
 func expand(raw, workspace string) (string, bool) {
-	const prefix = "${env:"
+	out, missing := expandKeys(raw, workspace)
+	return out, len(missing) == 0
+}
+
+func expandKeys(raw, workspace string) (string, []string) {
+	const (
+		envPrefix         = "${env:"
+		envOptionalPrefix = "${env?:"
+	)
 	if !strings.Contains(raw, "${") {
-		return raw, true
+		return raw, nil
 	}
 	var b strings.Builder
-	ok := true
+	var missing []string
 	rest := raw
 	for {
 		i := strings.Index(rest, "${")
@@ -303,54 +320,168 @@ func expand(raw, workspace string) (string, bool) {
 		switch {
 		case token == "${workspaceFolder}":
 			b.WriteString(workspace)
-		case strings.HasPrefix(token, prefix) && strings.HasSuffix(token, "}"):
-			key := strings.TrimSuffix(strings.TrimPrefix(token, prefix), "}")
-			val := os.Getenv(key)
-			if strings.TrimSpace(val) == "" {
-				ok = false
+		case strings.HasPrefix(token, envOptionalPrefix) && strings.HasSuffix(token, "}"):
+			key := strings.TrimSuffix(strings.TrimPrefix(token, envOptionalPrefix), "}")
+			val, _ := lookupEnv(key)
+			b.WriteString(val)
+		case strings.HasPrefix(token, envPrefix) && strings.HasSuffix(token, "}"):
+			key := strings.TrimSuffix(strings.TrimPrefix(token, envPrefix), "}")
+			val, ok := lookupEnv(key)
+			if !ok {
+				missing = append(missing, key)
 			}
 			b.WriteString(val)
 		default:
 			b.WriteString(token)
 		}
 	}
-	return b.String(), ok
+	return b.String(), missing
 }
 
-func expandServer(s Server, workspace string) (Server, bool) {
-	ok := true
-	if cmd, good := expand(s.Command, workspace); !good {
-		ok = false
-	} else {
-		s.Command = cmd
+// lookupEnv lê a variável. GITHUB_MCP_TOKEN ausente cai para `gh auth token`
+// só na memória: o valor não é gravado e quem chama não pode logar o retorno.
+func lookupEnv(key string) (string, bool) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v, true
 	}
-	for i, arg := range s.Args {
-		v, good := expand(arg, workspace)
-		s.Args[i] = v
-		if !good {
-			ok = false
+	if key == "GITHUB_MCP_TOKEN" && ghAuthToken != nil {
+		if v := strings.TrimSpace(ghAuthToken()); v != "" {
+			return v, true
 		}
+	}
+	return "", false
+}
+
+// ghAuthToken é trocado nos testes. O padrão chama o gh e descarta o stderr.
+var ghAuthToken = readGHAuthToken
+
+var (
+	ghTokenMu     sync.Mutex
+	ghTokenCached string
+	ghTokenAt     time.Time
+	ghTokenTTL    = 2 * time.Minute
+)
+
+// readGHAuthToken guarda o token só na memória por alguns minutos.
+// A lista MCP e a conexão compartilham esse cache para não disparar `gh` a cada chamada.
+func readGHAuthToken() string {
+	ghTokenMu.Lock()
+	defer ghTokenMu.Unlock()
+	if !ghTokenAt.IsZero() && time.Since(ghTokenAt) < ghTokenTTL {
+		return ghTokenCached
+	}
+	ghTokenCached = execGHAuthToken()
+	ghTokenAt = time.Now()
+	return ghTokenCached
+}
+
+func execGHAuthToken() string {
+	ghBin, err := lookPath("gh")
+	if err != nil || strings.TrimSpace(ghBin) == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ghBin, "auth", "token", "--hostname", "github.com")
+	procx.ConfigureContext(cmd)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func expandServer(s Server, workspace string) (Server, []string) {
+	var missing []string
+	take := func(v string, miss []string) string {
+		missing = append(missing, miss...)
+		return v
+	}
+	s.Command = take(expandKeys(s.Command, workspace))
+	for i, arg := range s.Args {
+		s.Args[i] = take(expandKeys(arg, workspace))
 	}
 	for k, v := range s.Env {
-		ev, good := expand(v, workspace)
-		s.Env[k] = ev
-		if !good {
-			ok = false
-		}
+		s.Env[k] = take(expandKeys(v, workspace))
 	}
-	if u, good := expand(s.URL, workspace); !good {
-		ok = false
-	} else {
-		s.URL = u
-	}
+	s.URL = take(expandKeys(s.URL, workspace))
 	for k, v := range s.Headers {
-		ev, good := expand(v, workspace)
-		s.Headers[k] = ev
-		if !good {
-			ok = false
+		s.Headers[k] = take(expandKeys(v, workspace))
+	}
+	s.Headers = stripEmptyBearer(s.Headers)
+	return s, missing
+}
+
+func stripEmptyBearer(headers map[string]string) map[string]string {
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		rest := strings.TrimSpace(v)
+		low := strings.ToLower(rest)
+		if strings.HasPrefix(low, "bearer") {
+			rest = strings.TrimSpace(rest[len("bearer"):])
+		}
+		if rest == "" {
+			delete(headers, k)
 		}
 	}
-	return s, ok
+	return headers
+}
+
+func secretMessage(missing []string) string {
+	if len(missing) == 0 {
+		return "falta variável de ambiente referenciada na configuração (nada foi gravado no Git)"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "faltam variáveis: %s. Nada foi gravado no Git.", strings.Join(missing, ", "))
+	for _, k := range missing {
+		switch k {
+		case "CONTEXT7_API_KEY":
+			b.WriteString(" Defina CONTEXT7_API_KEY (chave grátis no painel do Context7).")
+		case "GITHUB_MCP_TOKEN":
+			b.WriteString(" Defina GITHUB_MCP_TOKEN ou rode `gh auth login`. O token do gh é lido na hora, não é gravado e não entra no log.")
+		case "FIGMA_API_KEY":
+			b.WriteString(" Defina FIGMA_API_KEY.")
+		}
+	}
+	return b.String()
+}
+
+var (
+	bearerValue  = regexp.MustCompile(`(?i)bearer\s+\S+`)
+	ghTokenValue = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+`)
+)
+
+func redactSecrets(s string) string {
+	s = bearerValue.ReplaceAllString(s, "Bearer [redigido]")
+	s = ghTokenValue.ReplaceAllString(s, "[redigido]")
+	return s
+}
+
+// RuntimeLabel é o que a lista mostra. Erro, segredo ausente e binário
+// ausente não aparecem como "ligado".
+func (v ServerView) RuntimeLabel() string {
+	switch v.Status {
+	case "ready":
+		return "ligado"
+	case "needs-secret", "error", "unavailable":
+		return "indisponível"
+	case "off":
+		return "desligado"
+	case "pending":
+		if v.Enabled {
+			return "ligado"
+		}
+		return "desligado"
+	default:
+		if v.Enabled {
+			return "ligado"
+		}
+		return "desligado"
+	}
 }
 
 func exclusivePartner(name string) string {

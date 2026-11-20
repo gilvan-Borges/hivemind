@@ -397,6 +397,9 @@ func (f *File) Normalize() {
 			a.Role = NormalizeRole(a.Role)
 			a.Provider = NormalizeProvider(a.Provider, a.Model)
 			a.Model = strings.TrimSpace(a.Model)
+			if a.Provider == "jev" && (a.Model == "" || strings.EqualFold(a.Model, "jev") || strings.EqualFold(a.Model, "jev:auto") || strings.EqualFold(a.Model, "jev/auto")) {
+				a.Model = "auto"
+			}
 			if strings.TrimSpace(a.Instructions) == "" {
 				a.Instructions = DefaultInstructions(a.Role)
 			}
@@ -519,6 +522,9 @@ func (t Team) Validate() error {
 		if a.Name == "" {
 			return fmt.Errorf("agente sem nome no time %s", t.Name)
 		}
+		if strings.EqualFold(strings.TrimSpace(a.Name), "jev") {
+			return fmt.Errorf("nome de agente %q é reservado para o roteador Jev", a.Name)
+		}
 		if _, ok := seen[a.Name]; ok {
 			return fmt.Errorf("nome de agente duplicado: %s", a.Name)
 		}
@@ -607,6 +613,8 @@ func NormalizeProvider(provider, model string) string {
 		return "openrouter"
 	case "cursor":
 		return "cursor"
+	case "jev":
+		return "jev"
 	case "":
 		return inferProvider(model)
 	default:
@@ -617,6 +625,8 @@ func NormalizeProvider(provider, model string) string {
 func inferProvider(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
+	case m == "jev" || strings.HasPrefix(m, "jev:") || strings.HasPrefix(m, "jev/"):
+		return "jev"
 	case m == "cursor" || strings.HasPrefix(m, "cursor:") || strings.HasPrefix(m, "cursor/"):
 		return "cursor"
 	case m == "agy" || strings.HasPrefix(m, "agy:"):
@@ -641,7 +651,7 @@ func inferProvider(model string) string {
 // DefaultAllowlist is the set of executables the shell tool may run without
 // being treated as unknown. Dangerous flag combinations still need confirmation.
 var DefaultAllowlist = []string{
-	"git", "go", "gofmt", "python", "python3", "pytest", "pip",
+	"git", "gh", "go", "gofmt", "python", "python3", "pytest", "pip",
 	"node", "npm", "npx", "pnpm", "yarn", "bun",
 	"cargo", "rustc", "mvn", "gradle", "dotnet", "make", "cmake",
 	"echo", "printf", "ls", "dir", "cat", "type", "pwd",

@@ -92,6 +92,7 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	})
 
 	RecordAIUsage("agy", "agy:gemini-4-neon-high", 1200, 300, 1500)
+	RecordAIUsage("cursor", "auto", 400, 100, 500)
 	RecordAIUsage("opencode", "opencode-go:glm-5.3", 2000, 500, 2500)
 	RecordAIUsage("openrouter", "anthropic/claude-sonnet-4-5", 100, 50, 150)
 	if err := SaveAIUsageLimits("agy", 500000, 2000000); err != nil {
@@ -102,12 +103,14 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	t.Setenv("OPENCODE_ZEN_API_KEY", "")
 	rep := GetAIUsageReport(context.Background())
 
-	var agyFound, goFound, zenFound, orFound *AIProviderUsage
+	var agyFound, cursorFound, goFound, zenFound, orFound *AIProviderUsage
 	for i := range rep.Providers {
 		p := &rep.Providers[i]
 		switch p.Provider {
 		case "agy":
 			agyFound = p
+		case "cursor":
+			cursorFound = p
 		case "opencode-go":
 			goFound = p
 		case "opencode":
@@ -118,6 +121,9 @@ func TestRecordAIUsageAndLimits(t *testing.T) {
 	}
 	if agyFound == nil || agyFound.Window5h.TotalTokens != 1500 || agyFound.Window5h.Calls != 1 {
 		t.Fatalf("unexpected agy usage: %+v", agyFound)
+	}
+	if cursorFound == nil || cursorFound.Window5h.TotalTokens != 500 || cursorFound.Window5h.Calls != 1 {
+		t.Fatalf("unexpected cursor usage (must not fall into agy): %+v", cursorFound)
 	}
 	if agyFound.Limits.FiveHourTokens != 500000 || agyFound.Limits.WeeklyTokens != 2000000 {
 		t.Fatalf("unexpected agy limits: %+v", agyFound.Limits)

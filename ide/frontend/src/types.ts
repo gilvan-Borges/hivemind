@@ -229,6 +229,9 @@ export interface AgentRuntime {
   name: string;
   role: string;
   model: string;
+  routeModel?: string;
+  routeTier?: string;
+  routeReasons?: string[];
   status: "idle" | "running" | "done" | "error";
   tool?: string;
   runningSince?: number;
@@ -297,6 +300,29 @@ export interface JiraProject {
   projectType?: string;
 }
 
+export interface JiraProfile {
+  id: string;
+  name: string;
+  base_url: string;
+  email: string;
+  token: string;
+  default_project?: string;
+  org_patterns?: string[];
+  is_default?: boolean;
+}
+
+export interface JiraProfileSummary {
+  id: string;
+  name: string;
+  baseUrl: string;
+  email: string;
+  tokenMasked: string;
+  defaultProject: string;
+  orgPatterns?: string[];
+  isDefault?: boolean;
+  hasToken: boolean;
+}
+
 export interface JiraConnectorStatus {
   configured: boolean;
   connected: boolean;
@@ -307,6 +333,66 @@ export interface JiraConnectorStatus {
   defaultProject: string;
   user: string;
   detail: string;
+  activeProfileId?: string;
+  activeProfileName?: string;
+  matchMode?: string;
+  matchedRule?: string;
+  bindingMode?: string;
+  detectedOrg?: string;
+  suggestedPatterns?: string[];
+  profiles?: JiraProfileSummary[];
+}
+
+export interface OrgIdentity {
+  workspace: string;
+  gitRemoteUrl?: string;
+  gitHost?: string;
+  gitOrg?: string;
+  gitRepo?: string;
+  workspaceLeaf?: string;
+  workspaceParent?: string;
+  suggestedPatterns?: string[];
+}
+
+export interface ProviderProfileSummary {
+  id: string;
+  provider: string;
+  name: string;
+  authMode?: string;
+  command?: string;
+  envMasked?: Record<string, string>;
+  configValues?: Record<string, string>;
+  orgPatterns?: string[];
+  isDefault?: boolean;
+  ready: boolean;
+  readyDetail?: string;
+}
+
+export interface SaveProfileRequest {
+  id: string;
+  provider: string;
+  name: string;
+  authMode?: string;
+  command?: string;
+  env?: Record<string, string>;
+  orgPatterns?: string[];
+  isDefault?: boolean;
+  bindWorkspace?: string;
+}
+
+export interface ResolvedProviderInfo {
+  provider: string;
+  profileId?: string;
+  profileName?: string;
+  matchMode: string;
+  matchedRule?: string;
+  bindingMode?: string;
+}
+
+export interface ProfilesOverview {
+  identity: OrgIdentity;
+  profiles: ProviderProfileSummary[];
+  resolved: Record<string, ResolvedProviderInfo>;
 }
 
 export interface TokenStat {
@@ -837,6 +923,14 @@ export interface WailsBackendApp {
   ListJiraProjects?(): Promise<JiraProject[]>;
   ListJiraProjectsForWorkspace?(workspace: string): Promise<JiraProject[]>;
   ImportJiraFromMCP?(workspace: string): Promise<JiraConnectorStatus>;
+  SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
+  SaveJiraProfile?(profile: JiraProfile, bindWorkspace: string): Promise<JiraConnectorStatus>;
+  DeleteJiraProfile?(profileID: string, workspace: string): Promise<JiraConnectorStatus>;
+  BindJiraWorkspace?(workspace: string, target: string): Promise<JiraConnectorStatus>;
+  GetProviderProfilesOverview?(workspace: string): Promise<ProfilesOverview>;
+  SaveProviderProfile?(req: SaveProfileRequest): Promise<ProfilesOverview>;
+  DeleteProviderProfile?(profileID: string, workspace: string): Promise<ProfilesOverview>;
+  BindProviderWorkspace?(workspace: string, provider: string, profileID: string): Promise<ProfilesOverview>;
   MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
   RotateMobileToken?(): Promise<MobileBridgeStatus>;
@@ -848,7 +942,6 @@ export interface WailsBackendApp {
   RelayCreateLinkCode?(): Promise<RelayLinkCode>;
   RelayClaimLinkCode?(code: string): Promise<RelayStatus>;
   RelayUnlink?(): Promise<RelayStatus>;
-  SaveJiraConfig?(baseURL: string, email: string, token: string, defaultProject: string, clear: boolean): Promise<JiraConnectorStatus>;
   InitGit(workspace: string): Promise<void>;
   WindowMinimize(): Promise<void>;
   WindowToggleMaximize(): Promise<void>;

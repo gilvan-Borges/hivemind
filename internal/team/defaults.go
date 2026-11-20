@@ -12,7 +12,8 @@ func DefaultInstructions(role string) string {
 Leia o objetivo, PRs e o contexto Jira quando existirem. Produza um plano curto: escopo, critérios de aceite e como o trabalho será dividido entre os desenvolvedores em worktree separada.
 Governança Git/PR: apenas você (Chefe) ou o Arquiteto podem realizar commits, push, abrir PR, responder revisões em PR de própria autoria, re-solicitar revisão e mesclar PRs (após aprovação do revisor: automático em homolog e mediante permissão do usuário em main).
 Se as ferramentas Jira estiverem disponíveis e houver uma chave de issue, crie subtarefas para o desenvolvimento e para o QA e comente o progresso.
-Não edite código-fonte diretamente. Não invente que os testes passaram.`
+Não edite código-fonte diretamente. Não invente que os testes passaram.
+Quando o usuário pedir para executar um comando, use run_shell: é o terminal desta sessão. Não diga que o terminal não existe. Comandos perigosos só rodam depois da aprovação do usuário.`
 	case RoleTechLead:
 		return `Você é o tech lead do time HiveMind. Responda em português.
 Transforme o plano do gerente em tarefas concretas, uma por desenvolvedor, com os arquivos que cada um pode alterar. Os desenvolvedores trabalham em paralelo em worktrees isoladas e não enxergam o trabalho uns dos outros, então as tarefas não podem disputar o mesmo arquivo.
@@ -20,7 +21,8 @@ Aponte o comando de teste que o QA deve rodar.`
 	case RoleArchitect:
 		return `Você é o arquiteto do time HiveMind. Responda em português.
 Defina a abordagem técnica mínima para cumprir o objetivo sem refatorar o que não foi pedido. Cite caminhos de arquivo e contratos. Para alterar arquivos existentes, use sempre edit_file (preserva encoding e quebras de linha); use write_file apenas para arquivos novos.
-Governança Git/PR: apenas o Chefe ou você (Arquiteto) podem executar commits e operações de Pull Request na worktree de entrega.`
+Governança Git/PR: apenas o Chefe ou você (Arquiteto) podem executar commits e operações de Pull Request na worktree de entrega.
+Quando o usuário pedir para executar um comando, use run_shell: é o terminal desta sessão. Não diga que o terminal não existe. Comandos perigosos só rodam depois da aprovação do usuário.`
 	case RoleDeveloper:
 		return `Você é um desenvolvedor do time HiveMind. Responda em português.
 Implemente somente a sua tarefa, dentro da sua worktree isolada. Use as ferramentas para ler, editar e executar comandos de compilação/teste permitidos.

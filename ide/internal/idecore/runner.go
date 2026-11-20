@@ -739,6 +739,31 @@ func (m *SessionManager) RunTurnWithOptions(
 	mcpHost := mcpx.Start(ctx, workspace)
 	defer mcpHost.Close()
 
+	var routedMu sync.Mutex
+	routedModels := map[string][2]string{}
+	recordLaneEvent := func(ev orchestrator.Event) {
+		if ev.Kind == "model_route" && ev.Author != "" && ev.Provider != "" {
+			routedMu.Lock()
+			routedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
+			routedMu.Unlock()
+		}
+		if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
+			prov, mod := resolveAgentProviderModel(selected, ev.Author)
+			routedMu.Lock()
+			if rm, ok := routedModels[strings.ToLower(strings.TrimSpace(ev.Author))]; ok && rm[0] != "" {
+				prov, mod = rm[0], rm[1]
+			}
+			routedMu.Unlock()
+			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+		}
+		if m.Emit != nil {
+			m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
+		}
+	}
+	budgetApprove := func(prompt string) bool {
+		return m.RequestApproval(ctx, laneID, selected.Name, prompt)
+	}
+
 	runner := &orchestrator.Runner{
 		Workspace:          workspace,
 		Project:            cfg,
@@ -756,16 +781,13 @@ func (m *SessionManager) RunTurnWithOptions(
 		EnableClosingChief: true,
 		NativeSkills:       nativeSkills,
 		NativeSkillsRoot:   nativeRoot,
-		OnEvent: func(ev orchestrator.Event) {
-			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
-				prov, mod := resolveAgentProviderModel(selected, ev.Author)
-				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
-			}
-			if m.Emit != nil {
-				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
-			}
-		},
+		OnEvent:            recordLaneEvent,
 	}
+	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
+		Workspace: workspace,
+		Approve:   budgetApprove,
+		OnEvent:   recordLaneEvent,
+	})
 	res, runErr := runner.Run(ctx, orchestrator.Request{
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
@@ -911,6 +933,28 @@ func (m *SessionManager) RunAutoReviewTurn(
 	mcpHost := mcpx.Start(ctx, workspaceDir)
 	defer mcpHost.Close()
 
+	var autoRoutedMu sync.Mutex
+	autoRoutedModels := map[string][2]string{}
+	recordAutoReviewEvent := func(ev orchestrator.Event) {
+		if ev.Kind == "model_route" && ev.Author != "" && ev.Provider != "" {
+			autoRoutedMu.Lock()
+			autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
+			autoRoutedMu.Unlock()
+		}
+		if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
+			prov, mod := resolveAgentProviderModel(selected, ev.Author)
+			autoRoutedMu.Lock()
+			if rm, ok := autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))]; ok && rm[0] != "" {
+				prov, mod = rm[0], rm[1]
+			}
+			autoRoutedMu.Unlock()
+			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+		}
+		if m.Emit != nil {
+			m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
+		}
+	}
+
 	runner := &orchestrator.Runner{
 		Workspace:          workspaceDir,
 		ReviewRoot:         reviewRoot,
@@ -929,16 +973,13 @@ func (m *SessionManager) RunAutoReviewTurn(
 		EnableClosingChief: false,
 		NativeSkills:       nativeSkills,
 		NativeSkillsRoot:   nativeRoot,
-		OnEvent: func(ev orchestrator.Event) {
-			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
-				prov, mod := resolveAgentProviderModel(selected, ev.Author)
-				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
-			}
-			if m.Emit != nil {
-				m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
-			}
-		},
+		OnEvent:            recordAutoReviewEvent,
 	}
+	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
+		Workspace: workspaceDir,
+		Approve:   denyDangerous,
+		OnEvent:   recordAutoReviewEvent,
+	})
 	return runner.Run(ctx, orchestrator.Request{
 		Objective: fullObjective,
 		RunMode:   "auto-review",
