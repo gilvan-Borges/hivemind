@@ -32,7 +32,7 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	}
 	switch provider {
 	case "agy", "antigravity":
-		return NewAgy("", modelName)
+		return NewAgyForContext(ctx, "", modelName)
 	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
 		return NewOpenCode(ctx, modelName)
 	case "gemini", "vertex":
@@ -52,13 +52,13 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 
 func newGemini(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	cfg := &genai.ClientConfig{}
-	useVertex := provider == "vertex" || envTruthy("GOOGLE_GENAI_USE_VERTEXAI")
+	useVertex := provider == "vertex" || strings.EqualFold(resolveEnvForContext(ctx, "gemini", "GOOGLE_GENAI_USE_VERTEXAI"), "true") || envTruthy("GOOGLE_GENAI_USE_VERTEXAI")
 	if useVertex {
-		project := FirstEnvOrStored("GOOGLE_CLOUD_PROJECT")
+		project := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT")
 		if project == "" {
 			return nil, fmt.Errorf("defina GOOGLE_CLOUD_PROJECT para usar o Vertex AI")
 		}
-		location := FirstEnvOrStored("GOOGLE_CLOUD_LOCATION")
+		location := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_LOCATION")
 		if location == "" {
 			location = "us-central1"
 		}
@@ -68,7 +68,7 @@ func newGemini(ctx context.Context, provider, modelName string) (model.LLM, erro
 		cfg.HTTPClient = retryHTTPClient()
 		return gemini.NewModel(ctx, modelName, cfg)
 	}
-	key := FirstEnvOrStored("GOOGLE_API_KEY", "GEMINI_API_KEY")
+	key := resolveEnvForContext(ctx, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina GOOGLE_API_KEY (ou GEMINI_API_KEY) para usar o Gemini, ou troque o provedor para agy se o Antigravity CLI já estiver autenticado")
 	}
@@ -79,11 +79,11 @@ func newGemini(ctx context.Context, provider, modelName string) (model.LLM, erro
 
 func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ANTHROPIC_BACKEND")), "vertex") {
-		project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT"))
+		project := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT")
 		if project == "" {
 			return nil, fmt.Errorf("defina GOOGLE_CLOUD_PROJECT para Claude no Vertex AI")
 		}
-		location := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_LOCATION"))
+		location := resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_LOCATION")
 		if location == "" {
 			location = "us-central1"
 		}
@@ -93,7 +93,7 @@ func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
 			Location: location,
 		})
 	}
-	key := FirstEnvOrStored("ANTHROPIC_API_KEY")
+	key := resolveEnvForContext(ctx, "anthropic", "ANTHROPIC_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina ANTHROPIC_API_KEY para usar a API da Anthropic")
 	}
@@ -105,8 +105,8 @@ func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
 }
 
 func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, error) {
-	key := EnvOrStored("OPENAI_API_KEY")
-	base := EnvOrStored("OPENAI_BASE_URL")
+	key := resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY")
+	base := resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")
 	if key == "" && base == "" {
 		return nil, fmt.Errorf("defina OPENAI_API_KEY para usar a OpenAI")
 	}
@@ -120,6 +120,19 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 		API:        api,
 		HTTPClient: retryHTTPClient(),
 	})
+}
+
+// ProbeOpenRouterAuth validates the configured OPENROUTER_API_KEY via GET /key.
+func ProbeOpenRouterAuth(ctx context.Context) error {
+	key := EnvOrStored("OPENROUTER_API_KEY")
+	if key == "" {
+		return fmt.Errorf("defina OPENROUTER_API_KEY para validar o OpenRouter")
+	}
+	base := EnvOrStored("OPENROUTER_BASE_URL")
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	return openRouterCheckAuth(ctx, key, base)
 }
 
 // openRouterCheckAuth preflights the API key against GET /key so a bad/revoked
@@ -173,11 +186,11 @@ func openRouterCheckAuth(ctx context.Context, key, base string) error {
 // Model IDs follow the vendor format (e.g. "anthropic/claude-sonnet-4-5",
 // "openai/gpt-4.1", "google/gemini-2.5-pro", "deepseek/deepseek-chat").
 func newOpenRouter(ctx context.Context, modelName string) (model.LLM, error) {
-	key := EnvOrStored("OPENROUTER_API_KEY")
+	key := resolveEnvForContext(ctx, "openrouter", "OPENROUTER_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina OPENROUTER_API_KEY para usar o OpenRouter (chave em https://openrouter.ai/keys); o modelo usa o formato fornecedor/modelo, ex.: anthropic/claude-sonnet-4-5")
 	}
-	base := EnvOrStored("OPENROUTER_BASE_URL")
+	base := resolveEnvForContext(ctx, "openrouter", "OPENROUTER_BASE_URL")
 	if base == "" {
 		base = "https://openrouter.ai/api/v1"
 	}
