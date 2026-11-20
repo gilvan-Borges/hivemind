@@ -17,12 +17,33 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
-// Issue is the part of a Jira issue the CLI uses.
+// SubtaskItem is a concise summary of a Jira subtask or child issue.
+type SubtaskItem struct {
+	Key     string `json:"key"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
+}
+
+// Issue is the part of a Jira issue the CLI and IDE use.
 type Issue struct {
-	Key         string `json:"key"`
-	Summary     string `json:"summary"`
-	Description string `json:"description"`
-	Status      string `json:"status"`
+	Key           string        `json:"key"`
+	Summary       string        `json:"summary"`
+	Description   string        `json:"description"`
+	Status        string        `json:"status"`
+	IssueType     string        `json:"issueType,omitempty"`
+	ParentKey     string        `json:"parentKey,omitempty"`
+	ParentSummary string        `json:"parentSummary,omitempty"`
+	Subtasks      []SubtaskItem `json:"subtasks,omitempty"`
+}
+
+// IsDoneStatus reports whether a Jira status name represents a completed issue.
+func IsDoneStatus(status string) bool {
+	s := strings.ToLower(strings.TrimSpace(status))
+	switch s {
+	case "done", "concluído", "concluido", "fechado", "closed", "resolved", "resolvido", "finalizado", "entregue":
+		return true
+	}
+	return strings.Contains(s, "conclu") || strings.Contains(s, "done") || strings.Contains(s, "fechad")
 }
 
 // Client is the Jira surface used by tools and `hivemind run --jira`.
@@ -132,7 +153,7 @@ func (h *HTTP) GetIssue(ctx context.Context, key string) (Issue, error) {
 		return Issue{}, err
 	}
 	var raw issuePayload
-	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+safeKey+"?fields=summary,description,status", nil, &raw); err != nil {
+	if err := h.do(ctx, http.MethodGet, "/rest/api/3/issue/"+safeKey+"?fields=summary,description,status,issuetype,parent,subtasks", nil, &raw); err != nil {
 		return Issue{}, err
 	}
 	return raw.issue(), nil
@@ -145,7 +166,7 @@ func (h *HTTP) Search(ctx context.Context, jql string, limit int) ([]Issue, erro
 	body := map[string]any{
 		"jql":        jql,
 		"maxResults": limit,
-		"fields":     []string{"summary", "description", "status"},
+		"fields":     []string{"summary", "description", "status", "issuetype", "parent", "subtasks"},
 	}
 	var raw searchPayload
 	err := h.do(ctx, http.MethodPost, "/rest/api/3/search/jql", body, &raw)
@@ -315,16 +336,48 @@ type issuePayload struct {
 		Status      struct {
 			Name string `json:"name"`
 		} `json:"status"`
+		IssueType struct {
+			Name string `json:"name"`
+		} `json:"issuetype"`
+		Parent struct {
+			Key    string `json:"key"`
+			Fields struct {
+				Summary string `json:"summary"`
+			} `json:"fields"`
+		} `json:"parent"`
+		Subtasks []struct {
+			Key    string `json:"key"`
+			Fields struct {
+				Summary string `json:"summary"`
+				Status  struct {
+					Name string `json:"name"`
+				} `json:"status"`
+			} `json:"fields"`
+		} `json:"subtasks"`
 	} `json:"fields"`
 }
 
 func (p issuePayload) issue() Issue {
-	return Issue{
-		Key:         p.Key,
-		Summary:     p.Fields.Summary,
-		Description: strings.TrimSpace(flatten(p.Fields.Description)),
-		Status:      p.Fields.Status.Name,
+	out := Issue{
+		Key:           p.Key,
+		Summary:       p.Fields.Summary,
+		Description:   strings.TrimSpace(flatten(p.Fields.Description)),
+		Status:        p.Fields.Status.Name,
+		IssueType:     p.Fields.IssueType.Name,
+		ParentKey:     p.Fields.Parent.Key,
+		ParentSummary: p.Fields.Parent.Fields.Summary,
 	}
+	for _, st := range p.Fields.Subtasks {
+		if strings.TrimSpace(st.Key) == "" {
+			continue
+		}
+		out.Subtasks = append(out.Subtasks, SubtaskItem{
+			Key:     st.Key,
+			Summary: st.Fields.Summary,
+			Status:  st.Fields.Status.Name,
+		})
+	}
+	return out
 }
 
 func flatten(v any) string {

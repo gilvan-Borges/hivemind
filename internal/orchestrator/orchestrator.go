@@ -1991,6 +1991,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		preloadedPR        int
 		preloadedOwnPR     bool
 		preloadedAllDiffs  bool
+		preloadedJiraKey   string
 	)
 	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
 		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
@@ -2008,6 +2009,24 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 					clonedParts[0] = &firstCopy
 					msg = &genai.Content{Role: msg.Role, Parts: clonedParts}
 				}
+			}
+		}
+	} else if !sddDocs && !sddJira && r.Jira != nil && r.Jira.Enabled() {
+		jiraDossier, resKey := buildPreHydratedJiraDossier(ctx, r.Jira, jiraKey, r.Project.Settings.JiraProject, r.objectiveText)
+		if jiraDossier != "" {
+			preloadedJiraKey = resKey
+			if jiraKey == "" && resKey != "" {
+				jiraKey = resKey
+				r.issueKey = resKey
+			}
+			_ = sessionx.CompactOldToolOutputs(sess, 2)
+			if msg != nil && len(msg.Parts) > 0 && msg.Parts[0] != nil {
+				clonedParts := make([]*genai.Part, len(msg.Parts))
+				copy(clonedParts, msg.Parts)
+				firstCopy := *clonedParts[0]
+				firstCopy.Text += jiraDossier
+				clonedParts[0] = &firstCopy
+				msg = &genai.Content{Role: msg.Role, Parts: clonedParts}
 			}
 		}
 	}
@@ -2459,13 +2478,16 @@ Você é o Chefe da equipe (%s) operando em MODO SQUAD.
 		triageInstr = fmt.Sprintf(`%s
 
 Você é o Chefe da equipe (%s).
-REGRA DE TRIAGEM:
-1. Se o usuário fez uma pergunta, pediu análise/diagnóstico, revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado pelo revisor (github_merge_pr) SEM precisar alterar código agora: execute as ferramentas de leitura/PR cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
-2. Se o usuário pediu para criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso: monte um plano objetivo e chame delegate_to_squad passando "plan", "dev_tasks" (1 item para demandas pequenas/focadas, ou 2 a %d itens sem conflito de arquivos para demandas grandes) e, se for revisão de PR existente, "pr_number", "pr_branch" e "reviewers".
+REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
+1. Se o usuário fez apenas uma pergunta conceitual, pediu revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado (github_merge_pr) SEM pedir para implementar tarefa/código: execute as ferramentas cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
+2. Se o usuário pediu para resolver uma issue/task do Jira (ou ir no Jira ver as tasks/subtasks e fazer uma), criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso:
+   • ZERO-ROUNDTRIP JIRA: se a seção [Dossiê Pré-Carregado do Jira] já estiver na mensagem, NÃO chame jira_get nem jira_search para a mesma issue — use a lista de Subtasks/Tasks Filhas já pré-carregada.
+   • SELEÇÃO IMEDIATA DE SUBTASK: quando uma issue/épico tiver múltiplas subtasks ou tarefas pendentes (no Jira ou em specs/.../tasks.md), NUNCA tente ler o projeto inteiro. Escolha a PRÓXIMA subtask pendente lógica (ou até 2-3 subtasks independentes da mesma onda), faça no máximo 1 turno rápido de leitura cirúrgica (3 a 5 arquivos, orçamento rígido de %d leituras na triagem) e chame **OBRIGATORIAMENTE delegate_to_squad** passando "plan", "context_brief" e "dev_tasks".
+   • WORKTREE & EXECUÇÃO: a worktree isolada e o(s) Desenvolvedor(es) SÓ são criados quando você chama delegate_to_squad. Nunca encerre a triagem de uma tarefa de implementação sem chamar delegate_to_squad!
 3. AUTONOMIA PARA PAUSAR: se a tarefa for grande, arriscada (migração, refatoração ampla, mudança de contrato, dados sensíveis) ou de escopo ambíguo, chame delegate_to_squad com pause_for_approval=true — o plano será apresentado ao usuário para aprovação ANTES de disparar o Squad. Use essa autonomia com critério: tarefas pequenas e claras executam direto.
 %s
 %s`,
-			chief.Instructions, chief.Name, maxDevs, scaleGuidance, govRules)
+			chief.Instructions, chief.Name, defaultMaxTriageExploreCalls, scaleGuidance, govRules)
 	}
 
 	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão. Se o usuário pedir para rodar um comando (gh, testes, build), chame run_shell. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."
@@ -2503,6 +2525,10 @@ REGRA DE TRIAGEM:
 		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, revAfter)
+	} else if !sddDocs && !sddJira && runMode != "direct" {
+		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, defaultMaxTriageExploreCalls)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, triAfter)
 	}
 	keepInTurn := r.Project.Settings.EffectiveInTurnKeepToolResults()
 	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {

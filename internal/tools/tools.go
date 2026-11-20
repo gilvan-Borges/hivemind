@@ -1308,7 +1308,7 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 	}
 	get, err := functiontool.New(functiontool.Config{
 		Name:        "jira_get",
-		Description: "Lê uma issue do Jira Cloud.",
+		Description: "Lê uma issue do Jira Cloud (incluindo tipo, status, issue pai e lista de subtasks/tarefas filhas com seus status).",
 	}, func(ctx agent.Context, args struct {
 		Key string `json:"key" jsonschema:"Chave da issue, por exemplo PROJ-123."`
 	}) (textResult, error) {
@@ -1316,14 +1316,48 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 		if err != nil {
 			return textResult{}, err
 		}
-		return textResult{Text: issue.Key + " [" + issue.Status + "] " + issue.Summary + "\n" + issue.Description}, nil
+		var b strings.Builder
+		typeTag := ""
+		if issue.IssueType != "" {
+			typeTag = " (" + issue.IssueType + ")"
+		}
+		fmt.Fprintf(&b, "%s%s [%s] %s\n", issue.Key, typeTag, issue.Status, issue.Summary)
+		if issue.ParentKey != "" {
+			fmt.Fprintf(&b, "Pai: %s — %s\n", issue.ParentKey, issue.ParentSummary)
+		}
+		if issue.Description != "" {
+			fmt.Fprintf(&b, "\n[Descrição]\n%s\n", issue.Description)
+		}
+		// Merge inline subtasks + JQL child issues (for Epics/Stories whose children are Tasks).
+		seenSub := map[string]bool{}
+		var children []jirax.SubtaskItem
+		for _, st := range issue.Subtasks {
+			seenSub[strings.ToUpper(st.Key)] = true
+			children = append(children, st)
+		}
+		if jqlChildren, sErr := d.Jira.Search(ctx, fmt.Sprintf(`parent = "%s" ORDER BY key ASC`, issue.Key), 40); sErr == nil {
+			for _, ch := range jqlChildren {
+				k := strings.ToUpper(ch.Key)
+				if !seenSub[k] {
+					seenSub[k] = true
+					children = append(children, jirax.SubtaskItem{Key: ch.Key, Summary: ch.Summary, Status: ch.Status})
+				}
+			}
+		}
+		if len(children) > 0 {
+			fmt.Fprintf(&b, "\n[Subtasks / Tasks Filhas (%d)]\n", len(children))
+			for _, st := range children {
+				fmt.Fprintf(&b, "- %s [%s] %s\n", st.Key, st.Status, st.Summary)
+			}
+		}
+		return textResult{Text: strings.TrimSpace(b.String())}, nil
 	})
 	if err != nil {
 		return err
 	}
 	search, err := functiontool.New(functiontool.Config{
 		Name:        "jira_search",
-		Description: "Pesquisa issues com JQL.",
+		Description: "Pesquisa issues e subtasks no Jira com JQL (retorna chave, status, tipo, pai e título).",
 	}, func(ctx agent.Context, args struct {
 		JQL   string `json:"jql" jsonschema:"Consulta JQL."`
 		Limit int    `json:"limit,omitempty" jsonschema:"Máximo de issues. Vazio usa 20."`
@@ -1334,7 +1368,22 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 		}
 		var b strings.Builder
 		for _, issue := range issues {
-			fmt.Fprintf(&b, "%s %s\n", issue.Key, issue.Summary)
+			status := issue.Status
+			if status == "" {
+				status = "Sem status"
+			}
+			parent := ""
+			if issue.ParentKey != "" {
+				parent = fmt.Sprintf(" (pai: %s)", issue.ParentKey)
+			}
+			subCount := ""
+			if len(issue.Subtasks) > 0 {
+				subCount = fmt.Sprintf(" [%d subtask(s)]", len(issue.Subtasks))
+			}
+			fmt.Fprintf(&b, "%s [%s]%s%s — %s\n", issue.Key, status, parent, subCount, issue.Summary)
+		}
+		if b.Len() == 0 {
+			return textResult{Text: "Nenhuma issue encontrada para o JQL informado."}, nil
 		}
 		return textResult{Text: b.String()}, nil
 	})

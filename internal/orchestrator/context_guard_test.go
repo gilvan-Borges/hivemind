@@ -386,3 +386,35 @@ func TestPRReviewGuardCallbacksAndExtractPRNumber(t *testing.T) {
 		t.Fatalf("expected post-review tool block, got %v", res)
 	}
 }
+
+func TestChiefTriageBudgetCallbacksAndJiraKeyExtract(t *testing.T) {
+	if got := extractJiraKeyFromObjective("Resolver issue IPG-874 — Front F3 (RN-018-15, D-179, FT-232)"); got != "IPG-874" {
+		t.Fatalf("extractJiraKeyFromObjective = %q, want IPG-874", got)
+	}
+
+	before, after := newChiefTriageBudgetCallbacks("IPG-874", 3)
+	jiraGetTool := stubNamedTool{name: "jira_get"}
+	readTool := stubNamedTool{name: "read_file"}
+	delegateTool := stubNamedTool{name: "delegate_to_squad"}
+
+	// Preloaded Jira key is short-circuited immediately.
+	if res, _ := before(nil, jiraGetTool, map[string]any{"key": "ipg-874"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ JIRA") {
+		t.Fatalf("expected jira_get cache hit, got %v", res)
+	}
+
+	// Up to maxExploreCalls=3 reads pass; 4th forces immediate delegate_to_squad.
+	for i := 1; i <= 3; i++ {
+		if res, _ := before(nil, readTool, map[string]any{"path": fmt.Sprintf("f%d.ts", i)}); res != nil {
+			t.Fatalf("triage read #%d should pass, got %v", i, res)
+		}
+	}
+	if res, _ := before(nil, readTool, map[string]any{"path": "f4.ts"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "ORÇAMENTO DE TRIAGEM DO CHEFE ATINGIDO") {
+		t.Fatalf("4th triage read must force delegate_to_squad, got %v", res)
+	}
+
+	// Once delegate_to_squad succeeds, any further read is blocked.
+	_, _ = after(nil, delegateTool, nil, map[string]any{"status": "ok"}, nil)
+	if res, _ := before(nil, readTool, map[string]any{"path": "f1.ts"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "delegate_to_squad já foi registrado") {
+		t.Fatalf("expected post-delegate tool block, got %v", res)
+	}
+}
