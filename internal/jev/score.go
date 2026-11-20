@@ -256,12 +256,13 @@ func selectBestInTier(
 
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
 	onlyProv := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
+	checkBlockedInline := len(catalog.Entries) <= 64
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
 			continue
 		}
-		if strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
+		if checkBlockedInline && strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
 			continue
 		}
 		if e.Tier != "" && e.Tier != targetTier {
@@ -397,7 +398,7 @@ func selectBestInTier(
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
 			continue
 		}
-		if strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
+		if checkBlockedInline && strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
 			continue
 		}
 		if e.Tier != "" && e.Tier != targetTier {

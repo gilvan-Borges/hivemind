@@ -725,6 +725,9 @@ func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []Model
 		if prov == "" || mod == "" || !isSafeCatalogID(mod) {
 			continue
 		}
+		if prov == "openrouter" && isBlockedOpenRouterEndpoint(mod) {
+			continue
+		}
 		key := catalogKey(prov, mod)
 		if seen[key] {
 			continue
@@ -834,9 +837,7 @@ func mergeWithStaticSeeds(cat Catalog) Catalog {
 		}
 	}
 	for _, seed := range StaticSeedEntries() {
-		// Always ensure the 21 curated OpenRouter models are present in the catalog even after
-		// a partial remote refresh, while letting live OpenRouter entries override them.
-		if hasLiveProvider[strings.ToLower(seed.Provider)] && !strings.EqualFold(seed.Provider, "openrouter") {
+		if hasLiveProvider[strings.ToLower(seed.Provider)] {
 			continue
 		}
 		if !seen[catalogKey(seed.Provider, seed.Model)] {

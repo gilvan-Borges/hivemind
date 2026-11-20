@@ -16,6 +16,37 @@ import (
 	"google.golang.org/adk/v2/model"
 )
 
+type accountSwitchObserverKey struct{}
+
+// AccountSwitchNotice describes an automatic per-model failover from one account
+// in the provider pool to the next healthy account (e.g. Conta 1 -> Conta 2 for "argon").
+type AccountSwitchNotice struct {
+	Provider    string
+	ModelBucket string
+	FromAccount string
+	ToAccount   string
+	ToAccountID string
+}
+
+// WithAccountSwitchObserver attaches a callback to ctx that is invoked whenever
+// the multi-account pool switches a model from a quota-exhausted account (e.g. Conta 1)
+// to a reserve account (e.g. Conta 2).
+func WithAccountSwitchObserver(ctx context.Context, fn func(AccountSwitchNotice)) context.Context {
+	if ctx == nil || fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, accountSwitchObserverKey{}, fn)
+}
+
+func notifyAccountSwitch(ctx context.Context, n AccountSwitchNotice) {
+	if ctx == nil {
+		return
+	}
+	if fn, ok := ctx.Value(accountSwitchObserverKey{}).(func(AccountSwitchNotice)); ok && fn != nil {
+		fn(n)
+	}
+}
+
 const (
 	defaultAccountModelQuotaCooldown = 15 * time.Minute
 	defaultAccountModelRateCooldown  = 2 * time.Minute
@@ -531,6 +562,17 @@ func (p *pooledAccountLLM) GenerateContent(ctx context.Context, req *model.LLMRe
 
 			// Transparently switch this model to the next healthy account in the pool!
 			excludedAccounts[strings.ToLower(acc.ID)] = true
+			nextIdx := p.selectHealthyAccountIndex(excludedAccounts)
+			if nextIdx >= 0 && nextIdx < len(p.pool) {
+				nextAcc := p.pool[nextIdx]
+				notifyAccountSwitch(ctx, AccountSwitchNotice{
+					Provider:    p.provider,
+					ModelBucket: NormalizeModelQuotaBucket(p.provider, p.modelName),
+					FromAccount: acc.Name,
+					ToAccount:   nextAcc.Name,
+					ToAccountID: nextAcc.ID,
+				})
+			}
 			p.mu.Lock()
 			p.activeLLM = nil
 			p.mu.Unlock()

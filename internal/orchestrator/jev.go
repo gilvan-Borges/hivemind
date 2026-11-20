@@ -248,6 +248,30 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			g = opts.Git
 		}
 		workDir := firstNonEmptyString(hint.WorkDir, ws)
+		if onEvent != nil {
+			ctx = modelx.WithAccountSwitchObserver(ctx, func(n modelx.AccountSwitchNotice) {
+				fromLbl := strings.TrimSpace(n.FromAccount)
+				if fromLbl == "" {
+					fromLbl = "Conta 1"
+				}
+				toLbl := strings.TrimSpace(n.ToAccount)
+				if toLbl == "" {
+					toLbl = "Conta Reserva"
+				}
+				msg := fmt.Sprintf("%s sem quota para %s → usando %s · %s/%s (demais modelos seguem na %s)",
+					fromLbl, n.ModelBucket, toLbl, n.Provider, n.ModelBucket, fromLbl)
+				onEvent(Event{
+					Kind:     "model_route",
+					Stage:    stage,
+					Author:   jev.RedactSecrets(author, opts.ExtraSecrets...),
+					Label:    jev.RedactSecrets(label, opts.ExtraSecrets...),
+					Text:     jev.RedactSecrets(msg, opts.ExtraSecrets...),
+					Provider: n.Provider,
+					Model:    n.ModelBucket,
+					Reasons:  []string{"account_pool_failover"},
+				})
+			})
+		}
 
 		exclude := map[string]bool{}
 		agentPin := jev.AgentPin{Provider: provNorm, Model: a.Model}

@@ -83,6 +83,16 @@ func fetchJevOpenRouter(ctx context.Context) ([]jev.ModelEntry, error) {
 			Free:      strings.HasSuffix(strings.ToLower(m.ID), ":free"),
 		})
 	}
+	seen := make(map[string]bool, len(out))
+	for _, e := range out {
+		seen[strings.ToLower(e.Model)] = true
+	}
+	for _, seed := range jev.CuratedOpenRouterSeedEntries() {
+		if !seen[strings.ToLower(seed.Model)] {
+			seed.Source = "openrouter"
+			out = append(out, seed)
+		}
+	}
 	return out, nil
 }
 

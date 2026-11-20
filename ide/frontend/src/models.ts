@@ -7,7 +7,27 @@ import { activeLane } from "./lanes";
 import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
-export type ModelProviderId = "default" | "jev" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter" | "cursor";
+export type ModelProviderId =
+  | "default"
+  | "jev"
+  | "agy"
+  | "opencode-go"
+  | "opencode"
+  | "gemini"
+  | "anthropic"
+  | "openai"
+  | "openrouter"
+  | "cursor"
+  | string;
+
+function splitProviderAccount(providerId: string): { baseProv: string; accountId: string } {
+  const raw = (providerId || "").trim();
+  const atIdx = raw.indexOf("@");
+  if (atIdx > 0) {
+    return { baseProv: raw.slice(0, atIdx).toLowerCase(), accountId: raw.slice(atIdx + 1) };
+  }
+  return { baseProv: raw.toLowerCase(), accountId: "" };
+}
 
 export function inferModelProvider(modelSpec: string, includeDefaultBlank = false): ModelProviderId {
   const cur = (modelSpec || "").trim();
@@ -16,6 +36,13 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   const atIdx = low.indexOf("@");
   if (atIdx > 0) {
     const pref = low.slice(0, atIdx);
+    const rest = cur.slice(atIdx + 1);
+    const colonIdx = rest.search(/[:/]/);
+    const accId = (colonIdx > 0 ? rest.slice(0, colonIdx) : rest).trim();
+    const normPref = pref === "antigravity" ? "agy" : pref;
+    if (accId && (state.profilesOverview?.profiles || []).some((p) => p.provider === normPref && p.id.toLowerCase() === accId.toLowerCase())) {
+      return `${normPref}@${accId}`;
+    }
     if (pref === "agy" || pref === "antigravity") return "agy";
     if (pref === "openrouter") return "openrouter";
     if (pref === "opencode-go") return "opencode-go";
@@ -56,48 +83,81 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   const agyCount = state.models.length > 0 ? ` (${state.models.length})` : "";
   const goCount = state.openCodeGoModels.length > 0 ? ` (${state.openCodeGoModels.length})` : "";
   const zenCount = state.openCodeModels.length > 0 ? ` (${state.openCodeModels.length})` : "";
+  const allProfiles = state.profilesOverview?.profiles || [];
+  const agyProfiles = allProfiles.filter((p) => p.provider === "agy");
+  const orProfiles = allProfiles.filter((p) => p.provider === "openrouter");
+  const ocProfiles = allProfiles.filter((p) => p.provider === "opencode");
+
+  out.push({ id: "jev", label: "Jev (Auto)" });
+  if (agyProfiles.length > 0) {
+    out.push({ id: "agy", label: `Antigravity (Pool Auto: Conta 1 → ${agyProfiles.length + 1})${agyCount}` });
+    agyProfiles.forEach((p, idx) => {
+      out.push({ id: `agy@${p.id}`, label: `Antigravity · Conta ${idx + 1} (${p.name})` });
+    });
+  } else {
+    out.push({ id: "agy", label: `Antigravity (agy)${agyCount}` });
+  }
   out.push(
-    { id: "jev", label: "Jev (Auto)" },
-    { id: "agy", label: `Antigravity (agy)${agyCount}` },
     { id: "opencode-go", label: `OpenCode Go${goCount}` },
     { id: "opencode", label: `OpenCode Zen${zenCount}` },
+  );
+  ocProfiles.forEach((p, idx) => {
+    out.push({ id: `opencode@${p.id}`, label: `OpenCode · Conta ${idx + 1} (${p.name})` });
+  });
+  out.push(
     { id: "gemini", label: "Google Gemini" },
     { id: "anthropic", label: "Anthropic (Claude)" },
     { id: "openai", label: "OpenAI / Grok" },
-    { id: "openrouter", label: "OpenRouter" },
-    { id: "cursor", label: "Cursor CLI" },
   );
+  if (orProfiles.length > 0) {
+    out.push({ id: "openrouter", label: `OpenRouter (Pool Auto: Conta 1 → ${orProfiles.length})` });
+    orProfiles.forEach((p, idx) => {
+      out.push({ id: `openrouter@${p.id}`, label: `OpenRouter · Conta ${idx + 1} (${p.name})` });
+    });
+  } else {
+    out.push({ id: "openrouter", label: "OpenRouter" });
+  }
+  out.push({ id: "cursor", label: "Cursor CLI" });
   return out;
 }
 
 export function getModelsForProvider(providerId: ModelProviderId, currentModel = ""): Array<{ value: string; label: string }> {
   const cur = (currentModel || "").trim();
+  const { baseProv, accountId } = splitProviderAccount(providerId);
+  const accPref = accountId ? `@${accountId}` : "";
   let items: Array<{ value: string; label: string }> = [];
-  switch (providerId) {
+  switch (baseProv) {
     case "default":
       return [{ value: "", label: "(herdar modelo padrão)" }];
     case "jev":
       return [
-        { value: "jev:auto", label: "auto — Todos os provedores ativos (mais barato)" },
-        { value: "jev:openrouter", label: "openrouter — Só modelos do OpenRouter (Jev escolhe)" },
+        { value: "jev:auto", label: "auto — Todos os provedores ativos (por dificuldade + promoção)" },
+        { value: "jev:openrouter", label: "openrouter — Só modelos do OpenRouter (Jev escolhe c/ promoção)" },
         { value: "jev:opencode", label: "opencode — Só modelos do OpenCode Go/Zen (Jev escolhe)" },
-        { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe)" },
+        { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe c/ Pool de Contas)" },
         { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
       ];
     case "agy": {
       const agyProfiles = (state.profilesOverview?.profiles || []).filter((p) => p.provider === "agy");
-      const poolHint = agyProfiles.length > 0 ? ` — Pool (${agyProfiles.length + 1} contas c/ failover por modelo)` : "";
+      const pinnedProf = accountId ? agyProfiles.find((p) => p.id.toLowerCase() === accountId.toLowerCase()) : undefined;
+      const poolHint = pinnedProf
+        ? ` (${pinnedProf.name} → reserva nas demais)`
+        : agyProfiles.length > 0
+          ? ` — Pool (Conta 1 → ${agyProfiles.length + 1} por modelo)`
+          : "";
       const baseModels = state.models.length > 0
-        ? state.models.map((m) => ({ slug: m.slug, value: `agy:${m.slug}`, label: `${m.slug}${poolHint}` }))
-        : [{ slug: "agy", value: "agy", label: `agy (padrão)${poolHint}` }];
+        ? state.models.map((m) => ({ slug: m.slug, value: `agy${accPref}:${m.slug}`, label: `${m.slug}${poolHint}` }))
+        : [{ slug: "agy", value: `agy${accPref}`, label: `agy (padrão)${poolHint}` }];
       items = [
-        { value: "agy:auto", label: `auto (Jev escolhe no Antigravity${poolHint})` },
+        { value: `agy${accPref}:auto`, label: `auto (Jev escolhe no Antigravity${poolHint})` },
         ...baseModels.map((m) => ({ value: m.value, label: m.label })),
       ];
-      for (const prof of agyProfiles) {
-        for (const m of baseModels) {
-          const val = m.slug === "agy" ? `agy@${prof.id}` : `agy@${prof.id}:${m.slug}`;
-          items.push({ value: val, label: `[Conta: ${prof.name}] ${m.slug}` });
+      if (!accountId) {
+        for (const prof of agyProfiles) {
+          for (const m of baseModels) {
+            const val = m.slug === "agy" ? `agy@${prof.id}` : `agy@${prof.id}:${m.slug}`;
+            items.push({ value: val, label: `[Conta: ${prof.name}] ${m.slug}` });
+          }
         }
       }
       break;

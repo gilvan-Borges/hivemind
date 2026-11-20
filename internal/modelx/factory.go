@@ -42,6 +42,15 @@ func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 				break
 			}
 		}
+		if idx > 0 {
+			notifyAccountSwitch(ctx, AccountSwitchNotice{
+				Provider:    NormalizeProfileProvider(baseProv),
+				ModelBucket: NormalizeModelQuotaBucket(baseProv, cleanModel),
+				FromAccount: pool[0].Name,
+				ToAccount:   pool[idx].Name,
+				ToAccountID: pool[idx].ID,
+			})
+		}
 		accCtx := ctx
 		if pool[idx].ID == "__system__" {
 			accCtx = WithProfileOverride(ctx, baseProv, "__global__")
