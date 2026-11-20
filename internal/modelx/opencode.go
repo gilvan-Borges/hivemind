@@ -155,6 +155,12 @@ func LoadOpenCodeCredentials() (apiKey, baseURL, source string) {
 			baseURL = fileBase
 		}
 	}
+	if apiKey == "" {
+		if profKey := strings.TrimSpace(resolveEnvForContext(context.Background(), "opencode", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY")); profKey != "" {
+			apiKey = profKey
+			source = "profile"
+		}
+	}
 
 	if baseURL == "" {
 		baseURL = OpenCodeDefaultBaseURL

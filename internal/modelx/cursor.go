@@ -89,7 +89,8 @@ func LookCursor() (string, error) {
 // ProbeCursor reports whether the CLI and a key are present. It does not run
 // the agent and does not print the key.
 func ProbeCursor() CursorStatus {
-	st := CursorStatus{HasKey: strings.TrimSpace(EnvOrStored("CURSOR_API_KEY")) != ""}
+	key := strings.TrimSpace(resolveEnvForContext(context.Background(), "cursor", "CURSOR_API_KEY"))
+	st := CursorStatus{HasKey: key != ""}
 	path, err := LookCursor()
 	if err != nil {
 		st.Detail = err.Error()
@@ -98,7 +99,7 @@ func ProbeCursor() CursorStatus {
 	st.Found = true
 	st.Path = path
 	if st.HasKey {
-		st.Detail = "CLI encontrado e CURSOR_API_KEY definida (ambiente ou api-keys.json)"
+		st.Detail = "CLI encontrado e CURSOR_API_KEY definida (Pool de Contas, ambiente ou api-keys.json)"
 	} else {
 		st.Detail = "CLI encontrado, mas falta CURSOR_API_KEY. Cole a chave do painel Cursor em Chaves de API, ou exporte a variável. O modo headless não usa a sessão interativa do editor."
 	}
@@ -303,12 +304,19 @@ func cursorModelID(modelName string) string {
 }
 
 func cursorArgs(modelID, workspace string) []string {
+	sandboxMode := "enabled"
+	if runtime.GOOS == "windows" {
+		// Cursor CLI sandbox mode requires macOS or Linux and errors immediately on Windows
+		// ("Error: Sandbox mode is enabled but not available on this system").
+		sandboxMode = "disabled"
+	}
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--stream-partial-output",
 		"--trust",
-		"--sandbox", "enabled",
+		"--force",
+		"--sandbox", sandboxMode,
 		"--workspace", workspace,
 		"Siga exatamente o arquivo .hivemind/cursor-task.md neste workspace. Não faça git commit, git push nem abra pull request. Resuma em português ao terminar.",
 	}
@@ -405,11 +413,12 @@ func ListCursorModels(ctx context.Context) ([]AgyModel, CursorStatus, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	cursorKey := resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
 	cmd := cursorCommand(probeCtx, status.Path, []string{"models"})
-	cmd.Env = cursorChildEnv(os.Environ(), EnvOrStored("CURSOR_API_KEY"))
+	cmd.Env = cursorChildEnv(os.Environ(), cursorKey)
 	out, err := cmd.Output()
 	if err != nil {
-		status.Detail = "CLI encontrado, mas `agent models` falhou. Usando auto. " + truncateText(redactSecret(err.Error(), EnvOrStored("CURSOR_API_KEY")), 200)
+		status.Detail = "CLI encontrado, mas `agent models` falhou. Usando auto. " + truncateText(redactSecret(err.Error(), cursorKey), 200)
 		return fallback, status, nil
 	}
 	ids := parseCursorModelList(string(out))

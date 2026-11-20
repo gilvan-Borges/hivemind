@@ -42,19 +42,20 @@ func JevCredentialFingerprints() map[string]string {
 		sum := h.Sum(nil)
 		return hex.EncodeToString(sum[:8])
 	}
+	bg := context.Background()
 	ocKey, ocBase, _ := LoadOpenCodeCredentials()
 	agyBin, _ := LookAgy()
 	curBin, _ := LookCursor()
 	return map[string]string{
 		"agy":              hashVal(agyBin),
-		"cursor":           hashVal(curBin, EnvOrStored("CURSOR_API_KEY")),
+		"cursor":           hashVal(curBin, resolveEnvForContext(bg, "cursor", "CURSOR_API_KEY")),
 		"opencode":         hashVal(ocKey, ocBase),
-		"openrouter":       hashVal(EnvOrStored("OPENROUTER_API_KEY"), EnvOrStored("OPENROUTER_BASE_URL")),
-		"gemini":           hashVal(FirstEnvOrStored("GOOGLE_API_KEY", "GEMINI_API_KEY")),
-		"vertex":           hashVal(FirstEnvOrStored("GOOGLE_CLOUD_PROJECT"), FirstEnvOrStored("GOOGLE_CLOUD_LOCATION")),
-		"anthropic":        hashVal(FirstEnvOrStored("ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_BACKEND")),
-		"openai":           hashVal(EnvOrStored("OPENAI_API_KEY"), EnvOrStored("OPENAI_BASE_URL")),
-		"openai-responses": hashVal(EnvOrStored("OPENAI_API_KEY"), EnvOrStored("OPENAI_BASE_URL")),
+		"openrouter":       hashVal(resolveEnvForContext(bg, "openrouter", "OPENROUTER_API_KEY"), resolveEnvForContext(bg, "openrouter", "OPENROUTER_BASE_URL")),
+		"gemini":           hashVal(resolveEnvForContext(bg, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")),
+		"vertex":           hashVal(resolveEnvForContext(bg, "gemini", "GOOGLE_CLOUD_PROJECT"), resolveEnvForContext(bg, "gemini", "GOOGLE_CLOUD_LOCATION")),
+		"anthropic":        hashVal(resolveEnvForContext(bg, "anthropic", "ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_BACKEND")),
+		"openai":           hashVal(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY"), resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")),
+		"openai-responses": hashVal(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY"), resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")),
 	}
 }
 

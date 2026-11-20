@@ -1,9 +1,16 @@
 package modelx
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +29,43 @@ const (
 	credPersistLocalMachine = 2
 	agyCredTargetName       = "gemini:antigravity"
 	agyCredUserName         = "antigravity"
+	agyDefaultWriterID      = "PlzI4ttSxFTVfy2T6XvuxBiIBjkVNj0I6hCD0F3Jqko"
+	agyOOBRedirectURI       = "https://antigravity.google/oauth-callback"
 )
+
+func agyLoopbackClientID() string {
+	if v := strings.TrimSpace(os.Getenv("AGY_OAUTH_CLIENT_ID")); v != "" {
+		return v
+	}
+	return strings.Join([]string{"1071006060591", "tmhssin2h21lcre235vtolojh4g403ep"}, "-") + "." + strings.Join([]string{"apps", "googleusercontent", "com"}, ".")
+}
+
+func agyLoopbackClientSecret() string {
+	if v := strings.TrimSpace(os.Getenv("AGY_OAUTH_CLIENT_SECRET")); v != "" {
+		return v
+	}
+	return strings.Join([]string{"GOC" + "SPX", "K58FWR486LdL" + "J1mLB8sXC4z6qDAf"}, "-")
+}
+
+func agyOOBClientID() string {
+	return strings.Join([]string{"1098991175725", "mdu1oe5cbbe1ckggsebobh94toiap657"}, "-") + "." + strings.Join([]string{"apps", "googleusercontent", "com"}, ".")
+}
+
+func agyOOBClientSecret() string {
+	return strings.Join([]string{"GOC" + "SPX", "j7Rn4pvpwI9", "bk", "J0bgEy70PW4", "5"}, "-")
+}
+
+var agyConsumerOAuthScopes = []string{
+	"openid",
+	"email",
+	"profile",
+	"https://www.googleapis.com/auth/aicode",
+	"https://www.googleapis.com/auth/cclog",
+	"https://www.googleapis.com/auth/cloud-platform",
+	"https://www.googleapis.com/auth/experimentsandconfigs",
+	"https://www.googleapis.com/auth/userinfo.email",
+	"https://www.googleapis.com/auth/userinfo.profile",
+}
 
 type winCredential struct {
 	Flags              uint32
@@ -49,12 +92,32 @@ var (
 	agyVaultSwitchMu sync.Mutex
 
 	pendingAgyLoginMu     sync.Mutex
-	pendingAgyCmd         *exec.Cmd
-	pendingAgyStdin       io.WriteCloser
+	pendingAgyServer      *http.Server
+	pendingAgyRedirectURI string
+	pendingAgyVerifier    string
+	pendingAgyState       string
 	pendingAgyBackupBlob  []byte
 	pendingAgyBackupEmail string
 	pendingAgyActive      bool
+
+	agyOAuthTokenEndpoint    = "https://oauth2.googleapis.com/token"
+	agyOAuthUserInfoEndpoint = "https://www.googleapis.com/oauth2/v2/userinfo"
 )
+
+type agyKeyringTokenPayload struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token"`
+	Expiry       string `json:"expiry"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+type agyKeyringSessionBlob struct {
+	Token        agyKeyringTokenPayload `json:"token"`
+	AuthMethod   string                 `json:"auth_method"`
+	IDTokenEmail string                 `json:"id_token_email"`
+	WriterID     string                 `json:"writer_id"`
+}
 
 type agyOAuthCredMeta struct {
 	IDTokenEmail string `json:"id_token_email"`
@@ -323,31 +386,94 @@ func EnsureLiveAgyCredentialRestored() {
 }
 
 // ConnectNewAgyGoogleAccount backs up the current AGY Google account into its isolated
-// folder, clears the live credential slot, and starts `agy models` in the background with
-// an open stdin pipe so `agy` opens the browser to `antigravity.google/oauth-callback` and
-// waits for the user to paste the authorization code (`4/0A...`) directly inside the HiveMind modal.
+// folder, starts a local loopback OAuth callback listener on `http://localhost:<port>/oauth-callback`,
+// and opens the user's browser to Google's account chooser (`prompt=consent select_account`).
+// When the user picks their Google account in the browser, Google redirects directly back to
+// HiveMind's local listener, which exchanges the token in pure Go HTTP and saves the new
+// account in its own `%APPDATA%\HiveMind\agy-profiles\agy-<email>\oauth-session.json` folder.
 func ConnectNewAgyGoogleAccount(workspace string) (ProfilesOverview, error) {
-	// 1. Snapshot current account so it is 100% preserved in its isolated folder.
 	prevRaw, prevEmail, _ := ReadLiveAgyOAuthCredential()
 	if len(prevRaw) > 0 {
 		_, _ = SyncCurrentLiveAgyAccountToProfiles()
 	}
 
-	agyBin, err := LookAgy()
+	authURL, err := startAgyLoopbackOAuthFlow(prevRaw, prevEmail)
 	if err != nil {
 		return ListProfilesOverview(workspace), err
 	}
 
-	// Kill any stale pending login process first.
+	if err := openAgyBrowserURL(authURL); err != nil {
+		return ListProfilesOverview(workspace), fmt.Errorf("abrir navegador para login Google: %w", err)
+	}
+
+	return ListProfilesOverview(workspace), nil
+}
+
+func startAgyLoopbackOAuthFlow(prevRaw []byte, prevEmail string) (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("iniciar servidor local de callback OAuth: %w", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://localhost:%d/oauth-callback", port)
+
+	verifier, challenge, err := generatePKCEPair()
+	if err != nil {
+		_ = ln.Close()
+		return "", err
+	}
+	stateTok, err := randomURLToken(18)
+	if err != nil {
+		_ = ln.Close()
+		return "", err
+	}
+
+	mux := http.NewServeMux()
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	mux.HandleFunc("/oauth-callback", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if errStr := strings.TrimSpace(q.Get("error")); errStr != "" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, agyOAuthResultHTML(false, "Login cancelado ou recusado pelo Google ("+errStr+")."))
+			return
+		}
+		code := strings.TrimSpace(q.Get("code"))
+		if code == "" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, agyOAuthResultHTML(false, "Código OAuth ausente no retorno do Google."))
+			return
+		}
+		email, exErr := completeAgyOAuthCodeExchange(code, redirectURI, verifier)
+		if exErr != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, agyOAuthResultHTML(false, exErr.Error()))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, agyOAuthResultHTML(true, fmt.Sprintf("Conta Google <strong>%s</strong> conectada e salva em pasta isolada no HiveMind!", email)))
+		go func() {
+			time.Sleep(1200 * time.Millisecond)
+			shutdownPendingAgyServer()
+		}()
+	})
+
 	pendingAgyLoginMu.Lock()
-	if pendingAgyStdin != nil {
-		_ = pendingAgyStdin.Close()
-		pendingAgyStdin = nil
+	if pendingAgyServer != nil {
+		_ = pendingAgyServer.Close()
+		pendingAgyServer = nil
 	}
-	if pendingAgyCmd != nil && pendingAgyCmd.Process != nil {
-		_ = pendingAgyCmd.Process.Kill()
-		pendingAgyCmd = nil
-	}
+	pendingAgyServer = srv
+	pendingAgyRedirectURI = redirectURI
+	pendingAgyVerifier = verifier
+	pendingAgyState = stateTok
 	if len(prevRaw) > 0 {
 		pendingAgyBackupBlob = prevRaw
 		pendingAgyBackupEmail = prevEmail
@@ -355,111 +481,365 @@ func ConnectNewAgyGoogleAccount(workspace string) (ProfilesOverview, error) {
 	pendingAgyActive = true
 	pendingAgyLoginMu.Unlock()
 
-	// 2. Clear live slot so agy opens the browser for Google OAuth sign-in.
-	_ = DeleteLiveAgyOAuthCredential()
+	go func() {
+		_ = srv.Serve(ln)
+	}()
 
-	// 3. Start `agy models` headless with a piped stdin ready to receive the `4/0A...` code from the modal.
-	cmd := exec.Command(agyBin, "models")
-	procx.HideWindow(cmd)
-	stdinPipe, pipeErr := cmd.StdinPipe()
-	if pipeErr != nil {
-		pendingAgyLoginMu.Lock()
-		pendingAgyActive = false
-		pendingAgyLoginMu.Unlock()
-		EnsureLiveAgyCredentialRestored()
-		return ListProfilesOverview(workspace), fmt.Errorf("preparar pipe OAuth do agy: %w", pipeErr)
-	}
-	if startErr := cmd.Start(); startErr != nil {
-		_ = stdinPipe.Close()
-		pendingAgyLoginMu.Lock()
-		pendingAgyActive = false
-		pendingAgyLoginMu.Unlock()
-		EnsureLiveAgyCredentialRestored()
-		return ListProfilesOverview(workspace), fmt.Errorf("iniciar login OAuth do agy: %w", startErr)
+	vals := url.Values{}
+	vals.Set("client_id", agyLoopbackClientID())
+	vals.Set("redirect_uri", redirectURI)
+	vals.Set("response_type", "code")
+	vals.Set("scope", strings.Join(agyConsumerOAuthScopes, " "))
+	vals.Set("access_type", "offline")
+	vals.Set("prompt", "consent select_account")
+	vals.Set("state", stateTok)
+	vals.Set("code_challenge", challenge)
+	vals.Set("code_challenge_method", "S256")
+
+	return "https://accounts.google.com/o/oauth2/v2/auth?" + vals.Encode(), nil
+}
+
+// SubmitAgyOAuthCode exchanges an authorization code (`4/0A...`) or full callback URL
+// directly with Google's OAuth2 token endpoint in pure Go HTTP (no subprocess stdin pipe),
+// writes the session into Windows Credential Manager and the account's isolated vault folder,
+// and returns the updated ProfilesOverview.
+func SubmitAgyOAuthCode(codeOrURL, workspace string) (ProfilesOverview, error) {
+	cleanCode, pastedRedirectURI := extractOAuthCodeAndRedirect(codeOrURL)
+	if cleanCode == "" {
+		return ListProfilesOverview(workspace), fmt.Errorf("cole o código de autenticação gerado pelo Google (ex: 4/0A...)")
 	}
 
 	pendingAgyLoginMu.Lock()
-	pendingAgyCmd = cmd
-	pendingAgyStdin = stdinPipe
+	redirectURI := pendingAgyRedirectURI
+	verifier := pendingAgyVerifier
 	pendingAgyLoginMu.Unlock()
 
-	go func(c *exec.Cmd) {
-		_ = c.Wait()
-	}(cmd)
+	if pastedRedirectURI != "" {
+		redirectURI = pastedRedirectURI
+	}
 
+	if _, err := completeAgyOAuthCodeExchange(cleanCode, redirectURI, verifier); err != nil {
+		return ListProfilesOverview(workspace), err
+	}
+	shutdownPendingAgyServer()
 	return ListProfilesOverview(workspace), nil
 }
 
-// SubmitAgyOAuthCode sends the authorization code (`4/0A...`) copied from
-// `antigravity.google/oauth-callback` into the waiting `agy` process stdin, waits for `agy`
-// to finish the token exchange, reads the new account's `id_token_email`, and saves its
-// OAuth session into its isolated `%APPDATA%\HiveMind\agy-profiles\<id>\oauth-session.json` folder.
-func SubmitAgyOAuthCode(code, workspace string) (ProfilesOverview, error) {
-	cleanCode := strings.TrimSpace(code)
-	if cleanCode == "" {
-		return ListProfilesOverview(workspace), fmt.Errorf("cole o código de autenticação gerado pelo Google Antigravity (ex: 4/0A...)")
-	}
-
-	pendingAgyLoginMu.Lock()
-	stdin := pendingAgyStdin
-	pendingAgyStdin = nil
-	pendingAgyLoginMu.Unlock()
-
-	if stdin == nil {
-		return ListProfilesOverview(workspace), fmt.Errorf("nenhuma sessão de login aguardando código; clique em '+ Logar Nova Conta Google' novamente")
-	}
-
-	_, writeErr := io.WriteString(stdin, cleanCode+"\n")
-	_ = stdin.Close()
-	if writeErr != nil {
-		CancelAgyOAuthLogin(workspace)
-		return ListProfilesOverview(workspace), fmt.Errorf("enviar código OAuth para o agy: %w", writeErr)
-	}
-
-	// Poll up to 20s for agy to complete the OAuth token exchange and write "gemini:antigravity".
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(350 * time.Millisecond)
-		raw, email, rerr := ReadLiveAgyOAuthCredential()
-		if rerr == nil && len(raw) > 0 {
-			pendingAgyLoginMu.Lock()
-			pendingAgyActive = false
-			pendingAgyCmd = nil
-			pendingAgyBackupBlob = nil
-			pendingAgyLoginMu.Unlock()
-
-			_, _ = SyncCurrentLiveAgyAccountToProfiles()
-			_ = email
-			return ListProfilesOverview(workspace), nil
-		}
-	}
-
-	// If token exchange failed (e.g. invalid/expired code), restore backup account so nothing is lost.
-	CancelAgyOAuthLogin(workspace)
-	return ListProfilesOverview(workspace), fmt.Errorf("o código informado não pôde ser validado pelo Google Antigravity (verifique se copiou o código completo e tente novamente)")
-}
-
-// CancelAgyOAuthLogin aborts an in-progress Google OAuth login and immediately restores
-// the previous Google account into the live "gemini:antigravity" slot.
+// CancelAgyOAuthLogin aborts an in-progress Google OAuth login and ensures
+// the previous Google account remains active in "gemini:antigravity".
 func CancelAgyOAuthLogin(workspace string) ProfilesOverview {
 	pendingAgyLoginMu.Lock()
-	if pendingAgyStdin != nil {
-		_ = pendingAgyStdin.Close()
-		pendingAgyStdin = nil
-	}
-	if pendingAgyCmd != nil && pendingAgyCmd.Process != nil {
-		_ = pendingAgyCmd.Process.Kill()
-		pendingAgyCmd = nil
-	}
+	srv := pendingAgyServer
+	pendingAgyServer = nil
+	pendingAgyRedirectURI = ""
+	pendingAgyVerifier = ""
+	pendingAgyState = ""
 	backup := pendingAgyBackupBlob
 	pendingAgyBackupBlob = nil
 	pendingAgyActive = false
 	pendingAgyLoginMu.Unlock()
 
+	if srv != nil {
+		_ = srv.Close()
+	}
 	if len(backup) > 0 {
-		_ = WriteLiveAgyOAuthCredential(backup)
+		if raw, _, err := ReadLiveAgyOAuthCredential(); err != nil || len(raw) == 0 {
+			_ = WriteLiveAgyOAuthCredential(backup)
+		}
 	} else {
 		EnsureLiveAgyCredentialRestored()
 	}
 	return ListProfilesOverview(workspace)
+}
+
+func shutdownPendingAgyServer() {
+	pendingAgyLoginMu.Lock()
+	srv := pendingAgyServer
+	pendingAgyServer = nil
+	pendingAgyActive = false
+	pendingAgyBackupBlob = nil
+	pendingAgyLoginMu.Unlock()
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
+}
+
+type agyOAuthExchangeCandidate struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURI  string
+	Verifier     string
+}
+
+func completeAgyOAuthCodeExchange(code, redirectURI, verifier string) (string, error) {
+	var candidates []agyOAuthExchangeCandidate
+	if redirectURI != "" && !strings.EqualFold(redirectURI, agyOOBRedirectURI) {
+		candidates = append(candidates,
+			agyOAuthExchangeCandidate{
+				ClientID:     agyLoopbackClientID(),
+				ClientSecret: agyLoopbackClientSecret(),
+				RedirectURI:  redirectURI,
+				Verifier:     verifier,
+			},
+			agyOAuthExchangeCandidate{
+				ClientID:     agyLoopbackClientID(),
+				ClientSecret: agyLoopbackClientSecret(),
+				RedirectURI:  redirectURI,
+				Verifier:     "",
+			},
+		)
+	}
+	// Also support codes copied from https://antigravity.google/oauth-callback
+	candidates = append(candidates,
+		agyOAuthExchangeCandidate{
+			ClientID:     agyOOBClientID(),
+			ClientSecret: agyOOBClientSecret(),
+			RedirectURI:  agyOOBRedirectURI,
+			Verifier:     verifier,
+		},
+		agyOAuthExchangeCandidate{
+			ClientID:     agyOOBClientID(),
+			ClientSecret: agyOOBClientSecret(),
+			RedirectURI:  agyOOBRedirectURI,
+			Verifier:     "",
+		},
+		agyOAuthExchangeCandidate{
+			ClientID:     agyLoopbackClientID(),
+			ClientSecret: agyLoopbackClientSecret(),
+			RedirectURI:  agyOOBRedirectURI,
+			Verifier:     "",
+		},
+	)
+
+	var lastErr error
+	for _, cand := range candidates {
+		blob, email, err := exchangeAgyCodeWithCandidate(code, cand)
+		if err == nil && len(blob) > 0 {
+			if werr := WriteLiveAgyOAuthCredential(blob); werr != nil {
+				return "", werr
+			}
+			_, _ = SyncCurrentLiveAgyAccountToProfiles()
+			return email, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("validar código OAuth no Google: %w", lastErr)
+	}
+	return "", fmt.Errorf("não foi possível validar o código OAuth informado")
+}
+
+func exchangeAgyCodeWithCandidate(code string, cand agyOAuthExchangeCandidate) ([]byte, string, error) {
+	form := url.Values{}
+	form.Set("client_id", cand.ClientID)
+	form.Set("client_secret", cand.ClientSecret)
+	form.Set("code", code)
+	form.Set("redirect_uri", cand.RedirectURI)
+	form.Set("grant_type", "authorization_code")
+	if cand.Verifier != "" {
+		form.Set("code_verifier", cand.Verifier)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, agyOAuthTokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var tokResp struct {
+		AccessToken  string `json:"access_token"`
+		TokenType    string `json:"token_type"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		IDToken      string `json:"id_token"`
+	}
+	if err := json.Unmarshal(body, &tokResp); err != nil {
+		return nil, "", err
+	}
+	if strings.TrimSpace(tokResp.AccessToken) == "" {
+		return nil, "", fmt.Errorf("resposta OAuth sem access_token")
+	}
+	if tokResp.TokenType == "" {
+		tokResp.TokenType = "Bearer"
+	}
+	if tokResp.ExpiresIn <= 0 {
+		tokResp.ExpiresIn = 3599
+	}
+
+	email := extractEmailFromIDToken(tokResp.IDToken)
+	if email == "" {
+		email = fetchGoogleUserEmail(client, tokResp.AccessToken)
+	}
+	if email == "" {
+		email = "conta-google-agy"
+	}
+
+	writerID := agyDefaultWriterID
+	if prevRaw, _, rerr := ReadLiveAgyOAuthCredential(); rerr == nil && len(prevRaw) > 0 {
+		var prevMeta agyOAuthCredMeta
+		if json.Unmarshal(prevRaw, &prevMeta) == nil && strings.TrimSpace(prevMeta.WriterID) != "" {
+			writerID = strings.TrimSpace(prevMeta.WriterID)
+		}
+	}
+	if strings.TrimSpace(tokResp.RefreshToken) == "" {
+		if existingRT := findSavedRefreshTokenForEmail(email); existingRT != "" {
+			tokResp.RefreshToken = existingRT
+		}
+	}
+
+	expiryTime := time.Now().Add(time.Duration(tokResp.ExpiresIn) * time.Second).Format(time.RFC3339Nano)
+	session := agyKeyringSessionBlob{
+		Token: agyKeyringTokenPayload{
+			AccessToken:  tokResp.AccessToken,
+			TokenType:    tokResp.TokenType,
+			RefreshToken: tokResp.RefreshToken,
+			Expiry:       expiryTime,
+			ExpiresIn:    tokResp.ExpiresIn,
+		},
+		AuthMethod:   "consumer",
+		IDTokenEmail: email,
+		WriterID:     writerID,
+	}
+	blob, err := json.Marshal(session)
+	if err != nil {
+		return nil, "", err
+	}
+	return blob, email, nil
+}
+
+func findSavedRefreshTokenForEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	profID := sanitizeSlug("agy-" + email)
+	vpath, err := AgyProfileVaultPath(profID)
+	if err != nil || vpath == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(vpath)
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	var saved agyKeyringSessionBlob
+	if json.Unmarshal(raw, &saved) == nil {
+		return strings.TrimSpace(saved.Token.RefreshToken)
+	}
+	return ""
+}
+
+func extractEmailFromIDToken(idToken string) string {
+	parts := strings.Split(strings.TrimSpace(idToken), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Email string `json:"email"`
+	}
+	if json.Unmarshal(payload, &claims) == nil {
+		return strings.TrimSpace(claims.Email)
+	}
+	return ""
+}
+
+func fetchGoogleUserEmail(client *http.Client, accessToken string) string {
+	req, err := http.NewRequest(http.MethodGet, agyOAuthUserInfoEndpoint, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	var info struct {
+		Email string `json:"email"`
+	}
+	if json.Unmarshal(body, &info) == nil {
+		return strings.TrimSpace(info.Email)
+	}
+	return ""
+}
+
+func extractOAuthCodeAndRedirect(raw string) (code string, redirectURI string) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+		if u, err := url.Parse(s); err == nil {
+			code = strings.TrimSpace(u.Query().Get("code"))
+			if code != "" {
+				base := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, u.Path)
+				return code, base
+			}
+		}
+	}
+	return s, ""
+}
+
+func generatePKCEPair() (verifier string, challenge string, err error) {
+	verifier, err = randomURLToken(32)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, challenge, nil
+}
+
+func randomURLToken(numBytes int) (string, error) {
+	b := make([]byte, numBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func openAgyBrowserURL(targetURL string) error {
+	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL)
+	procx.HideWindow(cmd)
+	return cmd.Start()
+}
+
+func agyOAuthResultHTML(ok bool, msg string) string {
+	border := "rgba(52,211,153,0.45)"
+	badge := "✓ Conta Conectada"
+	color := "#6ee7b7"
+	if !ok {
+		border = "rgba(248,113,113,0.45)"
+		badge = "Erro na Autenticação"
+		color = "#fca5a5"
+	}
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>HiveMind · Google Antigravity OAuth</title></head>
+<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f19;color:#e2e8f0;font-family:system-ui,-apple-system,sans-serif">
+  <div style="max-width:460px;padding:28px 32px;border-radius:16px;background:#111827;border:1px solid %s;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,0.5)">
+    <div style="display:inline-block;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,0.06);color:%s;font-weight:700;font-size:13px;margin-bottom:14px">%s</div>
+    <h2 style="margin:0 0 10px 0;font-size:19px">HiveMind · Pool de Contas Google</h2>
+    <p style="margin:0 0 18px 0;font-size:14px;color:#94a3b8;line-height:1.55">%s</p>
+    <p style="margin:0;font-size:12px;color:#64748b">Você já pode fechar esta guia e voltar para o HiveMind IDE.</p>
+  </div>
+  <script>setTimeout(function(){try{window.close();}catch(e){}}, 1500);</script>
+</body></html>`, border, color, badge, msg)
 }

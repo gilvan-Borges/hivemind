@@ -196,11 +196,11 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 
 // ProbeOpenRouterAuth validates the configured OPENROUTER_API_KEY via GET /key.
 func ProbeOpenRouterAuth(ctx context.Context) error {
-	key := EnvOrStored("OPENROUTER_API_KEY")
+	key := resolveEnvForContext(ctx, "openrouter", "OPENROUTER_API_KEY")
 	if key == "" {
 		return fmt.Errorf("defina OPENROUTER_API_KEY para validar o OpenRouter")
 	}
-	base := EnvOrStored("OPENROUTER_BASE_URL")
+	base := resolveEnvForContext(ctx, "openrouter", "OPENROUTER_BASE_URL")
 	if base == "" {
 		base = "https://openrouter.ai/api/v1"
 	}

@@ -347,6 +347,15 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 			return prepareProfile(doc.Profiles[i]), "default", ""
 		}
 	}
+	// If the user saved accounts in the Pool de Contas without explicitly marking IsDefault,
+	// automatically resolve Conta #1 (the first ready unscoped profile for this provider).
+	for i := range doc.Profiles {
+		if doc.Profiles[i].Provider == prov && len(doc.Profiles[i].OrgPatterns) == 0 {
+			if ready, _ := evaluateProfileReadiness(doc.Profiles[i]); ready {
+				return prepareProfile(doc.Profiles[i]), "default", ""
+			}
+		}
+	}
 	return nil, "global", ""
 }
 

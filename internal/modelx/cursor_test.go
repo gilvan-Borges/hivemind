@@ -172,9 +172,13 @@ func TestParseCursorModelList(t *testing.T) {
 
 func TestNewCursorMissingKey(t *testing.T) {
 	t.Setenv("CURSOR_API_KEY", "")
+	tmp := t.TempDir()
 	prev := keysFilePathFn
-	keysFilePathFn = func() (string, error) { return filepath.Join(t.TempDir(), "api-keys.json"), nil }
+	keysFilePathFn = func() (string, error) { return filepath.Join(tmp, "api-keys.json"), nil }
 	t.Cleanup(func() { keysFilePathFn = prev })
+	prevProf := profilesFilePathFn
+	profilesFilePathFn = func() (string, error) { return filepath.Join(tmp, "provider-profiles.json"), nil }
+	t.Cleanup(func() { profilesFilePathFn = prevProf })
 	_, err := New(context.Background(), "cursor", "auto")
 	if err == nil || !strings.Contains(err.Error(), "CURSOR_API_KEY") {
 		t.Fatalf("erro: %v", err)
