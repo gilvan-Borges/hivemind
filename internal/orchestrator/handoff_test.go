@@ -87,3 +87,20 @@ func TestQAReturnStillAllowedUntilStall(t *testing.T) {
 		t.Fatal("papel já visitado com o mesmo hash deveria ser recusado")
 	}
 }
+
+func TestSealSanitizesDevSlices(t *testing.T) {
+	r := &Runner{
+		Workspace: t.TempDir(),
+		chiefPlan: "plano",
+		devSlices: []string{"edite a.go\ncmd /c dir\nhmlan_1234567890abcdefghij"},
+	}
+	t.Setenv("HIVEMIND_DATA_DIR", t.TempDir())
+	r.sealHandoff("s")
+	joined := strings.Join(r.devSlices, "\n")
+	if strings.Contains(joined, "cmd /c") || strings.Contains(joined, "hmlan_") {
+		t.Fatalf("fatia crua: %q", joined)
+	}
+	if !strings.Contains(joined, "edite a.go") {
+		t.Fatalf("fatia perdeu o texto seguro: %q", joined)
+	}
+}
