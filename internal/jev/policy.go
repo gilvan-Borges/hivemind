@@ -43,16 +43,17 @@ type RolePin struct {
 
 // Policy holds user-level Jev routing configuration stored outside any repository.
 type Policy struct {
-	Version          int                     `json:"version"`
-	Enabled          bool                    `json:"enabled"`
-	Weights          Weights                 `json:"weights"`
-	AutoEscalateUSD  float64                 `json:"autoEscalateUsd"`
-	MaxEscalateRatio float64                 `json:"maxEscalateRatio"`
-	DailyUSD         map[string]float64      `json:"dailyUsd"`
-	Cooldown         CooldownConfig          `json:"cooldown"`
-	AllowDataClass   []DataClass             `json:"allowDataClass"`
-	Repos            map[string]RepoOverride `json:"repos,omitempty"`
-	Pins             map[string]RolePin      `json:"pins,omitempty"`
+	Version                 int                     `json:"version"`
+	Enabled                 bool                    `json:"enabled"`
+	Weights                 Weights                 `json:"weights"`
+	AutoEscalateUSD         float64                 `json:"autoEscalateUsd"`
+	MaxEscalateRatio        float64                 `json:"maxEscalateRatio"`
+	OpenRouterMinReserveUSD float64                 `json:"openRouterMinReserveUsd,omitempty"`
+	DailyUSD                map[string]float64      `json:"dailyUsd"`
+	Cooldown                CooldownConfig          `json:"cooldown"`
+	AllowDataClass          []DataClass             `json:"allowDataClass"`
+	Repos                   map[string]RepoOverride `json:"repos,omitempty"`
+	Pins                    map[string]RolePin      `json:"pins,omitempty"`
 }
 
 // RepoPolicy represents the optional .hivemind/jev.yaml file inside a project.
@@ -72,8 +73,9 @@ func DefaultPolicy() Policy {
 			Cost:    0.50,
 			Latency: 0.15,
 		},
-		AutoEscalateUSD:  0.02,
-		MaxEscalateRatio: 3.0,
+		AutoEscalateUSD:         0.02,
+		MaxEscalateRatio:        3.0,
+		OpenRouterMinReserveUSD: 1.00,
 		DailyUSD: map[string]float64{
 			"openrouter":       1.0,
 			"opencode":         1.0,
@@ -153,6 +155,9 @@ func LoadPolicyFrom(path string) (Policy, error) {
 	}
 	if parsed.MaxEscalateRatio <= 0 {
 		parsed.MaxEscalateRatio = pol.MaxEscalateRatio
+	}
+	if parsed.OpenRouterMinReserveUSD <= 0 {
+		parsed.OpenRouterMinReserveUSD = pol.OpenRouterMinReserveUSD
 	}
 	if parsed.DailyUSD == nil {
 		parsed.DailyUSD = pol.DailyUSD

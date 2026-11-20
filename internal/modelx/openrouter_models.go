@@ -32,10 +32,103 @@ type OpenRouterModel struct {
 const openRouterModelsTTL = 30 * time.Minute
 
 var (
-	orModelsMu       sync.Mutex
-	orModelsCache    []OpenRouterModel
-	orModelsCachedAt time.Time
+	orModelsMu        sync.Mutex
+	orModelsCache     []OpenRouterModel
+	orModelsCachedAt  time.Time
+	orBalanceMu       sync.Mutex
+	orBalanceUSD      float64
+	orBalanceKnown    bool
+	orBalanceCachedAt time.Time
 )
+
+const openRouterBalanceTTL = 2 * time.Minute
+
+// GetOpenRouterBalanceUSD queries OpenRouter's /credits (and /key) endpoint to check
+// the remaining account balance in USD, caching the result for 2 minutes.
+// When known is true and balanceUSD <= 1.00, Jev preserves that $1.00 reserve and
+// routes work to other active providers (agy, cursor, opencode, gemini).
+func GetOpenRouterBalanceUSD(ctx context.Context) (balanceUSD float64, known bool) {
+	key := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_API_KEY"))
+	if key == "" {
+		return 0, false
+	}
+	orBalanceMu.Lock()
+	if orBalanceKnown && time.Since(orBalanceCachedAt) < openRouterBalanceTTL {
+		b, k := orBalanceUSD, orBalanceKnown
+		orBalanceMu.Unlock()
+		return b, k
+	}
+	orBalanceMu.Unlock()
+
+	base := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_BASE_URL"))
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	base = strings.TrimRight(base, "/")
+
+	reqCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 4 * time.Second}
+
+	// 1. Check GET /credits (account-wide total_credits - total_usage).
+	if req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, base+"/credits", nil); err == nil {
+		req.Header.Set("Authorization", "Bearer "+key)
+		if resp, err := client.Do(req); err == nil {
+			var credRaw struct {
+				Data struct {
+					TotalCredits *float64 `json:"total_credits"`
+					TotalUsage   *float64 `json:"total_usage"`
+				} `json:"data"`
+			}
+			decErr := json.NewDecoder(resp.Body).Decode(&credRaw)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && decErr == nil && credRaw.Data.TotalCredits != nil {
+				used := 0.0
+				if credRaw.Data.TotalUsage != nil {
+					used = *credRaw.Data.TotalUsage
+				}
+				rem := *credRaw.Data.TotalCredits - used
+				if rem < 0 {
+					rem = 0
+				}
+				orBalanceMu.Lock()
+				orBalanceUSD = rem
+				orBalanceKnown = true
+				orBalanceCachedAt = time.Now()
+				orBalanceMu.Unlock()
+				return rem, true
+			}
+		}
+	}
+
+	// 2. Fallback to GET /key (key-scoped limit_remaining).
+	if req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, base+"/key", nil); err == nil {
+		req.Header.Set("Authorization", "Bearer "+key)
+		if resp, err := client.Do(req); err == nil {
+			var keyRaw struct {
+				Data struct {
+					LimitRemaining *float64 `json:"limit_remaining"`
+				} `json:"data"`
+			}
+			decErr := json.NewDecoder(resp.Body).Decode(&keyRaw)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && decErr == nil && keyRaw.Data.LimitRemaining != nil {
+				rem := *keyRaw.Data.LimitRemaining
+				if rem < 0 {
+					rem = 0
+				}
+				orBalanceMu.Lock()
+				orBalanceUSD = rem
+				orBalanceKnown = true
+				orBalanceCachedAt = time.Now()
+				orBalanceMu.Unlock()
+				return rem, true
+			}
+		}
+	}
+
+	return 0, false
+}
 
 // OpenRouterModels lists every model available on OpenRouter (GET /models).
 // The catalog is public and does not require the API key. Results are cached

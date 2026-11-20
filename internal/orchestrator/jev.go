@@ -164,6 +164,39 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			strings.HasPrefix(lowMod, "jev:") ||
 			strings.HasPrefix(lowMod, "jev/") ||
 			(provNorm != "cursor" && (strings.HasSuffix(lowMod, ":auto") || strings.HasSuffix(lowMod, "/auto") || strings.HasSuffix(lowMod, ":jev")))
+
+		onEventEarly := hint.OnEvent
+		if onEventEarly == nil {
+			onEventEarly = opts.OnEvent
+		}
+		if onEventEarly != nil {
+			authorEarly := firstNonEmptyString(hint.Author, a.Name)
+			labelEarly := firstNonEmptyString(hint.Label, a.Name)
+			stageEarly := firstNonEmptyString(hint.Stage, inferStage(authorEarly, labelEarly))
+			ctx = modelx.WithAccountSwitchObserver(ctx, func(n modelx.AccountSwitchNotice) {
+				fromLbl := strings.TrimSpace(n.FromAccount)
+				if fromLbl == "" {
+					fromLbl = "Conta 1"
+				}
+				toLbl := strings.TrimSpace(n.ToAccount)
+				if toLbl == "" {
+					toLbl = "Conta Reserva"
+				}
+				msg := fmt.Sprintf("%s sem quota para %s → usando %s · %s/%s (demais modelos seguem na %s)",
+					fromLbl, n.ModelBucket, toLbl, n.Provider, n.ModelBucket, fromLbl)
+				onEventEarly(Event{
+					Kind:     "model_route",
+					Stage:    stageEarly,
+					Author:   jev.RedactSecrets(authorEarly, opts.ExtraSecrets...),
+					Label:    jev.RedactSecrets(labelEarly, opts.ExtraSecrets...),
+					Text:     jev.RedactSecrets(msg, opts.ExtraSecrets...),
+					Provider: n.Provider,
+					Model:    n.ModelBucket,
+					Reasons:  []string{"account_pool_failover"},
+				})
+			})
+		}
+
 		// Opt-in / backward compatibility: when policy.Enabled is false and the
 		// agent is not set to provider "jev" (or a jev:<provider> auto spec), behave identically to modelx.New.
 		if !policy.Enabled && !isJevSpec {
@@ -248,30 +281,6 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			g = opts.Git
 		}
 		workDir := firstNonEmptyString(hint.WorkDir, ws)
-		if onEvent != nil {
-			ctx = modelx.WithAccountSwitchObserver(ctx, func(n modelx.AccountSwitchNotice) {
-				fromLbl := strings.TrimSpace(n.FromAccount)
-				if fromLbl == "" {
-					fromLbl = "Conta 1"
-				}
-				toLbl := strings.TrimSpace(n.ToAccount)
-				if toLbl == "" {
-					toLbl = "Conta Reserva"
-				}
-				msg := fmt.Sprintf("%s sem quota para %s → usando %s · %s/%s (demais modelos seguem na %s)",
-					fromLbl, n.ModelBucket, toLbl, n.Provider, n.ModelBucket, fromLbl)
-				onEvent(Event{
-					Kind:     "model_route",
-					Stage:    stage,
-					Author:   jev.RedactSecrets(author, opts.ExtraSecrets...),
-					Label:    jev.RedactSecrets(label, opts.ExtraSecrets...),
-					Text:     jev.RedactSecrets(msg, opts.ExtraSecrets...),
-					Provider: n.Provider,
-					Model:    n.ModelBucket,
-					Reasons:  []string{"account_pool_failover"},
-				})
-			})
-		}
 
 		exclude := map[string]bool{}
 		agentPin := jev.AgentPin{Provider: provNorm, Model: a.Model}
@@ -286,11 +295,21 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			healthFn := opts.Health
 			if healthFn == nil {
 				creds := credsFn()
+				var orBal float64
+				var orKnown bool
+				if creds["openrouter"] {
+					orBal, orKnown = modelx.GetOpenRouterBalanceUSD(ctx)
+				}
 				healthFn = func() jev.HealthSnapshot {
+					var snap jev.HealthSnapshot
 					if healthStore != nil {
-						return healthStore.Snapshot(creds, exclude)
+						snap = healthStore.Snapshot(creds, exclude)
+					} else {
+						snap = jev.HealthSnapshot{Credentials: creds, ExcludePairs: exclude, AgyRemainingPct: -1}
 					}
-					return jev.HealthSnapshot{Credentials: creds, ExcludePairs: exclude, AgyRemainingPct: -1}
+					snap.OpenRouterBalanceUSD = orBal
+					snap.OpenRouterBalanceKnown = orKnown
+					return snap
 				}
 			}
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
+	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 )
 
 // jevModelWrapper wraps a routed model.LLM to track health/spend, classify errors
@@ -170,7 +171,8 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	exclude map[string]bool,
 ) (jev.Choice, model.LLM, error) {
 	task := w.taskBase
-	task.InStep = true // Cursor stays out of mid-step failover (Spec §9 / Fase 2).
+	task.OnlyProvider = "" // Failover is never locked to a single failed/exhausted provider.
+	task.InStep = true     // Cursor stays out of mid-step failover (Spec §9 / Fase 2).
 	task.HasPendingToolCall = hasPriorToolActivity(req)
 	if est := estimateRequestTokens(req); est > task.InputTokens {
 		task.InputTokens = est
@@ -193,6 +195,9 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 			snap = w.health.Snapshot(creds, exclude)
 		} else {
 			snap = jev.HealthSnapshot{Credentials: creds, ExcludePairs: exclude, AgyRemainingPct: -1}
+		}
+		if creds["openrouter"] {
+			snap.OpenRouterBalanceUSD, snap.OpenRouterBalanceKnown = modelx.GetOpenRouterBalanceUSD(ctx)
 		}
 
 		// Failover bypasses the failed team.yaml pin so another healthy provider can take over.

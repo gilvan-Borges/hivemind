@@ -134,6 +134,12 @@ type HealthSnapshot struct {
 	// AgyRemainingPct holds the last known remaining quota percentage for agy.
 	// A negative value means unknown (still eligible).
 	AgyRemainingPct float64
+	// OpenRouterBalanceUSD holds the last known remaining credit balance in USD on OpenRouter
+	// when OpenRouterBalanceKnown is true. When <= OpenRouterMinReserveUSD ($1.00), Jev stops
+	// selecting OpenRouter to preserve the $1.00 operational reserve and routes to other
+	// active providers (agy, cursor, opencode, gemini).
+	OpenRouterBalanceUSD   float64
+	OpenRouterBalanceKnown bool
 }
 
 // AgentPin represents an explicit model pin from .hivemind/team.yaml.

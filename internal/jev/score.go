@@ -127,6 +127,32 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 			refusal = cheapRef
 		}
 	}
+	// If a provider-scoped auto request (e.g. openrouter:auto / jev:openrouter) found no
+	// eligible model on that provider (for instance because OpenRouter balance is <= $1.00
+	// reserve floor, or circuit is open / out of credits), do NOT break: automatically
+	// fall back across all other active providers (agy, cursor, opencode, gemini).
+	var crossProviderFallbackReason string
+	if best == nil && task.OnlyProvider != "" && refusal.Code != "budget" && refusal.Code != "allowlist" {
+		prevOnly := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
+		fallbackTask := task
+		fallbackTask.OnlyProvider = ""
+		fbBest, fbEst, fbRef := selectBestInTier(fallbackTask, catalog, policy, health, repoPolicy, targetTier)
+		if fbBest == nil && targetTier == TierMid && fbRef.Code != "budget" {
+			fbBest, fbEst, fbRef = selectBestInTier(fallbackTask, catalog, policy, health, repoPolicy, TierCheap)
+			if fbBest != nil {
+				targetTier = TierCheap
+			}
+		}
+		if fbBest != nil {
+			best = fbBest
+			estMicro = fbEst
+			if prevOnly == "openrouter" && isOpenRouterReserveLocked(policy, health) {
+				crossProviderFallbackReason = "openrouter_reserva_1usd"
+			} else {
+				crossProviderFallbackReason = "fallback_" + prevOnly
+			}
+		}
+	}
 	if best == nil {
 		if refusal.Code == "" {
 			refusal = Refusal{Code: "none_fit", Reason: "nenhum modelo do catálogo atende aos filtros da tarefa"}
@@ -135,6 +161,11 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 	}
 
 	reasons := buildReasons(task, *best, targetTier)
+	if crossProviderFallbackReason != "" {
+		reasons = append([]string{crossProviderFallbackReason}, reasons...)
+	} else if isOpenRouterReserveLocked(policy, health) && !strings.EqualFold(best.Provider, "openrouter") {
+		reasons = append([]string{"openrouter_reserva_1usd"}, reasons...)
+	}
 	return finish(Choice{
 		Provider:          best.Provider,
 		Model:             best.Model,
@@ -230,6 +261,17 @@ func weightsForTask(policy Policy, task Task) Weights {
 	}
 }
 
+func isOpenRouterReserveLocked(policy Policy, health HealthSnapshot) bool {
+	if !health.OpenRouterBalanceKnown {
+		return false
+	}
+	minRes := policy.OpenRouterMinReserveUSD
+	if minRes <= 0 {
+		minRes = 1.00
+	}
+	return health.OpenRouterBalanceUSD <= minRes
+}
+
 func selectBestInTier(
 	task Task,
 	catalog Catalog,
@@ -256,10 +298,17 @@ func selectBestInTier(
 
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
 	onlyProv := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
+	orReserveLocked := isOpenRouterReserveLocked(policy, health)
 	checkBlockedInline := len(catalog.Entries) <= 64
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
+			continue
+		}
+		// Reserve rule: when OpenRouter balance is <= $1.00, do not indicate or select
+		// OpenRouter so that $1.00 stays reserved for operating Jev itself; route to agy/cursor/others.
+		if orReserveLocked && strings.EqualFold(e.Provider, "openrouter") {
+			sawCircuit = true
 			continue
 		}
 		if checkBlockedInline && strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
@@ -396,6 +445,9 @@ func selectBestInTier(
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
+			continue
+		}
+		if orReserveLocked && strings.EqualFold(e.Provider, "openrouter") {
 			continue
 		}
 		if checkBlockedInline && strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {

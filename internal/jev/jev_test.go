@@ -287,6 +287,26 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 	if choice.Model != "google/gemini-4-carbon" || choice.DiscountPct != 50 || choice.DisplayName != "Google Carbon" {
 		t.Fatalf("expected google/gemini-4-carbon (-50%%) to win on medium difficulty coding task, got %+v", choice)
 	}
+
+	// Reserve rule ($1.00 floor): when OpenRouter balance is <= $1.00 (e.g. $0.95 or $1.00),
+	// Jev MUST NOT select OpenRouter (preserving that $1.00 for Jev itself) and MUST NOT break
+	// even if OnlyProvider was "openrouter" — it automatically falls back to agy / cursor!
+	reserveHealth := HealthSnapshot{
+		Credentials:            map[string]bool{"openrouter": true, "agy": true, "cursor": true},
+		AgyRemainingPct:        80,
+		OpenRouterBalanceUSD:   1.00,
+		OpenRouterBalanceKnown: true,
+	}
+	fallbackChoice, fallbackRef := Score(medTask, cat, pol, reserveHealth, AgentPin{Provider: "openrouter", Model: "openrouter:auto"}, RepoPolicy{})
+	if fallbackRef.Code != "" {
+		t.Fatalf("expected Jev not to break when OpenRouter has <= $1.00, got refusal: %+v", fallbackRef)
+	}
+	if fallbackChoice.Provider == "openrouter" {
+		t.Fatalf("expected Jev to preserve the $1.00 OpenRouter reserve and pick agy/cursor, got %+v", fallbackChoice)
+	}
+	if fallbackChoice.Provider != "agy" && fallbackChoice.Provider != "cursor" {
+		t.Fatalf("expected Jev to fall back to agy or cursor when OpenRouter <= $1.00, got %+v", fallbackChoice)
+	}
 }
 
 func TestRouteRejectsNonCatalogIDAndAsyncRefresh(t *testing.T) {
