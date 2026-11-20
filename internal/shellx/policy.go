@@ -173,7 +173,7 @@ func isDangerous(base string, argv []string, shell bool) (bool, string) {
 	if blocked[base] {
 		return true, fmt.Sprintf("%s pode alterar o sistema ou baixar código e precisa de confirmação", base)
 	}
-	if shell {
+	if shell || HasShellMetacharacters(strings.Join(argv, " ")) {
 		return true, "metacaracteres de shell precisam de confirmação"
 	}
 	if base == "git" && gitDangerous(argv) {
@@ -338,20 +338,19 @@ func gitDangerous(argv []string) bool {
 	return false
 }
 
-func split(command string) ([]string, bool, error) {
+// HasShellMetacharacters reports operators that would make the line run through
+// a shell: ; | && || $() ${} backtick, redirection, or a newline. The check is
+// quote-blind on purpose — a metacharacter inside quotes is still a shell line.
+func HasShellMetacharacters(command string) bool {
 	if strings.Contains(command, "$(") || strings.Contains(command, "${") {
-		argv, err := fields(command)
-		return argv, true, err
+		return true
 	}
-	for _, r := range command {
-		switch r {
-		case '|', '>', '<', '&', ';', '`', '\n', '\r':
-			argv, err := fields(command)
-			return argv, true, err
-		}
-	}
+	return strings.ContainsAny(command, "|><&;`"+"\n\r")
+}
+
+func split(command string) ([]string, bool, error) {
 	argv, err := fields(command)
-	return argv, false, err
+	return argv, HasShellMetacharacters(command), err
 }
 
 func fields(s string) ([]string, error) {

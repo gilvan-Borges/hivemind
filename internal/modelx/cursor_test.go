@@ -53,7 +53,7 @@ func TestParseCursorStreamSkipsDuplicateFlushes(t *testing.T) {
 
 func TestCursorArgsOmitAutoAndNeverCarryTheKey(t *testing.T) {
 	secret := "crsr_supersecretvalue"
-	args := cursorArgs("auto", `C:\projetos\meu app`)
+	args := cursorArgs("auto", `C:\projetos\meu app`, "")
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "--model") {
 		t.Fatalf("auto não deve fixar --model: %s", joined)
@@ -61,10 +61,16 @@ func TestCursorArgsOmitAutoAndNeverCarryTheKey(t *testing.T) {
 	if strings.Contains(joined, secret) {
 		t.Fatal("argumentos não podem carregar a chave")
 	}
-	if !strings.Contains(joined, "stream-json") || !strings.Contains(joined, "--trust") {
-		t.Fatalf("args: %s", joined)
+	if !strings.Contains(joined, "stream-json") || strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") {
+		t.Fatalf("sem full_access não passa --trust/--force: %s", joined)
 	}
-	pinned := cursorArgs("composer-2.5", "/tmp/proj")
+	if !strings.Contains(joined, "--sandbox enabled") && runtime.GOOS != "windows" {
+		t.Fatalf("sandbox deveria permanecer ligada: %s", joined)
+	}
+	if runtime.GOOS == "windows" && !strings.Contains(joined, "--sandbox disabled") {
+		t.Fatalf("no Windows o sandbox do CLI não existe: %s", joined)
+	}
+	pinned := cursorArgs("composer-2.5", "/tmp/proj", "governed")
 	if pinned[0] != "--model" || pinned[1] != "composer-2.5" {
 		t.Fatalf("modelo explícito: %v", pinned[:4])
 	}
@@ -92,6 +98,34 @@ func TestCursorModelID(t *testing.T) {
 	}
 	if got := cursorModelID(""); got != "auto" {
 		t.Fatal(got)
+	}
+}
+
+func TestCursorArgsTrustForceOnlyInFullAccess(t *testing.T) {
+	for _, mode := range []string{"", "governed", "auto_edit"} {
+		joined := strings.Join(buildCursorArgs("auto", `C:\proj`, mode, "linux"), " ")
+		if strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") || !strings.Contains(joined, "--sandbox enabled") {
+			t.Fatalf("modo %q: %s", mode, joined)
+		}
+	}
+	full := strings.Join(buildCursorArgs("auto", `C:\proj`, "full_access", "linux"), " ")
+	if !strings.Contains(full, "--trust") || !strings.Contains(full, "--force") || !strings.Contains(full, "--sandbox enabled") {
+		t.Fatalf("full_access mantém a sandbox e só então passa trust/force: %s", full)
+	}
+	win := strings.Join(buildCursorArgs("auto", `C:\proj`, "auto_edit", "windows"), " ")
+	if strings.Contains(win, "--trust") || strings.Contains(win, "--force") || !strings.Contains(win, "--sandbox disabled") {
+		t.Fatalf("windows sem full_access: %s", win)
+	}
+	winFull := strings.Join(buildCursorArgs("auto", `C:\proj`, "full_access", "windows"), " ")
+	if !strings.Contains(winFull, "--trust") || !strings.Contains(winFull, "--sandbox disabled") {
+		t.Fatalf("windows full_access: %s", winFull)
+	}
+	if cursorSandboxWarning("linux") != "" || cursorSandboxWarning("windows") == "" {
+		t.Fatal("aviso de sandbox só no Windows")
+	}
+	ctx := WithPermissionMode(context.Background(), "full_access")
+	if permissionModeFrom(ctx) != "full_access" {
+		t.Fatal(permissionModeFrom(ctx))
 	}
 }
 

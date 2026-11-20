@@ -4,6 +4,8 @@ package team
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 )
 
 const (
@@ -15,7 +17,7 @@ const (
 
 	// Permission modes inspired by Claude Code / Codex autonomy levels.
 	PermissionGoverned   = "governed"    // Default: strict worktree/PR/review governance & confirmations
-	PermissionAutoEdit   = "auto_edit"   // Local edits & allowlisted shell run without prompts; main merge still asks
+	PermissionAutoEdit   = "auto_edit"   // Local edits and allowlisted shell run without prompts; shell metacharacters still confirm; main merge still asks
 	PermissionFullAccess = "full_access" // Full autonomy & permissions granted by the user in settings
 
 	// Skill target scopes: restrict a skill to specific specialist roles or apply to everyone.
@@ -271,6 +273,9 @@ func (s Settings) EffectiveAllowlist() []string {
 }
 
 // NeedsShellConfirm reports whether dangerous shell commands must ask for human confirmation.
+// full_access never asks (those shell-metacharacter lines are audited instead).
+// auto_edit does not ask for an ordinary allowlisted command; a line with
+// metacharacters still asks — see ShellLineNeedsConfirm.
 func (s Settings) NeedsShellConfirm() bool {
 	mode := s.EffectivePermissionMode()
 	if mode == PermissionFullAccess || mode == PermissionAutoEdit {
@@ -280,6 +285,20 @@ func (s Settings) NeedsShellConfirm() bool {
 		return *s.ConfirmShell
 	}
 	return true
+}
+
+// ShellLineNeedsConfirm reports whether this command line must be confirmed
+// before it runs. In auto_edit, ; | && || $() backtick and redirection require
+// confirmation and are refused when no confirmer can ask (headless).
+// full_access does not confirm.
+func (s Settings) ShellLineNeedsConfirm(command string) bool {
+	if s.IsFullAccess() {
+		return false
+	}
+	if shellx.HasShellMetacharacters(command) {
+		return true
+	}
+	return s.NeedsShellConfirm()
 }
 
 // IsHomologBranch reports whether branch is a homologation/staging target where the Chief

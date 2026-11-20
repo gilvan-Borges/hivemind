@@ -431,6 +431,12 @@ export function bootstrapAsync(rootDir?: string) {
     updateStatusBar();
   }).catch(() => {});
 
+  backend.CursorCLIStatus?.().then((st) => {
+    state.cursorCLI = st;
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
+  }).catch(() => {});
+
   if (rootDir) {
     const targetKey = normalizePathKey(rootDir);
     backend.GitHubStatus(rootDir).then((gh) => {

@@ -455,6 +455,7 @@ export function renderLeftSidebar() {
             <option value="auto_edit" ${permMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
             <option value="full_access" ${permMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
           </select>
+          ${state.cursorCLI?.sandboxWarning ? `<div class="dim" style="font-size:10.5px;margin-top:4px;line-height:1.4">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
         </div>
         <button class="mini" id="btn-team-memory" style="width:100%;margin-bottom:8px;justify-content:flex-start">
           ${icons.memory}
