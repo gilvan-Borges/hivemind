@@ -220,7 +220,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		if g == nil {
 			g = opts.Git
 		}
-		workDir := firstNonEmptyString(hint.WorkDir, modelx.AgentDirFrom(ctx), ws)
+		workDir := firstNonEmptyString(hint.WorkDir, ws)
 
 		exclude := map[string]bool{}
 		agentPin := jev.AgentPin{Provider: provNorm, Model: a.Model}

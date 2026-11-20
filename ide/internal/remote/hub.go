@@ -7,13 +7,30 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
 // StreamEvent is one SSE message mirrored to mobile clients. Types:
-// "lane_event", "autoreview_status", "approval_resolved", "ping".
+// "lane_event", "autoreview_status", "approval_resolved", "provider_health", "ping".
 type StreamEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// ProviderHealthItem is the secret-safe provider status entry published over SSE
+// when circuits change or on periodic idle checks (§11).
+type ProviderHealthItem struct {
+	Provider           string `json:"provider"`
+	State              string `json:"state"`
+	Reason             string `json:"reason,omitempty"`
+	Until              string `json:"until,omitempty"`
+	DailySpentMicroUSD int64  `json:"dailySpentMicroUsd,omitempty"`
+	DailyCapMicroUSD   int64  `json:"dailyCapMicroUsd,omitempty"`
+}
+
+// ProviderHealthPayload is the JSON body of the "provider_health" SSE event.
+type ProviderHealthPayload struct {
+	Providers []ProviderHealthItem `json:"providers"`
 }
 
 // ApprovalInfo is a pending approval gate visible to the mobile app.
@@ -28,20 +45,23 @@ type ApprovalInfo struct {
 
 // LaneEventItem is a capped transcript entry of a lane's active turn.
 type LaneEventItem struct {
-	Kind              string   `json:"kind"`
-	Stage             string   `json:"stage,omitempty"`
-	Author            string   `json:"author,omitempty"`
-	Label             string   `json:"label,omitempty"`
-	Text              string   `json:"text,omitempty"`
-	ToolName          string   `json:"toolName,omitempty"`
-	Tokens            int64    `json:"tokens,omitempty"`
-	Provider          string   `json:"provider,omitempty"`
-	Model             string   `json:"model,omitempty"`
-	Tier              string   `json:"tier,omitempty"`
-	Reasons           []string `json:"reasons,omitempty"`
-	EstimatedMicroUSD int64    `json:"estimatedMicroUsd,omitempty"`
-	DecisionMicros    int64    `json:"decisionMicros,omitempty"`
-	At                string   `json:"at,omitempty"`
+	Kind              string                 `json:"kind"`
+	Stage             string                 `json:"stage,omitempty"`
+	Author            string                 `json:"author,omitempty"`
+	Label             string                 `json:"label,omitempty"`
+	Text              string                 `json:"text,omitempty"`
+	ToolName          string                 `json:"toolName,omitempty"`
+	Tokens            int64                  `json:"tokens,omitempty"`
+	Provider          string                 `json:"provider,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	FromProvider      string                 `json:"fromProvider,omitempty"`
+	FromModel         string                 `json:"fromModel,omitempty"`
+	Tier              string                 `json:"tier,omitempty"`
+	Reasons           []string               `json:"reasons,omitempty"`
+	EstimatedMicroUSD int64                  `json:"estimatedMicroUsd,omitempty"`
+	DecisionMicros    int64                  `json:"decisionMicros,omitempty"`
+	Health            []jev.ProviderHealthView `json:"health,omitempty"`
+	At                string                 `json:"at,omitempty"`
 }
 
 // LaneSnapshot is the live state of one (workspace, laneId) pair.
@@ -89,12 +109,14 @@ func keyFor(workspace, laneID string) string {
 // Hub keeps the live (workspace, laneId) buffer consumed by the HTTP API and
 // fans events out to SSE subscribers.
 type Hub struct {
-	mu          sync.Mutex
-	lanes       map[string]*laneState
-	laneWks     map[string]string // laneID -> workspace (events carry no workspace)
-	autoreview  map[string]idecore.AutoReviewStatus
-	projects    map[string]ProjectSummary
-	subscribers map[chan StreamEvent]struct{}
+	mu                 sync.Mutex
+	lanes              map[string]*laneState
+	laneWks            map[string]string // laneID -> workspace (events carry no workspace)
+	autoreview         map[string]idecore.AutoReviewStatus
+	projects           map[string]ProjectSummary
+	providerHealth     []ProviderHealthItem
+	lastHealthEmitAt   time.Time
+	subscribers        map[chan StreamEvent]struct{}
 }
 
 // NewHub creates an empty Hub.
@@ -192,15 +214,18 @@ func (h *Hub) HandleLaneEvent(ev idecore.LaneEvent) {
 			Stage:             e.Stage,
 			Author:            e.Author,
 			Label:             e.Label,
-			Text:              e.Text,
+			Text:              jev.RedactSecrets(e.Text),
 			ToolName:          e.ToolName,
 			Tokens:            int64(e.Tokens),
 			Provider:          e.Provider,
 			Model:             e.Model,
+			FromProvider:      e.FromProvider,
+			FromModel:         e.FromModel,
 			Tier:              e.Tier,
 			Reasons:           append([]string(nil), e.Reasons...),
 			EstimatedMicroUSD: e.EstimatedMicroUSD,
 			DecisionMicros:    e.DecisionMicros,
+			Health:            append([]jev.ProviderHealthView(nil), e.Health...),
 			At:                at,
 		}
 		s.RecentEvents = append(s.RecentEvents, item)
@@ -296,6 +321,43 @@ func (h *Hub) HandleAutoReviewStatus(st idecore.AutoReviewStatus) {
 	raw, _ := json.Marshal(st)
 	h.mu.Unlock()
 	h.broadcast(StreamEvent{Type: "autoreview_status", Data: raw})
+}
+
+// HandleProviderHealth updates the cached provider circuit snapshot and broadcasts
+// a "provider_health" SSE event. Periodic idle updates are rate-limited to at most
+// once every 60s unless force is true (when a circuit opens or all circuits close).
+func (h *Hub) HandleProviderHealth(views []jev.ProviderHealthView, force bool) bool {
+	items := make([]ProviderHealthItem, 0, len(views))
+	for _, v := range views {
+		items = append(items, ProviderHealthItem{
+			Provider:           v.Provider,
+			State:              string(v.State),
+			Reason:             jev.RedactSecrets(v.Reason),
+			Until:              v.Until,
+			DailySpentMicroUSD: v.DailySpentMicro,
+			DailyCapMicroUSD:   v.DailyCapMicro,
+		})
+	}
+	now := time.Now()
+	h.mu.Lock()
+	h.providerHealth = items
+	if !force && !h.lastHealthEmitAt.IsZero() && now.Sub(h.lastHealthEmitAt) < 60*time.Second {
+		h.mu.Unlock()
+		return false
+	}
+	h.lastHealthEmitAt = now
+	h.mu.Unlock()
+
+	raw, _ := json.Marshal(ProviderHealthPayload{Providers: items})
+	h.broadcast(StreamEvent{Type: "provider_health", Data: raw})
+	return true
+}
+
+// ProviderHealth returns the last published provider health snapshot.
+func (h *Hub) ProviderHealth() []ProviderHealthItem {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]ProviderHealthItem(nil), h.providerHealth...)
 }
 
 // RegisterProject records metadata about an open workspace (branch, stack,

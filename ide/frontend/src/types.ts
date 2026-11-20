@@ -729,6 +729,18 @@ export interface RelayLinkCode {
   qrDataUrl: string;
 }
 
+export interface ProviderHealthView {
+  provider: string;
+  state: "closed" | "open" | "half_open" | string;
+  reason?: string;
+  until?: string;
+  dailySpentMicroUsd?: number;
+  dailyCapMicroUsd?: number;
+  quotaRemainingPct?: number;
+  quotaStale?: boolean;
+  hasCredential: boolean;
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -833,6 +845,8 @@ export interface WailsBackendApp {
   OpenExternalURL(rawURL: string): Promise<void>;
   GetAIUsage(): Promise<AIUsageReport>;
   SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
+  GetProviderHealth?(): Promise<ProviderHealthView[]>;
+  ProbeProviders?(): Promise<ProviderHealthView[]>;
   GetAPIKeysStatus?(): Promise<Record<string, string>>;
   SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
   ListOpenRouterModels?(): Promise<OpenRouterModelInfo[]>;

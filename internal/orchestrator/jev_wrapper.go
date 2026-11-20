@@ -13,8 +13,6 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
-	"github.com/gilvan-Borges/HiveMind/internal/modelx"
-	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
 // jevModelWrapper wraps a routed model.LLM to track health/spend, classify errors

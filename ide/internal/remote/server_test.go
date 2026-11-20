@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 )
 
@@ -354,5 +355,25 @@ func TestSSEStreaming(t *testing.T) {
 	}
 	if data["type"] != "lane_event" {
 		t.Fatalf("tipo SSE errado: %+v", data)
+	}
+
+	// Verify provider_health SSE broadcast and secret redaction.
+	sent := hub.HandleProviderHealth([]jev.ProviderHealthView{
+		{Provider: "openrouter", State: string(jev.CircuitOpen), Reason: "auth sk-shouldnotleak123", Until: "2026-11-20T03:00:00Z"},
+	}, true)
+	if !sent {
+		t.Fatal("expected forced provider_health emit")
+	}
+	phGot := readUntil("event: provider_health\ndata: ", 3*time.Second)
+	if strings.Contains(phGot, "sk-shouldnotleak123") {
+		t.Fatalf("secret leaked in provider_health SSE: %q", phGot)
+	}
+	if !strings.Contains(phGot, `"provider":"openrouter"`) || !strings.Contains(phGot, `"state":"open"`) {
+		t.Fatalf("unexpected provider_health SSE payload: %q", phGot)
+	}
+
+	// Non-forced update within 60s must be rate-limited.
+	if hub.HandleProviderHealth([]jev.ProviderHealthView{{Provider: "openrouter", State: string(jev.CircuitClosed)}}, false) {
+		t.Fatal("expected non-forced provider_health within 60s to be rate-limited")
 	}
 }

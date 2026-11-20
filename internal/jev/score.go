@@ -196,6 +196,11 @@ func selectBestInTier(
 	hasPaidHTTP := false
 	hasPaidHTTPChecked := false
 
+	hasCreds := health.Credentials != nil
+	hasCircuits := len(health.Circuits) > 0
+	hasExcludes := len(health.ExcludePairs) > 0
+	hasModelCircuits := len(health.ModelCircuits) > 0
+
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
@@ -206,13 +211,13 @@ func selectBestInTier(
 			// strong never enters automatic selection without explicit escalation approval.
 			continue
 		}
-		if !isCredentialed(e.Provider, e.Free, health) {
+		if hasCreds && !isCredentialed(e.Provider, e.Free, health) {
 			continue
 		}
-		if health.ExcludePairs != nil && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
+		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
 			continue
 		}
-		if !isPairCircuitEligible(e.Provider, e.Model, health) {
+		if (hasCircuits && !isCircuitEligible(e.Provider, health)) || (hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health)) {
 			sawCircuit = true
 			continue
 		}
@@ -324,10 +329,13 @@ func selectBestInTier(
 		if e.Tier == TierStrong {
 			continue
 		}
-		if !isCredentialed(e.Provider, e.Free, health) || !isPairCircuitEligible(e.Provider, e.Model, health) {
+		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isCircuitEligible(e.Provider, health)) {
 			continue
 		}
-		if health.ExcludePairs != nil && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
+		if hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health) {
+			continue
+		}
+		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
 			continue
 		}
 		if !isEntryAllowedByPolicy(*e, task.RepoKey, policy, repoPolicy) {
@@ -470,7 +478,10 @@ func isCredentialed(provider string, free bool, health HealthSnapshot) bool {
 	if health.Credentials == nil {
 		return true
 	}
-	if health.Credentials[strings.ToLower(strings.TrimSpace(provider))] {
+	if health.Credentials[provider] {
+		return true
+	}
+	if low := strings.ToLower(strings.TrimSpace(provider)); low != provider && health.Credentials[low] {
 		return true
 	}
 	return free && health.Credentials["opencode_free"]
@@ -482,10 +493,15 @@ func modelIsFree(cat Catalog, provider, model string) bool {
 }
 
 func isCircuitEligible(provider string, health HealthSnapshot) bool {
-	if health.Circuits == nil {
+	if len(health.Circuits) == 0 {
 		return true
 	}
-	st, ok := health.Circuits[strings.ToLower(strings.TrimSpace(provider))]
+	st, ok := health.Circuits[provider]
+	if !ok {
+		if low := strings.ToLower(strings.TrimSpace(provider)); low != provider {
+			st, ok = health.Circuits[low]
+		}
+	}
 	if !ok || st.Circuit == "" || st.Circuit == CircuitClosed {
 		return true
 	}
@@ -496,7 +512,11 @@ func isPairCircuitEligible(provider, model string, health HealthSnapshot) bool {
 	if !isCircuitEligible(provider, health) {
 		return false
 	}
-	if health.ModelCircuits == nil {
+	return isModelCircuitOnlyEligible(provider, model, health)
+}
+
+func isModelCircuitOnlyEligible(provider, model string, health HealthSnapshot) bool {
+	if len(health.ModelCircuits) == 0 {
 		return true
 	}
 	st, ok := health.ModelCircuits[catalogKey(provider, model)]
