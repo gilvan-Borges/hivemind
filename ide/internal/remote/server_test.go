@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 )
 
 // fakeDeps records calls and returns canned values.
@@ -88,41 +90,48 @@ func (f *fakeDeps) AutoReviewPoll(workspace string) idecore.AutoReviewStatus {
 	return f.arStatus
 }
 
-func newTestServer(t *testing.T) (*Server, *Hub, *fakeDeps, string) {
+func newTestServer(t *testing.T) (*Server, *Hub, *fakeDeps, *lanSession) {
 	t.Helper()
-	cfg, err := LoadConfigFrom(t.TempDir() + "/remote-bridge.json")
+	path := filepath.Join(t.TempDir(), "remote-bridge.json")
+	cfg, err := LoadConfigFrom(path)
 	if err != nil {
 		t.Fatalf("LoadConfigFrom: %v", err)
 	}
 	hub := NewHub()
 	deps := &fakeDeps{cancelResult: true, resolveOK: true}
 	srv := NewServer(hub, deps, cfg)
-	return srv, hub, deps, cfg.Token
+	srv.configPath = path
+	srv.secrets = secretx.NewMemoryVault()
+	srv.urls = []string{"http://127.0.0.1:47890"}
+	return srv, hub, deps, pairDevice(t, srv)
 }
 
-func doJSON(t *testing.T, srv *Server, method, url, token string, body any) *httptest.ResponseRecorder {
+func doJSON(t *testing.T, srv *Server, method, url string, sess *lanSession, body any) *httptest.ResponseRecorder {
 	t.Helper()
-	var rd *bytes.Buffer
-	if body != nil {
-		rd = &bytes.Buffer{}
-		if err := json.NewEncoder(rd).Encode(body); err != nil {
+	var rd *bytes.Reader
+	if sess != nil {
+		rd = bytes.NewReader(sess.seal(t, body))
+	} else if body != nil {
+		buf := &bytes.Buffer{}
+		if err := json.NewEncoder(buf).Encode(body); err != nil {
 			t.Fatalf("encode body: %v", err)
 		}
+		rd = bytes.NewReader(buf.Bytes())
 	} else {
-		rd = &bytes.Buffer{}
+		rd = bytes.NewReader(nil)
 	}
 	req := httptest.NewRequest(method, url, rd)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
+	if sess != nil {
+		unwrapLAN(sess, rec)
+	}
 	return rec
 }
 
 func TestHealthIsPublic(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
-	rec := doJSON(t, srv, http.MethodGet, "/api/v1/health", "", nil)
+	rec := doJSON(t, srv, http.MethodGet, "/api/v1/health", nil, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health sem token deveria ser 200, veio %d", rec.Code)
 	}
@@ -141,7 +150,7 @@ func TestHealthIsPublic(t *testing.T) {
 }
 
 func TestAuthRequired(t *testing.T) {
-	srv, _, _, token := newTestServer(t)
+	srv, _, _, sess := newTestServer(t)
 	cases := []struct {
 		method, path string
 		body         any
@@ -161,38 +170,42 @@ func TestAuthRequired(t *testing.T) {
 		{http.MethodPost, "/api/v1/autoreview/poll?workspace=w", nil},
 	}
 	for _, c := range cases {
-		rec := doJSON(t, srv, c.method, c.path, "", c.body)
+		rec := doJSON(t, srv, c.method, c.path, nil, c.body)
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s %s sem token deveria ser 401, veio %d", c.method, c.path, rec.Code)
+			t.Fatalf("%s %s sem quadro deveria ser 401, veio %d", c.method, c.path, rec.Code)
 		}
 	}
 
-	// Wrong token must also be rejected.
-	if rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", strings.Repeat("0", 64), nil); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("token errado deveria ser 401, veio %d", rec.Code)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+sess.token)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("Bearer claro deveria ser 401, veio %d", rec.Code)
 	}
 
-	// Token rotation invalidates previous tokens immediately.
-	srv.SetToken(strings.Repeat("f", 64))
-	if rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", token, nil); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("token antigo após rotação deveria ser 401, veio %d", rec.Code)
+	if _, err := srv.RotateSession(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", sess, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("sessão antiga após rotação deveria ser 401, veio %d", rec.Code)
 	}
 }
 
 func TestRunStartValidation(t *testing.T) {
-	srv, _, deps, token := newTestServer(t)
+	srv, _, deps, sess := newTestServer(t)
 
-	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", token, map[string]any{"workspace": "w", "objective": "x"}); rec.Code != http.StatusBadRequest {
+	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", sess, map[string]any{"workspace": "w", "objective": "x"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("sem laneId deveria ser 400, veio %d", rec.Code)
 	}
-	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", token, map[string]any{"laneId": "l", "objective": "x"}); rec.Code != http.StatusBadRequest {
+	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", sess, map[string]any{"laneId": "l", "objective": "x"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("sem workspace deveria ser 400, veio %d", rec.Code)
 	}
-	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", token, map[string]any{"laneId": "l", "workspace": "w"}); rec.Code != http.StatusBadRequest {
+	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", sess, map[string]any{"laneId": "l", "workspace": "w"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("sem objective deveria ser 400, veio %d", rec.Code)
 	}
 
-	rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", token, map[string]any{
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/start", sess, map[string]any{
 		"laneId": "l1", "workspace": "C:/repo", "team": "principal",
 		"objective": "corrija o bug", "jiraKey": "PROJ-1", "sessionId": "s1", "runMode": "plan",
 		"images": []map[string]string{{"name": "foto.png", "mimeType": "image/png", "dataBase64": "aW1n"}},
@@ -211,16 +224,16 @@ func TestRunStartValidation(t *testing.T) {
 }
 
 func TestRunCancelAndRedirect(t *testing.T) {
-	srv, _, deps, token := newTestServer(t)
+	srv, _, deps, sess := newTestServer(t)
 
-	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/cancel", token, map[string]any{"laneId": "l9"}); rec.Code != http.StatusOK {
+	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/cancel", sess, map[string]any{"laneId": "l9"}); rec.Code != http.StatusOK {
 		t.Fatalf("cancel deveria ser 200, veio %d", rec.Code)
 	}
 	if len(deps.cancelled) != 1 || deps.cancelled[0] != "l9" {
 		t.Fatalf("cancel mal registrado: %+v", deps.cancelled)
 	}
 
-	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/redirect", token, map[string]any{"laneId": "l9", "workspace": "w", "objective": "nova"}); rec.Code != http.StatusAccepted {
+	if rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/redirect", sess, map[string]any{"laneId": "l9", "workspace": "w", "objective": "nova"}); rec.Code != http.StatusAccepted {
 		t.Fatalf("redirect deveria ser 202, veio %d", rec.Code)
 	}
 	if len(deps.cancelled) != 2 {
@@ -232,8 +245,8 @@ func TestRunCancelAndRedirect(t *testing.T) {
 }
 
 func TestApprovalResolve(t *testing.T) {
-	srv, _, deps, token := newTestServer(t)
-	rec := doJSON(t, srv, http.MethodPost, "/api/v1/approvals/resolve", token, map[string]any{"approvalId": "lane1:appr:2", "approved": true})
+	srv, _, deps, sess := newTestServer(t)
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/approvals/resolve", sess, map[string]any{"approvalId": "lane1:appr:2", "approved": true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resolve deveria ser 200, veio %d", rec.Code)
 	}
@@ -247,7 +260,7 @@ func TestApprovalResolve(t *testing.T) {
 }
 
 func TestProjectsAndLanesIsolation(t *testing.T) {
-	srv, hub, _, token := newTestServer(t)
+	srv, hub, _, sess := newTestServer(t)
 	hub.RegisterProject("C:/a", "ProjA", "main", "Go", "squad-a")
 	hub.RegisterProject("C:/b", "ProjB", "feat/x", "Java", "squad-b")
 	hub.RegisterRun("l1", "C:/a", "squad-a", "obj", "s1", "auto")
@@ -255,7 +268,7 @@ func TestProjectsAndLanesIsolation(t *testing.T) {
 
 	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "squad-a", Event: orchestrator.Event{Kind: "stage", Stage: "developing"}})
 
-	rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", token, nil)
+	rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", sess, nil)
 	var projs struct {
 		Projects []ProjectSummary `json:"projects"`
 	}
@@ -281,7 +294,7 @@ func TestProjectsAndLanesIsolation(t *testing.T) {
 		t.Fatalf("ProjB deveria ter 1 lane rodando, veio %+v", b)
 	}
 
-	rec = doJSON(t, srv, http.MethodGet, "/api/v1/lanes?workspace=C:/a", token, nil)
+	rec = doJSON(t, srv, http.MethodGet, "/api/v1/lanes?workspace=C:/a", sess, nil)
 	var lanes struct {
 		Lanes []LaneSnapshot `json:"lanes"`
 	}
@@ -294,15 +307,14 @@ func TestProjectsAndLanesIsolation(t *testing.T) {
 }
 
 func TestSSEStreaming(t *testing.T) {
-	srv, hub, _, token := newTestServer(t)
+	srv, hub, _, sess := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/events", nil)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/events", bytes.NewReader(sess.seal(t, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("events: %v", err)
@@ -317,62 +329,66 @@ func TestSSEStreaming(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	readUntil := func(want string, timeout time.Duration) string {
+	nextEvent := func(timeout time.Duration) StreamEvent {
+		t.Helper()
 		deadline := time.Now().Add(timeout)
-		var sb strings.Builder
+		var dataLine string
 		for time.Now().Before(deadline) {
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				t.Fatalf("lendo SSE: %v (até agora: %q)", err, sb.String())
+				t.Fatalf("lendo SSE: %v", err)
 			}
-			sb.WriteString(line)
-			if strings.Contains(sb.String(), want) {
-				return sb.String()
+			if strings.Contains(line, "sk-shouldnotleak123") {
+				t.Fatalf("segredo em claro no SSE: %q", line)
+			}
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "data: ") {
+				dataLine = strings.TrimPrefix(line, "data: ")
+				break
 			}
 		}
-		t.Fatalf("timeout esperando %q no stream (veio: %q)", want, sb.String())
-		return ""
+		if dataLine == "" {
+			t.Fatal("timeout esperando data SSE")
+		}
+		plain, err := sess.app.Open(sess.pcPub, mustBox(t, []byte(dataLine)))
+		if err != nil {
+			t.Fatalf("abrindo SSE: %v (%s)", err, dataLine)
+		}
+		var ev StreamEvent
+		if err := json.Unmarshal(plain, &ev); err != nil {
+			t.Fatalf("evento SSE: %v", err)
+		}
+		return ev
 	}
 
-	readUntil("event: connected", 3*time.Second)
+	if ev := nextEvent(3 * time.Second); ev.Type != "connected" {
+		t.Fatalf("primeiro evento: %+v", ev)
+	}
 
 	hub.RegisterRun("l1", "C:/w", "t", "obj", "", "auto")
 	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "chief"}})
 
-	got := readUntil("event: lane_event\ndata: ", 3*time.Second)
-	var data map[string]any
-	marker := "event: lane_event\ndata: "
-	idx := strings.Index(got, marker)
-	if idx < 0 {
-		t.Fatalf("sem data no SSE: %q", got)
-	}
-	payload := got[idx+len(marker):]
-	if nl := strings.IndexByte(payload, '\n'); nl >= 0 {
-		payload = payload[:nl]
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(payload)), &data); err != nil {
-		t.Fatalf("data SSE inválida: %v (%q)", err, payload)
-	}
-	if data["type"] != "lane_event" {
-		t.Fatalf("tipo SSE errado: %+v", data)
+	if ev := nextEvent(3 * time.Second); ev.Type != "lane_event" {
+		t.Fatalf("tipo SSE errado: %+v", ev)
 	}
 
-	// Verify provider_health SSE broadcast and secret redaction.
 	sent := hub.HandleProviderHealth([]jev.ProviderHealthView{
 		{Provider: "openrouter", State: string(jev.CircuitOpen), Reason: "auth sk-shouldnotleak123", Until: "2026-11-20T03:00:00Z"},
 	}, true)
 	if !sent {
 		t.Fatal("expected forced provider_health emit")
 	}
-	phGot := readUntil("event: provider_health\ndata: ", 3*time.Second)
-	if strings.Contains(phGot, "sk-shouldnotleak123") {
-		t.Fatalf("secret leaked in provider_health SSE: %q", phGot)
+	ev := nextEvent(3 * time.Second)
+	if ev.Type != "provider_health" {
+		t.Fatalf("tipo inesperado: %+v", ev)
 	}
-	if !strings.Contains(phGot, `"provider":"openrouter"`) || !strings.Contains(phGot, `"state":"open"`) {
-		t.Fatalf("unexpected provider_health SSE payload: %q", phGot)
+	if strings.Contains(string(ev.Data), "sk-shouldnotleak123") {
+		t.Fatalf("segredo no plaintext do SSE: %s", ev.Data)
+	}
+	if !strings.Contains(string(ev.Data), `"provider":"openrouter"`) || !strings.Contains(string(ev.Data), `"state":"open"`) {
+		t.Fatalf("payload inesperado: %s", ev.Data)
 	}
 
-	// Non-forced update within 60s must be rate-limited.
 	if hub.HandleProviderHealth([]jev.ProviderHealthView{{Provider: "openrouter", State: string(jev.CircuitClosed)}}, false) {
 		t.Fatal("expected non-forced provider_health within 60s to be rate-limited")
 	}

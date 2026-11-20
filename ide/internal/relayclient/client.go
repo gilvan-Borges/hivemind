@@ -24,8 +24,9 @@ import (
 type Options struct {
 	ConfigPath string
 	Handler    http.Handler
-	Bearer     func() string
-	Subscribe  func() (<-chan remote.StreamEvent, func())
+	// PrepareLocal marks the in-process hop. The LAN bridge rejects a clear bearer.
+	PrepareLocal func(*http.Request) *http.Request
+	Subscribe    func() (<-chan remote.StreamEvent, func())
 	// Snapshot is the live lane state. It is sent inside a relay_gap event
 	// when the local backlog had to drop events while the relay was down.
 	Snapshot func() []remote.LaneSnapshot
@@ -607,10 +608,8 @@ func (c *Client) callBridge(ctx context.Context, req relaywire.RPCRequest) relay
 	}
 	httpReq := httptest.NewRequest(req.Method, target, body)
 	httpReq = httpReq.WithContext(ctx)
-	if c.opt.Bearer != nil {
-		if tok := c.opt.Bearer(); tok != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+tok)
-		}
+	if c.opt.PrepareLocal != nil {
+		httpReq = c.opt.PrepareLocal(httpReq)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

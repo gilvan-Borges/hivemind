@@ -473,6 +473,37 @@ func (h *Hub) broadcast(ev StreamEvent) {
 	}
 }
 
+// ReplayEvents returns the lane events the hub already retained.
+// It does not allocate a second buffer and does not raise maxRecentEvents.
+func (h *Hub) ReplayEvents() []StreamEvent {
+	if h == nil {
+		return []StreamEvent{}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	keys := make([]string, 0, len(h.lanes))
+	for k := range h.lanes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]StreamEvent, 0)
+	for _, k := range keys {
+		st := h.lanes[k]
+		for _, item := range st.snapshot.RecentEvents {
+			raw, err := json.Marshal(struct {
+				Workspace string        `json:"workspace"`
+				LaneID    string        `json:"laneId"`
+				Item      LaneEventItem `json:"item"`
+			}{st.snapshot.Workspace, st.snapshot.LaneID, item})
+			if err != nil {
+				continue
+			}
+			out = append(out, StreamEvent{Type: "lane_event", Data: raw})
+		}
+	}
+	return out
+}
+
 func approvalsSlice(m map[string]ApprovalInfo) []ApprovalInfo {
 	out := make([]ApprovalInfo, 0, len(m))
 	for _, ai := range m {

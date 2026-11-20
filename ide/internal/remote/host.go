@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
@@ -52,12 +53,16 @@ func RunHeadless(ctx context.Context, workspace string) error {
 			fmt.Printf("  • %s\n", u)
 		}
 	}
-	uri := BuildPairURI(st.URLs, cfg.Token, st.Host)
-	if qr, err := QRASCII(uri); err == nil {
+	info, err := srv.Pairing()
+	if err != nil {
+		return err
+	}
+	if qr, err := QRASCII(info.URI); err == nil {
 		fmt.Println(qr)
 	}
-	fmt.Printf("Token (modo manual): %s\n\n", cfg.Token)
-	fmt.Println("Escaneie o QR no App Mobile (ou cole as URLs + token).")
+	fmt.Printf("Oferta: %s\n", info.URI)
+	fmt.Printf("Válida até %s (uso único).\n\n", time.Unix(info.Exp, 0).UTC().Format(time.RFC3339))
+	fmt.Println("Escaneie o QR para parear.")
 	fmt.Println("Pressione Ctrl+C para encerrar.")
 	fmt.Println()
 

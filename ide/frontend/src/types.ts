@@ -806,9 +806,9 @@ export interface MobileBridgeStatus {
 export interface MobilePairing {
   uri: string;
   urls: string[];
-  token: string;
   host: string;
   qrDataUrl: string;
+  exp: number;
 }
 
 export interface RelayStatus {

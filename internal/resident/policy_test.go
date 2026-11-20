@@ -216,6 +216,7 @@ func TestRedactSecretsAndFenceEscape(t *testing.T) {
 		"OPENROUTER_API_KEY=sk-1234567890abcdef1234",
 		"token: ghp_1234567890abcdefghijklmno",
 		"hmr_rt_1234567890abcdefghijklmno",
+		"hmlan_1234567890abcdefghijklmno",
 		"password=supersecretpass123",
 	}
 	for _, s := range samples {

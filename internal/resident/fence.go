@@ -79,7 +79,7 @@ func sanitizeHeaderToken(s string) string {
 
 var secretPatterns = []*regexp.Regexp{
 	// Known vendor/HiveMind token prefixes.
-	regexp.MustCompile(`(?i)\b(?:sk-[a-z0-9_-]{12,}|sk-or-v1-[a-z0-9]{16,}|ghp_[a-z0-9]{20,}|gho_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,}|hmr_(?:at|rt|dev)_[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})\b`),
+	regexp.MustCompile(`(?i)\b(?:sk-[a-z0-9_-]{12,}|sk-or-v1-[a-z0-9]{16,}|ghp_[a-z0-9]{20,}|gho_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,}|hmr_(?:at|rt|dev)_[A-Za-z0-9_-]{12,}|hmlan_[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})\b`),
 	// Bearer authorization headers.
 	regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}`),
 	// Key=value / JSON secret assignments.

@@ -273,11 +273,11 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 
 	// Medium difficulty coding task must route to TierMid and prioritize Google Carbon (-50% discount).
 	medTask := Task{
-		Role:        team.RoleDeveloper,
-		Class:       ClassCoding,
-		Complexity:  ComplexityMedium,
-		InputTokens: 6000,
-		NeedsTools:  true,
+		Role:         team.RoleDeveloper,
+		Class:        ClassCoding,
+		Complexity:   ComplexityMedium,
+		InputTokens:  6000,
+		NeedsTools:   true,
 		OnlyProvider: "openrouter",
 	}
 	choice, ref := Score(medTask, cat, pol, health, AgentPin{}, RepoPolicy{})
@@ -400,9 +400,9 @@ pins:
 }
 
 func TestRedactSecrets(t *testing.T) {
-	raw := "erro ao chamar provedor sk-testsecret12345 e crsr_abcdef12345 e AIzaSyTestKey1234567"
+	raw := "erro ao chamar provedor sk-testsecret12345 e crsr_abcdef12345 e AIzaSyTestKey1234567 e hmlan_abcdefghijklmnopqrstuvwxyz"
 	clean := RedactSecrets(raw, "minha-chave-secreta")
-	for _, secret := range []string{"sk-testsecret12345", "crsr_abcdef12345", "AIzaSyTestKey1234567"} {
+	for _, secret := range []string{"sk-testsecret12345", "crsr_abcdef12345", "AIzaSyTestKey1234567", "hmlan_abcdefghijklmnopqrstuvwxyz"} {
 		if strings.Contains(clean, secret) {
 			t.Fatalf("secret %q leaked in redacted text: %q", secret, clean)
 		}

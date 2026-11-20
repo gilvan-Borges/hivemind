@@ -3,44 +3,63 @@ package remote
 import (
 	"encoding/base64"
 	"net/url"
+	"strconv"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-// PairingInfo is shown in the IDE modal and consumed by the mobile app.
+// PairingInfo is shown in the IDE modal. It carries a one-time offer, never the session token.
 type PairingInfo struct {
 	URI       string   `json:"uri"`
 	URLs      []string `json:"urls"`
-	Token     string   `json:"token"`
 	Host      string   `json:"host"`
 	QRDataURL string   `json:"qrDataUrl"`
+	Exp       int64    `json:"exp"`
 }
 
-// BuildPairURI builds the hivemind://pair?... payload encoded in the QR code.
-// The mobile app saves all URLs and falls back to whichever answers first
-// (Tailscale → LAN).
-func BuildPairURI(urls []string, token, host string) string {
+// BuildPairURI builds the hivemind://pair?v=2 payload encoded in the QR code.
+// urls are tried in order. The offer is single-use and is not a session token.
+func BuildPairURI(urls []string, offer, pk string, exp int64, host string) string {
 	q := url.Values{}
+	q.Set("v", "2")
 	q.Set("urls", strings.Join(urls, ","))
-	q.Set("token", token)
-	q.Set("host", host)
+	q.Set("offer", offer)
+	q.Set("pk", pk)
+	q.Set("exp", strconv.FormatInt(exp, 10))
+	if strings.TrimSpace(host) != "" {
+		q.Set("host", host)
+	}
 	return "hivemind://pair?" + q.Encode()
 }
 
-// ParsePairURI decodes a hivemind://pair URI into its parts.
-func ParsePairURI(uri string) (urls []string, token, host string, ok bool) {
-	if !strings.HasPrefix(uri, "hivemind://pair?") {
-		return nil, "", "", false
+// ParsePairURI decodes a v=2 pairing URI. A token query, including on v=2, is rejected.
+func ParsePairURI(uri string) (PairURI, bool) {
+	const prefix = "hivemind://pair?"
+	if !strings.HasPrefix(uri, prefix) {
+		return PairURI{}, false
 	}
-	q, err := url.ParseQuery(strings.TrimPrefix(uri, "hivemind://pair?"))
+	q, err := url.ParseQuery(strings.TrimPrefix(uri, prefix))
 	if err != nil {
-		return nil, "", "", false
+		return PairURI{}, false
 	}
-	urls = splitComma(q.Get("urls"))
-	token = q.Get("token")
-	host = q.Get("host")
-	return urls, token, host, token != "" && len(urls) > 0
+	if q.Get("token") != "" || q.Get("v") != "2" {
+		return PairURI{}, false
+	}
+	urls := splitComma(q.Get("urls"))
+	offerRaw, errOffer := base64.RawURLEncoding.DecodeString(q.Get("offer"))
+	pkRaw, errPK := base64.RawURLEncoding.DecodeString(q.Get("pk"))
+	exp, errExp := strconv.ParseInt(q.Get("exp"), 10, 64)
+	if errOffer != nil || len(offerRaw) != 16 || errPK != nil || len(pkRaw) != 32 || errExp != nil || exp <= 0 || len(urls) == 0 {
+		return PairURI{}, false
+	}
+	return PairURI{
+		URLs:  urls,
+		Offer: q.Get("offer"),
+		PK:    q.Get("pk"),
+		Exp:   exp,
+		Host:  q.Get("host"),
+	}, true
 }
 
 func splitComma(s string) []string {

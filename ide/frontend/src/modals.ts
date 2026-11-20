@@ -978,12 +978,12 @@ export function renderModalLayer() {
                 <div class="dim" style="font-family:var(--mono);font-size:11px;margin:4px 0 10px;word-break:break-all">
                   ${(pr.urls || []).map((u) => `<div>• ${escapeHtml(u)}</div>`).join("") || "—"}
                 </div>
-                <label style="font-size:11px;color:var(--text-dim)">Token (pareamento manual):</label>
+                <label style="font-size:11px;color:var(--text-dim)">Oferta de uso único</label>
+                <div class="dim" style="font-size:11px;margin:4px 0 10px">Válida até ${escapeHtml(pr.exp ? new Date(pr.exp * 1000).toLocaleString("pt-BR") : "—")}. Um resgate só.</div>
                 <div style="display:flex;gap:6px;align-items:center;margin:4px 0 10px">
-                  <code style="font-size:11px;word-break:break-all">${escapeHtml(pr.token)}</code>
-                  <button id="mb-copy" class="mini">Copiar</button>
+                  <button id="mb-copy" class="mini" type="button">Copiar oferta</button>
                 </div>
-                <button id="mb-rotate" class="mini" title="Invalida todas as conexões ativas">Rotacionar Token / Desconectar Celulares</button>
+                <button id="mb-rotate" class="mini" type="button" title="Invalida todas as conexões ativas">Rotacionar sessão / Desconectar celulares</button>
               </div>
             </div>
           ` : `
@@ -1101,11 +1101,11 @@ export function renderModalLayer() {
       }
     });
     document.getElementById("mb-copy")?.addEventListener("click", async () => {
-      const tok = state.mobilePairing?.token;
-      if (!tok) return;
+      const uri = state.mobilePairing?.uri;
+      if (!uri) return;
       try {
-        await navigator.clipboard.writeText(tok);
-        toast("Token copiado.", "success");
+        await navigator.clipboard.writeText(uri);
+        toast("Oferta copiada.", "success");
       } catch {
         // clipboard indisponível
       }

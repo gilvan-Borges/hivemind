@@ -1938,9 +1938,9 @@ export namespace remote {
 	export class PairingInfo {
 	    uri: string;
 	    urls: string[];
-	    token: string;
 	    host: string;
 	    qrDataUrl: string;
+	    exp: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new PairingInfo(source);
@@ -1950,9 +1950,9 @@ export namespace remote {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.uri = source["uri"];
 	        this.urls = source["urls"];
-	        this.token = source["token"];
 	        this.host = source["host"];
 	        this.qrDataUrl = source["qrDataUrl"];
+	        this.exp = source["exp"];
 	    }
 	}
 	export class StatusInfo {

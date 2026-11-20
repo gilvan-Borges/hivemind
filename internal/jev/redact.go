@@ -13,6 +13,7 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b(AIza[0-9A-Za-z_-]{10,})`),
 	regexp.MustCompile(`\b(gh[pousr]_[0-9A-Za-z]{10,})`),
 	regexp.MustCompile(`(?i)(bearer\s+)[a-z0-9._-]{8,}`),
+	regexp.MustCompile(`\b(hmlan_[A-Za-z0-9_-]{12,})`),
 }
 
 // RedactSecrets masks common API token patterns and any explicit secret values
@@ -26,7 +27,7 @@ func RedactSecrets(text string, extraSecrets ...string) string {
 		}
 	}
 	for i, re := range secretPatterns {
-		if i == len(secretPatterns)-1 {
+		if i == len(secretPatterns)-2 {
 			out = re.ReplaceAllString(out, "${1}[REDACTED]")
 			continue
 		}
