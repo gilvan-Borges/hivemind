@@ -445,7 +445,7 @@ Não faz parte do teste desta spec chamar modelo pago nem subir o app Android.
 2. Vale migrar `api-keys.json` e os conectores para `secretx` no mesmo ciclo, ou o cofre nasce só para segredo novo do residente?
 3. O `runMode` dentro de `POST /api/v1/runs/start` basta para o app, já que o relay cifra o corpo e não precisa de rota nova? Se o cliente do app exigir um campo nomeado antes, o contrato continua sendo essa rota, não uma segunda API.
 4. Memória entre dois PCs da mesma conta fica fora. Confirmar se em algum momento o arquivo deve sincronizar por um canal que não seja o relay em claro. O desenho atual não sincroniza.
-5. `sandboxx` no `run_shell` do squad é o passo natural depois da fase 2, porque hoje o squad em `full_access` confirma sozinho e roda sem AppContainer. Fica fora deste trabalho para não misturar os dois loops. Confirmar quando puxar isso.
+5. `run_shell` do squad entra na sandbox por padrão. `shell_unsandboxed` ou o pedido `unsandboxed` do modelo roda no host só em Full Acesso ou com confirmação, com aviso, auditoria e sem segredo no ambiente. Linha com metacaractere continua pedindo confirmação quando a Onda 1 já pedia, e não entra na sandbox porque a sandbox não abre shell.
 6. Hash revisado pela pessoa é a barra de skill, compatível com o ADR-002 (produto interno, sem assinatura de binário como critério). Assinatura criptográfica de skill só se um dia o catálogo sair desta máquina.
 7. `sandbox-exec` no macOS é o que o Open Interpreter e o Codex ainda usam, e a Apple trata como antigo. Se uma versão do sistema recusar o perfil, o residente falha fechado. Um helper assinado fica para quando isso doer, não antes.
 

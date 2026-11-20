@@ -135,7 +135,11 @@ type Settings struct {
 	BaseBranch               string             `yaml:"base_branch" json:"base_branch"`
 	ShellAllowlist           []string           `yaml:"shell_allowlist,omitempty" json:"shell_allowlist,omitempty"`
 	ConfirmShell             *bool              `yaml:"confirm_shell,omitempty" json:"confirm_shell,omitempty"`
-	SkillAssignments         []SkillAssignment  `yaml:"skill_assignments,omitempty" json:"skill_assignments,omitempty"`
+	// ShellUnsandboxed runs run_shell on the host session. Default is false:
+	// the squad shell goes through sandboxx. Outside the sandbox still needs
+	// Full Acesso or an explicit confirmation.
+	ShellUnsandboxed bool              `yaml:"shell_unsandboxed,omitempty" json:"shell_unsandboxed,omitempty"`
+	SkillAssignments []SkillAssignment `yaml:"skill_assignments,omitempty" json:"skill_assignments,omitempty"`
 }
 
 // DefaultSettings returns the recommended governance defaults:
