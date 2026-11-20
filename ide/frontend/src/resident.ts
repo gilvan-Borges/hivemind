@@ -72,6 +72,7 @@ export function openResidentTab(): void {
   renderEditorTabs();
   renderEditorBody();
   void refreshResidentData();
+  startExternalSessionPoll();
 }
 
 export async function refreshResidentStatus(): Promise<void> {
@@ -89,6 +90,48 @@ export async function refreshResidentStatus(): Promise<void> {
   } catch {
     // ignore startup race
   }
+}
+
+export const EXTERNAL_SESSION_POLL_MS = 2000;
+let externalSessionTimer = 0;
+
+function externalSessionsHtml(): string {
+  if (residentState.externalSessions.length === 0) {
+    return `<div class="dim">Nenhuma sessão externa encontrada.</div>`;
+  }
+  return residentState.externalSessions
+    .map((s) => `<div class="dim"><code>${escapeHtml(s.source)}</code> · ${escapeHtml(s.state)} · pid ${s.pid}</div>`)
+    .join("");
+}
+
+export function startExternalSessionPoll(): void {
+  if (externalSessionTimer) return;
+  externalSessionTimer = window.setInterval(() => {
+    if (state.activeEditorPath !== RESIDENT_TAB_KEY) {
+      stopExternalSessionPoll();
+      return;
+    }
+    void refreshExternalSessions();
+  }, EXTERNAL_SESSION_POLL_MS);
+}
+
+export function stopExternalSessionPoll(): void {
+  if (!externalSessionTimer) return;
+  window.clearInterval(externalSessionTimer);
+  externalSessionTimer = 0;
+}
+
+async function refreshExternalSessions(): Promise<void> {
+  const backend = api();
+  if (!backend?.ExternalSessions) return;
+  try {
+    const ext = await backend.ExternalSessions();
+    residentState.externalSessions = Array.isArray(ext) ? ext : [];
+  } catch {
+    residentState.externalSessions = [];
+  }
+  const el = document.getElementById("res-external-sessions");
+  if (el) el.innerHTML = externalSessionsHtml();
 }
 
 export async function refreshResidentData(): Promise<void> {
@@ -117,12 +160,7 @@ export async function refreshResidentData(): Promise<void> {
     }
     residentState.memory = Array.isArray(memList) ? memList : [];
     residentState.audit = Array.isArray(auditList) ? auditList : [];
-    try {
-      const ext = await backend.ExternalSessions?.();
-      residentState.externalSessions = Array.isArray(ext) ? ext : [];
-    } catch {
-      residentState.externalSessions = [];
-    }
+    await refreshExternalSessions();
     residentState.loadedOnce = true;
     updateResidentStatusChip();
     rerenderResidentIfOpen();
@@ -402,9 +440,9 @@ function renderResidentSecurityHtml(): string {
           <strong>Sessões externas</strong>
           <span class="dim">só leitura</span>
         </div>
-        ${residentState.externalSessions.length === 0
-          ? `<div class="dim">Nenhuma sessão externa encontrada.</div>`
-          : residentState.externalSessions.map((s) => `<div class="dim"><code>${escapeHtml(s.source)}</code> · ${escapeHtml(s.state)} · pid ${s.pid}</div>`).join("")}
+        <div id="res-external-sessions">
+        ${externalSessionsHtml()}
+        </div>
       </div>
 
       <div class="resident-row-card">
