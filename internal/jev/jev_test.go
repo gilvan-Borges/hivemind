@@ -567,8 +567,9 @@ func TestRouteAndScoreLatency2000Models(t *testing.T) {
 	p99Route := routeTimes[p99Idx]
 	// Spec §13: Score < 2ms (2000us) p99, Route < 5ms (5000us) p99.
 	// Windows CI runners report a Score p99 just over 2ms from scheduler noise.
+	// Linux keeps 2000us even when CI=true.
 	scoreLimitUs := int64(2000)
-	if os.Getenv("CI") == "true" {
+	if runtime.GOOS == "windows" && os.Getenv("CI") == "true" {
 		scoreLimitUs = 8000
 	}
 	if p99Score > scoreLimitUs {
