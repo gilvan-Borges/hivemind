@@ -138,8 +138,8 @@ try {
         }
 
         Write-Step "Sincronizando logo HiveMind para Wails"
-        $logoPng = Join-Path $RepoRoot "assets\hivemind-logo.png"
-        $logoIco = Join-Path $RepoRoot "assets\hivemind.ico"
+        $logoPng = Join-Path $RepoRoot "assets\brand\appicon.png"
+        $logoIco = Join-Path $RepoRoot "assets\brand\hivemind.ico"
         $wailsBuildDir = Join-Path $IdeDir "build"
         $wailsWinDir = Join-Path $wailsBuildDir "windows"
         New-Item -ItemType Directory -Force -Path $wailsWinDir | Out-Null

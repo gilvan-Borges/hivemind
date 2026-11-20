@@ -8,7 +8,11 @@
 .codebase-memory/
 *.out
 /build/
-ide/build/
+ide/build/*
+!ide/build/appicon.png
+!ide/build/windows/
+ide/build/windows/*
+!ide/build/windows/icon.ico
 ide/frontend/node_modules/
 ide/frontend/dist/
 /bin/*.exe
