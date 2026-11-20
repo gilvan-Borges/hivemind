@@ -61,7 +61,7 @@ Sem argumentos, abre uma sessão interativa. Use "hivemind run" para executar um
 	if helpFlag := root.Flags().Lookup("help"); helpFlag != nil {
 		helpFlag.Usage = "Mostra a ajuda"
 	}
-	root.AddCommand(newTeamCmd(), newAgentCmd(), newRunCmd(), newSessionCmd(), newJiraCmd(), newGitCmd(), newMCPCmd(), newDoctorCmd(), newServeCmd())
+	root.AddCommand(newTeamCmd(), newAgentCmd(), newRunCmd(), newSessionCmd(), newJiraCmd(), newGitCmd(), newMCPCmd(), newDoctorCmd(), newServeCmd(), newSandboxExecCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Mostra a versão",

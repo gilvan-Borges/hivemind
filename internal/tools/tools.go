@@ -2,6 +2,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -31,7 +32,8 @@ type Deps struct {
 	DisableGitWrite        bool
 	DisableMerge           bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
 	ReviewCommentOnly      bool // Quando true, github_review_pr aceita apenas evento COMMENT
-	AllowReadOnlyTestShell bool // Libera run_shell somente-leitura/testes (bloqueando commit/push/merge/PR) no Chefe em auto-review
+	AllowReadOnlyTestShell bool // run_shell continua disponível, mas commit/push/merge/PR via shell ficam bloqueados (auto-review)
+	NoShell                bool // Revisão automática sem testes: não entrega run_shell
 	ReviewRequestedInObj   bool
 	// DocsOnlyWrite libera APENAS o write_doc (gravação restrita a documentação)
 	// para fases SDD, onde código permanece bloqueado até a aprovação dos docs.
@@ -115,7 +117,7 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 		}
-		if deps.AllowReadOnlyTestShell {
+		if !deps.NoShell {
 			if err := add(deps.canShell()); err != nil {
 				return nil, err
 			}
@@ -194,7 +196,7 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 		}
-		if deps.AllowReadOnlyTestShell {
+		if !deps.NoShell {
 			if err := add(deps.canShell()); err != nil {
 				return nil, err
 			}
@@ -618,29 +620,65 @@ type shellArgs struct {
 	Dir     string `json:"dir,omitempty" jsonschema:"Diretório relativo ao workspace. Vazio usa a raiz do agente."`
 }
 
+func (d Deps) shellBlocksGitWrite() bool {
+	return !d.canCommitAndManagePR() || d.AllowReadOnlyTestShell || d.DisableGitWrite || d.DisableMerge
+}
+
+func (d Deps) shellDescription() string {
+	desc := "Terminal da sessão: run_shell é a única ferramenta de terminal. Executa um comando no workspace. Se o comando estiver fora da lista, a ferramenta recusa e diz o motivo. Comandos perigosos (incluindo gh que comenta ou altera issue, PR ou repositório) só rodam depois da aprovação do usuário. O ambiente do processo não leva tokens nem chaves."
+	if d.shellBlocksGitWrite() {
+		desc += " git commit, push, merge e gh pr/api continuam bloqueados neste modo."
+	}
+	return desc
+}
+
+// shellAllowlist dá `gh` ao Chefe e ao Arquiteto mesmo quando o team.yaml
+// foi gravado antes de `gh` entrar na lista padrão. Dev e QA não ganham isso.
+func (d Deps) shellAllowlist() []string {
+	list := append([]string(nil), d.Allowlist...)
+	if !d.canCommitAndManagePR() {
+		return list
+	}
+	for _, item := range list {
+		norm := strings.ToLower(strings.TrimSpace(item))
+		norm = strings.TrimSuffix(norm, ".exe")
+		if norm == "*" || norm == "gh" {
+			return list
+		}
+	}
+	return append(list, "gh")
+}
+
+func (d Deps) runShell(ctx context.Context, command, relDir string) (string, error) {
+	if d.shellBlocksGitWrite() {
+		if blocked, what := shellx.IsCommitOrPRCommand(command); blocked {
+			if !d.canCommitAndManagePR() {
+				return "", fmt.Errorf("governança HiveMind: apenas o Chefe ou o Arquiteto podem executar %s (desenvolvedores e QA não comitam nem operam PR)", what)
+			}
+			return "", fmt.Errorf("governança HiveMind: operação %s bloqueada neste modo (apenas leitura e testes; sem commit, push ou merge)", what)
+		}
+	}
+	dir := d.Root
+	if strings.TrimSpace(relDir) != "" {
+		resolved, err := workspace.Resolve(d.Root, relDir)
+		if err != nil {
+			return "", err
+		}
+		dir = resolved
+	}
+	shell := d.Shell
+	if shell == nil {
+		shell = shellx.Local{}
+	}
+	return shell.Run(ctx, dir, command, d.shellAllowlist(), d.Confirm)
+}
+
 func (d Deps) canShell() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "run_shell",
-		Description: "Executa um comando permitido dentro do workspace. Operações de git commit/push/merge e PR são bloqueadas neste modo.",
+		Description: d.shellDescription(),
 	}, func(ctx agent.Context, args shellArgs) (textResult, error) {
-		if !d.canCommitAndManagePR() {
-			if blocked, what := shellx.IsCommitOrPRCommand(args.Command); blocked {
-				return textResult{}, fmt.Errorf("governança HiveMind: apenas o Chefe ou o Arquiteto podem executar %s (desenvolvedores e QA não comitam nem operam PR)", what)
-			}
-		} else if d.AllowReadOnlyTestShell || d.DisableGitWrite || d.DisableMerge {
-			if blocked, what := shellx.IsCommitOrPRCommand(args.Command); blocked {
-				return textResult{}, fmt.Errorf("governança auto-review: operação %s bloqueada neste modo (apenas leitura/testes permitidos; sem commit, push ou merge)", what)
-			}
-		}
-		dir := d.Root
-		if strings.TrimSpace(args.Dir) != "" {
-			resolved, err := workspace.Resolve(d.Root, args.Dir)
-			if err != nil {
-				return textResult{}, err
-			}
-			dir = resolved
-		}
-		out, err := d.Shell.Run(ctx, dir, args.Command, d.Allowlist, d.Confirm)
+		out, err := d.runShell(ctx, args.Command, args.Dir)
 		if err != nil {
 			return textResult{Text: out}, err
 		}
@@ -1338,7 +1376,7 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 			project = strings.ToUpper(strings.TrimSpace(d.JiraProject))
 		}
 		if project == "" {
-			if _, _, _, def, _ := jirax.LoadCredentials(); def != "" {
+			if _, _, _, def, _ := jirax.LoadCredentialsForWorkspace(d.Root); def != "" {
 				project = def
 			}
 		}

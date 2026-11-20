@@ -1,6 +1,9 @@
 package shellx
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEvaluateAllowAndDeny(t *testing.T) {
 	allow := []string{"git", "go", "echo", "python", "node", "find"}
@@ -104,5 +107,44 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	}
 	if blocked, _ := IsCommitOrPRCommand(`git -c core.pager=cat log --oneline`); blocked {
 		t.Fatal("git -c benigno não é commit/push")
+	}
+
+	issue := Evaluate("gh issue comment 708 --repo acme/app --body oi", []string{"gh"})
+	if !issue.Allowed || !issue.Dangerous {
+		t.Fatalf("gh issue comment deve pedir confirmação: %+v", issue)
+	}
+	view := Evaluate("gh issue view 708 --repo acme/app", []string{"gh"})
+	if !view.Allowed || view.Dangerous {
+		t.Fatalf("gh issue view é leitura: %+v", view)
+	}
+	leak := Evaluate("gh auth token", []string{"gh", "*"})
+	if leak.Allowed || strings.Contains(leak.Reason, "token") && strings.Contains(leak.Reason, "ghp_") {
+		t.Fatalf("gh auth token não pode executar nem ecoar segredo: %+v", leak)
+	}
+	if leak.Reason == "" || !strings.Contains(leak.Reason, "credencial") {
+		t.Fatalf("motivo da recusa: %+v", leak)
+	}
+	shown := Evaluate("gh auth status --show-token", []string{"gh"})
+	if shown.Allowed {
+		t.Fatal("--show-token não pode executar")
+	}
+	for _, raw := range []string{
+		`gh auth to'ken'`,
+		`gh auth "token"`,
+		`gh --hostname github.com auth token`,
+		`echo $(gh auth token)`,
+		`gh auth status --show-to'ken'`,
+	} {
+		dec := Evaluate(raw, []string{"gh", "echo", "*"})
+		if dec.Allowed || !strings.Contains(dec.Reason, "credencial") {
+			t.Fatalf("%q deveria ser recusado sem executar: %+v", raw, dec)
+		}
+		if strings.Contains(dec.Reason, "ghp_") || strings.Contains(dec.Reason, raw) {
+			t.Fatalf("motivo não pode repetir o comando: %+v", dec)
+		}
+	}
+	status := Evaluate("gh auth status", []string{"gh"})
+	if !status.Allowed || status.Dangerous {
+		t.Fatalf("gh auth status sem token continua leitura: %+v", status)
 	}
 }

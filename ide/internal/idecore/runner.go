@@ -230,16 +230,30 @@ func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	}
 }
 
+// ApprovalMetadata enriches an approval_required event for the UI and remote app.
+type ApprovalMetadata struct {
+	Label    string
+	ToolName string
+	Detail   string
+	Gate     string
+}
+
 // RequestApproval emits an approval_required event with a unique approvalId and
 // blocks until the user responds for that specific approvalId or ctx is canceled.
 // Safe for concurrent tool calls on the same lane: each request gets its own slot.
 func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, prompt string) bool {
-	return m.RequestApprovalWithGate(ctx, laneID, teamName, "", prompt)
+	return m.RequestApprovalWithMeta(ctx, laneID, teamName, prompt, ApprovalMetadata{})
 }
 
 // RequestApprovalWithGate emits an approval_required event with an explicit gate
 // identifier (e.g. "budget", "worktree") and waits for human resolution.
 func (m *SessionManager) RequestApprovalWithGate(ctx context.Context, laneID, teamName, gate, prompt string) bool {
+	return m.RequestApprovalWithMeta(ctx, laneID, teamName, prompt, ApprovalMetadata{Gate: gate})
+}
+
+// RequestApprovalWithMeta behaves like RequestApproval while attaching risk tier,
+// tool name, and target detail so the IDE UI and app display what the agent wants to do.
+func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, teamName, prompt string, meta ApprovalMetadata) bool {
 	if m.Emit == nil {
 		return false
 	}
@@ -261,13 +275,16 @@ func (m *SessionManager) RequestApprovalWithGate(ctx context.Context, laneID, te
 		m.mu.Unlock()
 	}()
 
-	label := "Permissão Necessária"
-	if gate == "budget" {
-		label = "Aprovação de Orçamento (Jev)"
-	} else if gate == "worktree" {
-		label = "Aprovação de Worktree (Cursor)"
+	label := strings.TrimSpace(meta.Label)
+	if label == "" {
+		if meta.Gate == "budget" {
+			label = "Aprovação de Orçamento (Jev)"
+		} else if meta.Gate == "worktree" {
+			label = "Aprovação de Worktree (Cursor)"
+		} else {
+			label = "Permissão Necessária"
+		}
 	}
-
 	m.Emit(LaneEvent{
 		LaneID: laneID,
 		Team:   teamName,
@@ -276,8 +293,10 @@ func (m *SessionManager) RequestApprovalWithGate(ctx context.Context, laneID, te
 			Stage:      "chief",
 			Author:     "chefe",
 			Label:      label,
+			ToolName:   meta.ToolName,
+			Detail:     meta.Detail,
+			Gate:       meta.Gate,
 			Text:       prompt,
-			Gate:       gate,
 			ApprovalID: approvalID,
 		},
 	})

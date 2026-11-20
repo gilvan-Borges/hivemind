@@ -2,9 +2,11 @@ package remote
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/resident"
 )
 
 // Deps abstracts the IDE services the HTTP API drives. It is implemented by
@@ -23,10 +25,11 @@ type Deps interface {
 	AutoReviewPoll(workspace string) idecore.AutoReviewStatus
 }
 
-// Adapter is the production Deps implementation wired to a SessionManager and
-// an AutoReviewManager.
+// Adapter is the production Deps implementation wired to a SessionManager,
+// ResidentManager, and AutoReviewManager.
 type Adapter struct {
 	Sessions   *idecore.SessionManager
+	Resident   *idecore.ResidentManager
 	AutoReview *idecore.AutoReviewManager
 	Hub        *Hub
 }
@@ -36,11 +39,41 @@ var _ Deps = (*Adapter)(nil)
 // RunStart registers the run in the Hub, echoes the mobile message into the
 // IDE chat (bidirectional sync) and starts the turn asynchronously. Errors
 // surface through SSE as lane error events.
+//
+// When runMode == "resident", the turn routes exclusively to ResidentManager on
+// fixed lane "resident" with OriginRemote — it never touches the squad runner
+// or inherits permission_mode (§1.10, §10).
 func (a *Adapter) RunStart(
 	ctx context.Context,
 	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
 	images []idecore.ImageInput,
 ) error {
+	if strings.EqualFold(strings.TrimSpace(runMode), resident.RunMode) {
+		if a.Resident == nil {
+			return fmt.Errorf("agente residente indisponível neste host")
+		}
+		laneID = resident.LaneID
+		teamName = "hive-resident"
+		a.Hub.RegisterRun(laneID, workspace, teamName, objective, sessionID, resident.RunMode)
+		if a.Sessions != nil && a.Sessions.Emit != nil {
+			text := strings.TrimSpace(objective)
+			if text != "" {
+				a.Sessions.Emit(idecore.LaneEvent{
+					LaneID: laneID,
+					Team:   teamName,
+					Event:  userMessageEvent(text),
+				})
+			}
+		}
+		go func() {
+			_, err := a.Resident.RunTurn(context.Background(), workspace, "", objective, resident.OriginRemote)
+			if err != nil {
+				a.Hub.HandleRunError(laneID, workspace, err)
+			}
+		}()
+		return nil
+	}
+
 	a.Hub.RegisterRun(laneID, workspace, teamName, objective, sessionID, runMode)
 	if a.Sessions != nil && a.Sessions.Emit != nil {
 		text := strings.TrimSpace(objective)
@@ -66,6 +99,11 @@ func (a *Adapter) RunStart(
 
 // RunCancel stops the active run on the lane.
 func (a *Adapter) RunCancel(laneID string) bool {
+	if laneID == resident.LaneID && a.Resident != nil {
+		ok := a.Resident.Cancel()
+		a.Hub.MarkCancel(laneID)
+		return ok
+	}
 	if a.Sessions == nil {
 		return false
 	}

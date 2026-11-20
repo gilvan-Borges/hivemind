@@ -6,7 +6,8 @@ import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from
 import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
-import { refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
+import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { handleResidentLaneEvent, refreshResidentStatus } from "./resident";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
@@ -28,6 +29,10 @@ export async function boot() {
   }
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
+    if (payload?.laneId === "resident") {
+      handleResidentLaneEvent(payload);
+      return;
+    }
     let hit = findLaneWithContext(payload.laneId);
     if (!hit && payload.laneId === "lane-autoreview") {
       // Auto-cria lane dedicada de Revisão Automática no projeto ativo sem roubar foco do chat manual.
@@ -326,6 +331,7 @@ export async function boot() {
   window.runtime?.EventsOn("hivemind:lsp-diagnostics", (payload: any) => {
     handleLSPDiagnosticsEvent(payload);
   });
+  void refreshResidentStatus();
 
   window.runtime?.EventsOn("hivemind:autoreview-status", (payload: any) => {
     const wsKey = normalizePathKey(payload?.workspace || "");
@@ -409,6 +415,7 @@ export function bootstrapAsync(rootDir?: string) {
 
   void refreshInlineAIStatus();
   void refreshJiraStatusAndProjects();
+  void refreshProviderProfiles();
 
   backend.MobileBridgeStatus?.().then((st) => {
     state.mobileStatus = st;
@@ -493,6 +500,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
     renderRightPane();
     setStatus(`Projeto em foco: ${proj.root}`);
     refreshDiffs();
+    void refreshJiraStatusAndProjects();
+    void refreshProviderProfiles();
     return;
   }
 

@@ -891,6 +891,34 @@ export namespace idecore {
 
 export namespace jirax {
 	
+	export class JiraProfileSummary {
+	    id: string;
+	    name: string;
+	    baseUrl: string;
+	    email: string;
+	    tokenMasked: string;
+	    defaultProject: string;
+	    orgPatterns?: string[];
+	    isDefault?: boolean;
+	    hasToken: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new JiraProfileSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.baseUrl = source["baseUrl"];
+	        this.email = source["email"];
+	        this.tokenMasked = source["tokenMasked"];
+	        this.defaultProject = source["defaultProject"];
+	        this.orgPatterns = source["orgPatterns"];
+	        this.isDefault = source["isDefault"];
+	        this.hasToken = source["hasToken"];
+	    }
+	}
 	export class ConnectorStatus {
 	    configured: boolean;
 	    connected: boolean;
@@ -901,6 +929,14 @@ export namespace jirax {
 	    defaultProject: string;
 	    user: string;
 	    detail: string;
+	    activeProfileId?: string;
+	    activeProfileName?: string;
+	    matchMode?: string;
+	    matchedRule?: string;
+	    bindingMode?: string;
+	    detectedOrg?: string;
+	    suggestedPatterns?: string[];
+	    profiles?: JiraProfileSummary[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ConnectorStatus(source);
@@ -917,8 +953,61 @@ export namespace jirax {
 	        this.defaultProject = source["defaultProject"];
 	        this.user = source["user"];
 	        this.detail = source["detail"];
+	        this.activeProfileId = source["activeProfileId"];
+	        this.activeProfileName = source["activeProfileName"];
+	        this.matchMode = source["matchMode"];
+	        this.matchedRule = source["matchedRule"];
+	        this.bindingMode = source["bindingMode"];
+	        this.detectedOrg = source["detectedOrg"];
+	        this.suggestedPatterns = source["suggestedPatterns"];
+	        this.profiles = this.convertValues(source["profiles"], JiraProfileSummary);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class JiraProfile {
+	    id: string;
+	    name: string;
+	    base_url?: string;
+	    email?: string;
+	    token?: string;
+	    default_project?: string;
+	    org_patterns?: string[];
+	    is_default?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new JiraProfile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	        this.email = source["email"];
+	        this.token = source["token"];
+	        this.default_project = source["default_project"];
+	        this.org_patterns = source["org_patterns"];
+	        this.is_default = source["is_default"];
 	    }
 	}
+	
 	export class Project {
 	    key: string;
 	    name: string;
@@ -1490,8 +1579,126 @@ export namespace modelx {
 	        this.completionPrice = source["completionPrice"];
 	    }
 	}
+	export class ResolvedProviderInfo {
+	    provider: string;
+	    profileId?: string;
+	    profileName?: string;
+	    matchMode: string;
+	    matchedRule?: string;
+	    bindingMode?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResolvedProviderInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.profileId = source["profileId"];
+	        this.profileName = source["profileName"];
+	        this.matchMode = source["matchMode"];
+	        this.matchedRule = source["matchedRule"];
+	        this.bindingMode = source["bindingMode"];
+	    }
+	}
+	export class ProviderProfileSummary {
+	    id: string;
+	    provider: string;
+	    name: string;
+	    authMode?: string;
+	    command?: string;
+	    envMasked?: Record<string, string>;
+	    configValues?: Record<string, string>;
+	    orgPatterns?: string[];
+	    isDefault?: boolean;
+	    ready: boolean;
+	    readyDetail?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderProfileSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.name = source["name"];
+	        this.authMode = source["authMode"];
+	        this.command = source["command"];
+	        this.envMasked = source["envMasked"];
+	        this.configValues = source["configValues"];
+	        this.orgPatterns = source["orgPatterns"];
+	        this.isDefault = source["isDefault"];
+	        this.ready = source["ready"];
+	        this.readyDetail = source["readyDetail"];
+	    }
+	}
+	export class ProfilesOverview {
+	    identity: orgx.Identity;
+	    profiles: ProviderProfileSummary[];
+	    resolved: Record<string, ResolvedProviderInfo>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfilesOverview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.identity = this.convertValues(source["identity"], orgx.Identity);
+	        this.profiles = this.convertValues(source["profiles"], ProviderProfileSummary);
+	        this.resolved = this.convertValues(source["resolved"], ResolvedProviderInfo, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
+	
+	
+	export class SaveProfileRequest {
+	    id: string;
+	    provider: string;
+	    name: string;
+	    authMode?: string;
+	    command?: string;
+	    env?: Record<string, string>;
+	    orgPatterns?: string[];
+	    isDefault?: boolean;
+	    bindWorkspace?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveProfileRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.name = source["name"];
+	        this.authMode = source["authMode"];
+	        this.command = source["command"];
+	        this.env = source["env"];
+	        this.orgPatterns = source["orgPatterns"];
+	        this.isDefault = source["isDefault"];
+	        this.bindWorkspace = source["bindWorkspace"];
+	    }
+	}
 
 }
 
@@ -1542,6 +1749,37 @@ export namespace orchestrator {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace orgx {
+	
+	export class Identity {
+	    workspace: string;
+	    gitRemoteUrl?: string;
+	    gitHost?: string;
+	    gitOrg?: string;
+	    gitRepo?: string;
+	    workspaceLeaf?: string;
+	    workspaceParent?: string;
+	    suggestedPatterns?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Identity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspace = source["workspace"];
+	        this.gitRemoteUrl = source["gitRemoteUrl"];
+	        this.gitHost = source["gitHost"];
+	        this.gitOrg = source["gitOrg"];
+	        this.gitRepo = source["gitRepo"];
+	        this.workspaceLeaf = source["workspaceLeaf"];
+	        this.workspaceParent = source["workspaceParent"];
+	        this.suggestedPatterns = source["suggestedPatterns"];
+	    }
 	}
 
 }
@@ -1641,6 +1879,203 @@ export namespace remote {
 	        this.urls = source["urls"];
 	        this.host = source["host"];
 	        this.version = source["version"];
+	    }
+	}
+
+}
+
+export namespace resident {
+	
+	export class AuditEntry {
+	    ts: string;
+	    phase: string;
+	    accountId: string;
+	    deviceId?: string;
+	    origin: string;
+	    workstream?: string;
+	    tool: string;
+	    tier: string;
+	    decision: string;
+	    approvalId?: string;
+	    sandbox?: string;
+	    target?: string;
+	    outcome?: string;
+	    errorClass?: string;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ts = source["ts"];
+	        this.phase = source["phase"];
+	        this.accountId = source["accountId"];
+	        this.deviceId = source["deviceId"];
+	        this.origin = source["origin"];
+	        this.workstream = source["workstream"];
+	        this.tool = source["tool"];
+	        this.tier = source["tier"];
+	        this.decision = source["decision"];
+	        this.approvalId = source["approvalId"];
+	        this.sandbox = source["sandbox"];
+	        this.target = source["target"];
+	        this.outcome = source["outcome"];
+	        this.errorClass = source["errorClass"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class LocalTurnMessage {
+	    role: string;
+	    text: string;
+	    // Go type: time
+	    at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalTurnMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.text = source["text"];
+	        this.at = this.convertValues(source["at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MemoryFact {
+	    id: string;
+	    workstream?: string;
+	    text: string;
+	    pinned?: boolean;
+	    source?: string;
+	    // Go type: time
+	    createdAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryFact(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.workstream = source["workstream"];
+	        this.text = source["text"];
+	        this.pinned = source["pinned"];
+	        this.source = source["source"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Status {
+	    state: string;
+	    phase: number;
+	    readOnly: boolean;
+	    accountId: string;
+	    workstream: string;
+	    provider: string;
+	    model: string;
+	    memoryDir?: string;
+	    auditPath?: string;
+	    lastError?: string;
+	    sandboxAvailable?: boolean;
+	    sandboxMechanism?: string;
+	    sandboxReason?: string;
+	    vaultAvailable?: boolean;
+	    vaultReason?: string;
+	    allowedBinaries?: string[];
+	    allowedHosts?: string[];
+	    vaultSecrets?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.phase = source["phase"];
+	        this.readOnly = source["readOnly"];
+	        this.accountId = source["accountId"];
+	        this.workstream = source["workstream"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.memoryDir = source["memoryDir"];
+	        this.auditPath = source["auditPath"];
+	        this.lastError = source["lastError"];
+	        this.sandboxAvailable = source["sandboxAvailable"];
+	        this.sandboxMechanism = source["sandboxMechanism"];
+	        this.sandboxReason = source["sandboxReason"];
+	        this.vaultAvailable = source["vaultAvailable"];
+	        this.vaultReason = source["vaultReason"];
+	        this.allowedBinaries = source["allowedBinaries"];
+	        this.allowedHosts = source["allowedHosts"];
+	        this.vaultSecrets = source["vaultSecrets"];
+	    }
+	}
+	export class TurnResult {
+	    sessionId: string;
+	    workstream: string;
+	    finalText: string;
+	    provider: string;
+	    model: string;
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	    toolCalls: number;
+	    promptBuildMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TurnResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.workstream = source["workstream"];
+	        this.finalText = source["finalText"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.toolCalls = source["toolCalls"];
+	        this.promptBuildMs = source["promptBuildMs"];
 	    }
 	}
 

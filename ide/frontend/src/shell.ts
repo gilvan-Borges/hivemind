@@ -9,9 +9,10 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
+import { openResidentTab, updateResidentStatusChip } from "./resident";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { countProblems, refreshLSPStatus } from "./lsp";
@@ -39,6 +40,8 @@ export function switchProjectTab(projectId: string) {
     gitBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
   }
   setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
+  void refreshJiraStatusAndProjects();
+  void refreshProviderProfiles();
 }
 
 export function closeProjectTab(projectId: string) {
@@ -196,6 +199,7 @@ export function mountShell() {
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
           <button class="act-btn" data-act="mcp" title="Servidores MCP">${icons.mcp}</button>
           <div class="spacer"></div>
+          <button class="act-btn" id="act-resident" title="Hive Residente (Fase 1 · Somente Leitura)">${icons.sparkle}</button>
           <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
           <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
@@ -227,6 +231,7 @@ export function mountShell() {
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
         <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
+        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente (Fase 2 · Sandbox e Cofre)">hive: ocioso</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
@@ -341,6 +346,8 @@ export function bindStaticShellEvents() {
     openProblemsPanel();
   });
   document.getElementById("status-mobile")?.addEventListener("click", () => void openMobileModal());
+  document.getElementById("status-resident")?.addEventListener("click", () => openResidentTab());
+  document.getElementById("act-resident")?.addEventListener("click", () => openResidentTab());
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -842,16 +849,24 @@ export function updateStatusBar() {
     tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
   }
   if (agyEl) {
+    const resolvedAgy = state.profilesOverview?.resolved?.["agy"];
+    const profBadge = resolvedAgy?.profileName ? ` · ${resolvedAgy.profileName}` : "";
     if (!state.agyStatus) {
-      agyEl.textContent = "agy: …";
+      agyEl.textContent = `agy: …${profBadge}`;
       agyEl.style.color = "";
       agyEl.title = "Verificando Antigravity CLI (agy)…";
+    } else if (resolvedAgy?.matchMode === "isolated") {
+      agyEl.textContent = "agy: isolado";
+      agyEl.style.color = "var(--text-dim)";
+      agyEl.title = "Nenhuma conta AGY vinculada a esta organização. A sessão global não será usada.";
     } else if (state.agyStatus.LoggedIn) {
-      agyEl.textContent = `agy: ok (${state.models.length})`;
+      agyEl.textContent = resolvedAgy?.profileName
+        ? `agy: ${resolvedAgy.profileName}`
+        : `agy: ok (${state.models.length})`;
       agyEl.style.color = "var(--green)";
-      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)`;
+      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)${resolvedAgy?.profileName ? ` · Conta ativa: ${resolvedAgy.profileName} (${resolvedAgy.matchMode})` : ""}`;
     } else {
-      agyEl.textContent = "agy: off";
+      agyEl.textContent = `agy: off${profBadge}`;
       agyEl.style.color = "var(--amber)";
       agyEl.title = `agy: ${state.agyStatus.Detail}`;
     }
@@ -881,9 +896,14 @@ export function updateStatusBar() {
       jiraEl.title = "Verificando Jira Cloud… (clique para conectar)";
     } else if (j.connected) {
       const pCount = state.jiraProjects.length > 0 ? ` (${state.jiraProjects.length})` : "";
-      jiraEl.textContent = `jira: ok${pCount}`;
+      const profLabel = j.activeProfileName ? j.activeProfileName : "ok";
+      jiraEl.textContent = `jira: ${profLabel}${pCount}`;
       jiraEl.style.color = "var(--green)";
-      jiraEl.title = `${j.detail}${j.defaultProject ? ` · Projeto padrão: ${j.defaultProject}` : ""} — clique para configurar`;
+      jiraEl.title = `${j.detail}${j.defaultProject ? ` · Projeto padrão: ${j.defaultProject}` : ""} — clique para gerenciar perfis Jira`;
+    } else if (j.matchMode === "isolated_none") {
+      jiraEl.textContent = j.detectedOrg ? `jira: sem (${j.detectedOrg})` : "jira: off";
+      jiraEl.style.color = "var(--text-dim)";
+      jiraEl.title = `${j.detail || "Sem Jira para esta org"} — clique para vincular`;
     } else {
       jiraEl.textContent = "jira: off";
       jiraEl.style.color = "var(--text-dim)";
@@ -1012,6 +1032,7 @@ export function updateStatusBar() {
     probEl.style.color = c.errors > 0 ? "var(--red)" : c.warnings > 0 ? "var(--amber)" : "";
     probEl.title = `${c.errors} erro(s), ${c.warnings} aviso(s) — clique para abrir Problemas (Ctrl+Shift+M)`;
   }
+  updateResidentStatusChip();
   if (envEl) {
     envEl.textContent = state.goVersion || "";
     envEl.title = `${state.goVersion} · ${state.os}`;

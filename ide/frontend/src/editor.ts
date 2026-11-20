@@ -5,6 +5,7 @@ import { escapeHtml } from "./utils";
 import { highlightActiveTreeRow, refreshExplorerTree } from "./explorer";
 import { refreshDiffs } from "./git";
 import { openCommandPalette, openQuickOpen } from "./quickopen";
+import { bindResidentViewEvents, renderResidentViewHtml } from "./resident";
 import { renderProjectTabsBar, syncLayoutVisibility } from "./shell";
 import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
@@ -186,13 +187,15 @@ export function renderEditorTabs() {
   if (!tabsEl) return;
   tabsEl.innerHTML = state.editorTabs.map((t) => {
     const tabIcon =
-      t.kind === "mission"
-        ? icons.swarm
-        : t.kind === "team-config"
-          ? icons.settings
-          : t.kind === "diff" || t.kind === "commit"
-            ? icons.gitSmall
-            : fileBadge(t.name);
+      t.kind === "resident"
+        ? icons.sparkle
+        : t.kind === "mission"
+          ? icons.swarm
+          : t.kind === "team-config"
+            ? icons.settings
+            : t.kind === "diff" || t.kind === "commit"
+              ? icons.gitSmall
+              : fileBadge(t.name);
     return `
       <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
         ${tabIcon}
@@ -632,6 +635,12 @@ export function renderEditorBody() {
     document.getElementById("welcome-quick-open")?.addEventListener("click", () => openQuickOpen());
     document.getElementById("welcome-cmd-palette")?.addEventListener("click", () => openCommandPalette());
     document.getElementById("welcome-memory")?.addEventListener("click", () => openTeamMemoryFile());
+    return;
+  }
+
+  if (activeTab.kind === "resident") {
+    body.innerHTML = renderResidentViewHtml();
+    bindResidentViewEvents();
     return;
   }
 

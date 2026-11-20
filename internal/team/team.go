@@ -651,7 +651,7 @@ func inferProvider(model string) string {
 // DefaultAllowlist is the set of executables the shell tool may run without
 // being treated as unknown. Dangerous flag combinations still need confirmation.
 var DefaultAllowlist = []string{
-	"git", "go", "gofmt", "python", "python3", "pytest", "pip",
+	"git", "gh", "go", "gofmt", "python", "python3", "pytest", "pip",
 	"node", "npm", "npx", "pnpm", "yarn", "bun",
 	"cargo", "rustc", "mvn", "gradle", "dotnet", "make", "cmake",
 	"echo", "printf", "ls", "dir", "cat", "type", "pwd",

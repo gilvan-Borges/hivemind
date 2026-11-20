@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -101,6 +101,15 @@ export const state = {
   providerHealthProbing: false,
   doctorModal: null as AgyStatus | null,
   apiKeysStatus: {} as Record<string, string>,
+  apiKeysTab: "profiles" as "profiles" | "global",
+  jiraEditingProfileId: null as string | null,
+  profilesOverview: null as ProfilesOverview | null,
+  profileEditor: {
+    open: false,
+    id: "",
+    provider: "agy",
+    authMode: "live",
+  },
   confirmModal: null as ConfirmDialogState | null,
   pathModal: null as null | {
     mode: "newFile" | "newDir" | "rename" | "delete";
