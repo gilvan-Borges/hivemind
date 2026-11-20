@@ -627,6 +627,8 @@ func inferProvider(model string) string {
 	switch {
 	case m == "jev" || strings.HasPrefix(m, "jev:") || strings.HasPrefix(m, "jev/"):
 		return "jev"
+	case strings.HasPrefix(m, "openrouter:") || strings.HasPrefix(m, "openrouter/"):
+		return "openrouter"
 	case m == "cursor" || strings.HasPrefix(m, "cursor:") || strings.HasPrefix(m, "cursor/"):
 		return "cursor"
 	case m == "agy" || strings.HasPrefix(m, "agy:"):

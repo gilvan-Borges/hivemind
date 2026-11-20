@@ -217,3 +217,52 @@ func TestJevModelFactoryBuildErrorRedacted(t *testing.T) {
 		t.Fatalf("secret leaked in returned error: %v", err)
 	}
 }
+
+func TestJevModelFactoryProviderScopedOpenRouterAuto(t *testing.T) {
+	pol := jev.DefaultPolicy() // Enabled: false; opt-in via openrouter:auto or jev:openrouter
+	cat := jev.NewCatalogStore(t.TempDir()+"/catalog.json", nil)
+	cat.MergeSource("openrouter", []jev.ModelEntry{
+		{
+			Provider:           "openrouter",
+			Model:              "deepseek/deepseek-chat",
+			ContextLength:      128_000,
+			PromptMicroUSD:     0.14,
+			CompletionMicroUSD: 0.28,
+			Capabilities:       jev.Capabilities{Tools: true},
+			Tier:               jev.TierCheap,
+		},
+	})
+	for _, spec := range []team.Agent{
+		{Name: "dev", Role: team.RoleDeveloper, Provider: "openrouter", Model: "openrouter:auto"},
+		{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "jev:openrouter"},
+	} {
+		var calledProvider, calledModel string
+		factory := NewJevModelFactory(JevFactoryOptions{
+			Policy:  &pol,
+			Catalog: cat,
+			Health: func() jev.HealthSnapshot {
+				return jev.HealthSnapshot{
+					Credentials:     map[string]bool{"agy": true, "gemini": true, "openrouter": true},
+					AgyRemainingPct: -1,
+				}
+			},
+			BuildModel: func(_ context.Context, provider, modelName string) (model.LLM, error) {
+				calledProvider = provider
+				calledModel = modelName
+				return &modelx.Scripted{}, nil
+			},
+		})
+		ctx := withJevRouteHint(context.Background(), jevRouteHint{
+			Step:         "dev_report",
+			ObjectiveLen: 200,
+			InputTokens:  3000,
+			NeedsTools:   true,
+		})
+		if _, err := factory(ctx, spec); err != nil {
+			t.Fatalf("spec %+v unexpected error: %v", spec, err)
+		}
+		if calledProvider != "openrouter" || calledModel != "deepseek/deepseek-chat" {
+			t.Fatalf("spec %+v expected Jev to pick openrouter/deepseek/deepseek-chat (ignoring static agy/gemini seeds), got %s/%s", spec, calledProvider, calledModel)
+		}
+	}
+}
