@@ -38,11 +38,22 @@ const (
 
 // Call is a single structured tool invocation passed to the policy & broker (§4).
 type Call struct {
-	Name       string         `json:"name"`
-	Args       map[string]any `json:"args,omitempty"`
-	Origin     Origin         `json:"origin"`
-	Workstream string         `json:"workstream,omitempty"`
-	ParentTier Tier           `json:"parentTier,omitempty"`
+	Name         string         `json:"name"`
+	Args         map[string]any `json:"args,omitempty"`
+	Origin       Origin         `json:"origin"`
+	Workstream   string         `json:"workstream,omitempty"`
+	ParentTier   Tier           `json:"parentTier,omitempty"`
+	AllowedTiers []Tier         `json:"-"`
+}
+
+// SquadHandoff is the structured charge sent to the squad after approval.
+// The host fills PermissionMode from team.yaml; the model cannot set it.
+type SquadHandoff struct {
+	Workspace      string
+	Team           string
+	Objective      string
+	Facts          []string
+	PermissionMode string
 }
 
 // Decision is the pure policy result for a Call (§4).
@@ -178,14 +189,14 @@ type TurnRequest struct {
 
 // TurnResult summarizes the completed turn.
 type TurnResult struct {
-	SessionID    string `json:"sessionId"`
-	Workstream   string `json:"workstream"`
-	FinalText    string `json:"finalText"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model"`
-	InputTokens  int64  `json:"inputTokens"`
-	OutputTokens int64  `json:"outputTokens"`
-	TotalTokens  int64  `json:"totalTokens"`
-	ToolCalls    int    `json:"toolCalls"`
-	PromptBuildMs int64 `json:"promptBuildMs"`
+	SessionID     string `json:"sessionId"`
+	Workstream    string `json:"workstream"`
+	FinalText     string `json:"finalText"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	InputTokens   int64  `json:"inputTokens"`
+	OutputTokens  int64  `json:"outputTokens"`
+	TotalTokens   int64  `json:"totalTokens"`
+	ToolCalls     int    `json:"toolCalls"`
+	PromptBuildMs int64  `json:"promptBuildMs"`
 }

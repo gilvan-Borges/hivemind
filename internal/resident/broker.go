@@ -50,6 +50,14 @@ type BrokerConfig struct {
 	Approve         ApprovalFunc
 	ApproveDetailed ApprovalDetailFunc
 	OnToolEvent     func(ev Event)
+	// Phase3 enables cron_add, spawn_subagent and delegate_to_hive_team.
+	Phase3         bool
+	AllowedTiers   []Tier
+	PermissionMode func(workspace string) string
+	Spawn          func(ctx context.Context, objective string, roots, classes []string) (string, error)
+	SquadHandoff   func(ctx context.Context, h SquadHandoff) (string, error)
+	OnRoutineSaved func()
+	BaseDir        string
 	// CustomHandlers optionally overrides built-in handlers (used in tests
 	// to observe exact invocation order relative to Audit.RecordDecision).
 	CustomHandlers map[string]ToolHandler
@@ -106,11 +114,15 @@ func (b *Broker) ObservedCalls() []Call {
 func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]any) (string, error) {
 	cleanArgs := SanitizeArgs(rawArgs)
 	call := Call{
-		Name:       strings.TrimSpace(name),
-		Args:       cleanArgs,
-		Origin:     b.cfg.Origin,
-		Workstream: b.cfg.Workstream,
-		ParentTier: b.cfg.ParentTier,
+		Name:         strings.TrimSpace(name),
+		Args:         cleanArgs,
+		Origin:       b.cfg.Origin,
+		Workstream:   b.cfg.Workstream,
+		ParentTier:   b.cfg.ParentTier,
+		AllowedTiers: b.cfg.AllowedTiers,
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	b.mu.Lock()
@@ -162,8 +174,16 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 		}
 		riskLabel := RiskLabel(tier)
 		safeTarget := RedactTarget(target)
-		prompt := fmt.Sprintf("Hive Residente · Risco: %s\nOrigem: %s · Classe: %s\nFerramenta: %s\nAlvo: %s\n\nPermitir esta ação?",
-			riskLabel, call.Origin, tier, toolName, safeTarget)
+		extra := ""
+		if toolName == "delegate_to_hive_team" && b.cfg.PermissionMode != nil {
+			mode := strings.TrimSpace(b.cfg.PermissionMode(b.cfg.Workspace))
+			if mode == "" {
+				mode = "indisponível"
+			}
+			extra = "\npermission_mode do time: " + mode
+		}
+		prompt := fmt.Sprintf("Hive Residente · Risco: %s\nOrigem: %s · Classe: %s\nFerramenta: %s\nAlvo: %s%s\n\nPermitir esta ação?",
+			riskLabel, call.Origin, tier, toolName, safeTarget, extra)
 		req := ApprovalRequest{
 			ApprovalID: callID,
 			ToolName:   toolName,
@@ -409,9 +429,20 @@ func (b *Broker) resolveHandler(name string) (ToolHandler, bool) {
 		return b.handleExecCommand, true
 	case "net_fetch":
 		return b.handleNetFetch, true
-	default:
-		return nil, false
+	case "cron_add":
+		if b.cfg.Phase3 {
+			return b.handleCronAdd, true
+		}
+	case "spawn_subagent":
+		if b.cfg.Phase3 {
+			return b.handleSpawn, true
+		}
+	case "delegate_to_hive_team":
+		if b.cfg.Phase3 {
+			return b.handleHandoff, true
+		}
 	}
+	return nil, false
 }
 
 func (b *Broker) requireWorkspace() (string, error) {
@@ -831,6 +862,66 @@ func intArg(args map[string]any, key string) int {
 	default:
 		return 0
 	}
+}
+
+func (b *Broker) handleCronAdd(_ context.Context, args map[string]any) (string, error) {
+	base := strings.TrimSpace(b.cfg.BaseDir)
+	if base == "" {
+		return "", fmt.Errorf("diretório do residente ausente")
+	}
+	rt, err := SaveRoutine(base, Routine{
+		Expr:       strArg(args, "expr"),
+		Timezone:   strArg(args, "timezone"),
+		Text:       strArg(args, "text"),
+		Workstream: firstNonEmptyStr(strArg(args, "workstream"), b.cfg.Workstream),
+		Classes:    strSliceArg(args, "classes"),
+		Enabled:    true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if b.cfg.OnRoutineSaved != nil {
+		b.cfg.OnRoutineSaved()
+	}
+	return "rotina gravada: " + rt.ID, nil
+}
+
+func (b *Broker) handleSpawn(ctx context.Context, args map[string]any) (string, error) {
+	if b.cfg.Spawn == nil {
+		return "", fmt.Errorf("subagente indisponível")
+	}
+	out, err := b.cfg.Spawn(ctx, strArg(args, "objective"), strSliceArg(args, "roots"), strSliceArg(args, "classes"))
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func (b *Broker) handleHandoff(ctx context.Context, args map[string]any) (string, error) {
+	if b.cfg.SquadHandoff == nil {
+		return "", fmt.Errorf("handoff para o time indisponível")
+	}
+	mode := ""
+	if b.cfg.PermissionMode != nil {
+		mode = b.cfg.PermissionMode(b.cfg.Workspace)
+	}
+	facts := strSliceArg(args, "facts")
+	if len(facts) == 0 {
+		if s, ok := args["facts"].(string); ok && strings.TrimSpace(s) != "" {
+			facts = []string{strings.TrimSpace(s)}
+		}
+	}
+	hash, err := b.cfg.SquadHandoff(ctx, SquadHandoff{
+		Workspace:      b.cfg.Workspace,
+		Team:           strArg(args, "team"),
+		Objective:      strArg(args, "objective"),
+		Facts:          facts,
+		PermissionMode: mode,
+	})
+	if err != nil {
+		return "", err
+	}
+	return "handoff aceito: " + hash, nil
 }
 
 func boolArg(args map[string]any, key string) bool {

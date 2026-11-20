@@ -1100,4 +1100,19 @@ export interface WailsBackendApp {
   ResidentAddMemory?(workstream: string, text: string, pinned: boolean): Promise<ResidentMemoryFact>;
   ResidentDeleteMemory?(id: string): Promise<boolean>;
   ResidentAuditLog?(limit: number): Promise<ResidentAuditEntry[]>;
+  ResidentListRoutines?(): Promise<ResidentRoutine[]>;
+  ResidentSaveRoutine?(expr: string, timezone: string, text: string, workstream: string, classes: string[]): Promise<ResidentRoutine>;
+  ResidentSetRoutineEnabled?(id: string, enabled: boolean): Promise<void>;
+  ResidentDeleteRoutine?(id: string): Promise<void>;
+  ResidentReviewSkill?(name: string): Promise<string>;
+}
+
+export interface ResidentRoutine {
+  id: string;
+  expr: string;
+  timezone?: string;
+  text: string;
+  workstream?: string;
+  classes?: string[];
+  enabled: boolean;
 }
