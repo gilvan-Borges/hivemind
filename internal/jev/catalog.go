@@ -17,7 +17,7 @@ const CatalogTTL = 30 * time.Minute
 // SourceFetcher retrieves fresh ModelEntry items for one catalog source outside the hot path.
 type SourceFetcher func(ctx context.Context) ([]ModelEntry, error)
 
-// StaticSeedEntries returns the baseline cheap model seeds from SPEC_JEV_ORQUESTRADOR §6
+// StaticSeedEntries returns the baseline cheap and mid model seeds from SPEC_JEV_ORQUESTRADOR §6
 // used when no network snapshot exists yet or when a remote refresh fails.
 func StaticSeedEntries() []ModelEntry {
 	return []ModelEntry{
@@ -43,6 +43,45 @@ func StaticSeedEntries() []ModelEntry {
 			Tier:          TierCheap,
 			Source:        "static",
 			Free:          true,
+		},
+		{
+			Provider:           "openrouter",
+			Model:              "deepseek/deepseek-chat",
+			ContextLength:      128_000,
+			PromptMicroUSD:     0.14,
+			CompletionMicroUSD: 0.28,
+			Capabilities:       Capabilities{Tools: true, Stream: true},
+			LatencyP50Ms:       850,
+			Quality:            0.74,
+			DataClass:          DataClassHTTPAPI,
+			Tier:               TierCheap,
+			Source:             "static",
+		},
+		{
+			Provider:           "openrouter",
+			Model:              "google/gemini-2.5-flash",
+			ContextLength:      1_000_000,
+			PromptMicroUSD:     0.15,
+			CompletionMicroUSD: 0.60,
+			Capabilities:       Capabilities{Tools: true, Vision: true, Stream: true},
+			LatencyP50Ms:       750,
+			Quality:            0.76,
+			DataClass:          DataClassHTTPAPI,
+			Tier:               TierCheap,
+			Source:             "static",
+		},
+		{
+			Provider:           "openrouter",
+			Model:              "openai/gpt-4.1-mini",
+			ContextLength:      1_000_000,
+			PromptMicroUSD:     0.40,
+			CompletionMicroUSD: 1.60,
+			Capabilities:       Capabilities{Tools: true, Vision: true, Stream: true},
+			LatencyP50Ms:       800,
+			Quality:            0.78,
+			DataClass:          DataClassHTTPAPI,
+			Tier:               TierMid,
+			Source:             "static",
 		},
 		{
 			Provider:      "agy",
@@ -208,7 +247,9 @@ func (s *CatalogStore) RefreshIfStale(ctx context.Context) {
 				delete(s.refreshing, source)
 				s.mu.Unlock()
 			}()
-			entries, err := fn(ctx)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			entries, err := fn(bgCtx)
 			if err != nil || len(entries) == 0 {
 				return
 			}

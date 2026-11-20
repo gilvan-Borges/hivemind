@@ -872,10 +872,11 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
 	ctx = modelx.WithAgentDir(ctx, root)
 	label := roleLabel(a.Role) + " · " + a.Name
-	inTok := int(r.turnInputTokens)
-	if inTok <= 0 {
-		inTok = jev.EstimateFirstStepInputTokens(len(r.objectiveText)+len(extra)+len(r.chiefPlan), len(r.teamMemorySnippet()), true)
-	}
+	// Pipeline agents run with IncludeContentsNone, so their initial context is
+	// strictly their system instructions plus the state handoff keys (objective,
+	// chief_plan, chief_context_brief, etc.) — NOT r.turnInputTokens (which is
+	// the cumulative sum of all prior LLM calls across the turn).
+	inTok := jev.EstimateFirstStepInputTokens(len(r.objectiveText)+len(extra)+len(r.chiefPlan)+len(r.chiefContextBrief), len(r.teamMemorySnippet()), true)
 	runMode := ""
 	if r.autoReviewMode {
 		runMode = "auto-review"
@@ -1111,10 +1112,13 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	}
 	m, err := buildOne(a)
 	if err != nil && (a.Role == team.RoleQA || a.Role == team.RoleDeveloper || a.Role == team.RoleTechLead) {
-		// If a specialist agent (e.g. QA pinned to Cursor without CURSOR_API_KEY) fails to
-		// initialize due to missing credentials, fall back to the Chief's configured provider/model
-		// so the squad run does not abort mid-pipeline.
-		if jev.ClassifyError(err) == jev.ErrClassAuth {
+		// If a specialist agent (e.g. QA pinned to Cursor without CURSOR_API_KEY, or Dev
+		// on Jev when secondary providers have no active credentials/catalog match) fails
+		// to initialize, fall back to the Chief's working provider/model so the squad run
+		// does not abort mid-pipeline after Triage already succeeded.
+		errMsg := strings.ToLower(err.Error())
+		isJevRefusal := strings.Contains(errMsg, "roteamento jev recusou") || strings.Contains(errMsg, "provedores estão esgotados")
+		if jev.ClassifyError(err) == jev.ErrClassAuth || isJevRefusal {
 			chief := r.primaryChief()
 			if !strings.EqualFold(chief.Provider, a.Provider) || !strings.EqualFold(chief.Model, a.Model) {
 				fallback := a

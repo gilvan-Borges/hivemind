@@ -123,7 +123,7 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 			best = cheapBest
 			estMicro = cheapEst
 			targetTier = TierCheap
-		} else if refusal.Code == "" {
+		} else if cheapRef.Code != "" {
 			refusal = cheapRef
 		}
 	}
@@ -257,7 +257,7 @@ func selectBestInTier(
 		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
 			continue
 		}
-		if (hasCircuits && !isCircuitEligible(e.Provider, health)) || (hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health)) {
+		if (hasCircuits && !isEntryCircuitEligible(*e, health)) || (hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health)) {
 			sawCircuit = true
 			continue
 		}
@@ -375,7 +375,7 @@ func selectBestInTier(
 		if e.Tier == TierStrong {
 			continue
 		}
-		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isCircuitEligible(e.Provider, health)) {
+		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isEntryCircuitEligible(*e, health)) {
 			continue
 		}
 		if hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health) {
@@ -536,6 +536,22 @@ func isCredentialed(provider string, free bool, health HealthSnapshot) bool {
 func modelIsFree(cat Catalog, provider, model string) bool {
 	e, ok := cat.Lookup(provider, model)
 	return ok && e.Free
+}
+
+func isEntryCircuitEligible(e ModelEntry, health HealthSnapshot) bool {
+	if isCircuitEligible(e.Provider, health) {
+		return true
+	}
+	// A free OpenCode Zen model (e.g. opencode:big-pickle) does not consume paid OpenCode Go
+	// quota; if the opencode provider circuit is open solely due to quota exhaustion, keep
+	// free Zen models eligible unless their own model circuit is open.
+	if e.Free && strings.EqualFold(e.Provider, "opencode") && !strings.HasPrefix(strings.ToLower(e.Model), "opencode-go:") {
+		st, ok := health.Circuits["opencode"]
+		if ok && st.Reason == string(ErrClassQuota) {
+			return true
+		}
+	}
+	return false
 }
 
 func isCircuitEligible(provider string, health HealthSnapshot) bool {
