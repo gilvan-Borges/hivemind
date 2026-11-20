@@ -63,19 +63,18 @@ func ReadLiveAgyOAuthCredential() (raw []byte, email string, err error) {
 	if err != nil {
 		return nil, "", err
 	}
-	var credPtr uintptr
+	var cred *winCredential
 	r1, _, e1 := procCredReadW.Call(
 		uintptr(unsafe.Pointer(targetPtr)),
 		uintptr(credTypeGeneric),
 		0,
-		uintptr(unsafe.Pointer(&credPtr)),
+		uintptr(unsafe.Pointer(&cred)),
 	)
-	if r1 == 0 || credPtr == 0 {
+	if r1 == 0 || cred == nil {
 		return nil, "", fmt.Errorf("nenhuma sessão OAuth ativa em %s (%v)", agyCredTargetName, e1)
 	}
-	defer procCredFree.Call(credPtr)
+	defer procCredFree.Call(uintptr(unsafe.Pointer(cred)))
 
-	cred := (*winCredential)(unsafe.Pointer(credPtr))
 	if cred.CredentialBlobSize == 0 || cred.CredentialBlob == nil {
 		return nil, "", fmt.Errorf("sessão OAuth vazia")
 	}
