@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIProviderUsage, AIUsageReport, GitHubStatus } from "./types";
+import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderProfileSummary } from "./types";
 import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
@@ -68,8 +68,22 @@ export async function refreshJiraStatusAndProjects() {
   }
 }
 
+export async function refreshProviderProfiles() {
+  const backend = api();
+  const root = state.project?.root || "";
+  if (!backend?.GetProviderProfilesOverview) return;
+  try {
+    state.profilesOverview = await backend.GetProviderProfilesOverview(root);
+    updateStatusBar();
+    if (state.showAPIKeysModal) renderModalLayer();
+  } catch {
+    // mantém estado anterior
+  }
+}
+
 export async function openJiraModal() {
   state.showJiraModal = true;
+  state.jiraEditingProfileId = null;
   renderModalLayer();
   await refreshJiraStatusAndProjects();
 }
@@ -103,14 +117,23 @@ export async function openOpenCodeModal() {
   }
 }
 
-export async function openAPIKeysModal() {
+export async function openAPIKeysModal(initialTab?: "profiles" | "global", initialProvider?: string) {
+  if (initialTab) state.apiKeysTab = initialTab;
+  if (initialProvider) {
+    state.apiKeysTab = "profiles";
+    state.profileEditor = { open: true, id: "", provider: initialProvider, authMode: initialProvider === "agy" ? "adc" : "key" };
+  }
   state.showAPIKeysModal = true;
   renderModalLayer();
   const backend = api();
-  if (!backend?.GetAPIKeysStatus) return;
   try {
-    state.apiKeysStatus = await backend.GetAPIKeysStatus();
-    if (backend.CursorCLIStatus) state.cursorCLI = await backend.CursorCLIStatus();
+    if (backend?.GetProviderProfilesOverview) {
+      state.profilesOverview = await backend.GetProviderProfilesOverview(state.project?.root || "");
+    }
+    if (backend?.GetAPIKeysStatus) {
+      state.apiKeysStatus = await backend.GetAPIKeysStatus();
+    }
+    if (backend?.CursorCLIStatus) state.cursorCLI = await backend.CursorCLIStatus();
     renderModalLayer();
   } catch {
     // mantém o modal aberto sem status
@@ -383,7 +406,7 @@ export function renderModalLayer() {
             ${state.models.length === 0 ? "Nenhum modelo carregado." : state.models.map((m) => `<div>${escapeHtml(m.slug)} — <span class="dim">${escapeHtml(m.name)}</span></div>`).join("")}
           </div>
           <div class="modal-footer">
-            <button id="doc-api-keys">${icons.settings}<span>Chaves de API (Provedores LLM)…</span></button>
+            <button id="doc-api-keys">${icons.settings}<span>Contas por Org &amp; Chaves…</span></button>
             <div class="spacer"></div>
             <button class="primary" id="doc-close">Fechar</button>
           </div>
@@ -396,44 +419,249 @@ export function renderModalLayer() {
     });
     document.getElementById("doc-api-keys")?.addEventListener("click", () => {
       state.doctorModal = null;
-      void openAPIKeysModal();
+      void openAPIKeysModal("profiles", "agy");
     });
     return;
   }
 
   if (state.showAPIKeysModal) {
+    const tab = state.apiKeysTab || "profiles";
+    const ov = state.profilesOverview;
     const saved = state.apiKeysStatus || {};
     const field = (id: string, label: string, placeholder: string, savedMask?: string) => `
       <label for="${id}">${escapeHtml(label)}${savedMask ? ` <span class="dim" style="font-weight:500">(salvo: ${escapeHtml(savedMask)})</span>` : ""}</label>
       <input id="${id}" type="${id.includes("KEY") ? "password" : "text"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
     `;
+
+    const provLabels: Record<string, string> = {
+      agy: "Antigravity (agy)",
+      cursor: "Cursor CLI",
+      openrouter: "OpenRouter",
+      openai: "OpenAI / Grok",
+      anthropic: "Anthropic (Claude)",
+      gemini: "Google Gemini / Vertex",
+      opencode: "OpenCode Go & Zen",
+    };
+    const provKeys: Record<string, Array<{ key: string; label: string; placeholder: string; secret?: boolean }>> = {
+      cursor: [{ key: "CURSOR_API_KEY", label: "Cursor API Key", placeholder: "crsr_…", secret: true }],
+      openrouter: [
+        { key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", placeholder: "sk-or-v1-…", secret: true },
+        { key: "OPENROUTER_BASE_URL", label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
+      ],
+      openai: [
+        { key: "OPENAI_API_KEY", label: "OpenAI API Key", placeholder: "sk-…", secret: true },
+        { key: "OPENAI_BASE_URL", label: "Base URL", placeholder: "https://api.openai.com/v1" },
+      ],
+      anthropic: [{ key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", placeholder: "sk-ant-…", secret: true }],
+      gemini: [
+        { key: "GOOGLE_API_KEY", label: "Gemini API Key", placeholder: "AIza…", secret: true },
+        { key: "GOOGLE_CLOUD_PROJECT", label: "Vertex Projeto", placeholder: "meu-projeto-gcp" },
+        { key: "GOOGLE_CLOUD_LOCATION", label: "Vertex Região", placeholder: "us-central1" },
+      ],
+      opencode: [
+        { key: "OPENCODE_API_KEY", label: "OpenCode Token", placeholder: "oc_…", secret: true },
+        { key: "OPENCODE_BASE_URL", label: "Base URL", placeholder: "https://opencode.ai/zen/v1" },
+      ],
+    };
+
+    const profilesList = ov?.profiles || [];
+    const ed = state.profileEditor;
+    const editingProf: ProviderProfileSummary | undefined = ed.id
+      ? profilesList.find((p) => p.id === ed.id)
+      : undefined;
+    const curProv = ed.provider || editingProf?.provider || "agy";
+    const curAuthMode = ed.authMode || editingProf?.authMode || (curProv === "agy" ? "adc" : "key");
+    const detectedOrg = ov?.identity?.gitOrg || "";
+    const wsRoot = state.project?.root || "";
+
+    const renderOrgSummaryGrid = () => {
+      if (!ov) return `<div class="dim" style="font-size:12px">Carregando contas configuradas…</div>`;
+      const provs = Object.keys(provLabels);
+      return `
+        <div style="display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center;font-size:12px;margin-top:8px">
+          ${provs.map((pv) => {
+            const info = ov.resolved?.[pv];
+            const pvProfiles = profilesList.filter((p) => p.provider === pv);
+            const activeLabel = info?.profileName
+              ? `${escapeHtml(info.profileName)} (${info.matchMode === "auto_org" ? `auto: ${escapeHtml(info.matchedRule || detectedOrg)}` : info.matchMode})`
+              : info?.matchMode === "isolated"
+                ? "Isolado (sem conta desta org)"
+                : "Global / Ambiente";
+            return `
+              <div>
+                <strong>${escapeHtml(provLabels[pv])}</strong>
+                <div class="dim" style="font-size:11px">${activeLabel}</div>
+              </div>
+              <select class="prov-ws-bind" data-prov="${pv}" style="min-width:175px;font-size:11.5px;padding:4px 8px">
+                <option value="auto" ${!info?.bindingMode ? "selected" : ""}>Auto (pela org)</option>
+                <option value="global" ${info?.bindingMode === "global" ? "selected" : ""}>Forçar global/env</option>
+                ${pvProfiles.map((p) => `<option value="${escapeHtml(p.id)}" ${info?.bindingMode === p.id ? "selected" : ""}>Fixar: ${escapeHtml(p.name)}</option>`).join("")}
+              </select>
+            `;
+          }).join("")}
+        </div>
+      `;
+    };
+
+    const renderProfileEditor = () => {
+      if (!ed.open) return "";
+      const suggestedStr = (ov?.identity?.suggestedPatterns || []).join(", ");
+      const orgVal = editingProf?.orgPatterns?.join(", ") || "";
+      const agyFields = curProv === "agy" ? `
+        <label for="prof-agy-mode">Modo de autenticação (agy):</label>
+        <select id="prof-agy-mode">
+          <option value="adc" ${curAuthMode === "adc" ? "selected" : ""}>Google Cloud ADC isolado (multi-conta simultânea)</option>
+          <option value="live" ${curAuthMode === "live" ? "selected" : ""}>Sessão OAuth ativa no sistema (agy padrão)</option>
+          <option value="env" ${curAuthMode === "env" ? "selected" : ""}>Binário / Variáveis customizadas</option>
+        </select>
+        ${curAuthMode === "adc" ? `
+          <label for="prof-env-GOOGLE_CLOUD_PROJECT">GCP Project ID:</label>
+          <input id="prof-env-GOOGLE_CLOUD_PROJECT" value="${escapeHtml(editingProf?.configValues?.["GOOGLE_CLOUD_PROJECT"] || "")}" placeholder="meu-projeto-empresa" />
+          <label for="prof-env-GOOGLE_CLOUD_QUOTA_PROJECT">Quota Project (opcional):</label>
+          <input id="prof-env-GOOGLE_CLOUD_QUOTA_PROJECT" value="${escapeHtml(editingProf?.configValues?.["GOOGLE_CLOUD_QUOTA_PROJECT"] || "")}" placeholder="mesmo-projeto-gcp" />
+          <label for="prof-env-CLOUDSDK_CONFIG">Pasta CLOUDSDK_CONFIG:</label>
+          <input id="prof-env-CLOUDSDK_CONFIG" value="${escapeHtml(editingProf?.configValues?.["CLOUDSDK_CONFIG"] || "")}" placeholder="Automática em %APPDATA%\\HiveMind\\agy-profiles se vazio" />
+          <div class="dim" style="grid-column:1/-1;font-size:11px;line-height:1.45;background:var(--bg-deep);border:1px solid var(--border);padding:8px;border-radius:8px">
+            Cada perfil ADC ganha sua própria pasta isolada de credenciais gcloud (permite rodar <strong>conta pessoal</strong> e <strong>conta Vibetex</strong> ao mesmo tempo sem deslogar). Após salvar, rode no terminal com o caminho gerado:<br />
+            <code>set CLOUDSDK_CONFIG=&lt;pasta&gt; &amp;&amp; gcloud auth application-default login</code>
+          </div>
+        ` : curAuthMode === "env" ? `
+          <label for="prof-command">Caminho do agy (opcional):</label>
+          <input id="prof-command" value="${escapeHtml(editingProf?.command || "")}" placeholder="Padrão do PATH" />
+          <label for="prof-env-AGY_ACCOUNT">AGY_ACCOUNT (opcional):</label>
+          <input id="prof-env-AGY_ACCOUNT" value="${escapeHtml(editingProf?.configValues?.["AGY_ACCOUNT"] || "")}" placeholder="trabalho" />
+          <label for="prof-env-GOOGLE_CLOUD_PROJECT">GOOGLE_CLOUD_PROJECT:</label>
+          <input id="prof-env-GOOGLE_CLOUD_PROJECT" value="${escapeHtml(editingProf?.configValues?.["GOOGLE_CLOUD_PROJECT"] || "")}" placeholder="opcional" />
+        ` : `
+          <div class="dim" style="grid-column:1/-1;font-size:11px">Usa a sessão Google Pro atualmente conectada no <code>agy</code> do sistema.</div>
+        `}
+      ` : (provKeys[curProv] || []).map((f) => {
+        const mask = editingProf?.envMasked?.[f.key] || "";
+        const cfgVal = editingProf?.configValues?.[f.key] || "";
+        return `
+          <label for="prof-env-${f.key}">${escapeHtml(f.label)}:${mask ? ` <span class="dim">(salvo: ${escapeHtml(mask)})</span>` : ""}</label>
+          <input id="prof-env-${f.key}" type="${f.secret ? "password" : "text"}" value="${f.secret ? "" : escapeHtml(cfgVal)}" placeholder="${mask ? "Preencha apenas se quiser trocar" : escapeHtml(f.placeholder)}" autocomplete="off" />
+        `;
+      }).join("");
+
+      return `
+        <div style="margin-top:12px;padding:12px;border-radius:10px;background:var(--bg-sidebar);border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <strong>${editingProf ? `Editar perfil: ${escapeHtml(editingProf.name)}` : "Nova conta / perfil"}</strong>
+            <button type="button" class="mini" id="prof-cancel-edit">Cancelar</button>
+          </div>
+          <div class="form-grid">
+            <label for="prof-provider">Provedor:</label>
+            <select id="prof-provider" ${editingProf ? "disabled" : ""}>
+              ${Object.entries(provLabels).map(([id, lbl]) => `<option value="${id}" ${curProv === id ? "selected" : ""}>${escapeHtml(lbl)}</option>`).join("")}
+            </select>
+
+            <label for="prof-name">Nome da conta:</label>
+            <input id="prof-name" value="${escapeHtml(editingProf?.name || "")}" placeholder="ex.: Vibetex ou Pessoal" />
+
+            <label for="prof-orgs">Orgs Git / Pastas:</label>
+            <div style="display:flex;gap:6px">
+              <input id="prof-orgs" style="flex:1" value="${escapeHtml(orgVal)}" placeholder="ex.: vibetex, projeto-vibetex" />
+              ${suggestedStr ? `<button type="button" class="mini" id="prof-use-org" title="Preencher com org detectada do projeto atual">+ Org atual</button>` : ""}
+            </div>
+
+            ${agyFields}
+
+            <label></label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;cursor:pointer">
+              <input type="checkbox" id="prof-default" ${editingProf?.isDefault ? "checked" : ""} />
+              Usar como conta padrão deste provedor quando nenhuma regra de org bater
+            </label>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+            ${wsRoot ? `<button type="button" class="mini" id="prof-save-bind">Salvar &amp; Fixar aqui</button>` : ""}
+            <button type="button" class="primary mini" id="prof-save">${icons.check}<span>Salvar Perfil</span></button>
+          </div>
+        </div>
+      `;
+    };
+
     layer.innerHTML = `
       <div class="modal-backdrop" id="ak-modal-backdrop">
-        <div class="modal-box" role="dialog" aria-modal="true" style="width:560px">
-          <h3 class="modal-title">Chaves de API — Provedores LLM</h3>
-          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px;line-height:1.5">
-            Salve aqui as chaves dos provedores (arquivo <code>api-keys.json</code> em <code>%APPDATA%\\HiveMind</code>, fora do repositório).
-            Variáveis de ambiente sempre têm prioridade sobre o que está salvo. Deixar o campo vazio remove o valor salvo.
-          </p>
-          ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">⚠ A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e TEM prioridade sobre o valor salvo aqui.</div>` : ""}
-          <div class="form-grid">
-            ${field("ak-CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
-            <p class="dim" style="font-size:11.5px;margin:-4px 0 8px;line-height:1.45">Não é uma API de chat. O HiveMind chama o <code>agent -p</code> no workspace do agente. ${state.cursorCLI?.detail ? escapeHtml(state.cursorCLI.detail) : "Se o CLI não estiver instalado, no Windows: irm 'https://cursor.com/install?win32=true' | iex"}</p>
-            ${state.apiKeysStatus?.["env_CURSOR_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">⚠ A variável <code>CURSOR_API_KEY</code> do sistema tem prioridade sobre o valor salvo aqui.</div>` : ""}
-            ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-… (chave em https://openrouter.ai/keys)", saved["OPENROUTER_API_KEY"])}
-            ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
-            ${field("ak-OPENAI_API_KEY", "OpenAI API Key:", "sk-…", saved["OPENAI_API_KEY"])}
-            ${field("ak-OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
-            ${field("ak-ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
-            ${field("ak-GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
-            ${field("ak-GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
-            ${field("ak-GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:650px;max-height:86vh;display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <h3 class="modal-title" style="margin:0">Contas por Organização &amp; Provedores LLM</h3>
+            <div style="display:flex;gap:6px">
+              <button type="button" class="mini ${tab === "profiles" ? "primary" : ""}" id="ak-tab-profiles">Contas Multi-Org (${profilesList.length})</button>
+              <button type="button" class="mini ${tab === "global" ? "primary" : ""}" id="ak-tab-global">Chaves Globais</button>
+            </div>
           </div>
-          <div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
-          <div class="modal-footer">
+
+          <div style="overflow-y:auto;padding-right:4px;flex:1">
+            ${tab === "profiles" ? `
+              <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);margin-bottom:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                  <div style="font-size:12px">
+                    <strong>Projeto atual:</strong> ${escapeHtml(state.project?.name || "nenhum")}
+                    ${detectedOrg ? `<span class="dim"> · org Git: <code>${escapeHtml(detectedOrg)}</code></span>` : `<span class="dim"> · sem remote org</span>`}
+                  </div>
+                  <button type="button" class="primary mini" id="prof-new">+ Nova conta / perfil</button>
+                </div>
+                ${wsRoot ? renderOrgSummaryGrid() : `<div class="dim" style="font-size:11.5px;margin-top:6px">Abra um projeto para fixar contas específicas neste repositório.</div>`}
+              </div>
+
+              ${renderProfileEditor()}
+
+              <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                ${profilesList.length === 0 ? `
+                  <div class="dim" style="font-size:12px;padding:14px;text-align:center;border:1px dashed var(--border);border-radius:10px">
+                    Nenhuma conta extra configurada ainda. Clique em <strong>+ Nova conta / perfil</strong> para cadastrar múltiplas contas do <strong>agy</strong> (pessoal vs empresa), OpenRouter, Cursor, etc.
+                  </div>
+                ` : profilesList.map((p) => {
+                  const orgTag = p.orgPatterns?.length ? `Orgs: ${p.orgPatterns.map((o) => `<code>${escapeHtml(o)}</code>`).join(", ")}` : (p.isDefault ? "Padrão global do provedor" : "Uso manual / sob demanda");
+                  const maskedList = Object.entries(p.envMasked || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(" · ");
+                  return `
+                    <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+                      <div style="min-width:0;flex:1">
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                          <span style="font-size:11px;padding:2px 7px;border-radius:999px;background:var(--bg-elevated);border:1px solid var(--border);font-weight:600">${escapeHtml(provLabels[p.provider] || p.provider)}</span>
+                          <strong>${escapeHtml(p.name)}</strong>
+                          ${p.authMode && p.provider === "agy" ? `<span class="dim" style="font-size:11px">(${escapeHtml(p.authMode.toUpperCase())})</span>` : ""}
+                          <span style="font-size:11px;color:${p.ready ? "var(--green)" : "var(--amber)"}">${p.ready ? "Pronto" : "Pendente"}</span>
+                        </div>
+                        <div class="dim" style="font-size:11.5px;margin-top:4px">${orgTag}</div>
+                        ${p.readyDetail ? `<div class="dim" style="font-size:11px;margin-top:2px;word-break:break-word">${escapeHtml(p.readyDetail)}</div>` : ""}
+                        ${maskedList ? `<div class="dim" style="font-size:11px;margin-top:2px">${maskedList}</div>` : ""}
+                      </div>
+                      <div style="display:flex;gap:6px;flex-shrink:0">
+                        ${wsRoot ? `<button type="button" class="mini prof-pin" data-id="${escapeHtml(p.id)}" data-prov="${escapeHtml(p.provider)}">Usar aqui</button>` : ""}
+                        <button type="button" class="mini prof-edit" data-id="${escapeHtml(p.id)}">Editar</button>
+                        <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}">Excluir</button>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            ` : `
+              <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
+                Chaves globais padrão (<code>%APPDATA%\\HiveMind\\api-keys.json</code>), usadas como fallback quando o projeto/org não tiver um perfil específico.
+              </p>
+              ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema.</div>` : ""}
+              <div class="form-grid">
+                ${field("ak-CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
+                <p class="dim" style="font-size:11.5px;margin:-4px 0 8px;line-height:1.45">${state.cursorCLI?.detail ? escapeHtml(state.cursorCLI.detail) : "No Windows: irm 'https://cursor.com/install?win32=true' | iex"}</p>
+                ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
+                ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
+                ${field("ak-OPENAI_API_KEY", "OpenAI API Key:", "sk-…", saved["OPENAI_API_KEY"])}
+                ${field("ak-OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
+                ${field("ak-ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
+                ${field("ak-GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
+                ${field("ak-GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
+                ${field("ak-GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
+              </div>
+            `}
+            <div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+          </div>
+
+          <div class="modal-footer" style="margin-top:10px">
             <button id="ak-close">Fechar</button>
             <div class="spacer"></div>
-            <button class="primary" id="ak-save">${icons.check}<span>Salvar Chaves</span></button>
+            ${tab === "global" ? `<button class="primary" id="ak-save">${icons.check}<span>Salvar Chaves Globais</span></button>` : ""}
           </div>
         </div>
       </div>
@@ -441,12 +669,149 @@ export function renderModalLayer() {
 
     const closeAk = () => {
       state.showAPIKeysModal = false;
+      state.profileEditor.open = false;
       renderModalLayer();
     };
     document.getElementById("ak-close")?.addEventListener("click", closeAk);
     document.getElementById("ak-modal-backdrop")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement)?.id === "ak-modal-backdrop") closeAk();
     });
+    document.getElementById("ak-tab-profiles")?.addEventListener("click", () => {
+      state.apiKeysTab = "profiles";
+      renderModalLayer();
+    });
+    document.getElementById("ak-tab-global")?.addEventListener("click", () => {
+      state.apiKeysTab = "global";
+      renderModalLayer();
+    });
+
+    document.getElementById("prof-new")?.addEventListener("click", () => {
+      state.profileEditor = { open: true, id: "", provider: "agy", authMode: "adc" };
+      renderModalLayer();
+    });
+    document.getElementById("prof-cancel-edit")?.addEventListener("click", () => {
+      state.profileEditor.open = false;
+      renderModalLayer();
+    });
+    document.getElementById("prof-provider")?.addEventListener("change", (e) => {
+      const pv = (e.target as HTMLSelectElement).value;
+      state.profileEditor.provider = pv;
+      state.profileEditor.authMode = pv === "agy" ? "adc" : "key";
+      renderModalLayer();
+    });
+    document.getElementById("prof-agy-mode")?.addEventListener("change", (e) => {
+      state.profileEditor.authMode = (e.target as HTMLSelectElement).value;
+      renderModalLayer();
+    });
+    document.getElementById("prof-use-org")?.addEventListener("click", () => {
+      const el = document.getElementById("prof-orgs") as HTMLInputElement | null;
+      const sugg = ov?.identity?.gitOrg || ov?.identity?.suggestedPatterns?.[0] || "";
+      if (el && sugg) {
+        const cur = el.value.split(",").map((s) => s.trim()).filter(Boolean);
+        if (!cur.some((c) => c.toLowerCase() === sugg.toLowerCase())) cur.push(sugg);
+        el.value = cur.join(", ");
+      }
+    });
+
+    const saveProfileAction = async (bindHere: boolean) => {
+      const backend = api();
+      if (!backend?.SaveProviderProfile) return;
+      const nameVal = (document.getElementById("prof-name") as HTMLInputElement | null)?.value.trim() || "";
+      const orgsRaw = (document.getElementById("prof-orgs") as HTMLInputElement | null)?.value || "";
+      const orgPatterns = orgsRaw.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+      const isDefault = Boolean((document.getElementById("prof-default") as HTMLInputElement | null)?.checked);
+      const command = (document.getElementById("prof-command") as HTMLInputElement | null)?.value.trim() || "";
+      const env: Record<string, string> = {};
+      document.querySelectorAll<HTMLInputElement>("[id^='prof-env-']").forEach((inp) => {
+        const key = inp.id.replace("prof-env-", "");
+        env[key] = inp.value.trim();
+      });
+      try {
+        state.profilesOverview = await backend.SaveProviderProfile({
+          id: state.profileEditor.id || "",
+          provider: curProv,
+          name: nameVal,
+          authMode: curProv === "agy" ? curAuthMode : "key",
+          command,
+          env,
+          orgPatterns,
+          isDefault,
+          bindWorkspace: bindHere ? wsRoot : "",
+        });
+        state.profileEditor.open = false;
+        updateStatusBar();
+        toast("Perfil de provedor salvo.", "success");
+        renderModalLayer();
+      } catch (err: any) {
+        const errEl = document.getElementById("ak-modal-err");
+        if (errEl) {
+          errEl.textContent = err?.message || String(err);
+          errEl.style.display = "block";
+        }
+      }
+    };
+    document.getElementById("prof-save")?.addEventListener("click", () => void saveProfileAction(false));
+    document.getElementById("prof-save-bind")?.addEventListener("click", () => void saveProfileAction(true));
+
+    document.querySelectorAll<HTMLElement>(".prof-edit").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = btn.dataset.id || "";
+        const found = profilesList.find((x) => x.id === pid);
+        if (!found) return;
+        state.profileEditor = {
+          open: true,
+          id: found.id,
+          provider: found.provider,
+          authMode: found.authMode || (found.provider === "agy" ? "live" : "key"),
+        };
+        renderModalLayer();
+      });
+    });
+    document.querySelectorAll<HTMLElement>(".prof-del").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const backend = api();
+        const pid = btn.dataset.id || "";
+        if (!backend?.DeleteProviderProfile || !pid) return;
+        try {
+          state.profilesOverview = await backend.DeleteProviderProfile(pid, wsRoot);
+          updateStatusBar();
+          renderModalLayer();
+        } catch (err: any) {
+          toastError("excluir perfil", err);
+        }
+      });
+    });
+    document.querySelectorAll<HTMLElement>(".prof-pin").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const backend = api();
+        const pid = btn.dataset.id || "";
+        const pv = btn.dataset.prov || "";
+        if (!backend?.BindProviderWorkspace || !wsRoot) return;
+        try {
+          state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, pv, pid);
+          updateStatusBar();
+          toast("Conta fixada para este projeto.", "success");
+          renderModalLayer();
+        } catch (err: any) {
+          toastError("vincular conta", err);
+        }
+      });
+    });
+    document.querySelectorAll<HTMLSelectElement>(".prov-ws-bind").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const backend = api();
+        const pv = sel.dataset.prov || "";
+        if (!backend?.BindProviderWorkspace || !wsRoot || !pv) return;
+        try {
+          state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, pv, sel.value);
+          updateStatusBar();
+          renderModalLayer();
+        } catch (err: any) {
+          toastError("alterar vínculo do provedor", err);
+        }
+      });
+    });
+
     document.getElementById("ak-save")?.addEventListener("click", async () => {
       const backend = api();
       if (!backend?.SaveAPIKeys) return;
@@ -457,7 +822,7 @@ export function renderModalLayer() {
       }
       try {
         state.apiKeysStatus = await backend.SaveAPIKeys(entries);
-        toast("Chaves de API salvas (variáveis de ambiente continuam com prioridade).", "success");
+        toast("Chaves globais salvas.", "success");
         setStatus("Chaves de API atualizadas.");
         renderModalLayer();
       } catch (err: any) {
@@ -822,56 +1187,112 @@ export function renderModalLayer() {
 
   if (state.showJiraModal) {
     const jira = state.jiraStatus;
+    const profiles = jira?.profiles || [];
+    const wsRoot = state.project?.root || "";
+    const isNewMode = state.jiraEditingProfileId === "__new__";
+    const selectedProfile: JiraProfileSummary | undefined = isNewMode
+      ? undefined
+      : (profiles.find((p) => p.id === (state.jiraEditingProfileId || jira?.activeProfileId)) || profiles[0]);
+
     const statusBadge = jira?.connected
-      ? `<span style="color:var(--green);font-weight:600">Conectado como ${escapeHtml(jira.user || jira.email)}${jira.source ? ` (${jira.source === "env" ? "ENV" : jira.source.startsWith("mcp:") ? `MCP · ${jira.source.slice(4)}` : "Conector Nativo"})` : ""}${jira.tokenMasked ? ` · token ${escapeHtml(jira.tokenMasked)}` : ""}</span>`
-      : `<span style="color:var(--amber)">${escapeHtml(jira?.detail || "Desconectado — informe URL, E-mail e API Token ou importe do mcp_config.json")}</span>`;
+      ? `<span style="color:var(--green);font-weight:600">Conectado como ${escapeHtml(jira.user || jira.email)}${jira.activeProfileName ? ` · ${escapeHtml(jira.activeProfileName)}` : ""}${jira.matchMode === "auto_org" ? ` (auto: ${escapeHtml(jira.matchedRule || jira.detectedOrg || "")})` : jira.matchMode === "manual" ? " (fixado)" : ""}</span>`
+      : jira?.matchMode === "isolated_none"
+        ? `<span style="color:var(--text-dim)">${escapeHtml(jira.detail || "Sem Jira vinculado a este projeto")}</span>`
+        : `<span style="color:var(--amber)">${escapeHtml(jira?.detail || "Desconectado — adicione um perfil ou importe do mcp_config.json")}</span>`;
+
     const projects = state.jiraProjects || [];
-    const currentDefProj = (jira?.defaultProject || "").toUpperCase();
-    const hasMatchProj = projects.some((p) => p.key.toUpperCase() === currentDefProj);
+    const formBase = selectedProfile ? selectedProfile.baseUrl : (isNewMode ? "" : (jira?.baseUrl || ""));
+    const formEmail = selectedProfile ? selectedProfile.email : (isNewMode ? "" : (jira?.email || ""));
+    const formName = selectedProfile ? selectedProfile.name : "";
+    const formOrgs = selectedProfile?.orgPatterns?.join(", ") || "";
+    const formDefProj = (selectedProfile ? selectedProfile.defaultProject : (isNewMode ? "" : (jira?.defaultProject || ""))).toUpperCase();
+    const formHasTok = selectedProfile ? selectedProfile.hasToken : (jira?.source === "config");
+    const hasMatchProj = !isNewMode && projects.some((p) => p.key.toUpperCase() === formDefProj);
+    const suggestedOrg = jira?.detectedOrg || jira?.suggestedPatterns?.[0] || "";
 
     layer.innerHTML = `
       <div class="modal-backdrop" id="jira-modal-backdrop">
-        <div class="modal-box" role="dialog" aria-modal="true" style="width:560px">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:620px;max-height:86vh;display:flex;flex-direction:column">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-            <h3 class="modal-title" style="margin:0">Conector Jira Cloud (REST v3)</h3>
+            <h3 class="modal-title" style="margin:0">Conector Jira Cloud (Multi-Organização)</h3>
             <div style="display:flex;gap:6px">
-              <button type="button" class="mini" id="jira-import-mcp" title="Importar automaticamente de .agents/mcp_config.json, .mcp.json ou .cursor/mcp.json">${icons.download}<span>Importar do MCP</span></button>
+              <button type="button" class="mini" id="jira-import-mcp" title="Importar automaticamente de .agents/mcp_config.json, .mcp.json ou .cursor/mcp.json">${icons.download}<span>Importar MCP</span></button>
               <button type="button" class="mini" id="jira-open-token-help" title="Abrir página da Atlassian para criar um API Token">${icons.openInNew}<span>Gerar Token ↗</span></button>
             </div>
           </div>
-          <p class="dim" style="font-size:12px;margin-top:0;margin-bottom:10px">
-            Detecta automaticamente seu <code>mcp_config.json</code> (ex.: <code>.agents/mcp_config.json</code>) ou salve aqui uma única vez fora do repo. Pode colar só <code>sua-empresa.atlassian.net</code> — os projetos aparecem dinamicamente.
-          </p>
-          <div style="font-size:12px;margin-bottom:10px"><strong>Status:</strong> ${statusBadge}</div>
-          <div class="form-grid">
-            <label>URL do Jira:</label>
-            <input id="jira-base-url" value="${escapeHtml(jira?.baseUrl || "")}" placeholder="sua-empresa.atlassian.net" />
 
-            <label>E-mail (Atlassian):</label>
-            <input id="jira-email" value="${escapeHtml(jira?.email || "")}" placeholder="voce@empresa.com" autocomplete="off" />
+          <div style="overflow-y:auto;padding-right:4px;flex:1">
+            ${wsRoot ? `
+              <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                <div style="font-size:12px">
+                  <strong>Projeto atual:</strong> ${escapeHtml(state.project?.name || "")}
+                  ${jira?.detectedOrg ? `<span class="dim"> · org Git: <code>${escapeHtml(jira.detectedOrg)}</code></span>` : `<span class="dim"> · sem org Git</span>`}
+                  <div style="margin-top:3px">${statusBadge}</div>
+                </div>
+                <select id="jira-ws-bind" style="font-size:12px;padding:5px 8px;min-width:190px">
+                  <option value="auto" ${!jira?.bindingMode ? "selected" : ""}>Auto (detectar pela org)</option>
+                  <option value="none" ${jira?.bindingMode === "none" ? "selected" : ""}>Sem Jira neste projeto</option>
+                  ${profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${jira?.bindingMode === p.id ? "selected" : ""}>Fixar: ${escapeHtml(p.name)}</option>`).join("")}
+                </select>
+              </div>
+            ` : `<div style="font-size:12px;margin-bottom:10px"><strong>Status:</strong> ${statusBadge}</div>`}
 
-            <label>API Token:</label>
-            <input id="jira-api-token" type="password" placeholder="${jira?.source === "config" ? "Token salvo — cole outro apenas se quiser trocar" : "Cole o API Token gerado na Atlassian"}" autocomplete="off" />
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+              <button type="button" class="mini ${isNewMode || profiles.length === 0 ? "primary" : ""}" id="jira-profile-new">+ Novo Perfil Jira</button>
+              ${profiles.map((p) => {
+                const isSel = selectedProfile?.id === p.id;
+                const isAct = jira?.activeProfileId === p.id && jira?.connected;
+                return `<button type="button" class="mini jira-profile-chip ${isSel ? "primary" : ""}" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}${isAct ? " ✓" : ""}</button>`;
+              }).join("")}
+            </div>
 
-            <label>Projeto padrão:</label>
-            ${projects.length > 0
-              ? `<select id="jira-project">
-                  <option value="">(Selecionar projeto dinamicamente…)</option>
-                  ${projects.map((p) => `<option value="${escapeHtml(p.key)}" ${p.key.toUpperCase() === currentDefProj ? "selected" : ""}>${escapeHtml(p.key)} — ${escapeHtml(p.name)}</option>`).join("")}
-                  ${currentDefProj && !hasMatchProj ? `<option value="${escapeHtml(currentDefProj)}" selected>${escapeHtml(currentDefProj)} (atual)</option>` : ""}
-                </select>`
-              : `<input id="jira-project" value="${escapeHtml(currentDefProj)}" placeholder="Opcional — após conectar aparece a lista de projetos" />`
-            }
+            <div class="form-grid">
+              <label for="jira-prof-name">Nome do Perfil:</label>
+              <input id="jira-prof-name" value="${escapeHtml(formName)}" placeholder="ex.: Vibetex ou Empresa B" />
+
+              <label for="jira-prof-orgs">Orgs Git / Pastas:</label>
+              <div style="display:flex;gap:6px">
+                <input id="jira-prof-orgs" style="flex:1" value="${escapeHtml(formOrgs)}" placeholder="ex.: vibetex, projeto-vibetex (auto-detecção)" />
+                ${suggestedOrg ? `<button type="button" class="mini" id="jira-use-org">+ ${escapeHtml(suggestedOrg)}</button>` : ""}
+              </div>
+
+              <label for="jira-base-url">URL do Jira:</label>
+              <input id="jira-base-url" value="${escapeHtml(formBase)}" placeholder="sua-empresa.atlassian.net" />
+
+              <label for="jira-email">E-mail (Atlassian):</label>
+              <input id="jira-email" value="${escapeHtml(formEmail)}" placeholder="voce@empresa.com" autocomplete="off" />
+
+              <label for="jira-api-token">API Token:</label>
+              <input id="jira-api-token" type="password" placeholder="${formHasTok ? "Token salvo — cole outro apenas se quiser trocar" : "Cole o API Token gerado na Atlassian"}" autocomplete="off" />
+
+              <label for="jira-project">Projeto padrão:</label>
+              ${!isNewMode && projects.length > 0 && selectedProfile?.id === jira?.activeProfileId
+                ? `<select id="jira-project">
+                    <option value="">(Selecionar projeto dinamicamente…)</option>
+                    ${projects.map((p) => `<option value="${escapeHtml(p.key)}" ${p.key.toUpperCase() === formDefProj ? "selected" : ""}>${escapeHtml(p.key)} — ${escapeHtml(p.name)}</option>`).join("")}
+                    ${formDefProj && !hasMatchProj ? `<option value="${escapeHtml(formDefProj)}" selected>${escapeHtml(formDefProj)} (atual)</option>` : ""}
+                  </select>`
+                : `<input id="jira-project" value="${escapeHtml(formDefProj)}" placeholder="Opcional — ex.: IPG" />`
+              }
+
+              <label></label>
+              <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;cursor:pointer">
+                <input type="checkbox" id="jira-prof-default" ${selectedProfile?.isDefault ? "checked" : ""} />
+                Perfil padrão fallback (usado quando o projeto não bater com nenhuma org)
+              </label>
+            </div>
+            <div class="dim" style="font-size:11px;margin-top:8px;line-height:1.45">
+              Quando há perfis com <strong>Orgs Git / Pastas</strong>, repositórios de outra organização sem regra vinculada ficam isolados sem Jira para evitar erros entre empresas.
+            </div>
+            <div id="jira-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           </div>
-          <div class="dim" style="font-size:11px;margin-top:8px;line-height:1.45">
-            Prioridade: variáveis <code>JIRA_BASE_URL</code>/<code>JIRA_EMAIL</code>/<code>JIRA_API_TOKEN</code> → conector nativo (<code>jira-connector.json</code>, nunca commitado).
-          </div>
-          <div id="jira-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
-          <div class="modal-footer">
-            ${jira?.source === "config" ? `<button class="danger mini" id="jira-clear-token">Desconectar</button>` : ""}
+
+          <div class="modal-footer" style="margin-top:10px">
+            ${selectedProfile ? `<button class="danger mini" id="jira-delete-profile">Excluir perfil</button>` : ""}
             <div class="spacer"></div>
             <button id="jira-close">Fechar</button>
-            <button class="primary" id="jira-save">Salvar & Testar</button>
+            ${wsRoot ? `<button id="jira-save-pin">Salvar &amp; Fixar aqui</button>` : ""}
+            <button class="primary" id="jira-save">Salvar &amp; Testar</button>
           </div>
         </div>
       </div>
@@ -879,18 +1300,56 @@ export function renderModalLayer() {
 
     const closeJira = () => {
       state.showJiraModal = false;
+      state.jiraEditingProfileId = null;
       renderModalLayer();
     };
     document.getElementById("jira-close")?.addEventListener("click", closeJira);
     document.getElementById("jira-open-token-help")?.addEventListener("click", () => {
       void api()?.OpenExternalURL("https://id.atlassian.com/manage-profile/security/api-tokens");
     });
+    document.getElementById("jira-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement)?.id === "jira-modal-backdrop") closeJira();
+    });
+
+    document.getElementById("jira-profile-new")?.addEventListener("click", () => {
+      state.jiraEditingProfileId = "__new__";
+      renderModalLayer();
+    });
+    document.querySelectorAll<HTMLElement>(".jira-profile-chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.jiraEditingProfileId = btn.dataset.id || null;
+        renderModalLayer();
+      });
+    });
+    document.getElementById("jira-use-org")?.addEventListener("click", () => {
+      const el = document.getElementById("jira-prof-orgs") as HTMLInputElement | null;
+      if (el && suggestedOrg) {
+        const cur = el.value.split(",").map((s) => s.trim()).filter(Boolean);
+        if (!cur.some((c) => c.toLowerCase() === suggestedOrg.toLowerCase())) cur.push(suggestedOrg);
+        el.value = cur.join(", ");
+      }
+    });
+
+    document.getElementById("jira-ws-bind")?.addEventListener("change", async (e) => {
+      const target = (e.target as HTMLSelectElement).value;
+      const backend = api();
+      if (!backend?.BindJiraWorkspace || !wsRoot) return;
+      try {
+        state.jiraStatus = await backend.BindJiraWorkspace(wsRoot, target);
+        state.jiraEditingProfileId = null;
+        await refreshJiraStatusAndProjects();
+      } catch (err: any) {
+        toastError("vincular Jira ao projeto", err);
+      }
+    });
+
     document.getElementById("jira-import-mcp")?.addEventListener("click", async () => {
       const backend = api();
       if (!backend?.ImportJiraFromMCP) return;
       const errEl = document.getElementById("jira-modal-err");
       try {
-        state.jiraStatus = await backend.ImportJiraFromMCP(state.project?.root || "");
+        state.jiraStatus = await backend.ImportJiraFromMCP(wsRoot);
+        state.jiraEditingProfileId = null;
         await refreshJiraStatusAndProjects();
         if (state.jiraStatus?.connected) {
           if (state.teamConfigDraft) {
@@ -912,36 +1371,38 @@ export function renderModalLayer() {
         }
       }
     });
-    document.getElementById("jira-modal-backdrop")?.addEventListener("click", (e) => {
-      if ((e.target as HTMLElement)?.id === "jira-modal-backdrop") closeJira();
-    });
 
-    document.getElementById("jira-clear-token")?.addEventListener("click", async () => {
+    document.getElementById("jira-delete-profile")?.addEventListener("click", async () => {
       const backend = api();
-      if (!backend?.SaveJiraConfig) return;
+      if (!selectedProfile) return;
       try {
-        state.jiraStatus = await backend.SaveJiraConfig("", "", "", "", true);
-        state.jiraProjects = [];
-        updateStatusBar();
-        renderModalLayer();
-        if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-        setStatus("Credenciais do Conector Jira removidas.");
+        if (backend?.DeleteJiraProfile) {
+          state.jiraStatus = await backend.DeleteJiraProfile(selectedProfile.id, wsRoot);
+        } else if (backend?.SaveJiraConfig) {
+          state.jiraStatus = await backend.SaveJiraConfig("", "", "", "", true);
+        }
+        state.jiraEditingProfileId = null;
+        await refreshJiraStatusAndProjects();
+        setStatus("Perfil Jira removido.");
       } catch (err: any) {
         const errEl = document.getElementById("jira-modal-err");
         if (errEl) {
-          errEl.textContent = `Falha ao remover credenciais: ${err?.message || String(err)}`;
+          errEl.textContent = `Falha ao excluir perfil: ${err?.message || String(err)}`;
           errEl.style.display = "block";
         }
       }
     });
 
-    document.getElementById("jira-save")?.addEventListener("click", async () => {
+    const saveJiraAction = async (pinWorkspace: boolean) => {
       const backend = api();
-      if (!backend?.SaveJiraConfig) return;
+      const nameIn = (document.getElementById("jira-prof-name") as HTMLInputElement | null)?.value.trim() || "";
+      const orgsRaw = (document.getElementById("jira-prof-orgs") as HTMLInputElement | null)?.value || "";
+      const orgPatterns = orgsRaw.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
       const baseIn = (document.getElementById("jira-base-url") as HTMLInputElement | null)?.value.trim() || "";
       const emailIn = (document.getElementById("jira-email") as HTMLInputElement | null)?.value.trim() || "";
       const tokIn = (document.getElementById("jira-api-token") as HTMLInputElement | null)?.value.trim() || "";
       const projIn = (document.getElementById("jira-project") as HTMLInputElement | HTMLSelectElement | null)?.value.trim().toUpperCase() || "";
+      const isDefIn = Boolean((document.getElementById("jira-prof-default") as HTMLInputElement | null)?.checked);
       const errEl = document.getElementById("jira-modal-err");
       const btn = document.getElementById("jira-save") as HTMLButtonElement | null;
       if (btn) {
@@ -949,16 +1410,26 @@ export function renderModalLayer() {
         btn.textContent = "Conectando…";
       }
       try {
-        state.jiraStatus = await backend.SaveJiraConfig(baseIn, emailIn, tokIn, projIn, false);
+        if (backend?.SaveJiraProfile) {
+          state.jiraStatus = await backend.SaveJiraProfile(
+            {
+              id: selectedProfile?.id || "",
+              name: nameIn,
+              base_url: baseIn,
+              email: emailIn,
+              token: tokIn,
+              default_project: projIn,
+              org_patterns: orgPatterns,
+              is_default: isDefIn,
+            },
+            pinWorkspace ? wsRoot : "",
+          );
+        } else if (backend?.SaveJiraConfig) {
+          state.jiraStatus = await backend.SaveJiraConfig(baseIn, emailIn, tokIn, projIn, false);
+        }
+        state.jiraEditingProfileId = null;
+        await refreshJiraStatusAndProjects();
         if (state.jiraStatus?.connected) {
-          try {
-            const projs = backend.ListJiraProjectsForWorkspace
-              ? await backend.ListJiraProjectsForWorkspace(state.project?.root || "")
-              : await backend.ListJiraProjects?.();
-            state.jiraProjects = projs || [];
-          } catch {
-            // segue mesmo se listar projetos falhar
-          }
           if (state.teamConfigDraft) {
             state.teamConfigDraft.jiraEnabled = true;
             if (!state.teamConfigDraft.jiraProject && (projIn || state.jiraProjects[0]?.key)) {
@@ -967,21 +1438,21 @@ export function renderModalLayer() {
           }
           updateStatusBar();
           if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-          closeJira();
-          const projNote = state.jiraProjects.length > 0 ? ` (${state.jiraProjects.length} projeto(s) carregado(s))` : "";
-          toast(`Jira conectado como ${state.jiraStatus.user || emailIn}${projNote}.`, "success");
+          toast(`Jira conectado (${state.jiraStatus.activeProfileName || state.jiraStatus.user || emailIn}).`, "success");
+          if (pinWorkspace) closeJira();
+          else renderModalLayer();
         } else {
           updateStatusBar();
           renderModalLayer();
           const refreshedErr = document.getElementById("jira-modal-err");
           if (refreshedErr) {
-            refreshedErr.textContent = state.jiraStatus?.detail || "Não foi possível autenticar no Jira.";
+            refreshedErr.textContent = state.jiraStatus?.detail || "Perfil salvo, mas este projeto usa outra organização ou falhou a autenticação.";
             refreshedErr.style.display = "block";
           }
         }
       } catch (err: any) {
         if (errEl) {
-          errEl.textContent = `Falha ao salvar configuração Jira: ${err?.message || String(err)}`;
+          errEl.textContent = `Falha ao salvar perfil Jira: ${err?.message || String(err)}`;
           errEl.style.display = "block";
         }
         if (btn) {
@@ -989,7 +1460,9 @@ export function renderModalLayer() {
           btn.textContent = "Salvar & Testar";
         }
       }
-    });
+    };
+    document.getElementById("jira-save")?.addEventListener("click", () => void saveJiraAction(false));
+    document.getElementById("jira-save-pin")?.addEventListener("click", () => void saveJiraAction(true));
     return;
   }
 

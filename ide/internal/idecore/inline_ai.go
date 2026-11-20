@@ -3,7 +3,6 @@ package idecore
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -83,19 +82,29 @@ func isHTTPInlineProvider(provider string) bool {
 	}
 }
 
-func hasHTTPProviderCredentials(provider string) bool {
+func hasHTTPProviderCredentials(workspaceDir, provider string) bool {
+	ctx := modelx.WithWorkspace(context.Background(), workspaceDir)
+	if modelx.CredentialIsolated(ctx, provider) {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "opencode", "opencode-go":
+		if modelx.ResolveEnv(ctx, "opencode", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY") != "" {
+			return true
+		}
+		if prof, mode, _ := modelx.ResolveProfile(ctx, "opencode"); prof != nil && (len(prof.OrgPatterns) > 0 || mode == "auto_org" || mode == "manual" || mode == "override") {
+			return false
+		}
 		key, _, _ := modelx.LoadOpenCodeCredentials()
 		return strings.TrimSpace(key) != ""
 	case "openai", "openai-responses":
-		return strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" || strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) != ""
+		return modelx.ResolveEnv(ctx, "openai", "OPENAI_API_KEY", "OPENAI_BASE_URL") != ""
 	case "anthropic":
-		return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != ""
+		return modelx.ResolveEnv(ctx, "anthropic", "ANTHROPIC_API_KEY") != ""
 	case "gemini":
-		return strings.TrimSpace(os.Getenv("GOOGLE_API_KEY")) != "" || strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != ""
+		return modelx.ResolveEnv(ctx, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY") != ""
 	case "vertex":
-		return strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")) != ""
+		return modelx.ResolveEnv(ctx, "gemini", "GOOGLE_CLOUD_PROJECT") != ""
 	default:
 		return false
 	}
@@ -135,7 +144,7 @@ func ResolveInlineModel(workspaceDir, requestedModel string, requireHTTP bool) (
 			for _, role := range []string{team.RoleDeveloper, team.RoleArchitect, team.RoleProjectManager} {
 				for _, ag := range active.ByRole(role) {
 					prov := team.NormalizeProvider(ag.Provider, ag.Model)
-					if isHTTPInlineProvider(prov) && strings.TrimSpace(ag.Model) != "" && hasHTTPProviderCredentials(prov) {
+					if isHTTPInlineProvider(prov) && strings.TrimSpace(ag.Model) != "" && hasHTTPProviderCredentials(workspaceDir, prov) {
 						return prov, strings.TrimSpace(ag.Model), ""
 					}
 				}
@@ -144,16 +153,22 @@ func ResolveInlineModel(workspaceDir, requestedModel string, requireHTTP bool) (
 	}
 
 	// Fallback to any configured HTTP credentials in the user environment/store.
-	if key, _, _ := modelx.LoadOpenCodeCredentials(); strings.TrimSpace(key) != "" {
-		return "opencode", "opencode-go:glm-5.3-flash", ""
+	// Org-scoped providers that do not match this workspace stay unavailable.
+	ctx := modelx.WithWorkspace(context.Background(), workspaceDir)
+	if !modelx.CredentialIsolated(ctx, "opencode") {
+		if key, _, _ := modelx.LoadOpenCodeCredentials(); strings.TrimSpace(key) != "" {
+			if prof, mode, _ := modelx.ResolveProfile(ctx, "opencode"); prof == nil || (len(prof.OrgPatterns) == 0 && mode != "auto_org" && mode != "manual" && mode != "override") {
+				return "opencode", "opencode-go:glm-5.3-flash", ""
+			}
+		}
 	}
-	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
+	if modelx.ResolveEnv(ctx, "openai", "OPENAI_API_KEY") != "" {
 		return "openai", "gpt-4o-mini", ""
 	}
-	if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != "" {
+	if modelx.ResolveEnv(ctx, "anthropic", "ANTHROPIC_API_KEY") != "" {
 		return "anthropic", "claude-3-5-haiku-latest", ""
 	}
-	if strings.TrimSpace(os.Getenv("GOOGLE_API_KEY")) != "" || strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
+	if modelx.ResolveEnv(ctx, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY") != "" {
 		return "gemini", "gemini-2.5-flash", ""
 	}
 
@@ -206,6 +221,7 @@ func CompleteInlineCode(ctx context.Context, req InlineCompleteRequest) (InlineC
 
 	runCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
+	runCtx = modelx.WithWorkspace(runCtx, req.Workspace)
 	runCtx = modelx.WithSessionID(runCtx, "inline-ghost-"+filepath.Base(req.FilePath))
 
 	llm, err := inlineModelFactory(runCtx, prov, modSpec)
@@ -249,6 +265,7 @@ func GenerateInlineEdit(ctx context.Context, req InlineEditRequest) (InlineEditR
 
 	runCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	runCtx = modelx.WithWorkspace(runCtx, req.Workspace)
 	runCtx = modelx.WithSessionID(runCtx, "inline-edit-"+filepath.Base(req.FilePath))
 
 	llm, err := inlineModelFactory(runCtx, prov, modSpec)

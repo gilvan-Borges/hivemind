@@ -6,7 +6,7 @@ import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from
 import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
-import { refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
+import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
@@ -392,6 +392,7 @@ export function bootstrapAsync(rootDir?: string) {
 
   void refreshInlineAIStatus();
   void refreshJiraStatusAndProjects();
+  void refreshProviderProfiles();
 
   backend.MobileBridgeStatus?.().then((st) => {
     state.mobileStatus = st;
@@ -476,6 +477,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
     renderRightPane();
     setStatus(`Projeto em foco: ${proj.root}`);
     refreshDiffs();
+    void refreshJiraStatusAndProjects();
+    void refreshProviderProfiles();
     return;
   }
 

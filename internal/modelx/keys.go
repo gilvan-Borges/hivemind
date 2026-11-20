@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // SupportedStoredKeyNames lists the API key/setting names the IDE can persist
@@ -26,6 +27,13 @@ var SupportedStoredKeyNames = []string{
 var (
 	keysMu         sync.Mutex
 	keysFilePathFn = defaultAPIKeysPath
+	keysBlob       struct {
+		path string
+		mod  time.Time
+		size int64
+		raw  []byte
+		ok   bool
+	}
 )
 
 func defaultAPIKeysPath() (string, error) {
@@ -46,12 +54,32 @@ func loadStoredKeysLocked() (map[string]string, error) {
 	if err != nil {
 		return out, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
+	info, statErr := os.Stat(path)
+	var data []byte
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			keysBlob.ok = false
 			return out, nil
 		}
-		return out, err
+		return out, statErr
+	}
+	if keysBlob.ok && keysBlob.path == path && keysBlob.size == info.Size() && keysBlob.mod.Equal(info.ModTime()) && keysBlob.raw != nil {
+		data = keysBlob.raw
+	} else {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				keysBlob.ok = false
+				return out, nil
+			}
+			return out, err
+		}
+		keysBlob.path = path
+		keysBlob.mod = info.ModTime()
+		keysBlob.size = info.Size()
+		keysBlob.raw = append([]byte(nil), data...)
+		keysBlob.ok = true
+		data = keysBlob.raw
 	}
 	var raw map[string]string
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -140,20 +168,23 @@ func SaveStoredAPIKeys(entries map[string]string) (map[string]string, error) {
 			stored[name] = v
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	data = append(data, '\n')
+	if err := writeSecretFile(path, data); err != nil {
+		keysBlob.ok = false
 		return nil, err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return nil, os.WriteFile(path, data, 0o600)
+	if info, statErr := os.Stat(path); statErr == nil {
+		keysBlob.path = path
+		keysBlob.mod = info.ModTime()
+		keysBlob.size = info.Size()
+		keysBlob.raw = append([]byte(nil), data...)
+		keysBlob.ok = true
+	} else {
+		keysBlob.ok = false
 	}
 	out := map[string]string{}
 	for k, v := range stored {
@@ -162,11 +193,57 @@ func SaveStoredAPIKeys(entries map[string]string) (map[string]string, error) {
 	return out, nil
 }
 
-// MaskKey hides most of a secret for safe display.
+// MaskKey hides a secret for safe display. Only a short suffix is kept.
 func MaskKey(v string) string {
 	v = strings.TrimSpace(v)
-	if len(v) <= 10 {
+	if v == "" {
+		return ""
+	}
+	if len(v) <= 8 {
 		return "••••"
 	}
-	return v[:5] + "…" + v[len(v)-3:]
+	return "••••" + v[len(v)-4:]
+}
+
+// writeSecretFile replaces path atomically and leaves it readable only by the user.
+func writeSecretFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".secret-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		// Windows cannot replace an existing file with Rename.
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmpName, path); err2 != nil {
+			return err2
+		}
+	}
+	cleanup = false
+	return os.Chmod(path, 0o600)
 }

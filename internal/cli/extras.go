@@ -69,9 +69,9 @@ func jiraClient(cmd *cobra.Command) (jirax.Client, error) {
 	if f, loadErr := team.Load(dir); loadErr == nil && !f.Settings.JiraEnabled {
 		return nil, fmt.Errorf("Jira está desativado em .hivemind/team.yaml")
 	}
-	client := jirax.FromEnv()
+	client := jirax.FromWorkspace(dir)
 	if !client.Enabled() {
-		return nil, fmt.Errorf("defina JIRA_BASE_URL, JIRA_EMAIL e JIRA_API_TOKEN")
+		return nil, fmt.Errorf("Jira não configurado para este workspace (perfil da organização, conector ou JIRA_BASE_URL, JIRA_EMAIL e JIRA_API_TOKEN)")
 	}
 	return client, nil
 }
