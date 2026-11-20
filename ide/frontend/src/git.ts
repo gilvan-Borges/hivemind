@@ -641,11 +641,23 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
               .filter((x) => x.iss.source === "jira" && x.iss.key.includes("-"))
               .map((x) => x.iss.key.split("-")[0].toUpperCase())
           ));
-          const activeJiraProj = (proj?.teamConfig?.settings?.jira_project || detectedJiraKeys[0] || state.jiraStatus?.defaultProject || "").toUpperCase();
+          const savedJiraProj = (proj?.teamConfig?.settings?.jira_project || "").trim().toUpperCase();
+          const activeJiraProj = savedJiraProj === "NONE"
+            ? "NONE"
+            : (savedJiraProj || detectedJiraKeys[0] || "");
           return `
-            <div class="git-section-head">
+            <div class="git-section-head" style="gap:6px;flex-wrap:wrap">
               <span>Minhas tasks & issues (${countLabel})</span>
-              ${activeJiraProj ? `<span class="tok-pill" title="Projeto Jira vinculado automaticamente a este repositório">Jira: ${escapeHtml(activeJiraProj)}</span>` : ""}
+              ${state.jiraStatus?.connected && state.jiraProjects.length > 0 ? `
+                <select id="git-quick-jira-project" title="Projeto Jira vinculado a este repositório" style="font-size:10.5px;padding:2px 6px;max-width:148px;height:22px">
+                  <option value="" ${!activeJiraProj ? "selected" : ""}>Auto (pelo repo)</option>
+                  <option value="NONE" ${activeJiraProj === "NONE" ? "selected" : ""}>Sem Jira neste repo</option>
+                  ${state.jiraProjects.map((p) => `<option value="${escapeHtml(p.key)}" ${p.key.toUpperCase() === activeJiraProj ? "selected" : ""}>Jira: ${escapeHtml(p.key)} — ${escapeHtml(p.name)}</option>`).join("")}
+                  <option value="*" ${activeJiraProj === "*" ? "selected" : ""}>Jira: Todos projetos</option>
+                </select>
+              ` : activeJiraProj && activeJiraProj !== "NONE" ? `
+                <span class="tok-pill" title="Projeto Jira vinculado automaticamente a este repositório">Jira: ${escapeHtml(activeJiraProj)}</span>
+              ` : ""}
             </div>
             ${allIssues.length > 0 ? `
               <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
@@ -1168,6 +1180,23 @@ export function bindGitSidebarEvents() {
     if (nextEl) {
       nextEl.focus();
       nextEl.setSelectionRange(pos, pos);
+    }
+  });
+  document.getElementById("git-quick-jira-project")?.addEventListener("change", async (e) => {
+    const val = (e.target as HTMLSelectElement).value;
+    const backend = api();
+    if (!state.project || !backend?.UpdateProjectJira) return;
+    try {
+      const cfg = await backend.UpdateProjectJira(state.project.root, val);
+      state.project.teamConfig = cfg;
+      if (state.teamConfigDraft) {
+        state.teamConfigDraft.jiraProject = cfg.settings.jira_project || "";
+        state.teamConfigDraft.jiraEnabled = cfg.settings.jira_enabled;
+      }
+      state.issues.loadedOnce = false;
+      await loadProjectIssues();
+    } catch (err: any) {
+      toastError("vincular projeto Jira ao repositório", err);
     }
   });
   document.querySelectorAll("[data-issue-source]").forEach((btn) => {

@@ -542,6 +542,10 @@ export function UpdatePermissionMode(arg1, arg2) {
   return window['go']['main']['App']['UpdatePermissionMode'](arg1, arg2);
 }
 
+export function UpdateProjectJira(arg1, arg2) {
+  return window['go']['main']['App']['UpdateProjectJira'](arg1, arg2);
+}
+
 export function WindowClose() {
   return window['go']['main']['App']['WindowClose']();
 }

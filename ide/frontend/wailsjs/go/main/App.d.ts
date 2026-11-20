@@ -282,6 +282,8 @@ export function UpdateAgentModel(arg1:string,arg2:string,arg3:string,arg4:string
 
 export function UpdatePermissionMode(arg1:string,arg2:string):Promise<team.File>;
 
+export function UpdateProjectJira(arg1:string,arg2:string):Promise<team.File>;
+
 export function WindowClose():Promise<void>;
 
 export function WindowIsMaximized():Promise<boolean>;

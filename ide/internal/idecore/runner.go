@@ -210,6 +210,28 @@ func EnableProjectJira(workspace, defaultProject string) {
 	}
 }
 
+// UpdateProjectJiraKey sets settings.jira_project in .hivemind/team.yaml (creating a starter team file if needed).
+// Passing "NONE" disables Jira for this workspace; passing "*" queries all projects; passing "" resets to auto-match.
+func UpdateProjectJiraKey(workspaceDir, jiraProjectKey string) (team.File, error) {
+	cfg, err := team.Load(workspaceDir)
+	if err != nil {
+		return team.File{}, err
+	}
+	val := strings.ToUpper(strings.TrimSpace(jiraProjectKey))
+	switch val {
+	case "NONE", "OFF":
+		cfg.Settings.JiraEnabled = false
+		cfg.Settings.JiraProject = "NONE"
+	default:
+		cfg.Settings.JiraEnabled = true
+		cfg.Settings.JiraProject = val
+	}
+	if err := team.Save(workspaceDir, cfg); err != nil {
+		return team.File{}, err
+	}
+	return cfg, nil
+}
+
 // UpdateProjectPermissionMode updates settings.permission_mode ("governed", "auto_edit", "full_access") in .hivemind/team.yaml.
 func UpdateProjectPermissionMode(workspace, permissionMode string) (team.File, error) {
 	cfg, err := team.Load(workspace)

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -1165,5 +1166,70 @@ func TestBuildMyJiraIssuesJQL(t *testing.T) {
 	wantEmpty := `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`
 	if gotEmpty != wantEmpty {
 		t.Fatalf("buildMyJiraIssuesJQL(\"\") = %q, want %q", gotEmpty, wantEmpty)
+	}
+}
+
+func TestMatchJiraProjectFromNamesVibetexRepos(t *testing.T) {
+	projs := []jirax.Project{
+		{Key: "CED", Name: "Cedae"},
+		{Key: "GERAL", Name: "Geral"},
+		{Key: "IPG", Name: "VibeGas (IPG)"},
+		{Key: "MDT", Name: "Mural de Troca"},
+		{Key: "RKSAM", Name: "VibeTime"},
+		{Key: "SB", Name: "Sol Brilhante"},
+		{Key: "VB", Name: "VibeSmart"},
+		{Key: "VBWHTS", Name: "VibeWhats"},
+		{Key: "VC", Name: "Vibe Control"},
+		{Key: "VOF", Name: "VibeOffice"},
+		{Key: "VPD", Name: "VibePromotor (DROPS)"},
+		{Key: "VS", Name: "Vibe Suporte"},
+	}
+
+	cases := []struct {
+		repo string
+		want string
+	}{
+		// Projects in Jira
+		{repo: "ipg", want: "IPG"},
+		{repo: "ipg-mobile", want: "IPG"},
+		{repo: "vibePromotor", want: "VPD"},
+		{repo: "vibepromotor-drops", want: "VPD"},
+		{repo: "appVibePromotor-drops", want: "VPD"},
+		{repo: "solbrilhante", want: "SB"},
+		{repo: "AppSolBrilhante", want: "SB"},
+		{repo: "VIBETIME", want: "RKSAM"},
+		{repo: "VibeOffice", want: "VOF"},
+		{repo: "vibeoffice-ios", want: "VOF"},
+		{repo: "VibeSmart", want: "VB"},
+		{repo: "HubVibesmart", want: "VB"},
+		{repo: "AuditoriaVibeSmart", want: "VB"},
+		{repo: "PraticoMural", want: "MDT"},
+		{repo: "PraticoMuralWeb", want: "MDT"},
+		{repo: "VibeWhats", want: "VBWHTS"},
+		{repo: "cedaeApp", want: "CED"},
+		{repo: "vibetexCedae", want: "CED"},
+		{repo: "vibeTexCedaeAPP", want: "CED"},
+		{repo: "vibeControl", want: "VC"},
+		{repo: "ControlAppApiAtualizado", want: "VC"},
+		{repo: "suporte", want: "VS"},
+
+		// Repos not in Jira yet -> must return "" so no unrelated Jira tasks are mixed in
+		{repo: "vibe-saude", want: ""},
+		{repo: "trace-pharma", want: ""},
+		{repo: "trace-pharma-demo", want: ""},
+		{repo: "vibeservice-ponto", want: ""},
+		{repo: "vibeservice-ponto-mobile", want: ""},
+		{repo: "vibeservice", want: ""},
+		{repo: "hubVibeTex", want: ""},
+		{repo: "vibetex-bi", want: ""},
+		{repo: "vibesyncApp", want: ""},
+		{repo: "RustAgent", want: ""},
+	}
+
+	for _, tc := range cases {
+		got := matchJiraProjectFromNames(projs, tc.repo)
+		if got != tc.want {
+			t.Errorf("matchJiraProjectFromNames(%q) = %q, want %q", tc.repo, got, tc.want)
+		}
 	}
 }

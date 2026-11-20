@@ -1038,23 +1038,10 @@ func buildMyJiraIssuesJQL(projectKey string) string {
 	return "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
 }
 
-// inferJiraProjectKeyForWorkspace matches the current workspace/repository name
-// (e.g. "ipg", "ipg-mobile", "appVibePromotor-drops", "vibetexCedae", "PraticoMuralWeb", "suporte")
-// against the organization's Jira projects (e.g. IPG, VPD, CED, MDT, VS, VB, VBWHTS, VC, VOF, SB, RKSAM).
-// If the repository has no corresponding project in Jira yet (e.g. "vibe-saude", "trace-pharma", "vibeservice-ponto"),
-// it returns ("", false) when multiple Jira projects exist in the org so tasks from unrelated Jira projects are NEVER mixed in.
-func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (matchedKey string, hasMultipleOrgProjects bool) {
-	if strings.TrimSpace(workspaceDir) == "" {
-		return "", false
+func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string {
+	if len(projs) == 0 {
+		return ""
 	}
-	projs, err := jirax.ListProjectsForWorkspace(ctx, workspaceDir)
-	if err != nil || len(projs) == 0 {
-		return "", false
-	}
-	if len(projs) == 1 {
-		return sanitizeJiraProjectKey(projs[0].Key), false
-	}
-
 	normAlpha := func(s string) string {
 		var b strings.Builder
 		for _, r := range strings.ToLower(s) {
@@ -1156,22 +1143,15 @@ func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (
 			}
 		}
 	}
-
-	g := gitx.Local{}
-	if g.IsRepo(ctx, workspaceDir) {
-		if remoteURL, rErr := g.RemoteURL(ctx, workspaceDir); rErr == nil {
-			if _, repo, ok := githubx.ParseRemote(remoteURL); ok {
-				addSource(repo)
-			}
-		}
+	for _, raw := range rawNames {
+		addSource(raw)
 	}
-	addSource(filepath.Base(filepath.Clean(workspaceDir)))
 
 	// 1. Exact key match (e.g., "ipg" / "ipg-mobile" -> "IPG").
 	for _, cand := range candidates {
 		for _, p := range projs {
 			if strings.EqualFold(p.Key, cand) {
-				return sanitizeJiraProjectKey(p.Key), true
+				return sanitizeJiraProjectKey(p.Key)
 			}
 		}
 	}
@@ -1204,9 +1184,43 @@ func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (
 				(na != "" && len(na) >= 3 && (nc == na || strings.Contains(nc, na))) ||
 				(len(nmNoVibe) >= 4 && (nc == nmNoVibe || strings.HasSuffix(nc, nmNoVibe))) ||
 				(strings.Contains(nc, "mural") && strings.Contains(nm, "mural")) {
-				return sanitizeJiraProjectKey(p.Key), true
+				return sanitizeJiraProjectKey(p.Key)
 			}
 		}
+	}
+	return ""
+}
+
+// inferJiraProjectKeyForWorkspace matches the current workspace/repository name
+// (e.g. "ipg", "ipg-mobile", "appVibePromotor-drops", "vibetexCedae", "PraticoMuralWeb", "suporte")
+// against the organization's Jira projects (e.g. IPG, VPD, CED, MDT, VS, VB, VBWHTS, VC, VOF, SB, RKSAM).
+// If the repository has no corresponding project in Jira yet (e.g. "vibe-saude", "trace-pharma", "vibeservice-ponto"),
+// it returns ("", true) when multiple Jira projects exist in the org so tasks from unrelated Jira projects are NEVER mixed in.
+func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (matchedKey string, hasMultipleOrgProjects bool) {
+	if strings.TrimSpace(workspaceDir) == "" {
+		return "", false
+	}
+	projs, err := jirax.ListProjectsForWorkspace(ctx, workspaceDir)
+	if err != nil || len(projs) == 0 {
+		return "", false
+	}
+	if len(projs) == 1 {
+		return sanitizeJiraProjectKey(projs[0].Key), false
+	}
+
+	var rawNames []string
+	g := gitx.Local{}
+	if g.IsRepo(ctx, workspaceDir) {
+		if remoteURL, rErr := g.RemoteURL(ctx, workspaceDir); rErr == nil {
+			if _, repo, ok := githubx.ParseRemote(remoteURL); ok {
+				rawNames = append(rawNames, repo)
+			}
+		}
+	}
+	rawNames = append(rawNames, filepath.Base(filepath.Clean(workspaceDir)))
+
+	if matched := matchJiraProjectFromNames(projs, rawNames...); matched != "" {
+		return matched, true
 	}
 
 	// 3. Fallback: inspect recent git commit messages for an explicit Jira key prefix (e.g. "feat(IPG-123): ...").
@@ -1249,44 +1263,55 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 		jc := jirax.FromWorkspace(workspace)
 		if jc.Enabled() {
 			var cfgProj string
+			var cfgLoaded bool
+			var cfgJiraEnabled bool
 			if cfg, err := team.Load(workspace); err == nil {
-				cfgProj = cfg.Settings.JiraProject
+				cfgLoaded = true
+				cfgProj = strings.TrimSpace(cfg.Settings.JiraProject)
+				cfgJiraEnabled = cfg.Settings.JiraEnabled
 			}
-			projKey := sanitizeJiraProjectKey(cfgProj)
-			hasMultiOrgProjs := false
-			if projKey == "" && !strings.EqualFold(strings.TrimSpace(cfgProj), "*") {
-				projKey, hasMultiOrgProjs = inferJiraProjectKeyForWorkspace(ctx, workspace)
-				if projKey != "" {
-					// Persist the inferred project key in team.yaml so subsequent runs & tools know it immediately.
-					EnableProjectJira(workspace, projKey)
+			if cfgLoaded && !cfgJiraEnabled && strings.EqualFold(cfgProj, "NONE") {
+				// User explicitly set "Sem Jira neste repositório" from the quick selector.
+			} else {
+				projKey := sanitizeJiraProjectKey(cfgProj)
+				if strings.EqualFold(projKey, "NONE") {
+					projKey = ""
 				}
-			}
-			if projKey == "" && !hasMultiOrgProjs {
-				projKey = sanitizeJiraProjectKey(res.DefaultProject)
-			}
-			// Only query Jira when we matched a specific Jira project (or when the user explicitly chose "*" for all projects,
-			// or when the Jira instance only has a single project). Repositories that don't exist in Jira yet (e.g. vibe-saude)
-			// won't pull unrelated tasks from other company projects.
-			shouldQueryJira := projKey != "" || strings.EqualFold(strings.TrimSpace(cfgProj), "*") || !hasMultiOrgProjs
-			if shouldQueryJira {
-				jql := buildMyJiraIssuesJQL(projKey)
-				list, err := jc.Search(ctx, jql, 50)
-				if err == nil {
-					base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
-					for _, it := range list {
-						browseURL := ""
-						if base != "" && it.Key != "" {
-							browseURL = base + "/browse/" + url.PathEscape(it.Key)
+				hasMultiOrgProjs := false
+				if projKey == "" && !strings.EqualFold(cfgProj, "*") {
+					projKey, hasMultiOrgProjs = inferJiraProjectKeyForWorkspace(ctx, workspace)
+					if projKey != "" {
+						// Persist the inferred project key in team.yaml so subsequent runs & tools know it immediately.
+						EnableProjectJira(workspace, projKey)
+					}
+				}
+				if projKey == "" && !hasMultiOrgProjs {
+					projKey = sanitizeJiraProjectKey(res.DefaultProject)
+				}
+				// Only query Jira when we matched a specific Jira project (or when the user explicitly chose "*" for all projects,
+				// or when the Jira instance only has a single project). Repositories that don't exist in Jira yet (e.g. vibe-saude)
+				// won't pull unrelated tasks from other company projects.
+				shouldQueryJira := projKey != "" || strings.EqualFold(cfgProj, "*") || !hasMultiOrgProjs
+				if shouldQueryJira {
+					jql := buildMyJiraIssuesJQL(projKey)
+					list, err := jc.Search(ctx, jql, 50)
+					if err == nil {
+						base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
+						for _, it := range list {
+							browseURL := ""
+							if base != "" && it.Key != "" {
+								browseURL = base + "/browse/" + url.PathEscape(it.Key)
+							}
+							issues = append(issues, ProjectIssue{
+								Source: "jira",
+								Key:    it.Key,
+								Title:  it.Summary,
+								Body:   it.Description,
+								Status: it.Status,
+								URL:    browseURL,
+								IsMine: true,
+							})
 						}
-						issues = append(issues, ProjectIssue{
-							Source: "jira",
-							Key:    it.Key,
-							Title:  it.Summary,
-							Body:   it.Description,
-							Status: it.Status,
-							URL:    browseURL,
-							IsMine: true,
-						})
 					}
 				}
 			}

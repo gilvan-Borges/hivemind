@@ -913,6 +913,7 @@ export interface WailsBackendApp {
   DeleteTeam(workspace: string, teamName: string): Promise<TeamFile>;
   UpdateAgentModel(workspace: string, teamName: string, agentName: string, modelSpec: string): Promise<TeamFile>;
   UpdatePermissionMode(workspace: string, permissionMode: string): Promise<TeamFile>;
+  UpdateProjectJira?(workspace: string, jiraProjectKey: string): Promise<TeamFile>;
   RespondApproval(approvalID: string, approved: boolean): Promise<boolean>;
   EnsureTeamMemory(workspace: string): Promise<string>;
   GetDiff(workspace: string): Promise<FileDiff[]>;

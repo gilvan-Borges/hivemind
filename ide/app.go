@@ -1035,6 +1035,11 @@ func (a *App) UpdatePermissionMode(workspace, permissionMode string) (team.File,
 	return idecore.UpdateProjectPermissionMode(workspace, permissionMode)
 }
 
+// UpdateProjectJira sets settings.jira_project in .hivemind/team.yaml ("", "NONE", "*", or a Jira project key like "IPG").
+func (a *App) UpdateProjectJira(workspace, jiraProjectKey string) (team.File, error) {
+	return idecore.UpdateProjectJiraKey(workspace, jiraProjectKey)
+}
+
 // RespondApproval delivers the user's decision on a pending approval gate (identified by approvalID or laneID).
 func (a *App) RespondApproval(approvalID string, approved bool) bool {
 	ok := a.sessions.ResolveApproval(approvalID, approved)
