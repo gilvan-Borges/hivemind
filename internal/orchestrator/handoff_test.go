@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
 
+	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
@@ -102,5 +104,36 @@ func TestSealSanitizesDevSlices(t *testing.T) {
 	}
 	if !strings.Contains(joined, "edite a.go") {
 		t.Fatalf("fatia perdeu o texto seguro: %q", joined)
+	}
+}
+
+func TestParallelDevelopersShareTheSameHandoff(t *testing.T) {
+	r := &Runner{}
+	rejected := 0
+	r.OnEvent = func(ev Event) {
+		if ev.Kind == "handoff_rejected" {
+			rejected++
+		}
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	guard := r.handoffModelGuard(team.RoleDeveloper)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if resp, _ := guard(nil, nil); resp != nil {
+				t.Errorf("desenvolvedor paralelo foi recusado")
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if rejected != 0 {
+		t.Fatalf("handoff compartilhado foi recusado %d vez(es)", rejected)
+	}
+	if r.qaLoopIter != 0 {
+		t.Fatalf("volta de qa não deveria contar: %d", r.qaLoopIter)
 	}
 }
