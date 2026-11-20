@@ -28,3 +28,23 @@ func TestResidentEventTriggerIsOptIn(t *testing.T) {
 		t.Fatalf("evento não pode executar ferramenta: %s", notes[0])
 	}
 }
+
+func TestExperimentalUnisolatedDefaultsOff(t *testing.T) {
+	m := NewResidentManager(ResidentManagerOptions{BaseDir: t.TempDir()})
+	t.Cleanup(m.Close)
+	st := m.Status()
+	if st.ExperimentalUnisolated || st.ExperimentalWarning != "" {
+		t.Fatalf("padrão deveria recusar: %+v", st)
+	}
+	st, err := m.SetExperimentalUnisolated(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.ExperimentalUnisolated || !strings.Contains(st.ExperimentalWarning, "SEM isolamento") {
+		t.Fatalf("aviso ausente: %+v", st)
+	}
+	st, err = m.SetExperimentalUnisolated(false)
+	if err != nil || st.ExperimentalUnisolated {
+		t.Fatalf("desligar: %+v %v", st, err)
+	}
+}

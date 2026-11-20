@@ -924,6 +924,8 @@ export interface ResidentStatus {
   allowedHosts?: string[];
   vaultSecrets?: string[];
   eventTriggers?: boolean;
+  experimentalUnisolated?: boolean;
+  experimentalWarning?: string;
   isolatedBrowser?: boolean;
   isolatedBrowserReason?: string;
   isolatedDesktop?: boolean;
@@ -1117,6 +1119,7 @@ export interface WailsBackendApp {
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
   ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;

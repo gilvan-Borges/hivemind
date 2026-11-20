@@ -294,6 +294,52 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 	}
 
 	if err := add(functiontool.New(functiontool.Config{
+		Name:        "browser_open",
+		Description: "Abre uma URL http(s) no browser da sessão real. Só funciona com experimentalUnisolated ligado. Roda SEM isolamento, pede confirmação fora de Full Acesso, ignora perfil e não lê o cofre.",
+	}, func(ctx agent.Context, args struct {
+		URL string `json:"url" jsonschema:"URL http ou https. Sem usuário nem senha na URL."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "browser_open", map[string]any{"url": args.URL})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "desktop_click",
+		Description: "Clica na sessão real nas coordenadas x,y. Só funciona com experimentalUnisolated ligado. Roda SEM isolamento, pede confirmação fora de Full Acesso e não lê o cofre.",
+	}, func(ctx agent.Context, args struct {
+		X int `json:"x" jsonschema:"Coordenada horizontal em pixels."`
+		Y int `json:"y" jsonschema:"Coordenada vertical em pixels."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "desktop_click", map[string]any{"x": args.X, "y": args.Y})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "desktop_type",
+		Description: "Digita texto na sessão real. Só funciona com experimentalUnisolated ligado. Roda SEM isolamento, pede confirmação fora de Full Acesso e não lê o cofre.",
+	}, func(ctx agent.Context, args struct {
+		Text string `json:"text" jsonschema:"Texto a digitar na janela em foco. Não envie segredo."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "desktop_type", map[string]any{"text": args.Text})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
 		Name:        "net_fetch",
 		Description: "Faz uma requisição HTTP/HTTPS GET ou HEAD exclusivamente para hosts na allowlist configurada (exige aprovação humana).",
 	}, func(ctx agent.Context, args residentNetFetchArgs) (textResult, error) {
