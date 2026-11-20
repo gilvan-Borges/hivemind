@@ -31,11 +31,12 @@ type ResidentManager struct {
 	sched      *resident.Scheduler
 	release    func()
 
-	mu           sync.Mutex
-	state        string // "ocioso" | "pensando" | "aguardando você"
-	lastError    string
-	cancel       context.CancelFunc
-	detectorSeen map[string]struct{}
+	mu            sync.Mutex
+	state         string // "ocioso" | "pensando" | "aguardando você"
+	lastError     string
+	eventTriggers bool
+	cancel        context.CancelFunc
+	detectorSeen  map[string]struct{}
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
@@ -67,23 +68,72 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	if vault == nil {
 		vault = secretx.NewOSVault()
 	}
+	cfg, _ := resident.LoadConfig(baseDir)
 	m := &ResidentManager{
-		baseDir:    baseDir,
-		sessions:   opts.Sessions,
-		accountFn:  opts.AccountFn,
-		projectsFn: opts.ProjectsFn,
-		audit:      resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
-		sandbox:    sb,
-		vault:      vault,
-		state:      "ocioso",
-		testModel:  opts.TestModel,
+		baseDir:       baseDir,
+		sessions:      opts.Sessions,
+		accountFn:     opts.AccountFn,
+		projectsFn:    opts.ProjectsFn,
+		audit:         resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
+		sandbox:       sb,
+		vault:         vault,
+		state:         "ocioso",
+		eventTriggers: cfg.EventTriggers,
+		testModel:     opts.TestModel,
 	}
 	if release, ok := resident.TryAcquireLock(baseDir); ok {
 		m.release = release
 		m.sched = resident.NewScheduler(baseDir, m.fireRoutine)
 		m.sched.Arm()
 	}
+	if m.sessions != nil {
+		m.sessions.HostSignal = func(kind string) { m.NoteHostEvent(kind) }
+	}
 	return m
+}
+
+// NoteHostEvent records an opt-in wake. It never starts a turn or a tool.
+func (m *ResidentManager) NoteHostEvent(kind string) {
+	if m == nil {
+		return
+	}
+	switch kind {
+	case "arquivo", "lane", "aprovacao":
+	default:
+		return
+	}
+	m.mu.Lock()
+	on := m.eventTriggers
+	m.mu.Unlock()
+	if !on || m.sessions == nil || m.sessions.Emit == nil {
+		return
+	}
+	m.sessions.Emit(LaneEvent{
+		LaneID: resident.LaneID,
+		Team:   "hive-resident",
+		Event: orchestrator.Event{
+			Kind:  "stage",
+			Stage: "chief",
+			Label: "Hive Residente",
+			Text:  "evento " + kind,
+		},
+	})
+}
+
+// SetEventTriggers persists the opt-in wake switch. Default is off.
+func (m *ResidentManager) SetEventTriggers(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.EventTriggers = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	m.mu.Lock()
+	m.eventTriggers = on
+	m.mu.Unlock()
+	return m.Status(), nil
 }
 
 // Close solta a trava do processo para o diretório temporário do teste poder sair.
@@ -185,6 +235,7 @@ func (m *ResidentManager) Status() resident.Status {
 		AllowedBinaries:       pol.AllowedBinaries,
 		AllowedHosts:          pol.AllowedHosts,
 		VaultSecrets:          vaultNames,
+		EventTriggers:         cfg.EventTriggers,
 		IsolatedBrowser:       browserOK,
 		IsolatedBrowserReason: browserReason,
 		IsolatedDesktop:       desktopOK,
@@ -393,6 +444,7 @@ func (m *ResidentManager) runTurn(
 		m.mu.Unlock()
 		return resident.TurnResult{}, runErr
 	}
+	_ = resident.SaveRouteTokens(m.baseDir, res.InputTokens)
 	return res, nil
 }
 

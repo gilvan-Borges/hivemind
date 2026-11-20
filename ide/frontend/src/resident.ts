@@ -320,6 +320,7 @@ export function renderResidentViewHtml(): string {
             ).join("")}
           </select>
           <input id="res-model-input" class="res-compact-input" style="width:180px" value="${escapeHtml(mod)}" placeholder="auto ou slug do modelo" title="Modelo do residente (padrão barato/auto)" />
+          <label class="dim" title="Acordar no arquivo salvo, no fim da lane ou numa aprovação. Não executa ferramenta."><input type="checkbox" id="res-event-triggers" ${st?.eventTriggers ? "checked" : ""}/> eventos</label>
           <button type="button" class="mini" id="btn-res-save-cfg">Salvar</button>
         </div>
       </header>
@@ -631,7 +632,11 @@ export function bindResidentViewEvents(): void {
     const mod = (document.getElementById("res-model-input") as HTMLInputElement | null)?.value || "";
     const ws = (document.getElementById("res-workstream-input") as HTMLInputElement | null)?.value || "geral";
     try {
-      const st = await backend.ResidentSaveConfig(prov === "auto" ? "" : prov, mod, ws);
+      let st = await backend.ResidentSaveConfig(prov === "auto" ? "" : prov, mod, ws);
+      const eventsOn = Boolean((document.getElementById("res-event-triggers") as HTMLInputElement | null)?.checked);
+      if (backend.ResidentSetEventTriggers) {
+        st = await backend.ResidentSetEventTriggers(eventsOn);
+      }
       residentState.status = st;
       residentState.workstream = st.workstream || "geral";
       updateResidentStatusChip();

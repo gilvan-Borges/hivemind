@@ -480,6 +480,9 @@ func (a *App) onFSChange(ev idecore.FileChangeEvent) {
 			_ = a.fileIndex.Refresh(target)
 		}(ev.Root)
 	}
+	if a.resident != nil {
+		a.resident.NoteHostEvent("arquivo")
+	}
 	if a.ctx != nil && !a.smokeCheck {
 		wailsrt.EventsEmit(a.ctx, "hivemind:fs-event", map[string]any{
 			"workspace": ev.Root,
@@ -1531,6 +1534,14 @@ func (a *App) ResidentDeleteSecret(name string) (resident.Status, error) {
 }
 
 // ResidentSaveConfig persists local resident preferences (provider, model, workstream).
+// ResidentSetEventTriggers turns opt-in host wakes on or off. Off does nothing.
+func (a *App) ResidentSetEventTriggers(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetEventTriggers(on)
+}
+
 func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (resident.Status, error) {
 	if a.resident == nil {
 		return resident.Status{}, fmt.Errorf("agente residente indisponível")

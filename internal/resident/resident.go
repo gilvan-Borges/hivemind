@@ -125,7 +125,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	prov, mod := ResolveModelRoute(r.Config)
 	if llm == nil {
 		var err error
-		llm, prov, mod, err = BuildLLM(ctx, r.Config)
+		llm, prov, mod, err = BuildLLM(ctx, baseDir, r.Config)
 		if err != nil {
 			return TurnResult{}, err
 		}

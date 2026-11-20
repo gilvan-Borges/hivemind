@@ -265,6 +265,15 @@ type SessionManager struct {
 	approvals   map[string]pendingApproval
 	approvalSeq uint64
 	Emit        func(LaneEvent)
+	// HostSignal wakes an opt-in listener. It must not run tools.
+	HostSignal func(kind string)
+}
+
+func (m *SessionManager) noteHostSignal(kind string) {
+	if m == nil || m.HostSignal == nil {
+		return
+	}
+	m.HostSignal(kind)
 }
 
 // NewSessionManager creates a SessionManager.
@@ -321,6 +330,7 @@ func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, te
 		m.mu.Unlock()
 	}()
 
+	m.noteHostSignal("aprovacao")
 	label := strings.TrimSpace(meta.Label)
 	if label == "" {
 		if meta.Gate == "budget" {
@@ -854,6 +864,9 @@ func (m *SessionManager) RunTurnWithOptions(
 			routedMu.Unlock()
 			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
 		}
+		if ev.Kind == "finish" {
+			m.noteHostSignal("lane")
+		}
 		if m.Emit != nil {
 			m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
 		}
@@ -1059,6 +1072,9 @@ func (m *SessionManager) RunAutoReviewTurn(
 			}
 			autoRoutedMu.Unlock()
 			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+		}
+		if ev.Kind == "finish" {
+			m.noteHostSignal("lane")
 		}
 		if m.Emit != nil {
 			m.Emit(LaneEvent{LaneID: laneID, Team: selected.Name, Event: ev})
