@@ -132,9 +132,14 @@ func isIncompatibleModel400(msg string) bool {
 			return true
 		}
 	}
-	// openai-go esconde o corpo e deixa só este resumo. No Cursor isso é a
-	// rejeição do id/parâmetro, não um pedido quebrado (esses ficam acima).
-	return strings.Contains(msg, "openai api error: 400")
+	// openai-go esconde o corpo e deixa só "OpenAI API error: 400 Bad Request".
+	// Esse resumo só é rejeição de modelo quando o adaptador Cursor já se
+	// identificou. O mesmo texto vindo da OpenAI ou do OpenRouter continua
+	// política: pode ser um pedido inválido que o próximo modelo repetiria.
+	if !strings.Contains(msg, "openai api error: 400") {
+		return false
+	}
+	return strings.Contains(msg, "cursor/") || strings.Contains(msg, "cursor cli") || strings.Contains(msg, "provedor cursor")
 }
 
 type outcomeSample struct {
