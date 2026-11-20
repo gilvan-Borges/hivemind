@@ -281,6 +281,8 @@ O provedor **Cursor** usa a assinatura da conta pelo CLI oficial (`agent -p`), n
 
 A proposta do agente residente (assistente sempre ligado, com sandbox) está em [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md). Ainda não há comando nem tela para ele.
 
+A proposta do orquestrador Jev (escolha de modelo por tarefa e failover de provedor, acima do squad) está em [docs/SPEC_JEV_ORQUESTRADOR.md](docs/SPEC_JEV_ORQUESTRADOR.md). Ainda não há comando nem tela para ele.
+
 ## Cursor (agente do editor)
 
 Quem edita este repositório no Cursor tem outra config, só para esse agente, em [`docs/CURSOR.md`](docs/CURSOR.md). Context7 e o Code Review Graph ficam ligados em `.cursor/mcp.json`. Playwright, Chrome DevTools, Toolbox, GitHub, Figma, Codebase Memory e a skill `untangle-codebase` ficam de fora do que o Cursor carrega.
