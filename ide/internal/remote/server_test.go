@@ -129,6 +129,19 @@ func doJSON(t *testing.T, srv *Server, method, url string, sess *lanSession, bod
 	return rec
 }
 
+func TestPolicyRouteIsRejected(t *testing.T) {
+	srv, _, _, sess := newTestServer(t)
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/jev/policy", sess, map[string]any{
+		"dailyUsd": map[string]float64{"openrouter": 1000},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST de policy deveria ser 400, veio %d (%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "policy.json") {
+		t.Fatalf("resposta não deve apontar o arquivo de policy: %s", rec.Body.String())
+	}
+}
+
 func TestHealthIsPublic(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	rec := doJSON(t, srv, http.MethodGet, "/api/v1/health", nil, nil)

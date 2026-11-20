@@ -1,5 +1,35 @@
 import type { AgentRuntime, PermissionMode, RunMode } from "./types";
 
+const REASON_PHRASE: Record<string, string> = {
+  cheap_default: "o mais barato que cabe",
+  pin: "modelo fixado por você",
+  context_fit: "cabe na janela",
+  circuit_open: "o anterior estava em pausa",
+  qa_escalation: "o QA pediu outra tentativa",
+  vision: "a tarefa tem imagem",
+  spread: "espalhado entre provedores",
+  budget_wait: "acima do teto, aguardando você",
+  budget_approved: "escalada autorizada",
+  account_pool_failover: "a conta estava sem cota",
+  dificuldade_alta: "tarefa difícil",
+  dificuldade_media: "tarefa média",
+};
+
+// reasonPhrase turns Jev reason codes into a short sentence. The model does not write it.
+export function reasonPhrase(codes: string[] | undefined | null): string {
+  if (!codes || codes.length === 0) return "";
+  return codes
+    .map((raw) => {
+      const code = String(raw || "").trim();
+      if (!code) return "";
+      if (REASON_PHRASE[code]) return REASON_PHRASE[code];
+      if (code.startsWith("promo_")) return `promoção ${code.slice("promo_".length)}`;
+      return code;
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function escapeHtml(text: string | undefined | null): string {
   return String(text ?? "")
     .replace(/&/g, "&amp;")

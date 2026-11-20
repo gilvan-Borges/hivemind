@@ -49,6 +49,19 @@ func jevRouteHintFrom(ctx context.Context) (jevRouteHint, bool) {
 	return h, ok
 }
 
+func repoDeniesProvider(pol jev.RepoPolicy, provider string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" || provider == "jev" {
+		return false
+	}
+	for _, denied := range pol.DenyProviders {
+		if strings.EqualFold(strings.TrimSpace(denied), provider) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasImageAttachments(atts []Attachment) bool {
 	for _, att := range atts {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(att.MIMEType)), "image/") {
@@ -207,6 +220,11 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					Reasons:  []string{"account_pool_failover"},
 				})
 			})
+		}
+
+		// A repo deny wins over a pin, including when Jev itself is off.
+		if repoDeniesProvider(repoPol, provNorm) {
+			return nil, fmt.Errorf("provedor %s negado por .hivemind/jev.yaml", provNorm)
 		}
 
 		// Opt-in / backward compatibility: when policy.Enabled is false and the
