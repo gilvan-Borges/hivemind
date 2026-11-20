@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime, RunMode } from "./types";
-import { escapeHtml, exactTokens, formatElapsedDuration, formatTokens, runModeLabel, updateAgentRuntimeStatus } from "./utils";
+import { escapeHtml, exactTokens, formatElapsedDuration, formatTokens, reasonPhrase, runModeLabel, updateAgentRuntimeStatus } from "./utils";
+
+describe("reasonPhrase", () => {
+  it("traduz os códigos de motivo do Jev", () => {
+    expect(reasonPhrase(["cheap_default", "context_fit"])).toBe("o mais barato que cabe · cabe na janela");
+    expect(reasonPhrase(["pin"])).toBe("modelo fixado por você");
+    expect(reasonPhrase(["circuit_open"])).toBe("o anterior estava em pausa");
+    expect(reasonPhrase(["qa_escalation"])).toBe("o QA pediu outra tentativa");
+    expect(reasonPhrase(["vision"])).toBe("a tarefa tem imagem");
+    expect(reasonPhrase(["spread"])).toBe("espalhado entre provedores");
+    expect(reasonPhrase(["budget_wait"])).toBe("acima do teto, aguardando você");
+    expect(reasonPhrase(["promo_-20%"])).toBe("promoção -20%");
+    expect(reasonPhrase(null)).toBe("");
+  });
+});
 
 describe("escapeHtml", () => {
   it("escapa os cinco caracteres perigosos", () => {

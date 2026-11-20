@@ -872,6 +872,16 @@ export interface RelayLinkCode {
   qrDataUrl: string;
 }
 
+export interface JevPolicy {
+  version: number;
+  enabled: boolean;
+  weights: { quality: number; cost: number; latency: number };
+  autoEscalateUsd: number;
+  maxEscalateRatio: number;
+  dailyUsd?: Record<string, number>;
+  allowDataClass?: string[];
+}
+
 export interface ProviderHealthView {
   provider: string;
   state: "closed" | "open" | "half_open" | string;
@@ -1087,6 +1097,8 @@ export interface WailsBackendApp {
   SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
   GetProviderHealth?(): Promise<ProviderHealthView[]>;
   ProbeProviders?(): Promise<ProviderHealthView[]>;
+  GetJevPolicy?(): Promise<JevPolicy>;
+  SaveJevPolicy?(policy: JevPolicy): Promise<JevPolicy>;
   GetAPIKeysStatus?(): Promise<Record<string, string>>;
   SaveAPIKeys?(entries: Record<string, string>): Promise<Record<string, string>>;
   ListOpenRouterModels?(): Promise<OpenRouterModelInfo[]>;

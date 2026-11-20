@@ -1,6 +1,6 @@
 # Spec — Jev, orquestrador de modelo e de saúde dos provedores
 
-**Status:** fase 3 implementada em `internal/jev` (registro local, prior e de-escalada). Fases 4 e 5 seguem proposta.
+**Status:** fases 1 a 4 implementadas. Fase 4: editor local de `policy.json` (`SaveJevPolicy`) e frases dos códigos de motivo no cliente. Fase 5 segue.
 **Data:** 2026-11-20
 **Escopo:** o lado Hive deste repositório (`hivemind-go`): CLI, HiveMind IDE (Go + Wails) e o processo que `hivemind serve` já sobe. O app Android (`HiveMind-App`, outro repositório) só entra como cliente do contrato que já consome. Esta spec não desenha tela nativa do app. Desenha o que o host passa a emitir e o que o app precisa reconhecer.
 
@@ -466,7 +466,9 @@ Aceite:
 - Sete amostras não mudam o prior. A oitava muda, num teste com números fixos.
 - `.hivemind/jev.yaml` com `dailyUsd` não altera o teto lido de `policy.json`.
 
-### Fase 4 — UI, app e allowlist visível
+### Fase 4 — UI, app e allowlist visível — implementada
+
+O binding Wails `SaveJevPolicy` grava `policy.json` no diretório de config do usuário. O bridge não tem essa rota: um POST fora da allowlist, inclusive um caminho de policy, responde 400. O cartão do agente monta a frase no cliente a partir dos códigos (`cheap_default`, `pin`, `context_fit`, `circuit_open`, `qa_escalation`, `vision`, `spread`, `budget_wait`). `deny_providers: [cursor]` impede construir o provedor Cursor mesmo com pin.
 
 Linha no agente, seletor “Jev”, circuito no modal de uso, policy editável só na IDE, `provider_health` no SSE.
 

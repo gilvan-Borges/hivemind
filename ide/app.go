@@ -1309,6 +1309,19 @@ func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens in
 	return a.GetAIUsage(), nil
 }
 
+// GetJevPolicy returns the local Jev policy. The bridge has no route for this.
+func (a *App) GetJevPolicy() jev.Policy {
+	return a.currentJevPolicy()
+}
+
+// SaveJevPolicy writes policy.json from the local IDE only.
+func (a *App) SaveJevPolicy(pol jev.Policy) (jev.Policy, error) {
+	if err := jev.SavePolicy(pol); err != nil {
+		return jev.Policy{}, err
+	}
+	return a.currentJevPolicy(), nil
+}
+
 func (a *App) currentJevPolicy() jev.Policy {
 	pol, err := jev.LoadPolicy()
 	if err != nil {
