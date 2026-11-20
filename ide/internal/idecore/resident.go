@@ -382,6 +382,23 @@ func (m *ResidentManager) DeleteMemory(id string) (bool, error) {
 	return m.memoryForCurrentAccount().DeleteFact(id)
 }
 
+// NoteDetectorRejected records a skipped detector file without its body.
+func (m *ResidentManager) NoteDetectorRejected(id, reason string) {
+	if m == nil || m.audit == nil {
+		return
+	}
+	_ = m.audit.RecordDecision(resident.AuditEntry{
+		Origin:     resident.OriginLocal,
+		Tool:       "detector_rejected",
+		Tier:       resident.TierCredentials,
+		Decision:   "deny",
+		Target:     id,
+		Outcome:    "denied",
+		ErrorClass: "detector_rejected",
+		Reason:     reason,
+	})
+}
+
 // AuditLog returns recent audit entries (read-only view, §11).
 func (m *ResidentManager) AuditLog(limit int) ([]resident.AuditEntry, error) {
 	if limit <= 0 {

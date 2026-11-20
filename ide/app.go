@@ -1490,6 +1490,11 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 
 // ExternalSessions lists outside processes by executable name. It does not control them.
 func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
+	extsess.OnReject = func(r extsess.Reject) {
+		if a != nil && a.resident != nil {
+			a.resident.NoteDetectorRejected(r.ID, r.Reason)
+		}
+	}
 	return extsess.List()
 }
 

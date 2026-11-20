@@ -45,7 +45,7 @@ func List() ([]ExternalSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionsFrom(procs, builtinNames), nil
+	return sessionsFrom(procs, mergedNames()), nil
 }
 
 func sessionsFrom(procs []processInfo, names map[string]string) []ExternalSession {
