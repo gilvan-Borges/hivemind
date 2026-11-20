@@ -57,8 +57,8 @@ export function buildDraftFromProject(): TeamConfigDraft {
     worktrees: settings?.worktrees !== false,
     autoCommit: settings ? settings.auto_commit === true : false,
     autoPR: settings ? settings.auto_pr === true : false,
-    jiraEnabled: settings?.jira_enabled === true,
-    jiraProject: settings?.jira_project || "",
+    jiraEnabled: settings?.jira_enabled === true || Boolean(state.jiraStatus?.connected && state.jiraStatus?.matchMode !== "isolated_none"),
+    jiraProject: settings?.jira_project || state.jiraStatus?.defaultProject || "",
     skillAssignments: (settings?.skill_assignments || []).map((a) => ({
       name: a.name,
       source: a.source || "",
@@ -407,21 +407,41 @@ export function renderTeamConfigPageHtml(): string {
             ${icons.sparkle}
             <div>
               <h3>Modelos LLM por Especialista</h3>
-              <div class="dim">Escolha primeiro o provedor (Antigravity, OpenCode, Gemini, Claude ou OpenAI/Grok) e depois o modelo.</div>
+              <div class="dim">Escolha o provedor à esquerda e o modelo à direita para cada papel da equipe.</div>
             </div>
           </div>
-          <div class="tc-fields">
-            <label>Modelo padrão</label>
-            ${renderModelPickerPairHtml({ pairKey: "tc-default", selectId: "tc-model", currentModel: draft.defaultModel })}
+          <div class="tc-model-rows">
+            <div class="tc-model-row">
+              <div class="tc-model-row-head">
+                <span class="tc-model-role">Modelo padrão</span>
+                <span class="tc-model-hint">Base para novos agentes</span>
+              </div>
+              ${renderModelPickerPairHtml({ pairKey: "tc-default", selectId: "tc-model", currentModel: draft.defaultModel })}
+            </div>
 
-            <label>Modelo do Chefe</label>
-            ${renderModelPickerPairHtml({ pairKey: "tc-chief", selectId: "tc-model-chief", currentModel: draft.chiefModel, includeDefaultBlank: true })}
+            <div class="tc-model-row">
+              <div class="tc-model-row-head">
+                <span class="tc-model-role">Modelo do Chefe</span>
+                <span class="tc-model-hint">Arquiteto / Planejamento</span>
+              </div>
+              ${renderModelPickerPairHtml({ pairKey: "tc-chief", selectId: "tc-model-chief", currentModel: draft.chiefModel, includeDefaultBlank: true })}
+            </div>
 
-            <label>Modelo do Dev</label>
-            ${renderModelPickerPairHtml({ pairKey: "tc-dev", selectId: "tc-model-dev", currentModel: draft.devModel, includeDefaultBlank: true })}
+            <div class="tc-model-row">
+              <div class="tc-model-row-head">
+                <span class="tc-model-role">Modelo do Dev</span>
+                <span class="tc-model-hint">Implementação em código</span>
+              </div>
+              ${renderModelPickerPairHtml({ pairKey: "tc-dev", selectId: "tc-model-dev", currentModel: draft.devModel, includeDefaultBlank: true })}
+            </div>
 
-            <label>Modelo do QA</label>
-            ${renderModelPickerPairHtml({ pairKey: "tc-qa", selectId: "tc-model-qa", currentModel: draft.qaModel, includeDefaultBlank: true })}
+            <div class="tc-model-row">
+              <div class="tc-model-row-head">
+                <span class="tc-model-role">Modelo do QA</span>
+                <span class="tc-model-hint">Testes e revisão técnica</span>
+              </div>
+              ${renderModelPickerPairHtml({ pairKey: "tc-qa", selectId: "tc-model-qa", currentModel: draft.qaModel, includeDefaultBlank: true })}
+            </div>
           </div>
         </section>
 

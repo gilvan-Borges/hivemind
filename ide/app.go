@@ -940,7 +940,11 @@ func (a *App) ImportJiraFromMCP(workspace string) (jirax.ConnectorStatus, error)
 	if _, err := jirax.ImportFromMCP(workspace); err != nil {
 		return jirax.ConnectorStatus{}, err
 	}
-	return a.JiraStatusForWorkspace(workspace), nil
+	st := a.JiraStatusForWorkspace(workspace)
+	if st.Connected {
+		idecore.EnableProjectJira(workspace, st.DefaultProject)
+	}
+	return st, nil
 }
 
 // SaveJiraConfig stores (or clears, when clear=true) the native Jira Cloud
@@ -958,7 +962,11 @@ func (a *App) SaveJiraProfile(profile jirax.JiraProfile, bindWorkspace string) (
 	if err := jirax.SaveProfile(profile, bindWorkspace); err != nil {
 		return jirax.ConnectorStatus{}, err
 	}
-	return a.JiraStatusForWorkspace(bindWorkspace), nil
+	st := a.JiraStatusForWorkspace(bindWorkspace)
+	if st.Connected && strings.TrimSpace(bindWorkspace) != "" {
+		idecore.EnableProjectJira(bindWorkspace, st.DefaultProject)
+	}
+	return st, nil
 }
 
 // DeleteJiraProfile removes a Jira Cloud profile by ID and returns refreshed status for workspace.
@@ -974,7 +982,11 @@ func (a *App) BindJiraWorkspace(workspace, target string) (jirax.ConnectorStatus
 	if err := jirax.BindWorkspace(workspace, target); err != nil {
 		return jirax.ConnectorStatus{}, err
 	}
-	return a.JiraStatusForWorkspace(workspace), nil
+	st := a.JiraStatusForWorkspace(workspace)
+	if st.Connected && !strings.EqualFold(strings.TrimSpace(target), "none") {
+		idecore.EnableProjectJira(workspace, st.DefaultProject)
+	}
+	return st, nil
 }
 
 // StartRun runs one objective through Chefe -> Dev -> QA -> Chefe on the given lane.

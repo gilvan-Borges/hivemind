@@ -159,10 +159,37 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		init(ws)
 
 		provNorm := team.NormalizeProvider(a.Provider, a.Model)
+		lowMod := strings.ToLower(strings.TrimSpace(a.Model))
+		isJevSpec := provNorm == "jev" ||
+			strings.HasPrefix(lowMod, "jev:") ||
+			strings.HasPrefix(lowMod, "jev/") ||
+			(provNorm != "cursor" && (strings.HasSuffix(lowMod, ":auto") || strings.HasSuffix(lowMod, "/auto") || strings.HasSuffix(lowMod, ":jev")))
 		// Opt-in / backward compatibility: when policy.Enabled is false and the
-		// agent is not set to provider "jev", behave identically to modelx.New.
-		if !policy.Enabled && provNorm != "jev" {
+		// agent is not set to provider "jev" (or a jev:<provider> auto spec), behave identically to modelx.New.
+		if !policy.Enabled && !isJevSpec {
 			return buildModel(ctx, a.Provider, a.Model)
+		}
+
+		// If the user chose a provider-scoped Jev auto spec (e.g. "jev:openrouter") and the
+		// catalog for that source hasn't been fetched yet, refresh it once before scoring.
+		if catalog != nil {
+			catSnap := catalog.Snapshot()
+			hasSource := func(src string) bool {
+				for _, e := range catSnap.Entries {
+					if strings.EqualFold(e.Provider, src) {
+						return true
+					}
+				}
+				return false
+			}
+			switch {
+			case strings.Contains(lowMod, "openrouter") && !hasSource("openrouter"):
+				catalog.RefreshNow(ctx)
+			case strings.Contains(lowMod, "opencode") && !hasSource("opencode"):
+				catalog.RefreshNow(ctx)
+			case strings.Contains(lowMod, "agy") && !hasSource("agy"):
+				catalog.RefreshNow(ctx)
+			}
 		}
 
 		if healthStore != nil && opts.Creds == nil {

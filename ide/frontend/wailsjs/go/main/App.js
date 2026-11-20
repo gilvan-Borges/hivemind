@@ -146,6 +146,10 @@ export function GetInlineAIStatus(arg1) {
   return window['go']['main']['App']['GetInlineAIStatus'](arg1);
 }
 
+export function GetProviderHealth() {
+  return window['go']['main']['App']['GetProviderHealth']();
+}
+
 export function GetProviderProfilesOverview(arg1) {
   return window['go']['main']['App']['GetProviderProfilesOverview'](arg1);
 }
@@ -298,6 +302,10 @@ export function ParseOutputProblems(arg1, arg2) {
   return window['go']['main']['App']['ParseOutputProblems'](arg1, arg2);
 }
 
+export function ProbeProviders() {
+  return window['go']['main']['App']['ProbeProviders']();
+}
+
 export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
 }
@@ -360,18 +368,6 @@ export function ResidentClearSession(arg1) {
 
 export function ResidentDeleteMemory(arg1) {
   return window['go']['main']['App']['ResidentDeleteMemory'](arg1);
-}
-
-export function ResidentDeleteSecret(arg1) {
-  return window['go']['main']['App']['ResidentDeleteSecret'](arg1);
-}
-
-export function ResidentSavePolicy(arg1, arg2) {
-  return window['go']['main']['App']['ResidentSavePolicy'](arg1, arg2);
-}
-
-export function ResidentSetSecret(arg1, arg2) {
-  return window['go']['main']['App']['ResidentSetSecret'](arg1, arg2);
 }
 
 export function ResidentDeleteSecret(arg1) {

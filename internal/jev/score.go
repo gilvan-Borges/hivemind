@@ -24,6 +24,9 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 	}
 
 	taskRole := team.NormalizeRole(task.Role)
+	if scProv := parseScopedJevProvider(agentPin); scProv != "" && task.OnlyProvider == "" {
+		task.OnlyProvider = scProv
+	}
 
 	// 1. Agent pin in .hivemind/team.yaml (highest precedence).
 	if isExplicitAgentPin(agentPin) {
@@ -144,13 +147,43 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 func isExplicitAgentPin(pin AgentPin) bool {
 	p := strings.ToLower(strings.TrimSpace(pin.Provider))
 	m := strings.TrimSpace(pin.Model)
-	if p == "jev" {
+	if p == "jev" || parseScopedJevProvider(pin) != "" {
 		return false
 	}
 	if p == "" && (m == "" || strings.EqualFold(m, "auto")) {
 		return false
 	}
 	return p != "" && m != ""
+}
+
+// parseScopedJevProvider extracts a provider constraint when an agent is configured
+// with a Jev provider-scoped auto spec such as "jev:openrouter", "openrouter:auto",
+// or (Provider: "openrouter", Model: "jev:auto").
+func parseScopedJevProvider(pin AgentPin) string {
+	p := strings.ToLower(strings.TrimSpace(pin.Provider))
+	m := strings.ToLower(strings.TrimSpace(pin.Model))
+	m = strings.ReplaceAll(m, "/", ":")
+	switch {
+	case strings.HasPrefix(m, "jev:"):
+		sub := strings.TrimPrefix(m, "jev:")
+		sub = strings.TrimSuffix(strings.TrimSuffix(sub, ":auto"), "-auto")
+		if sub != "" && sub != "auto" && sub != "jev" {
+			return team.NormalizeProvider(sub, "")
+		}
+		if p != "" && p != "jev" {
+			return team.NormalizeProvider(p, "")
+		}
+	case m == "auto" || m == "jev":
+		if p != "" && p != "jev" && p != "cursor" {
+			return team.NormalizeProvider(p, "")
+		}
+	case strings.HasSuffix(m, ":auto") || strings.HasSuffix(m, ":jev"):
+		prefix := strings.TrimSuffix(strings.TrimSuffix(m, ":auto"), ":jev")
+		if prefix != "" && prefix != "jev" && prefix != "cursor" {
+			return team.NormalizeProvider(prefix, "")
+		}
+	}
+	return ""
 }
 
 func initialTierFor(class Class, comp Complexity) Tier {
@@ -202,8 +235,12 @@ func selectBestInTier(
 	hasModelCircuits := len(health.ModelCircuits) > 0
 
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
+	onlyProv := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
+		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
+			continue
+		}
 		if e.Tier != "" && e.Tier != targetTier {
 			continue
 		}
@@ -323,6 +360,9 @@ func selectBestInTier(
 
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
+		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
+			continue
+		}
 		if e.Tier != "" && e.Tier != targetTier {
 			continue
 		}

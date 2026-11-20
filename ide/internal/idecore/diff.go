@@ -1037,18 +1037,29 @@ func buildMyJiraIssuesJQL(projectKey string) string {
 func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, error) {
 	var issues []ProjectIssue
 
-	// 1. Jira issues if enabled and configured (only tasks assigned to currentUser() and not Done)
-	if cfg, err := team.Load(workspace); err == nil && cfg.Settings.JiraEnabled {
+	// 1. Jira issues when a profile/connector is resolved for this workspace (unless explicitly opted out with bindingMode=="none").
+	res := jirax.ResolveForWorkspace(workspace)
+	if res.MatchMode != "isolated_none" {
 		jc := jirax.FromWorkspace(workspace)
 		if jc.Enabled() {
-			jiraBaseURL, _, _, defProj, _ := jirax.LoadCredentialsForWorkspace(workspace)
-			projKey := sanitizeJiraProjectKey(cfg.Settings.JiraProject)
+			var cfgProj string
+			if cfg, err := team.Load(workspace); err == nil {
+				cfgProj = cfg.Settings.JiraProject
+			}
+			projKey := sanitizeJiraProjectKey(cfgProj)
 			if projKey == "" {
-				projKey = sanitizeJiraProjectKey(defProj)
+				projKey = sanitizeJiraProjectKey(res.DefaultProject)
 			}
 			jql := buildMyJiraIssuesJQL(projKey)
-			if list, err := jc.Search(ctx, jql, 50); err == nil {
-				base := strings.TrimRight(strings.TrimSpace(jiraBaseURL), "/")
+			list, err := jc.Search(ctx, jql, 50)
+			if err == nil && len(list) == 0 && projKey != "" {
+				// If a default project filter yielded 0 tasks assigned to currentUser(), fall back to all non-Done tasks assigned to currentUser() across the org.
+				if allList, err2 := jc.Search(ctx, buildMyJiraIssuesJQL(""), 50); err2 == nil {
+					list = allList
+				}
+			}
+			if err == nil {
+				base := strings.TrimRight(strings.TrimSpace(res.BaseURL), "/")
 				for _, it := range list {
 					browseURL := ""
 					if base != "" && it.Key != "" {

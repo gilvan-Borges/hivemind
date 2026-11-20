@@ -186,6 +186,30 @@ func DeleteTeam(workspace, teamName string) (team.File, error) {
 	return cfg, nil
 }
 
+// EnableProjectJira marks settings.jira_enabled=true (and sets jira_project when empty and defaultProject is provided)
+// if a team config already exists in workspace.
+func EnableProjectJira(workspace, defaultProject string) {
+	if strings.TrimSpace(workspace) == "" {
+		return
+	}
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return
+	}
+	changed := false
+	if !cfg.Settings.JiraEnabled {
+		cfg.Settings.JiraEnabled = true
+		changed = true
+	}
+	if strings.TrimSpace(cfg.Settings.JiraProject) == "" && strings.TrimSpace(defaultProject) != "" {
+		cfg.Settings.JiraProject = strings.ToUpper(strings.TrimSpace(defaultProject))
+		changed = true
+	}
+	if changed {
+		_ = team.Save(workspace, cfg)
+	}
+}
+
 // UpdateProjectPermissionMode updates settings.permission_mode ("governed", "auto_edit", "full_access") in .hivemind/team.yaml.
 func UpdateProjectPermissionMode(workspace, permissionMode string) (team.File, error) {
 	cfg, err := team.Load(workspace)
@@ -752,6 +776,10 @@ func (m *SessionManager) RunTurnWithOptions(
 	var jira jirax.Client = jirax.Disabled{Reason: "Jira desabilitado"}
 	if cfg.Settings.JiraEnabled {
 		jira = jirax.FromWorkspace(workspace)
+	} else if res := jirax.ResolveForWorkspace(workspace); res.MatchMode != "isolated_none" {
+		if cand := jirax.FromWorkspace(workspace); cand.Enabled() {
+			jira = cand
+		}
 	}
 
 	normMode := strings.ToLower(strings.TrimSpace(runMode))

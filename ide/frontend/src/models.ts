@@ -13,6 +13,11 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   const cur = (modelSpec || "").trim();
   if (!cur && includeDefaultBlank) return "default";
   const low = cur.toLowerCase();
+  if (low === "openrouter:auto" || low === "openrouter/auto" || low === "openrouter:jev") return "openrouter";
+  if (low === "opencode-go:auto" || low === "opencode-go/auto") return "opencode-go";
+  if (low === "opencode:auto" || low === "opencode/auto") return "opencode";
+  if (low === "agy:auto" || low === "agy/auto") return "agy";
+  if (low === "gemini:auto" || low === "gemini/auto") return "gemini";
   if (low === "jev" || low === "jev:auto" || low === "jev/auto" || low.startsWith("jev:") || low === "auto") return "jev";
   if (low === "cursor" || low.startsWith("cursor:") || low.startsWith("cursor/")) return "cursor";
   if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
@@ -40,15 +45,15 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   const goCount = state.openCodeGoModels.length > 0 ? ` (${state.openCodeGoModels.length})` : "";
   const zenCount = state.openCodeModels.length > 0 ? ` (${state.openCodeModels.length})` : "";
   out.push(
-    { id: "jev", label: "Jev (automático, barato primeiro)" },
+    { id: "jev", label: "Jev (Auto)" },
     { id: "agy", label: `Antigravity (agy)${agyCount}` },
     { id: "opencode-go", label: `OpenCode Go${goCount}` },
     { id: "opencode", label: `OpenCode Zen${zenCount}` },
     { id: "gemini", label: "Google Gemini" },
     { id: "anthropic", label: "Anthropic (Claude)" },
-    { id: "openai", label: "OpenAI / Grok (API)" },
-    { id: "openrouter", label: "OpenRouter (gateway)" },
-    { id: "cursor", label: "Cursor (agente CLI)" },
+    { id: "openai", label: "OpenAI / Grok" },
+    { id: "openrouter", label: "OpenRouter" },
+    { id: "cursor", label: "Cursor CLI" },
   );
   return out;
 }
@@ -60,24 +65,40 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
     case "default":
       return [{ value: "", label: "(herdar modelo padrão)" }];
     case "jev":
-      return [{ value: "jev:auto", label: "auto (Jev escolhe o mais barato)" }];
+      return [
+        { value: "jev:auto", label: "auto — Todos os provedores ativos (mais barato)" },
+        { value: "jev:openrouter", label: "openrouter — Só modelos do OpenRouter (Jev escolhe)" },
+        { value: "jev:opencode", label: "opencode — Só modelos do OpenCode Go/Zen (Jev escolhe)" },
+        { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe)" },
+        { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
+      ];
     case "agy":
-      items = state.models.length > 0
-        ? state.models.map((m) => ({ value: `agy:${m.slug}`, label: m.slug }))
-        : [{ value: "agy", label: "agy (padrão)" }];
+      items = [
+        { value: "agy:auto", label: "auto (Jev escolhe no Antigravity)" },
+        ...(state.models.length > 0
+          ? state.models.map((m) => ({ value: `agy:${m.slug}`, label: m.slug }))
+          : [{ value: "agy", label: "agy (padrão)" }]),
+      ];
       break;
     case "opencode-go":
-      items = state.openCodeGoModels.length > 0
-        ? state.openCodeGoModels.map((m) => ({ value: `opencode-go:${m.slug}`, label: m.slug }))
-        : [{ value: "opencode-go:glm-5.3", label: "glm-5.3" }];
+      items = [
+        { value: "opencode:auto", label: "auto (Jev escolhe no OpenCode)" },
+        ...(state.openCodeGoModels.length > 0
+          ? state.openCodeGoModels.map((m) => ({ value: `opencode-go:${m.slug}`, label: m.slug }))
+          : [{ value: "opencode-go:glm-5.3", label: "glm-5.3" }]),
+      ];
       break;
     case "opencode":
-      items = state.openCodeModels.length > 0
-        ? state.openCodeModels.map((m) => ({ value: `opencode:${m.slug}`, label: m.slug }))
-        : [{ value: "opencode:big-pickle", label: "big-pickle" }];
+      items = [
+        { value: "opencode:auto", label: "auto (Jev escolhe no OpenCode)" },
+        ...(state.openCodeModels.length > 0
+          ? state.openCodeModels.map((m) => ({ value: `opencode:${m.slug}`, label: m.slug }))
+          : [{ value: "opencode:big-pickle", label: "big-pickle" }]),
+      ];
       break;
     case "gemini":
       items = [
+        { value: "gemini:auto", label: "auto (Jev escolhe no Gemini)" },
         { value: "gemini-2.5-pro", label: "gemini-2.5-pro" },
         { value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
         { value: "gemini-flash-latest", label: "gemini-flash-latest" },
@@ -106,15 +127,18 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
       }
       break;
     case "openrouter":
-      items = state.openRouterModels.length > 0
-        ? state.openRouterModels.map((m) => ({ value: m.id, label: m.id }))
-        : [
-            { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5 (carregando catálogo…)" },
-            { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
-            { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
-            { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
-            { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
-          ];
+      items = [
+        { value: "openrouter:auto", label: "auto (Jev escolhe o melhor/mais barato no OpenRouter)" },
+        ...(state.openRouterModels.length > 0
+          ? state.openRouterModels.map((m) => ({ value: m.id, label: m.id }))
+          : [
+              { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5 (carregando catálogo…)" },
+              { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
+              { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
+              { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
+              { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
+            ]),
+      ];
       break;
   }
   const normalizedCur = cur.replace("/", ":");

@@ -5,6 +5,7 @@ import {modelx} from '../models';
 import {main} from '../models';
 import {idecore} from '../models';
 import {team} from '../models';
+import {jev} from '../models';
 import {mcpx} from '../models';
 import {remote} from '../models';
 import {relayclient} from '../models';
@@ -83,6 +84,8 @@ export function GetInitialState():Promise<main.InitialState>;
 
 export function GetInlineAIStatus(arg1:string):Promise<idecore.InlineAIStatus>;
 
+export function GetProviderHealth():Promise<Array<jev.ProviderHealthView>>;
+
 export function GetProviderProfilesOverview(arg1:string):Promise<modelx.ProfilesOverview>;
 
 export function GetRecentProjects():Promise<Array<string>>;
@@ -158,6 +161,8 @@ export function OpenPR(arg1:string,arg2:string,arg3:string,arg4:string):Promise<
 export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
 
 export function ParseOutputProblems(arg1:string,arg2:string):Promise<Array<idecore.ProblemItem>>;
+
+export function ProbeProviders():Promise<Array<jev.ProviderHealthView>>;
 
 export function ReadFile(arg1:string,arg2:string):Promise<string>;
 

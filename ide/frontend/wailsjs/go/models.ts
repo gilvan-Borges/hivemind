@@ -889,6 +889,39 @@ export namespace idecore {
 
 }
 
+export namespace jev {
+	
+	export class ProviderHealthView {
+	    provider: string;
+	    state: string;
+	    reason?: string;
+	    until?: string;
+	    dailySpentMicroUsd?: number;
+	    dailyCapMicroUsd?: number;
+	    quotaRemainingPct?: number;
+	    quotaStale?: boolean;
+	    hasCredential: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderHealthView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.state = source["state"];
+	        this.reason = source["reason"];
+	        this.until = source["until"];
+	        this.dailySpentMicroUsd = source["dailySpentMicroUsd"];
+	        this.dailyCapMicroUsd = source["dailyCapMicroUsd"];
+	        this.quotaRemainingPct = source["quotaRemainingPct"];
+	        this.quotaStale = source["quotaStale"];
+	        this.hasCredential = source["hasCredential"];
+	    }
+	}
+
+}
+
 export namespace jirax {
 	
 	export class JiraProfileSummary {
@@ -1565,6 +1598,8 @@ export namespace modelx {
 	    contextLength?: number;
 	    promptPrice?: number;
 	    completionPrice?: number;
+	    supportsTools?: boolean;
+	    supportsVision?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new OpenRouterModel(source);
@@ -1577,6 +1612,8 @@ export namespace modelx {
 	        this.contextLength = source["contextLength"];
 	        this.promptPrice = source["promptPrice"];
 	        this.completionPrice = source["completionPrice"];
+	        this.supportsTools = source["supportsTools"];
+	        this.supportsVision = source["supportsVision"];
 	    }
 	}
 	export class ResolvedProviderInfo {
@@ -2013,14 +2050,14 @@ export namespace resident {
 	    memoryDir?: string;
 	    auditPath?: string;
 	    lastError?: string;
-	    sandboxAvailable?: boolean;
+	    sandboxAvailable: boolean;
 	    sandboxMechanism?: string;
 	    sandboxReason?: string;
-	    vaultAvailable?: boolean;
+	    vaultAvailable: boolean;
 	    vaultReason?: string;
-	    allowedBinaries?: string[];
-	    allowedHosts?: string[];
-	    vaultSecrets?: string[];
+	    allowedBinaries: string[];
+	    allowedHosts: string[];
+	    vaultSecrets: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);

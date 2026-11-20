@@ -66,6 +66,7 @@ type Task struct {
 	InStep             bool
 	QAStall            int
 	RepoKey            string
+	OnlyProvider       string
 }
 
 // Capabilities describes what a model supports inside HiveMind.

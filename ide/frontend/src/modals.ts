@@ -60,6 +60,17 @@ export async function refreshJiraStatusAndProjects() {
     } else if (!state.jiraStatus?.connected) {
       state.jiraProjects = [];
     }
+    if (state.jiraStatus?.connected) {
+      if (state.project?.teamConfig?.settings) {
+        state.project.teamConfig.settings.jira_enabled = true;
+      }
+      if (state.teamConfigDraft) {
+        state.teamConfigDraft.jiraEnabled = true;
+      }
+      if (state.sidebarView === "git" && state.gitTab === "prs_issues" && !state.issues.loading) {
+        void loadProjectIssues();
+      }
+    }
     updateStatusBar();
     if (state.showJiraModal) renderModalLayer();
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
@@ -1338,6 +1349,7 @@ export function renderModalLayer() {
         state.jiraStatus = await backend.BindJiraWorkspace(wsRoot, target);
         state.jiraEditingProfileId = null;
         await refreshJiraStatusAndProjects();
+        void loadProjectIssues();
       } catch (err: any) {
         toastError("vincular Jira ao projeto", err);
       }
@@ -1360,6 +1372,7 @@ export function renderModalLayer() {
           }
           if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
           toast(`Jira importado do MCP e conectado como ${state.jiraStatus.user || state.jiraStatus.email}!`, "success");
+          void loadProjectIssues();
         } else if (errEl) {
           errEl.textContent = state.jiraStatus?.detail || "Credenciais importadas, mas falha ao autenticar.";
           errEl.style.display = "block";
@@ -1439,6 +1452,7 @@ export function renderModalLayer() {
           updateStatusBar();
           if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
           toast(`Jira conectado (${state.jiraStatus.activeProfileName || state.jiraStatus.user || emailIn}).`, "success");
+          void loadProjectIssues();
           if (pinWorkspace) closeJira();
           else renderModalLayer();
         } else {
