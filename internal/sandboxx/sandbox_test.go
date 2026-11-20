@@ -31,9 +31,21 @@ func TestProbeAndRunBasic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// bwrap replaces /tmp with a tmpfs, so the Go test binary (under /tmp/go-build)
+	// is invisible unless its own directory is ro-bound. Never bind all of /tmp.
+	var readRoots []string
+	if runtime.GOOS == "linux" {
+		dir := filepath.Clean(filepath.Dir(exe))
+		switch dir {
+		case "/", "/tmp", "/var/tmp", "/private/tmp", ".":
+			t.Fatalf("refusing to ro-bind %s for the test binary", dir)
+		}
+		readRoots = []string{dir}
+	}
 	res, err := r.Run(context.Background(), Options{
 		Argv:       []string{exe, "-test.run=^TestSandboxHelperProcess$"},
 		WorkDir:    ws,
+		ReadRoots:  readRoots,
 		WriteRoots: []string{ws},
 		ExtraEnv:   []string{"HIVEMIND_SANDBOX_HELPER=echo_ok"},
 		Timeout:    15 * time.Second,
