@@ -79,12 +79,12 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		errClass := jev.ClassifyError(respErr)
-		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
+		if ctx.Err() != nil || (errClass == jev.ErrClassPolicy && !isUpstreamModel400(respErr)) {
 			yield(nil, fmt.Errorf("%s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
 			return
 		}
 
-		if w.health != nil {
+		if w.health != nil && errClass != jev.ErrClassPolicy {
 			w.health.RecordFailure(curChoice.Provider, curChoice.Model, errClass, time.Time{})
 		}
 
@@ -320,6 +320,17 @@ func (w *jevModelWrapper) emitExhausted(text string) {
 
 func pairKey(provider, model string) string {
 	return strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.TrimSpace(model)
+}
+
+func isUpstreamModel400(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "400 bad request") ||
+		strings.Contains(msg, "http 400") ||
+		strings.Contains(msg, "status 400") ||
+		strings.Contains(msg, "invalid_argument")
 }
 
 func responseHasToolCall(resp *model.LLMResponse) bool {

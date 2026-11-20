@@ -52,6 +52,9 @@ func fetchJevOpenRouter(ctx context.Context) ([]jev.ModelEntry, error) {
 	}
 	out := make([]jev.ModelEntry, 0, len(list))
 	for _, m := range list {
+		if !m.SupportsTools || !jev.IsTrustedOpenRouterModel(m.ID) {
+			continue
+		}
 		out = append(out, jev.ModelEntry{
 			Provider:           "openrouter",
 			Model:              m.ID,

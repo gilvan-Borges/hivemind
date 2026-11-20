@@ -1888,34 +1888,38 @@ type delegateResult struct {
 }
 
 // isLightOperationalObjective returns true when the user prompt is a short operational
-// request (e.g., checking a Jira task, changing task status, commenting on a PR/issue,
-// or listing status) that does not ask to write/refactor code.
+// request (e.g., checking a Jira task status, transitioning task column, commenting on a PR/issue)
+// that does NOT ask to solve/implement an issue, review code, or write/refactor code.
 func isLightOperationalObjective(raw string) bool {
 	// Extract the user's actual prompt if prefixed with stack/memory blocks.
 	text := strings.TrimSpace(raw)
 	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
 		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
 	}
-	if len(text) == 0 || len(text) > 700 {
+	if len(text) == 0 || len(text) > 360 {
 		return false
 	}
 	low := strings.ToLower(text)
-	// Exclude explicit code implementation/refactoring requests.
+	// Exclude any implementation, issue resolution, PR review, or squad execution objective.
 	for _, heavy := range []string{
+		"resolver issue", "resolva a issue", "resolver task", "resolver tarefa", "resolver ipg",
+		"revisar pr", "reavaliar pr", "revisar automaticamente", "atender feedback",
 		"implement", "refator", "crie o arquivo", "criar arquivo", "edite o código",
 		"editar o código", "corrija o bug", "corrigir o bug", "desenvolv", "escreva o teste",
-		"adicione o endpoint", "criar componente", "migração",
+		"adicione o endpoint", "criar componente", "migração", "fazer uma task", "pegar uma task",
+		"pegue uma task", "fazer a task", "executar a task", "worktree", "onda ", "fase ",
+		"descrição:", "critérios de aceite",
 	} {
 		if strings.Contains(low, heavy) {
 			return false
 		}
 	}
 	for _, kw := range []string{
-		"jira", "task", "tarefa", "issue", "status", "coluna", "transi",
-		"in progress", "em andamento", "done", "conclu", "coment", "comment",
-		"conferir", "confira", "verificar", "verifique", "listar", "liste",
-		"qual o status", "mude o status", "mudar status", "atualize o status",
-		"mover para", "mova para", "pr #", "pull request",
+		"mude o status", "mudar status", "mudar o status", "atualize o status", "atualizar status",
+		"mover para", "mova para", "transicionar", "transição",
+		"comentar no jira", "comente no jira", "comentar na task", "comente na task",
+		"comentar no pr", "comente no pr", "comentar na issue",
+		"qual o status", "conferir status", "verificar status", "listar tasks", "liste as tasks",
 	} {
 		if strings.Contains(low, kw) {
 			return true

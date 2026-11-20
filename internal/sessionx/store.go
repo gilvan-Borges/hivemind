@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -120,6 +121,10 @@ func (s *Store) Get(_ context.Context, req *session.GetRequest) (*session.GetRes
 		}
 		fs = loaded
 		s.live[req.SessionID] = fs
+	} else {
+		fs.mu.Lock()
+		sanitizeSessionEventCallIDs(fs.events)
+		fs.mu.Unlock()
 	}
 	s.mu.Unlock()
 	if fs.appName != req.AppName || fs.userID != req.UserID {
@@ -368,6 +373,7 @@ func (s *Store) load(id string) (*fileSession, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return nil, fmt.Errorf("ler sessão %s: %w", id, err)
 	}
+	sanitizeSessionEventCallIDs(rec.Events)
 	fs := &fileSession{
 		id:        rec.ID,
 		appName:   rec.AppName,
@@ -383,6 +389,114 @@ func (s *Store) load(id string) (*fileSession, error) {
 		fs.state = map[string]any{}
 	}
 	return fs, nil
+}
+
+// sanitizeSessionEventCallIDs repairs legacy persisted sessions that contain
+// duplicate FunctionCall IDs across turns (e.g. "agy-1", "call_01", "call_02")
+// or within parallel batches, as well as orphaned FunctionResponses.
+// Duplicate or orphaned IDs cause OpenAI/OpenRouter adapters to fail with
+// `received function response for unknown or already completed call id` and cause ADK's
+// history rearrangement to swap/duplicate tool responses across turns.
+func sanitizeSessionEventCallIDs(events []*session.Event) {
+	if len(events) == 0 {
+		return
+	}
+	type pendingCall struct {
+		origID string
+		newID  string
+		name   string
+		used   bool
+	}
+	usedCallIDs := make(map[string]bool)
+	var pending []pendingCall
+
+	for ei, ev := range events {
+		if ev == nil || ev.LLMResponse.Content == nil {
+			continue
+		}
+		hasCalls := false
+		for _, p := range ev.LLMResponse.Content.Parts {
+			if p != nil && p.FunctionCall != nil {
+				hasCalls = true
+				break
+			}
+		}
+		if hasCalls {
+			// Starting a new model tool-call turn resets any stale unmatched calls from earlier turns.
+			pending = nil
+		}
+
+		var keptParts []*genai.Part
+		partsChanged := false
+		for pi, part := range ev.LLMResponse.Content.Parts {
+			if part == nil {
+				continue
+			}
+			if fc := part.FunctionCall; fc != nil {
+				origID := strings.TrimSpace(fc.ID)
+				newID := origID
+				if newID == "" || usedCallIDs[newID] {
+					newID = fmt.Sprintf("hm-call-%d-%d", ei, pi)
+				}
+				usedCallIDs[newID] = true
+				fc.ID = newID
+				pending = append(pending, pendingCall{
+					origID: origID,
+					newID:  newID,
+					name:   strings.TrimSpace(fc.Name),
+				})
+				keptParts = append(keptParts, part)
+				continue
+			}
+			if fr := part.FunctionResponse; fr != nil {
+				origID := strings.TrimSpace(fr.ID)
+				frName := strings.TrimSpace(fr.Name)
+				matchedIdx := -1
+				// 1. Match by exact original ID + tool Name first.
+				for i := range pending {
+					if !pending[i].used && pending[i].origID == origID && (frName == "" || strings.EqualFold(pending[i].name, frName)) {
+						matchedIdx = i
+						break
+					}
+				}
+				// 2. Match by exact original ID alone.
+				if matchedIdx < 0 && origID != "" {
+					for i := range pending {
+						if !pending[i].used && pending[i].origID == origID {
+							matchedIdx = i
+							break
+						}
+					}
+				}
+				// 3. Match by tool Name if original IDs collided in a parallel batch.
+				if matchedIdx < 0 && frName != "" {
+					for i := range pending {
+						if !pending[i].used && strings.EqualFold(pending[i].name, frName) {
+							matchedIdx = i
+							break
+						}
+					}
+				}
+				if matchedIdx >= 0 {
+					pending[matchedIdx].used = true
+					fr.ID = pending[matchedIdx].newID
+					keptParts = append(keptParts, part)
+				} else {
+					// Orphaned FunctionResponse with no pending FunctionCall: drop it so OpenAI/OpenRouter
+					// CallTracker never fails with "unknown or already completed call id".
+					partsChanged = true
+				}
+				continue
+			}
+			keptParts = append(keptParts, part)
+		}
+		if partsChanged {
+			if len(keptParts) == 0 {
+				keptParts = []*genai.Part{{Text: "ok"}}
+			}
+			ev.LLMResponse.Content.Parts = keptParts
+		}
+	}
 }
 
 func (s *Store) readIndexLocked() ([]Meta, error) {

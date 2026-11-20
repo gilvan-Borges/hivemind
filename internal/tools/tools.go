@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
@@ -1067,6 +1068,12 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		*out = append(*out, create)
 	}
 
+	var (
+		govWriteMu   sync.Mutex
+		reviewedPRs  = make(map[int]string)
+		commentedPRs = make(map[string]bool)
+	)
+
 	commentPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_comment_pr",
 		Description: "Comenta na conversa geral de um Pull Request. Permitido SOMENTE quando o PR é de sua própria autoria (ex: respondendo mudanças feitas após review) ou quando há pedido de revisão.",
@@ -1074,6 +1081,13 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		Number int    `json:"number" jsonschema:"Número do pull request."`
 		Body   string `json:"body" jsonschema:"Resumo das alterações realizadas ou resposta à revisão."`
 	}) (textResult, error) {
+		dedupKey := fmt.Sprintf("%d::%s", args.Number, strings.TrimSpace(args.Body))
+		govWriteMu.Lock()
+		alreadyCommented := commentedPRs[dedupKey]
+		govWriteMu.Unlock()
+		if alreadyCommented {
+			return textResult{Text: fmt.Sprintf("BLOQUEIO DE DUPLICIDADE: este comentário já foi publicado no PR #%d nesta execução. Não envie comentários duplicados.", args.Number)}, nil
+		}
 		pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
 		if err != nil {
 			return textResult{}, err
@@ -1085,6 +1099,9 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		if err := d.GitHub.CommentOnIssue(ctx, args.Number, args.Body); err != nil {
 			return textResult{}, err
 		}
+		govWriteMu.Lock()
+		commentedPRs[dedupKey] = true
+		govWriteMu.Unlock()
 		return textResult{Text: fmt.Sprintf("comentário registrado no PR #%d", args.Number)}, nil
 	})
 	if err != nil {
@@ -1140,9 +1157,9 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		return err
 	}
 
-	reviewDesc := "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão."
+	reviewDesc := "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão. Chame NO MÁXIMO UMA VEZ por PR."
 	if d.ReviewCommentOnly {
-		reviewDesc = "Envia comentário de revisão (APENAS event=COMMENT) em um PR DE TERCEIRO. Modo automático configurado como somente-comentário: APPROVE e REQUEST_CHANGES são bloqueados."
+		reviewDesc = "Envia comentário de revisão (APENAS event=COMMENT) em um PR DE TERCEIRO. Modo automático configurado como somente-comentário: APPROVE e REQUEST_CHANGES são bloqueados. Chame NO MÁXIMO UMA VEZ por PR."
 	}
 	reviewPR, err := functiontool.New(functiontool.Config{
 		Name:        "github_review_pr",
@@ -1152,6 +1169,15 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		Event  string `json:"event" jsonschema:"Decisão: APPROVE, REQUEST_CHANGES ou COMMENT."`
 		Body   string `json:"body" jsonschema:"Parecer técnico da revisão."`
 	}) (textResult, error) {
+		govWriteMu.Lock()
+		prevEvent, alreadyReviewed := reviewedPRs[args.Number]
+		govWriteMu.Unlock()
+		if alreadyReviewed {
+			if ctx != nil && ctx.Actions() != nil {
+				ctx.Actions().Escalate = true
+			}
+			return textResult{Text: fmt.Sprintf("BLOQUEIO DE DUPLICIDADE: a revisão oficial (%s) JÁ foi enviada no PR #%d nesta execução. É proibido enviar múltiplas revisões seguidas no mesmo PR. Encerre imediatamente sua resposta.", prevEvent, args.Number)}, nil
+		}
 		if d.ReviewCommentOnly && !strings.EqualFold(strings.TrimSpace(args.Event), "COMMENT") {
 			return textResult{}, fmt.Errorf("governança auto-review: modo configurado para somente comentar (comment_only); use event=\"COMMENT\" em vez de %q", args.Event)
 		}
@@ -1166,7 +1192,11 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		if err := d.GitHub.SubmitReview(ctx, args.Number, args.Event, args.Body); err != nil {
 			return textResult{}, err
 		}
-		return textResult{Text: fmt.Sprintf("revisão %s enviada no PR #%d", strings.ToUpper(args.Event), args.Number)}, nil
+		evUpper := strings.ToUpper(strings.TrimSpace(args.Event))
+		govWriteMu.Lock()
+		reviewedPRs[args.Number] = evUpper
+		govWriteMu.Unlock()
+		return textResult{Text: fmt.Sprintf("revisão %s enviada com sucesso no PR #%d (1/1 — revisão concluída; NÃO chame github_review_pr novamente, apenas apresente o resumo final ao usuário)", evUpper, args.Number)}, nil
 	})
 	if err != nil {
 		return err

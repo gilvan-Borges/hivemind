@@ -1362,13 +1362,26 @@ export function bindGitSidebarEvents() {
         const manualLane = state.lanes.find((lane) => lane.id !== "lane-autoreview");
         if (manualLane) {
           state.activeLaneId = manualLane.id;
-          renderLaneBarOnly();
-          renderPipelineBar();
-          renderTokenBar();
-          rebuildChatMessagesFull();
-          syncComposerButtons();
         }
       }
+      const targetLane = activeLane();
+      if (targetLane && !targetLane.running && targetLane.sessionId) {
+        // Start a clean session when loading a new PR for review so old session history
+        // and token counters from previous tasks/PRs never pollute this review.
+        targetLane.sessionId = "";
+        targetLane.turnInTokens = 0;
+        targetLane.turnOutTokens = 0;
+        targetLane.turnTotalTokens = 0;
+        targetLane.sessionInTokens = 0;
+        targetLane.sessionOutTokens = 0;
+        targetLane.sessionTotalTokens = 0;
+        targetLane.messages = [];
+      }
+      renderLaneBarOnly();
+      renderPipelineBar();
+      renderTokenBar();
+      rebuildChatMessagesFull();
+      syncComposerButtons();
       state.showRightAI = true;
       syncLayoutVisibility();
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
@@ -1392,6 +1405,23 @@ export function bindGitSidebarEvents() {
       }
       const bodyPart = iss.body ? `\n\nDescrição:\n${iss.body.slice(0, 1200)}` : "";
       state.draftObjective = `Resolver issue ${iss.key} — ${iss.title}${bodyPart}`;
+      const targetLane = activeLane();
+      if (targetLane && !targetLane.running && targetLane.sessionId) {
+        // Start a clean session when loading a new Jira/GitHub issue from the sidebar.
+        targetLane.sessionId = "";
+        targetLane.turnInTokens = 0;
+        targetLane.turnOutTokens = 0;
+        targetLane.turnTotalTokens = 0;
+        targetLane.sessionInTokens = 0;
+        targetLane.sessionOutTokens = 0;
+        targetLane.sessionTotalTokens = 0;
+        targetLane.messages = [];
+        renderLaneBarOnly();
+        renderPipelineBar();
+        renderTokenBar();
+        rebuildChatMessagesFull();
+        syncComposerButtons();
+      }
       state.showRightAI = true;
       syncLayoutVisibility();
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;

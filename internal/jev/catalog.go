@@ -141,6 +141,16 @@ func NewCatalogStore(path string, fetchers map[string]SourceFetcher) *CatalogSto
 	}
 	if path != "" {
 		if loaded, err := LoadCatalogFrom(path); err == nil && len(loaded.Entries) > 0 {
+			if len(fetchers) > 0 {
+				filtered := make([]ModelEntry, 0, len(loaded.Entries))
+				for _, e := range loaded.Entries {
+					if strings.EqualFold(e.Provider, "openrouter") && !IsTrustedOpenRouterModel(e.Model) {
+						continue
+					}
+					filtered = append(filtered, e)
+				}
+				loaded.Entries = filtered
+			}
 			cs.catalog = mergeWithStaticSeeds(loaded)
 		}
 	}
@@ -265,6 +275,73 @@ func (s *CatalogStore) MergeSource(source string, entries []ModelEntry) {
 	}
 }
 
+// IsTrustedOpenRouterModel reports whether an OpenRouter model ID belongs to a
+// battle-tested coding and tool-calling family suitable for autonomous HiveMind agents.
+// Experimental/community ":free" endpoints, Baidu Ernie previews, Gemma, and small
+// chat-only models frequently fail with HTTP 400 Bad Request on multi-tool schemas.
+func IsTrustedOpenRouterModel(modelID string) bool {
+	m := strings.ToLower(strings.TrimSpace(modelID))
+	if m == "" {
+		return false
+	}
+	// Never route autonomous multi-tool agent tasks to OpenRouter ":free" trial endpoints
+	// or known tool-incompatible preview families.
+	if strings.HasSuffix(m, ":free") ||
+		strings.Contains(m, "/ernie") ||
+		strings.HasPrefix(m, "baidu/") ||
+		strings.Contains(m, "gemma") ||
+		strings.Contains(m, "llama-3.1-8b") ||
+		strings.Contains(m, "llama-3.2-") ||
+		strings.Contains(m, "vision-free") ||
+		strings.Contains(m, "roleplay") {
+		return false
+	}
+	trustedPrefixes := []string{
+		"anthropic/claude-",
+		"openai/gpt-4o",
+		"openai/gpt-4.1",
+		"openai/gpt-5",
+		"openai/o3",
+		"openai/o4",
+		"google/gemini-2.0-flash",
+		"google/gemini-2.5-flash",
+		"google/gemini-2.5-pro",
+		"google/gemini-3",
+		"deepseek/deepseek-chat",
+		"deepseek/deepseek-v3",
+		"deepseek/deepseek-coder",
+		"deepseek/deepseek-r1",
+		"qwen/qwen-2.5-coder",
+		"qwen/qwen3-coder",
+		"qwen/qwen3-235b",
+		"qwen/qwen3-32b",
+		"qwen/qwen3-30b",
+		"qwen/qwen-plus",
+		"qwen/qwen-max",
+		"qwen/qwen-turbo",
+		"x-ai/grok-3",
+		"x-ai/grok-4",
+		"x-ai/grok-code",
+		"mistralai/codestral",
+		"mistralai/devstral",
+		"mistralai/mistral-small-3",
+		"mistralai/mistral-medium-3",
+		"mistralai/mistral-large",
+		"minimax/minimax-m1",
+		"minimax/minimax-m2",
+		"z-ai/glm-4.5",
+		"z-ai/glm-5",
+		"thudm/glm-4",
+		"moonshotai/kimi-k2",
+	}
+	for _, pref := range trustedPrefixes {
+		if strings.HasPrefix(m, pref) {
+			return true
+		}
+	}
+	return false
+}
+
 func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []ModelEntry {
 	seen := make(map[string]bool, len(entries))
 	out := make([]ModelEntry, 0, len(entries))
@@ -281,7 +358,9 @@ func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []Model
 		seen[key] = true
 		e.Provider = prov
 		e.Model = mod
-		e.Source = source
+		if source != "" {
+			e.Source = source
+		}
 		if e.RefreshedAt.IsZero() {
 			e.RefreshedAt = now
 		}
