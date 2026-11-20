@@ -2386,8 +2386,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			}
 			skillNames := skillx.Names(r.selectedSkills)
 			nativeNames := skillx.Names(r.selectedNative)
-			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			r.sealHandoff(sess.ID())
+			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("chief_context_brief", r.chiefContextBrief)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)

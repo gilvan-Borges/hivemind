@@ -75,3 +75,25 @@ func TestNoteStaysOutOfGitStatus(t *testing.T) {
 		t.Fatalf("git status mostrou a nota: %s", out)
 	}
 }
+
+func TestRepoKeysDoNotCollide(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	t.Setenv("HIVEMIND_DATA_DIR", data)
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, "github.com/acme_tools/app", LineNote{Path: "a.go", Side: "new", Line: 1, Body: "um"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, "github.com/acme/tools_app", LineNote{Path: "a.go", Side: "new", Line: 2, Body: "dois"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(data, "reviews"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("chaves distintas cairam no mesmo arquivo: %d", len(entries))
+	}
+}

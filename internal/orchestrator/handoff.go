@@ -52,7 +52,11 @@ type handoffEdge struct {
 }
 
 func (r *Runner) sealHandoff(runID string) {
-	if r == nil || strings.TrimSpace(r.Workspace) == "" {
+	if r == nil {
+		return
+	}
+	r.devSlices = sanitizeSlices(r.devSlices)
+	if strings.TrimSpace(r.Workspace) == "" {
 		return
 	}
 	if r.chiefPlan == "" && r.chiefContextBrief == "" && len(r.devSlices) == 0 {
@@ -63,6 +67,25 @@ func (r *Runner) sealHandoff(runID string) {
 	r.chiefContextBrief = strings.Join(pkg.Facts, "\n")
 	r.handoffHash = pkg.DeliveryHash
 	_ = persistHandoff(r.Workspace, pkg)
+}
+
+func sanitizeSlices(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]string, 0, len(in))
+	for _, sl := range in {
+		s := sanitizeHandoffText(sl)
+		if len(s) > handoffFactMax {
+			s = s[:handoffFactMax]
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (r *Runner) makeHandoffPackage(runID, from, to string) HandoffPackage {
