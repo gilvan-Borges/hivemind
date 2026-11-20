@@ -22,7 +22,8 @@ const (
 	ErrClassAuth      ErrorClass = "auth"
 	ErrClassOutage    ErrorClass = "outage"
 	ErrClassSpike     ErrorClass = "spike"
-	ErrClassPolicy    ErrorClass = "policy" // 400, jail, approval denial, context.Canceled — never opens circuit
+	ErrClassModel     ErrorClass = "model"  // 400 de modelo/provedor incompatível — abre só o circuito do modelo
+	ErrClassPolicy    ErrorClass = "policy" // jail, aprovação, pedido inválido para qualquer modelo — nunca abre circuito
 )
 
 // ClassifyError maps a provider error (already past internal/modelx retries)
@@ -42,12 +43,16 @@ func ClassifyError(err error) ErrorClass {
 		return ErrClassOutage
 	}
 
-	// 1. Policy / client-side / 400 errors NEVER open circuits and NEVER failover.
-	for _, pat := range []string{
-		"http 400", "status 400", "400 bad request", "invalid_argument",
-		"recusado pela", "recusado fora", "fora do workspace", "jail",
-		"política", "aprovação", "não permitido", "context canceled",
-	} {
+	// 1. Pedido inválido para qualquer modelo (jail, tool_call órfão) não faz failover.
+	// 400 de modelo incompatível (id de outro provedor no Cursor, parâmetro recusado)
+	// abre só o circuito daquele modelo e deixa o Jev tentar o próximo candidato.
+	if isRequestShapePolicy(msg) {
+		return ErrClassPolicy
+	}
+	if isIncompatibleModel400(msg) {
+		return ErrClassModel
+	}
+	for _, pat := range []string{"http 400", "status 400", "400 bad request"} {
 		if strings.Contains(msg, pat) {
 			return ErrClassPolicy
 		}
@@ -90,6 +95,53 @@ func ClassifyError(err error) ErrorClass {
 	return ErrClassOutage
 }
 
+// isRequestShapePolicy reports errors that would fail on every model, so failover
+// must not resend the same request.
+func isRequestShapePolicy(msg string) bool {
+	for _, pat := range []string{
+		"invalid_argument", "tool_call_id", "orphaned", "tool message",
+		"recusado pela", "recusado fora", "fora do workspace", "jail",
+		"política", "aprovação", "não permitido", "context canceled",
+	} {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// isIncompatibleModel400 reports a 400 that means this model or provider cannot
+// serve the call (foreign id, unknown model, unsupported parameter).
+func isIncompatibleModel400(msg string) bool {
+	for _, pat := range []string{
+		"modelo incompatível",
+		"not a cursor model",
+		"is not a cursor",
+		"model not found",
+		"unknown model",
+		"invalid model",
+		"not a valid model",
+		"does not support",
+		"não suporta",
+		"unsupported parameter",
+		"no endpoints found",
+		"is not available",
+		"not available for",
+	} {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	// openai-go esconde o corpo e deixa só "OpenAI API error: 400 Bad Request".
+	// Esse resumo só é rejeição de modelo quando o adaptador Cursor já se
+	// identificou. O mesmo texto vindo da OpenAI ou do OpenRouter continua
+	// política: pode ser um pedido inválido que o próximo modelo repetiria.
+	if !strings.Contains(msg, "openai api error: 400") {
+		return false
+	}
+	return strings.Contains(msg, "cursor/") || strings.Contains(msg, "cursor cli") || strings.Contains(msg, "provedor cursor")
+}
+
 type outcomeSample struct {
 	At time.Time `json:"at"`
 	OK bool      `json:"ok"`
@@ -108,12 +160,12 @@ type circuitRecord struct {
 
 type providerStateRecord struct {
 	circuitRecord
-	QuotaRemainingPct float64 `json:"quotaRemainingPct"`
+	QuotaRemainingPct float64   `json:"quotaRemainingPct"`
 	QuotaResetsAt     time.Time `json:"quotaResetsAt,omitempty"`
-	QuotaStale        bool    `json:"quotaStale,omitempty"`
-	CredFingerprint   string  `json:"credFingerprint,omitempty"`
-	DailyDate         string  `json:"dailyDate,omitempty"`
-	DailySpentMicro   int64   `json:"dailySpentMicroUsd,omitempty"`
+	QuotaStale        bool      `json:"quotaStale,omitempty"`
+	CredFingerprint   string    `json:"credFingerprint,omitempty"`
+	DailyDate         string    `json:"dailyDate,omitempty"`
+	DailySpentMicro   int64     `json:"dailySpentMicroUsd,omitempty"`
 }
 
 type healthFile struct {
@@ -386,6 +438,16 @@ func (h *HealthStore) RecordFailure(provider, model string, class ErrorClass, re
 		mr.FailureCount++
 		mr.Circuit = CircuitOpen
 		mr.Reason = string(ErrClassRateLimit)
+		mr.OpenedAt = now
+		mr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassRateLimit), mr.FailureCount))
+		scope = "model"
+		state = CircuitOpen
+		opened = true
+
+	case ErrClassModel:
+		mr.FailureCount++
+		mr.Circuit = CircuitOpen
+		mr.Reason = string(ErrClassModel)
 		mr.OpenedAt = now
 		mr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassRateLimit), mr.FailureCount))
 		scope = "model"

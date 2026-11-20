@@ -156,6 +156,10 @@ func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
 	if mode == "isolated" {
 		return nil, fmt.Errorf("nenhuma conta Cursor vinculada a esta organização")
 	}
+	modelID := cursorModelID(modelName)
+	if err := rejectForeignCursorModel(modelID); err != nil {
+		return nil, err
+	}
 	key := resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
 	if key == "" {
 		return nil, fmt.Errorf("defina CURSOR_API_KEY para usar o Cursor (painel Cursor → API Keys). A variável de ambiente tem prioridade sobre a chave salva na IDE")
@@ -174,7 +178,7 @@ func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
 	}
 	return &Cursor{
 		Bin:        bin,
-		Model:      cursorModelID(modelName),
+		Model:      modelID,
 		Dir:        agentDirFrom(ctx),
 		Key:        key,
 		Env:        envMap,
@@ -209,6 +213,9 @@ func (c *Cursor) GenerateContent(ctx context.Context, req *model.LLMRequest, _ b
 }
 
 func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(string) bool) (*model.LLMResponse, error) {
+	if err := rejectForeignCursorModel(c.Model); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(c.Key) == "" {
 		return nil, fmt.Errorf("defina CURSOR_API_KEY para usar o Cursor")
 	}
@@ -319,12 +326,17 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("o Cursor CLI excedeu o tempo (%s)", timeout.Truncate(time.Second))
 	}
+	modelShown := c.Model
+	if strings.TrimSpace(modelShown) == "" {
+		modelShown = "auto"
+	}
 	if failed {
-		return nil, fmt.Errorf("o Cursor CLI terminou com erro: %s", truncateText(redactSecret(firstNonEmpty(final, stderr.String()), c.Key), 500))
+		detail := truncateText(redactSecret(firstNonEmpty(final, stderr.String()), c.Key), 500)
+		return nil, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI terminou com erro: %s", detail), c.Key))
 	}
 	if err != nil {
 		detail := redactSecret(strings.TrimSpace(stderr.String()), c.Key)
-		return nil, fmt.Errorf("o Cursor CLI falhou: %s", truncateText(firstNonEmpty(detail, redactSecret(err.Error(), c.Key)), 500))
+		return nil, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI falhou: %s", truncateText(firstNonEmpty(detail, redactSecret(err.Error(), c.Key)), 500)), c.Key))
 	}
 	if !sawResult {
 		final = redactSecret(strings.TrimSpace(stderr.String()), c.Key)
@@ -352,6 +364,29 @@ func cursorModelID(modelName string) string {
 		return "auto"
 	}
 	return raw
+}
+
+// foreignCursorModel reports an id that belongs to another provider. The Jev
+// route text is "openrouter/<vendor>/<model>"; that string must not become
+// `agent --model`. Cursor's API then answers with the OpenAI SDK summary
+// "OpenAI API error: 400 Bad Request" and drops the body.
+func foreignCursorModel(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	low := strings.ToLower(id)
+	if low == "auto" || low == "cursor" {
+		return false
+	}
+	return strings.Contains(id, "/") || strings.HasPrefix(low, "openrouter")
+}
+
+func rejectForeignCursorModel(id string) error {
+	if !foreignCursorModel(id) {
+		return nil
+	}
+	return fmt.Errorf("cursor/%s: modelo incompatível com o provedor Cursor (id de outro provedor não é enviado ao CLI): OpenAI API error: 400 Bad Request: model %q is not a Cursor model", id, id)
 }
 
 func cursorArgs(modelID, workspace, permissionMode string) []string {
