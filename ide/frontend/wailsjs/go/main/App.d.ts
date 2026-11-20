@@ -93,6 +93,8 @@ export function GetInitialState():Promise<main.InitialState>;
 
 export function GetInlineAIStatus(arg1:string):Promise<idecore.InlineAIStatus>;
 
+export function GetJevPolicy():Promise<jev.Policy>;
+
 export function GetProviderHealth():Promise<Array<jev.ProviderHealthView>>;
 
 export function GetProviderProfilesOverview(arg1:string):Promise<modelx.ProfilesOverview>;
@@ -207,15 +209,27 @@ export function ResidentClearSession(arg1:string):Promise<void>;
 
 export function ResidentDeleteMemory(arg1:string):Promise<boolean>;
 
+export function ResidentDeleteRoutine(arg1:string):Promise<void>;
+
 export function ResidentDeleteSecret(arg1:string):Promise<resident.Status>;
 
 export function ResidentListMemory(arg1:string):Promise<Array<resident.MemoryFact>>;
+
+export function ResidentListRoutines():Promise<Array<resident.Routine>>;
+
+export function ResidentReviewSkill(arg1:string):Promise<string>;
 
 export function ResidentSaveConfig(arg1:string,arg2:string,arg3:string):Promise<resident.Status>;
 
 export function ResidentSavePolicy(arg1:Array<string>,arg2:Array<string>):Promise<resident.Status>;
 
+export function ResidentSaveRoutine(arg1:string,arg2:string,arg3:string,arg4:string,arg5:Array<string>):Promise<resident.Routine>;
+
 export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
+
+export function ResidentSetEventTriggers(arg1:boolean):Promise<resident.Status>;
+
+export function ResidentSetRoutineEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function ResidentSetSecret(arg1:string,arg2:string):Promise<resident.Status>;
 
@@ -244,6 +258,8 @@ export function SaveAPIKeys(arg1:Record<string, string>):Promise<Record<string, 
 export function SaveFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveGitHubConfig(arg1:string,arg2:string,arg3:string):Promise<idecore.GitHubStatusInfo>;
+
+export function SaveJevPolicy(arg1:jev.Policy):Promise<jev.Policy>;
 
 export function SaveJiraConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean):Promise<jirax.ConnectorStatus>;
 

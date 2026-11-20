@@ -162,6 +162,10 @@ export function GetInlineAIStatus(arg1) {
   return window['go']['main']['App']['GetInlineAIStatus'](arg1);
 }
 
+export function GetJevPolicy() {
+  return window['go']['main']['App']['GetJevPolicy']();
+}
+
 export function GetProviderHealth() {
   return window['go']['main']['App']['GetProviderHealth']();
 }
@@ -390,12 +394,24 @@ export function ResidentDeleteMemory(arg1) {
   return window['go']['main']['App']['ResidentDeleteMemory'](arg1);
 }
 
+export function ResidentDeleteRoutine(arg1) {
+  return window['go']['main']['App']['ResidentDeleteRoutine'](arg1);
+}
+
 export function ResidentDeleteSecret(arg1) {
   return window['go']['main']['App']['ResidentDeleteSecret'](arg1);
 }
 
 export function ResidentListMemory(arg1) {
   return window['go']['main']['App']['ResidentListMemory'](arg1);
+}
+
+export function ResidentListRoutines() {
+  return window['go']['main']['App']['ResidentListRoutines']();
+}
+
+export function ResidentReviewSkill(arg1) {
+  return window['go']['main']['App']['ResidentReviewSkill'](arg1);
 }
 
 export function ResidentSaveConfig(arg1, arg2, arg3) {
@@ -406,8 +422,20 @@ export function ResidentSavePolicy(arg1, arg2) {
   return window['go']['main']['App']['ResidentSavePolicy'](arg1, arg2);
 }
 
+export function ResidentSaveRoutine(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ResidentSaveRoutine'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function ResidentSessionMessages(arg1) {
   return window['go']['main']['App']['ResidentSessionMessages'](arg1);
+}
+
+export function ResidentSetEventTriggers(arg1) {
+  return window['go']['main']['App']['ResidentSetEventTriggers'](arg1);
+}
+
+export function ResidentSetRoutineEnabled(arg1, arg2) {
+  return window['go']['main']['App']['ResidentSetRoutineEnabled'](arg1, arg2);
 }
 
 export function ResidentSetSecret(arg1, arg2) {
@@ -464,6 +492,10 @@ export function SaveFile(arg1, arg2, arg3) {
 
 export function SaveGitHubConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveGitHubConfig'](arg1, arg2, arg3);
+}
+
+export function SaveJevPolicy(arg1) {
+  return window['go']['main']['App']['SaveJevPolicy'](arg1);
 }
 
 export function SaveJiraConfig(arg1, arg2, arg3, arg4, arg5) {

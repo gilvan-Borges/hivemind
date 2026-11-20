@@ -5,6 +5,7 @@ import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { updateStatusBar } from "./shell";
 import { api, setStatus, state, toast, toastError } from "./state";
+import { hiveNotifyFromLaneEvent } from "./notify";
 
 export const RESIDENT_TAB_KEY = "hive:resident";
 
@@ -274,9 +275,11 @@ export function handleResidentLaneEvent(payload: any): void {
       label: "Erro",
       text: String(ev.text || "Erro no agente residente"),
     });
+    hiveNotifyFromLaneEvent(ev);
   } else if (ev.kind === "finish") {
     residentState.running = false;
     if (residentState.status) residentState.status.state = "ocioso";
+    hiveNotifyFromLaneEvent({ kind: "finish", text: ev.text || "Hive Residente concluiu." });
     void refreshResidentData();
   }
 

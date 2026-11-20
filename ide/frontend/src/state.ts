@@ -11,6 +11,13 @@ declare global {
     };
     runtime?: {
       EventsOn(eventName: string, cb: (data: any) => void): void;
+      InitializeNotifications?(): Promise<void>;
+      IsNotificationAvailable?(): Promise<boolean>;
+      RequestNotificationAuthorization?(): Promise<boolean>;
+      SendNotification?(opts: { id: string; title: string; body?: string }): Promise<void>;
+      WindowIsMinimised?(): Promise<boolean>;
+      WindowUnminimise?(): void;
+      WindowShow?(): void;
     };
   }
 }

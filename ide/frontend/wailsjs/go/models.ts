@@ -977,6 +977,118 @@ export namespace idecore {
 
 export namespace jev {
 	
+	export class CooldownConfig {
+	    quota: string;
+	    rate_limit: string;
+	    outage: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CooldownConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.quota = source["quota"];
+	        this.rate_limit = source["rate_limit"];
+	        this.outage = source["outage"];
+	    }
+	}
+	export class RolePin {
+	    provider: string;
+	    model: string;
+	    strict: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RolePin(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.strict = source["strict"];
+	    }
+	}
+	export class RepoOverride {
+	    deny: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RepoOverride(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deny = source["deny"];
+	    }
+	}
+	export class Weights {
+	    quality: number;
+	    cost: number;
+	    latency: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Weights(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.quality = source["quality"];
+	        this.cost = source["cost"];
+	        this.latency = source["latency"];
+	    }
+	}
+	export class Policy {
+	    version: number;
+	    enabled: boolean;
+	    classifyEnabled?: boolean;
+	    weights: Weights;
+	    autoEscalateUsd: number;
+	    maxEscalateRatio: number;
+	    openRouterMinReserveUsd?: number;
+	    dailyUsd: Record<string, number>;
+	    cooldown: CooldownConfig;
+	    allowDataClass: string[];
+	    repos?: Record<string, RepoOverride>;
+	    pins?: Record<string, RolePin>;
+	
+	    static createFrom(source: any = {}) {
+	        return new Policy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.enabled = source["enabled"];
+	        this.classifyEnabled = source["classifyEnabled"];
+	        this.weights = this.convertValues(source["weights"], Weights);
+	        this.autoEscalateUsd = source["autoEscalateUsd"];
+	        this.maxEscalateRatio = source["maxEscalateRatio"];
+	        this.openRouterMinReserveUsd = source["openRouterMinReserveUsd"];
+	        this.dailyUsd = source["dailyUsd"];
+	        this.cooldown = this.convertValues(source["cooldown"], CooldownConfig);
+	        this.allowDataClass = source["allowDataClass"];
+	        this.repos = this.convertValues(source["repos"], RepoOverride, true);
+	        this.pins = this.convertValues(source["pins"], RolePin, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProviderHealthView {
 	    provider: string;
 	    state: string;
@@ -1005,6 +1117,8 @@ export namespace jev {
 	        this.hasCredential = source["hasCredential"];
 	    }
 	}
+	
+	
 
 }
 
@@ -2284,6 +2398,55 @@ export namespace resident {
 		    return a;
 		}
 	}
+	export class Routine {
+	    id: string;
+	    expr: string;
+	    timezone?: string;
+	    text: string;
+	    workstream?: string;
+	    classes?: string[];
+	    enabled: boolean;
+	    // Go type: time
+	    lastFired?: any;
+	    day?: string;
+	    dayTurns?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Routine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.expr = source["expr"];
+	        this.timezone = source["timezone"];
+	        this.text = source["text"];
+	        this.workstream = source["workstream"];
+	        this.classes = source["classes"];
+	        this.enabled = source["enabled"];
+	        this.lastFired = this.convertValues(source["lastFired"], null);
+	        this.day = source["day"];
+	        this.dayTurns = source["dayTurns"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Status {
 	    state: string;
 	    phase: number;
@@ -2303,6 +2466,11 @@ export namespace resident {
 	    allowedBinaries: string[];
 	    allowedHosts: string[];
 	    vaultSecrets: string[];
+	    eventTriggers: boolean;
+	    isolatedBrowser: boolean;
+	    isolatedBrowserReason?: string;
+	    isolatedDesktop: boolean;
+	    isolatedDesktopReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -2328,6 +2496,11 @@ export namespace resident {
 	        this.allowedBinaries = source["allowedBinaries"];
 	        this.allowedHosts = source["allowedHosts"];
 	        this.vaultSecrets = source["vaultSecrets"];
+	        this.eventTriggers = source["eventTriggers"];
+	        this.isolatedBrowser = source["isolatedBrowser"];
+	        this.isolatedBrowserReason = source["isolatedBrowserReason"];
+	        this.isolatedDesktop = source["isolatedDesktop"];
+	        this.isolatedDesktopReason = source["isolatedDesktopReason"];
 	    }
 	}
 	export class TurnResult {

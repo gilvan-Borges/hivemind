@@ -13,6 +13,7 @@ import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
+import { hiveNotifyFromLaneEvent, initHiveNotify } from "./notify";
 
 export async function boot() {
   initInlineAIHooks();
@@ -27,6 +28,8 @@ export async function boot() {
     setStatus("Modo preview (sem runtime Wails)");
     return;
   }
+
+  void initHiveNotify();
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
     if (payload?.laneId === "resident") {
@@ -108,6 +111,7 @@ export async function boot() {
         label: ev.label || "Plano pronto para aprovação",
         text: ev.text || "",
       });
+      hiveNotifyFromLaneEvent(ev);
     } else if (ev.kind === "sdd_gate") {
       markToolsDone(lane);
       markThinkingDone(lane);
@@ -118,6 +122,7 @@ export async function boot() {
         label: ev.label || (ev.gate === "jira" ? "Gate 2 · Backlog Jira pronto" : "Gate 1 · Docs & Arquitetura SDD prontos"),
         text: ev.text || "",
       });
+      hiveNotifyFromLaneEvent(ev);
     } else if (ev.kind === "approval_required") {
       markToolsDone(lane);
       lane.messages.push({
@@ -127,6 +132,7 @@ export async function boot() {
         text: ev.text || "",
         approvalId: ev.approvalId || "",
       });
+      hiveNotifyFromLaneEvent(ev);
     } else if (ev.kind === "devs_scaled") {
       if (Array.isArray(ev.devs) && ev.devs.length > 0) {
         syncDynamicDevsInLane(lane, ev.devs.map(String));
@@ -228,6 +234,7 @@ export async function boot() {
           label: "Erro",
           text: errText,
         });
+        hiveNotifyFromLaneEvent(ev);
       }
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
@@ -257,6 +264,7 @@ export async function boot() {
           text: `${ev.text || "Execução concluída."}${tokSuffix}`,
         });
       }
+      hiveNotifyFromLaneEvent(ev);
       if (isActiveProject) {
         refreshDiffsAndSummarize(lane);
         refreshSessions();

@@ -5836,3 +5836,109 @@ button.status-chip:hover,
   line-height: 1.5;
   color: var(--text);
 }
+
+/* Hive companion — aviso flutuante leve (tipo mascote) */
+.hive-companion {
+  position: fixed;
+  right: 18px;
+  bottom: 48px;
+  z-index: 320;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+.hive-companion-avatar {
+  pointer-events: auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  padding: 0;
+  border: 1px solid var(--accent-border);
+  background: var(--surface-elevated);
+  box-shadow: var(--island-shadow);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  animation: hive-companion-idle 3.2s ease-in-out infinite;
+}
+.hive-companion-avatar img {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.hive-companion.is-speaking .hive-companion-avatar {
+  animation: hive-companion-speak 0.55s ease;
+  border-color: var(--accent);
+}
+.hive-companion-bubble {
+  pointer-events: auto;
+  position: relative;
+  max-width: min(320px, calc(100vw - 96px));
+  padding: 10px 28px 10px 12px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-emphasis);
+  box-shadow: var(--island-shadow);
+  color: var(--text-body);
+  animation: hive-companion-bubble-in 0.22s ease;
+}
+.hive-companion.kind-success .hive-companion-bubble {
+  border-color: var(--color-success-border);
+}
+.hive-companion.kind-error .hive-companion-bubble {
+  border-color: var(--color-danger-border);
+}
+.hive-companion.kind-attention .hive-companion-bubble {
+  border-color: var(--accent-border);
+}
+.hive-companion-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+.hive-companion-body {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.hive-companion-dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hive-companion-dismiss:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+.hive-companion-dismiss:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+@keyframes hive-companion-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes hive-companion-speak {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes hive-companion-bubble-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
