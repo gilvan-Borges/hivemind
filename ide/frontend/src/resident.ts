@@ -426,11 +426,16 @@ function renderResidentSecurityHtml(): string {
       <div class="resident-security-grid">
         <div class="resident-row-card">
           <div class="resident-row-head">
-            <strong>Browser e desktop isolados</strong>
-            <span class="resident-badge risk-destructive">Desligados</span>
+            <strong>Browser e desktop</strong>
+            <span class="resident-badge ${st?.experimentalUnisolated ? "risk-destructive" : "risk-read"}">${st?.experimentalUnisolated ? "SEM isolamento" : "Isolados desligados"}</span>
           </div>
           <div class="dim">${escapeHtml(st?.isolatedBrowserReason || "Browser isolado recusado: não há espaço com egress filtrado.")}</div>
           <div class="dim">${escapeHtml(st?.isolatedDesktopReason || "Desktop isolado recusado: a sessão real não é alvo.")}</div>
+          <label class="dim" style="display:block;margin-top:8px" title="Liga browser e desktop na sessão real, sem espaço isolado.">
+            <input type="checkbox" id="res-experimental-unisolated" ${st?.experimentalUnisolated ? "checked" : ""}/>
+            experimental_unisolated — usar browser e desktop SEM isolamento
+          </label>
+          ${st?.experimentalUnisolated ? `<div class="resident-badge risk-destructive" style="margin-top:8px">${escapeHtml(st.experimentalWarning || "SEM isolamento: a sessão real recebe a ação. O cofre não é consultado. Fora de Full Acesso, cada ação pede confirmação.")}</div>` : `<div class="dim">Desligado por padrão. Ligado, cada ação é auditada, avisa que roda SEM isolamento e pede confirmação fora de Full Acesso. O cofre não entra nesse caminho.</div>`}
         </div>
 
         <div class="resident-row-card">
@@ -626,6 +631,25 @@ export function bindResidentViewEvents(): void {
 
   document.getElementById("btn-res-refresh")?.addEventListener("click", () => {
     void refreshResidentData();
+  });
+
+  document.getElementById("res-experimental-unisolated")?.addEventListener("change", async (ev) => {
+    const backend = api();
+    const on = Boolean((ev.target as HTMLInputElement | null)?.checked);
+    if (!backend?.ResidentSetExperimentalUnisolated) return;
+    try {
+      const st = await backend.ResidentSetExperimentalUnisolated(on);
+      residentState.status = st;
+      updateResidentStatusChip();
+      if (on) {
+        toast("Browser e desktop do residente ligados SEM isolamento. Cada ação é auditada e, fora de Full Acesso, pede confirmação.", "success");
+      } else {
+        toast("Browser e desktop do residente voltaram a recusar.", "success");
+      }
+      rerenderResidentIfOpen();
+    } catch (err: any) {
+      toastError("salvar experimental_unisolated", err);
+    }
   });
 
   document.getElementById("btn-res-save-cfg")?.addEventListener("click", async () => {

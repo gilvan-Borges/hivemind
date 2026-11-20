@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -58,6 +59,11 @@ type BrokerConfig struct {
 	SquadHandoff   func(ctx context.Context, h SquadHandoff) (string, error)
 	OnRoutineSaved func()
 	BaseDir        string
+	// ExperimentalUnisolated lets browser and desktop run on the real session.
+	// Default is false. The vault is never read on that path.
+	ExperimentalUnisolated bool
+	// Surface is the host browser/desktop. Nil uses the OS implementation.
+	Surface Surface
 	// CustomHandlers optionally overrides built-in handlers (used in tests
 	// to observe exact invocation order relative to Audit.RecordDecision).
 	CustomHandlers map[string]ToolHandler
@@ -137,6 +143,10 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	sandboxState := sandboxRequirement(toolName)
 
 	dec := DecideWithPolicy(call, b.cfg.Policy)
+	if isHostSurfaceTool(toolName) && b.cfg.ExperimentalUnisolated {
+		sandboxState = "unisolated"
+		dec = decideExperimentalSurface(call, b.fullAccess())
+	}
 
 	// 1. Fail closed if denied by policy.
 	if !dec.Allow && !dec.Ask {
@@ -181,6 +191,9 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 				mode = "indisponível"
 			}
 			extra = "\npermission_mode do time: " + mode
+		}
+		if isHostSurfaceTool(toolName) {
+			extra += "\nAVISO: SEM isolamento. A ação ocorre na sessão real e o cofre não é lido."
 		}
 		prompt := fmt.Sprintf("Hive Residente · Risco: %s\nOrigem: %s · Classe: %s\nFerramenta: %s\nAlvo: %s%s\n\nPermitir esta ação?",
 			riskLabel, call.Origin, tier, toolName, safeTarget, extra)
@@ -441,8 +454,74 @@ func (b *Broker) resolveHandler(name string) (ToolHandler, bool) {
 		if b.cfg.Phase3 {
 			return b.handleHandoff, true
 		}
+	case "browser_open":
+		return b.handleBrowserOpen, true
+	case "desktop_click":
+		return b.handleDesktopClick, true
+	case "desktop_type":
+		return b.handleDesktopType, true
 	}
 	return nil, false
+}
+
+func (b *Broker) fullAccess() bool {
+	if b.cfg.PermissionMode == nil {
+		return false
+	}
+	return isFullAccessMode(b.cfg.PermissionMode(b.cfg.Workspace))
+}
+
+func (b *Broker) surface() Surface {
+	if b.cfg.Surface != nil {
+		return b.cfg.Surface
+	}
+	return defaultSurface()
+}
+
+func (b *Broker) refuseIfSurfaceOff() error {
+	if b.cfg.ExperimentalUnisolated {
+		return nil
+	}
+	return fmt.Errorf("recusado: experimental_unisolated desligado")
+}
+
+func (b *Broker) handleBrowserOpen(ctx context.Context, args map[string]any) (string, error) {
+	if err := b.refuseIfSurfaceOff(); err != nil {
+		return "", err
+	}
+	log.Printf("residente: browser_open SEM isolamento (experimentalUnisolated); o cofre não é consultado")
+	target, err := validatePublicURL(strArg(args, "url"))
+	if err != nil {
+		return "", err
+	}
+	if err := b.surface().OpenURL(ctx, target); err != nil {
+		return "", err
+	}
+	return "aberto SEM isolamento", nil
+}
+
+func (b *Broker) handleDesktopClick(ctx context.Context, args map[string]any) (string, error) {
+	if err := b.refuseIfSurfaceOff(); err != nil {
+		return "", err
+	}
+	log.Printf("residente: desktop_click SEM isolamento (experimentalUnisolated); o cofre não é consultado")
+	x, y := intArg(args, "x"), intArg(args, "y")
+	if err := b.surface().Click(ctx, x, y); err != nil {
+		return "", err
+	}
+	return "clique SEM isolamento", nil
+}
+
+func (b *Broker) handleDesktopType(ctx context.Context, args map[string]any) (string, error) {
+	if err := b.refuseIfSurfaceOff(); err != nil {
+		return "", err
+	}
+	log.Printf("residente: desktop_type SEM isolamento (experimentalUnisolated); o cofre não é consultado")
+	text := strArg(args, "text")
+	if err := b.surface().TypeText(ctx, text); err != nil {
+		return "", err
+	}
+	return "digitação SEM isolamento", nil
 }
 
 func (b *Broker) requireWorkspace() (string, error) {
@@ -785,6 +864,15 @@ func extractTarget(toolName string, args map[string]any) string {
 			return u
 		}
 		return "net_fetch"
+	case "browser_open":
+		if u := strArg(args, "url"); u != "" {
+			return u
+		}
+		return "browser_open"
+	case "desktop_click":
+		return fmt.Sprintf("click %d,%d", intArg(args, "x"), intArg(args, "y"))
+	case "desktop_type":
+		return strArg(args, "text")
 	default:
 		if p := strArg(args, "path"); p != "" {
 			return p

@@ -1556,6 +1556,15 @@ func (a *App) ResidentSetEventTriggers(on bool) (resident.Status, error) {
 	return a.resident.SetEventTriggers(on)
 }
 
+// ResidentSetExperimentalUnisolated turns host-session browser and desktop on or off.
+// Off keeps the refusal. On runs without OS isolation.
+func (a *App) ResidentSetExperimentalUnisolated(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetExperimentalUnisolated(on)
+}
+
 func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (resident.Status, error) {
 	if a.resident == nil {
 		return resident.Status{}, fmt.Errorf("agente residente indisponível")

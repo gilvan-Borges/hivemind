@@ -407,15 +407,19 @@ Aceite:
 - Host fora da allowlist, e nome que resolve para `169.254.169.254` ou loopback, recusam.
 - Cancelar pelo app (`runs/cancel`) mata o turno e os filhos.
 
-### Fase 4 — Browser e desktop isolados — recusados até haver espaço de verdade
+### Fase 4 — Browser e desktop — isolados ainda recusados; teste sem isolamento é opt-in
 
-O processo isolado de `exec` (AppContainer + Job Object no Windows, bwrap + seccomp no Linux) não é um browser com perfil limpo nem um desktop separado. Não há filtro de egress para um processo gráfico, e um clique na sessão real sairia do isolamento. `browser_open`, `desktop_click` e `desktop_type` ficam desligados: a política recusa sem perguntar, o broker não chama o sandbox e o caminho de perfil vindo do modelo é ignorado. Quando o espaço existir de fato, a ferramenta só sobe dentro dele. Sem esse espaço, nada roda. A sessão real não recebe clique. O perfil do browser da pessoa não é argumento.
+O processo isolado de `exec` (AppContainer + Job Object no Windows, bwrap + seccomp no Linux) não é um browser com perfil limpo nem um desktop separado. Não há filtro de egress para um processo gráfico, e um clique na sessão real sairia do isolamento. Sem a opção abaixo, `browser_open`, `desktop_click` e `desktop_type` ficam desligados: a política recusa sem perguntar, o broker não chama o sandbox e o caminho de perfil vindo do modelo é ignorado. Quando o espaço existir de fato, a ferramenta só sobe dentro dele. Sem esse espaço, o caminho padrão não roda. O perfil do browser da pessoa não é argumento.
+
+Para teste na máquina do dono existe `experimentalUnisolated` em `resident.json` (a IDE grava o mesmo campo). O padrão é desligado. Ligado, as três ferramentas usam a sessão real: no Windows, abrir URL pela API do sistema e clique/digitação por `SendInput`; no Linux, o abridor de URL e o binário de entrada, ambos com argv explícito e ambiente já passado por `shellx.SanitizedEnv`. O log e o cartão dizem que a ação roda SEM isolamento. Cada chamada entra na auditoria com `sandbox: unisolated`. Fora de Full Acesso o cartão é obrigatório; em Full Acesso não há cartão, mas a auditoria e o aviso continuam. Argumento de cofre, segredo ou URL com usuário e senha recusa sem executar. O campo de perfil continua ignorado. O cofre não é lido nesse caminho.
 
 Aceite:
 
-- O browser do espaço não enxerga o perfil do usuário. O teste aponta um diretório de perfil vazio controlado pelo sandbox.
-- Com o filtro de egress derrubado de propósito, o espaço não inicia.
-- Um gesto sintético cuja coordenada cai numa janela de consentimento é recusado, se o desktop isolado expuser input.
+- Com a opção desligada, as três ferramentas recusam sem pedir e sem efeito.
+- Com a opção ligada e modo que não é Full Acesso, a confirmação acontece antes do efeito. Sem resposta, nada roda.
+- Com a opção ligada e Full Acesso, não há cartão; a auditoria registra a ação e o aviso de sessão real.
+- URL com credencial, `credential_name` ou `secret_name` recusam e o cofre não é consultado.
+- O caminho de perfil vindo do modelo não aparece no erro nem na auditoria.
 
 ### Fase 5 — Workstream no dia a dia — implementada
 
@@ -445,7 +449,7 @@ Não faz parte do teste desta spec chamar modelo pago nem subir o app Android.
 2. Vale migrar `api-keys.json` e os conectores para `secretx` no mesmo ciclo, ou o cofre nasce só para segredo novo do residente?
 3. O `runMode` dentro de `POST /api/v1/runs/start` basta para o app, já que o relay cifra o corpo e não precisa de rota nova? Se o cliente do app exigir um campo nomeado antes, o contrato continua sendo essa rota, não uma segunda API.
 4. Memória entre dois PCs da mesma conta fica fora. Confirmar se em algum momento o arquivo deve sincronizar por um canal que não seja o relay em claro. O desenho atual não sincroniza.
-5. `sandboxx` no `run_shell` do squad é o passo natural depois da fase 2, porque hoje o squad em `full_access` confirma sozinho e roda sem AppContainer. Fica fora deste trabalho para não misturar os dois loops. Confirmar quando puxar isso.
+5. `run_shell` do squad entra na sandbox por padrão. `shell_unsandboxed` ou o pedido `unsandboxed` do modelo roda no host só em Full Acesso ou com confirmação, com aviso, auditoria e sem segredo no ambiente. Linha com metacaractere continua pedindo confirmação quando a Onda 1 já pedia, e não entra na sandbox porque a sandbox não abre shell.
 6. Hash revisado pela pessoa é a barra de skill, compatível com o ADR-002 (produto interno, sem assinatura de binário como critério). Assinatura criptográfica de skill só se um dia o catálogo sair desta máquina.
 7. `sandbox-exec` no macOS é o que o Open Interpreter e o Codex ainda usam, e a Apple trata como antigo. Se uma versão do sistema recusar o perfil, o residente falha fechado. Um helper assinado fica para quando isso doer, não antes.
 

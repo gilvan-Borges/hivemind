@@ -49,6 +49,16 @@ func defaultShellAuditPath() (string, error) {
 // a short hash — so a secret inside the line cannot land in the audit file.
 // A write failure does not block the command: full_access keeps its behavior.
 func AuditFullAccessShell(command string) {
+	writeShellAudit(command, "not_required", "full_access: linha com metacaractere de shell executada sem confirmação")
+}
+
+// AuditUnsandboxedShell appends one redacted line before a squad command runs
+// on the host, outside sandboxx. The command text is not stored.
+func AuditUnsandboxedShell(command string) {
+	writeShellAudit(command, "unisolated", "SEM sandbox: comando do squad autorizado na sessão do host")
+}
+
+func writeShellAudit(command, sandbox, reason string) {
 	path, err := shellAuditPathFn()
 	if err != nil || strings.TrimSpace(path) == "" {
 		return
@@ -62,10 +72,10 @@ func AuditFullAccessShell(command string) {
 		Tool:        "run_shell",
 		Tier:        "exec",
 		Decision:    "allow",
-		Sandbox:     "not_required",
+		Sandbox:     sandbox,
 		TargetClass: "exec",
 		TargetHash:  hex.EncodeToString(sum[:8]),
-		Reason:      "full_access: linha com metacaractere de shell executada sem confirmação",
+		Reason:      reason,
 	}
 	raw, err := json.Marshal(line)
 	if err != nil {

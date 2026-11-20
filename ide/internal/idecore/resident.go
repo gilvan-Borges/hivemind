@@ -136,6 +136,20 @@ func (m *ResidentManager) SetEventTriggers(on bool) (resident.Status, error) {
 	return m.Status(), nil
 }
 
+// SetExperimentalUnisolated persists the host-session browser and desktop switch.
+// Default is off. On means those tools run without an isolated space.
+func (m *ResidentManager) SetExperimentalUnisolated(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.ExperimentalUnisolated = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
 // Close solta a trava do processo para o diretório temporário do teste poder sair.
 func (m *ResidentManager) Close() {
 	if m == nil {
@@ -216,30 +230,36 @@ func (m *ResidentManager) Status() resident.Status {
 
 	browserOK, browserReason := resident.IsolatedBrowserAvailable()
 	desktopOK, desktopReason := resident.IsolatedDesktopAvailable()
+	warning := ""
+	if cfg.ExperimentalUnisolated {
+		warning = resident.ExperimentalUnisolatedWarning
+	}
 	return resident.Status{
-		State:                 st,
-		Phase:                 3,
-		ReadOnly:              false,
-		AccountID:             acct,
-		Workstream:            resident.SanitizeWorkstream(cfg.Workstream),
-		Provider:              prov,
-		Model:                 mod,
-		MemoryDir:             mem.AccountDir(),
-		AuditPath:             m.audit.Path(),
-		LastError:             lastErr,
-		SandboxAvailable:      probe.Available,
-		SandboxMechanism:      probe.Mechanism,
-		SandboxReason:         probe.Reason,
-		VaultAvailable:        vaultOK,
-		VaultReason:           vaultReason,
-		AllowedBinaries:       pol.AllowedBinaries,
-		AllowedHosts:          pol.AllowedHosts,
-		VaultSecrets:          vaultNames,
-		EventTriggers:         cfg.EventTriggers,
-		IsolatedBrowser:       browserOK,
-		IsolatedBrowserReason: browserReason,
-		IsolatedDesktop:       desktopOK,
-		IsolatedDesktopReason: desktopReason,
+		State:                  st,
+		Phase:                  3,
+		ReadOnly:               false,
+		AccountID:              acct,
+		Workstream:             resident.SanitizeWorkstream(cfg.Workstream),
+		Provider:               prov,
+		Model:                  mod,
+		MemoryDir:              mem.AccountDir(),
+		AuditPath:              m.audit.Path(),
+		LastError:              lastErr,
+		SandboxAvailable:       probe.Available,
+		SandboxMechanism:       probe.Mechanism,
+		SandboxReason:          probe.Reason,
+		VaultAvailable:         vaultOK,
+		VaultReason:            vaultReason,
+		AllowedBinaries:        pol.AllowedBinaries,
+		AllowedHosts:           pol.AllowedHosts,
+		VaultSecrets:           vaultNames,
+		EventTriggers:          cfg.EventTriggers,
+		ExperimentalUnisolated: cfg.ExperimentalUnisolated,
+		ExperimentalWarning:    warning,
+		IsolatedBrowser:        browserOK,
+		IsolatedBrowserReason:  browserReason,
+		IsolatedDesktop:        desktopOK,
+		IsolatedDesktopReason:  desktopReason,
 	}
 }
 

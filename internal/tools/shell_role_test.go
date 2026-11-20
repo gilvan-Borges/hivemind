@@ -95,47 +95,54 @@ type toolNamer interface {
 
 func TestChiefShellRunsGHOnlyAfterApproval(t *testing.T) {
 	sh := &gateShell{}
+	sb := &recordSandbox{}
 	deps := Deps{
 		Root:            t.TempDir(),
 		Role:            team.RoleArchitect,
 		DisableGitWrite: true,
 		Allowlist:       []string{"go", "git"},
 		Shell:           sh,
+		Sandbox:         sb,
 		Confirm:         func(string) bool { return false },
 	}
-	if _, err := deps.runShell(context.Background(), `git commit -m "nao"`, ""); err == nil || !strings.Contains(err.Error(), "bloqueada") {
+	if _, err := deps.runShell(context.Background(), `git commit -m "nao"`, "", false); err == nil || !strings.Contains(err.Error(), "bloqueada") {
 		t.Fatalf("commit na triagem: %v", err)
 	}
-	if sh.ran != "" {
+	if sh.ran != "" || sb.runs != 0 {
 		t.Fatal("commit não pode chegar no processo")
 	}
-	if _, err := deps.runShell(context.Background(), "gh auth token", ""); err == nil || !strings.Contains(err.Error(), "credencial") {
+	if _, err := deps.runShell(context.Background(), "gh auth token", "", false); err == nil || !strings.Contains(err.Error(), "credencial") {
 		t.Fatalf("gh auth token: %v", err)
 	}
-	if sh.ran != "" {
+	if sh.ran != "" || sb.runs != 0 {
 		t.Fatal("token não pode ser executado")
 	}
-	comment := "gh issue comment 708 --repo Vibetex/ipg --body oi"
-	if _, err := deps.runShell(context.Background(), comment, ""); err == nil || !strings.Contains(err.Error(), "perigoso") {
+	comment := "gh issue comment 708 --repo owner/repo --body oi"
+	if _, err := deps.runShell(context.Background(), comment, "", false); err == nil || !strings.Contains(err.Error(), "perigoso") {
 		t.Fatalf("sem aprovação: %v", err)
 	}
-	if sh.ran != "" {
+	if sh.ran != "" || sb.runs != 0 {
 		t.Fatal("comentário não roda sem aprovação")
 	}
 	deps.Confirm = func(string) bool { return true }
-	out, err := deps.runShell(context.Background(), comment, "")
-	if err != nil || out != "ok" || sh.ran != comment {
-		t.Fatalf("com aprovação: out=%q err=%v ran=%q", out, err, sh.ran)
+	out, err := deps.runShell(context.Background(), comment, "", false)
+	if err != nil || out != "ok" || sb.runs != 1 || sh.ran != "" {
+		t.Fatalf("com aprovação: out=%q err=%v sandbox=%d ran=%q", out, err, sb.runs, sh.ran)
 	}
-	if !containsFold(sh.allow, "gh") {
-		t.Fatalf("chefe antigo sem gh na lista ainda recebe gh: %v", sh.allow)
+	if len(sb.last.Argv) == 0 || !strings.EqualFold(sb.last.Argv[0], "gh") {
+		t.Fatalf("sandbox não recebeu gh: %#v", sb.last.Argv)
+	}
+	if len(sb.last.ExtraEnv) != 0 {
+		t.Fatalf("sandbox não pode receber ambiente extra: %#v", sb.last.ExtraEnv)
+	}
+	if !containsFold(deps.shellAllowlist(), "gh") {
+		t.Fatalf("chefe antigo sem gh na lista ainda recebe gh: %v", deps.shellAllowlist())
 	}
 
 	dev := deps
 	dev.Role = team.RoleDeveloper
 	dev.Confirm = func(string) bool { return true }
-	sh.ran = ""
-	if _, err := dev.runShell(context.Background(), "gh issue view 708", ""); err == nil {
+	if _, err := dev.runShell(context.Background(), "gh issue view 708", "", false); err == nil {
 		t.Fatal("dev não herda gh fora da allowlist")
 	}
 }

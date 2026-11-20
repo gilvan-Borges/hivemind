@@ -95,6 +95,9 @@ type Config struct {
 	Workstream    string   `json:"workstream,omitempty"`
 	Roots         []string `json:"roots,omitempty"`
 	EventTriggers bool     `json:"eventTriggers,omitempty"`
+	// ExperimentalUnisolated libera browser_open, desktop_click e desktop_type
+	// na sessão real. O padrão é falso: sem o campo, a política continua recusando.
+	ExperimentalUnisolated bool `json:"experimentalUnisolated,omitempty"`
 }
 
 // MemoryFact is one personal long-term memory record stored in
@@ -119,29 +122,31 @@ type ProjectRef struct {
 
 // Status reports the resident assistant's live state for the IDE UI (§11).
 type Status struct {
-	State                 string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
-	Phase                 int      `json:"phase"`
-	ReadOnly              bool     `json:"readOnly"`
-	AccountID             string   `json:"accountId"`
-	Workstream            string   `json:"workstream"`
-	Provider              string   `json:"provider"`
-	Model                 string   `json:"model"`
-	MemoryDir             string   `json:"memoryDir,omitempty"`
-	AuditPath             string   `json:"auditPath,omitempty"`
-	LastError             string   `json:"lastError,omitempty"`
-	SandboxAvailable      bool     `json:"sandboxAvailable"`
-	SandboxMechanism      string   `json:"sandboxMechanism,omitempty"`
-	SandboxReason         string   `json:"sandboxReason,omitempty"`
-	VaultAvailable        bool     `json:"vaultAvailable"`
-	VaultReason           string   `json:"vaultReason,omitempty"`
-	AllowedBinaries       []string `json:"allowedBinaries"`
-	AllowedHosts          []string `json:"allowedHosts"`
-	VaultSecrets          []string `json:"vaultSecrets"`
-	EventTriggers         bool     `json:"eventTriggers"`
-	IsolatedBrowser       bool     `json:"isolatedBrowser"`
-	IsolatedBrowserReason string   `json:"isolatedBrowserReason,omitempty"`
-	IsolatedDesktop       bool     `json:"isolatedDesktop"`
-	IsolatedDesktopReason string   `json:"isolatedDesktopReason,omitempty"`
+	State                  string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
+	Phase                  int      `json:"phase"`
+	ReadOnly               bool     `json:"readOnly"`
+	AccountID              string   `json:"accountId"`
+	Workstream             string   `json:"workstream"`
+	Provider               string   `json:"provider"`
+	Model                  string   `json:"model"`
+	MemoryDir              string   `json:"memoryDir,omitempty"`
+	AuditPath              string   `json:"auditPath,omitempty"`
+	LastError              string   `json:"lastError,omitempty"`
+	SandboxAvailable       bool     `json:"sandboxAvailable"`
+	SandboxMechanism       string   `json:"sandboxMechanism,omitempty"`
+	SandboxReason          string   `json:"sandboxReason,omitempty"`
+	VaultAvailable         bool     `json:"vaultAvailable"`
+	VaultReason            string   `json:"vaultReason,omitempty"`
+	AllowedBinaries        []string `json:"allowedBinaries"`
+	AllowedHosts           []string `json:"allowedHosts"`
+	VaultSecrets           []string `json:"vaultSecrets"`
+	EventTriggers          bool     `json:"eventTriggers"`
+	ExperimentalUnisolated bool     `json:"experimentalUnisolated"`
+	ExperimentalWarning    string   `json:"experimentalWarning,omitempty"`
+	IsolatedBrowser        bool     `json:"isolatedBrowser"`
+	IsolatedBrowserReason  string   `json:"isolatedBrowserReason,omitempty"`
+	IsolatedDesktop        bool     `json:"isolatedDesktop"`
+	IsolatedDesktopReason  string   `json:"isolatedDesktopReason,omitempty"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.

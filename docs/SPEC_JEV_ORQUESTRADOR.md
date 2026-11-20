@@ -1,6 +1,6 @@
 # Spec — Jev, orquestrador de modelo e de saúde dos provedores
 
-**Status:** fases 1 a 4 implementadas. Fase 4: editor local de `policy.json` (`SaveJevPolicy`) e frases dos códigos de motivo no cliente. Fase 5 segue.
+**Status:** fases 1 a 5 implementadas. O classificador nasce ligado; arquivo sem a chave fica ligado e `classifyEnabled: false` explícito continua desligado.
 **Data:** 2026-11-20
 **Escopo:** o lado Hive deste repositório (`hivemind-go`): CLI, HiveMind IDE (Go + Wails) e o processo que `hivemind serve` já sobe. O app Android (`HiveMind-App`, outro repositório) só entra como cliente do contrato que já consome. Esta spec não desenha tela nativa do app. Desenha o que o host passa a emitir e o que o app precisa reconhecer.
 
@@ -157,7 +157,7 @@ A classe sai de sinais do host, nesta ordem. Não sai de um modelo.
 
 A janela estimada é a última entrada medida em `recordUsage` para aquele autor, ou, no primeiro passo, um teto conservador: sistema e ferramentas do papel (o que o ADK já vai mandar) mais o objetivo mais o bloco de memória de no máximo 4 KiB de `.hivemind/MEMORY.md`. O número não precisa ser exato. Precisa impedir escolher um modelo cuja `contextLength` seja menor que `InputTokens * 1,2`.
 
-O classificador por modelo barato é a fase 5 e nasce desligado. Ele só pode refinar `Class` e `Complexity` quando o heurístico marcou confiança baixa (objetivo longo sem verbo reconhecível e papel ambíguo). A resposta dele é um enum, validado por lista fechada. Texto fora do enum é descartado e vale o heurístico. Ele não escolhe provedor, não vê chave e não corre no caminho dos 5 ms.
+O classificador por modelo barato é a fase 5 e nasce ligado. Ele só pode refinar `Class` e `Complexity` quando o heurístico marcou confiança baixa (objetivo longo sem verbo reconhecível e papel ambíguo). A resposta dele é um enum, validado por lista fechada. Texto fora do enum, falha da chamada ou modelo indisponível descartam a resposta e vale o heurístico. Ele não escolhe provedor, não vê chave e não corre no caminho dos 5 ms. Quem nunca gravou `classifyEnabled` fica ligado. Quem gravou `false` continua desligado.
 
 ## 6. Catálogo
 
@@ -481,14 +481,15 @@ Aceite:
 
 ### Fase 5 — Classificador opcional — implementada
 
-`classifyEnabled` nasce falso. Com a flag desligada não há chamada extra. Ligada, só um objetivo longo, sem verbo reconhecível e com papel ambíguo, pede uma resposta ao modelo barato. A resposta tem de ser duas palavras da lista fechada. Qualquer outro texto mantém o heurístico. O pedido leva o objetivo, não a policy e não a chave. O `Score` não espera essa chamada.
+`classifyEnabled` nasce verdadeiro. Arquivo antigo sem a chave passa a ligado na leitura. `classifyEnabled: false` gravado fica desligado. Com a flag desligada não há chamada extra. Ligada, só um objetivo longo, sem verbo reconhecível e com papel ambíguo, pede uma resposta ao modelo barato. A resposta tem de ser duas palavras da lista fechada. Qualquer outro texto, erro ou modelo indisponível mantém o heurístico. O pedido leva o objetivo, não a policy e não a chave. O `Score` não espera essa chamada.
 
-Desligado por padrão. Uma chamada no modelo barato, fora dos 5 ms do `Score`, só na confiança baixa. Enum inválido cai no heurístico.
+Ligado por padrão. Uma chamada no modelo barato, fora dos 5 ms do `Score`, só na confiança baixa. Enum inválido ou falha cai no heurístico.
 
 Aceite:
 
-- Com a flag desligada, nenhuma chamada extra no script.
-- Resposta fora do enum não muda a classe.
+- Com a flag desligada de propósito, nenhuma chamada extra no script.
+- Arquivo sem a chave carrega o classificador ligado. Arquivo com `false` permanece desligado.
+- Resposta fora do enum, erro ou modelo indisponível não muda a classe e não derruba a rota.
 - O classificador não recebe chave nem `policy.json`.
 
 ## 16. Plano de teste

@@ -128,6 +128,7 @@ export interface TeamSettings {
   review_model?: string;
   inline_model?: string;
   auto_review?: AutoReviewSettings;
+  shell_unsandboxed?: boolean;
   skill_assignments?: SkillAssignment[];
 }
 
@@ -579,6 +580,7 @@ export interface WizardInputPayload {
   worktrees: boolean;
   autoCommit: boolean;
   autoPR: boolean;
+  shellUnsandboxed?: boolean;
   jiraEnabled: boolean;
   jiraProject: string;
   baseBranch?: string;
@@ -875,6 +877,7 @@ export interface RelayLinkCode {
 export interface JevPolicy {
   version: number;
   enabled: boolean;
+  classifyEnabled?: boolean;
   weights: { quality: number; cost: number; latency: number };
   autoEscalateUsd: number;
   maxEscalateRatio: number;
@@ -924,6 +927,8 @@ export interface ResidentStatus {
   allowedHosts?: string[];
   vaultSecrets?: string[];
   eventTriggers?: boolean;
+  experimentalUnisolated?: boolean;
+  experimentalWarning?: string;
   isolatedBrowser?: boolean;
   isolatedBrowserReason?: string;
   isolatedDesktop?: boolean;
@@ -1117,6 +1122,7 @@ export interface WailsBackendApp {
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
   ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;

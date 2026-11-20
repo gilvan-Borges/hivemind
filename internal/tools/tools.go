@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
+	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -41,8 +43,11 @@ type Deps struct {
 	// para fases SDD, onde código permanece bloqueado até a aprovação dos docs.
 	DocsOnlyWrite bool
 	Shell         shellx.Runner
+	Sandbox       sandboxx.Runner
 	Allowlist     []string
 	Confirm       shellx.Confirmer
+	hostConfirm   shellx.Confirmer
+	shellPrepared bool
 	Approve       func(prompt string) bool
 	Git           gitx.Git
 	GitHub        githubx.Client
@@ -614,8 +619,9 @@ func (d Deps) writeDoc() (tool.Tool, error) {
 }
 
 type shellArgs struct {
-	Command string `json:"command" jsonschema:"Comando em formato argv, por exemplo: go test ./..."`
-	Dir     string `json:"dir,omitempty" jsonschema:"Diretório relativo ao workspace. Vazio usa a raiz do agente."`
+	Command     string `json:"command" jsonschema:"Comando em formato argv, por exemplo: go test ./..."`
+	Dir         string `json:"dir,omitempty" jsonschema:"Diretório relativo ao workspace. Vazio usa a raiz do agente."`
+	Unsandboxed bool   `json:"unsandboxed,omitempty" jsonschema:"Se true, pede para rodar na sessão do host, sem sandbox. Só vale em Full Acesso ou com confirmação. O padrão é a sandbox."`
 }
 
 // applyShellPolicy installs the shell confirmer for the permission mode.
@@ -623,6 +629,8 @@ type shellArgs struct {
 // line with shell metacharacters must be confirmed (or refused when nobody
 // can ask). full_access keeps running them and writes an audit line first.
 func applyShellPolicy(deps Deps) Deps {
+	deps.hostConfirm = deps.Confirm
+	deps.shellPrepared = true
 	if deps.Settings.IsFullAccess() {
 		deps.Allowlist = []string{"*"}
 		deps.Confirm = func(command string) bool {
@@ -660,7 +668,7 @@ func (d Deps) shellBlocksGitWrite() bool {
 }
 
 func (d Deps) shellDescription() string {
-	desc := "Terminal da sessão: run_shell é a única ferramenta de terminal. Executa um comando no workspace. Se o comando estiver fora da lista, a ferramenta recusa e diz o motivo. Comandos perigosos (incluindo gh que comenta ou altera issue, PR ou repositório) só rodam depois da aprovação do usuário. O ambiente do processo não leva tokens nem chaves."
+	desc := "Terminal da sessão: run_shell é a única ferramenta de terminal. Por padrão executa na sandbox do sistema, com argv explícito. unsandboxed=true, ou shell_unsandboxed no time, roda na sessão do host só em Full Acesso ou com confirmação, e avisa que está sem sandbox. Se o comando estiver fora da lista, a ferramenta recusa e diz o motivo. Comandos perigosos (incluindo gh que comenta ou altera issue, PR ou repositório) e linhas com metacaractere só rodam depois da aprovação do usuário. O ambiente do processo não leva tokens nem chaves."
 	if d.shellBlocksGitWrite() {
 		desc += " git commit, push, merge e gh pr/api continuam bloqueados neste modo."
 	}
@@ -684,7 +692,9 @@ func (d Deps) shellAllowlist() []string {
 	return append(list, "gh")
 }
 
-func (d Deps) runShell(ctx context.Context, command, relDir string) (string, error) {
+const unsandboxedWarning = "SEM SANDBOX: este comando roda na sessão do host, sem isolamento. O ambiente não leva segredos do cofre."
+
+func (d Deps) runShell(ctx context.Context, command, relDir string, unsandboxed bool) (string, error) {
 	if d.shellBlocksGitWrite() {
 		if blocked, what := shellx.IsCommitOrPRCommand(command); blocked {
 			if !d.canCommitAndManagePR() {
@@ -701,11 +711,83 @@ func (d Deps) runShell(ctx context.Context, command, relDir string) (string, err
 		}
 		dir = resolved
 	}
-	shell := d.Shell
-	if shell == nil {
-		shell = shellx.Local{}
+	if unsandboxed || d.Settings.ShellUnsandboxed {
+		return d.runShellUnsandboxed(ctx, dir, command)
 	}
-	return shell.Run(ctx, dir, command, d.shellAllowlist(), d.Confirm)
+	return d.runShellSandboxed(ctx, dir, command)
+}
+
+func (d Deps) hostShell() shellx.Runner {
+	if d.Shell != nil {
+		return d.Shell
+	}
+	return shellx.Local{}
+}
+
+func (d Deps) runShellUnsandboxed(ctx context.Context, dir, command string) (string, error) {
+	if !d.Settings.IsFullAccess() {
+		ask := d.hostConfirm
+		if !d.shellPrepared {
+			ask = d.Confirm
+		}
+		prompt := unsandboxedWarning + "\n" + command
+		if ask == nil || !ask(prompt) {
+			return "", fmt.Errorf("execução sem sandbox recusada: exige Full Acesso ou confirmação")
+		}
+	}
+	log.Printf("squad run_shell SEM sandbox; o ambiente não leva segredos do cofre")
+	shellx.AuditUnsandboxedShell(command)
+	out, err := d.hostShell().Run(ctx, dir, command, d.shellAllowlist(), d.Confirm)
+	if out == "" {
+		out = unsandboxedWarning
+	} else {
+		out = unsandboxedWarning + "\n" + out
+	}
+	return out, err
+}
+
+func (d Deps) runShellSandboxed(ctx context.Context, dir, command string) (string, error) {
+	dec := shellx.Evaluate(command, d.shellAllowlist())
+	if !dec.Allowed {
+		return "", fmt.Errorf("comando recusado: %s", dec.Reason)
+	}
+	if dec.UseShell {
+		return "", fmt.Errorf("comando com metacaractere não entra na sandbox; peça unsandboxed e confirme a execução sem sandbox")
+	}
+	if dec.Dangerous {
+		if d.Confirm == nil || !d.Confirm(command) {
+			return "", fmt.Errorf("comando perigoso recusado: %s", dec.Reason)
+		}
+	}
+	sb := d.Sandbox
+	if sb == nil {
+		sb = sandboxx.NewOSRunner()
+	}
+	argv := append([]string(nil), dec.Argv...)
+	argv[0] = shellx.ResolveLocalExecutable(dir, argv[0])
+	res, err := sb.Run(ctx, sandboxx.Options{
+		Argv:           argv,
+		WorkDir:        dir,
+		WriteRoots:     []string{dir},
+		AllowNetwork:   true,
+		Timeout:        shellx.DefaultTimeout,
+		MaxOutputBytes: 1 << 20,
+	})
+	text := res.Stdout
+	if strings.TrimSpace(res.Stderr) != "" {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += res.Stderr
+	}
+	text = strx.TruncateBytes(text, 16<<10, "\n…(saída truncada)")
+	if err != nil {
+		if strings.TrimSpace(text) == "" {
+			return "", err
+		}
+		return text, err
+	}
+	return text, nil
 }
 
 func (d Deps) canShell() (tool.Tool, error) {
@@ -713,7 +795,7 @@ func (d Deps) canShell() (tool.Tool, error) {
 		Name:        "run_shell",
 		Description: d.shellDescription(),
 	}, func(ctx agent.Context, args shellArgs) (textResult, error) {
-		out, err := d.runShell(ctx, args.Command, args.Dir)
+		out, err := d.runShell(ctx, args.Command, args.Dir, args.Unsandboxed)
 		if err != nil {
 			return textResult{Text: out}, err
 		}

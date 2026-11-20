@@ -64,7 +64,7 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 		}
 	} else {
 		argv := append([]string(nil), dec.Argv...)
-		argv[0] = resolveLocalExecutable(dir, argv[0])
+		argv[0] = ResolveLocalExecutable(dir, argv[0])
 		cmd = exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	}
 	cmd.Dir = dir
@@ -128,7 +128,8 @@ func (c *cappedBuffer) String() string {
 // "executable file not found" even when sitting right next to the agent
 // (dogfooding achado #5: ~6 tentativas e 436k tokens só para rodar o build).
 // On Windows a name without extension also probes .bat/.cmd/.exe variants.
-func resolveLocalExecutable(dir, name string) string {
+// ResolveLocalExecutable finds an allowlisted bare name inside dir.
+func ResolveLocalExecutable(dir, name string) string {
 	if dir == "" || name == "" {
 		return name
 	}
