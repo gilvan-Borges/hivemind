@@ -245,6 +245,12 @@ func (m *SessionManager) RequestApproval(ctx context.Context, laneID, teamName, 
 	return m.RequestApprovalWithMeta(ctx, laneID, teamName, prompt, ApprovalMetadata{})
 }
 
+// RequestApprovalWithGate emits an approval_required event with an explicit gate
+// identifier (e.g. "budget", "worktree") and waits for human resolution.
+func (m *SessionManager) RequestApprovalWithGate(ctx context.Context, laneID, teamName, gate, prompt string) bool {
+	return m.RequestApprovalWithMeta(ctx, laneID, teamName, prompt, ApprovalMetadata{Gate: gate})
+}
+
 // RequestApprovalWithMeta behaves like RequestApproval while attaching risk tier,
 // tool name, and target detail so the IDE UI and app display what the agent wants to do.
 func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, teamName, prompt string, meta ApprovalMetadata) bool {
@@ -271,7 +277,13 @@ func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, te
 
 	label := strings.TrimSpace(meta.Label)
 	if label == "" {
-		label = "Permissão Necessária"
+		if meta.Gate == "budget" {
+			label = "Aprovação de Orçamento (Jev)"
+		} else if meta.Gate == "worktree" {
+			label = "Aprovação de Worktree (Cursor)"
+		} else {
+			label = "Permissão Necessária"
+		}
 	}
 	m.Emit(LaneEvent{
 		LaneID: laneID,
@@ -763,7 +775,7 @@ func (m *SessionManager) RunTurnWithOptions(
 	var routedMu sync.Mutex
 	routedModels := map[string][2]string{}
 	recordLaneEvent := func(ev orchestrator.Event) {
-		if ev.Kind == "model_route" && ev.Author != "" && ev.Provider != "" {
+		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && ev.Author != "" && ev.Provider != "" {
 			routedMu.Lock()
 			routedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
 			routedMu.Unlock()
@@ -782,7 +794,10 @@ func (m *SessionManager) RunTurnWithOptions(
 		}
 	}
 	budgetApprove := func(prompt string) bool {
-		return m.RequestApproval(ctx, laneID, selected.Name, prompt)
+		return m.RequestApprovalWithGate(ctx, laneID, selected.Name, "budget", prompt)
+	}
+	gateApprove := func(gate, prompt string) bool {
+		return m.RequestApprovalWithGate(ctx, laneID, selected.Name, gate, prompt)
 	}
 
 	runner := &orchestrator.Runner{
@@ -805,9 +820,11 @@ func (m *SessionManager) RunTurnWithOptions(
 		OnEvent:            recordLaneEvent,
 	}
 	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-		Workspace: workspace,
-		Approve:   budgetApprove,
-		OnEvent:   recordLaneEvent,
+		Workspace:   workspace,
+		Git:         g,
+		Approve:     budgetApprove,
+		ApproveGate: gateApprove,
+		OnEvent:     recordLaneEvent,
 	})
 	res, runErr := runner.Run(ctx, orchestrator.Request{
 		Objective:   fullObjective,
@@ -957,7 +974,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 	var autoRoutedMu sync.Mutex
 	autoRoutedModels := map[string][2]string{}
 	recordAutoReviewEvent := func(ev orchestrator.Event) {
-		if ev.Kind == "model_route" && ev.Author != "" && ev.Provider != "" {
+		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && ev.Author != "" && ev.Provider != "" {
 			autoRoutedMu.Lock()
 			autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
 			autoRoutedMu.Unlock()

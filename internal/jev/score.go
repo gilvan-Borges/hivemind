@@ -57,7 +57,8 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 		prov := team.NormalizeProvider(rolePin.Provider, rolePin.Model)
 		mod := strings.TrimSpace(rolePin.Model)
 		allowed := isProviderAllowedByPolicy(prov, task.RepoKey, policy, repoPolicy)
-		healthy := isCredentialed(prov, modelIsFree(catalog, prov, mod), health) && isCircuitEligible(prov, health)
+		excluded := health.ExcludePairs != nil && health.ExcludePairs[catalogKey(prov, mod)]
+		healthy := !excluded && isCredentialed(prov, modelIsFree(catalog, prov, mod), health) && isPairCircuitEligible(prov, mod, health)
 		entry, inCatalog := catalog.Lookup(prov, mod)
 		est := estimateCallMicroUSD(task.InputTokens, entry, TierCheap)
 		budgetOK := checkDailyBudget(prov, est, policy, health) == nil
@@ -77,6 +78,8 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 				code = "allowlist"
 			} else if !budgetOK {
 				code = "budget"
+			} else if !isPairCircuitEligible(prov, mod, health) {
+				code = "circuit"
 			}
 			return Choice{}, Refusal{
 				Code:   code,
@@ -193,6 +196,11 @@ func selectBestInTier(
 	hasPaidHTTP := false
 	hasPaidHTTPChecked := false
 
+	hasCreds := health.Credentials != nil
+	hasCircuits := len(health.Circuits) > 0
+	hasExcludes := len(health.ExcludePairs) > 0
+	hasModelCircuits := len(health.ModelCircuits) > 0
+
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
@@ -203,10 +211,13 @@ func selectBestInTier(
 			// strong never enters automatic selection without explicit escalation approval.
 			continue
 		}
-		if !isCredentialed(e.Provider, e.Free, health) {
+		if hasCreds && !isCredentialed(e.Provider, e.Free, health) {
 			continue
 		}
-		if !isCircuitEligible(e.Provider, health) {
+		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
+			continue
+		}
+		if (hasCircuits && !isCircuitEligible(e.Provider, health)) || (hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health)) {
 			sawCircuit = true
 			continue
 		}
@@ -224,7 +235,7 @@ func selectBestInTier(
 		if task.NeedsTools && !e.Capabilities.Tools && !e.Capabilities.WorkspaceAgent {
 			continue
 		}
-		if task.HasPendingToolCall && e.Capabilities.WorkspaceAgent {
+		if (task.HasPendingToolCall || task.InStep) && e.Capabilities.WorkspaceAgent {
 			continue
 		}
 		// Quota rule (§7): agy with < 5% remaining does not beat a cheap HTTP model.
@@ -318,7 +329,13 @@ func selectBestInTier(
 		if e.Tier == TierStrong {
 			continue
 		}
-		if !isCredentialed(e.Provider, e.Free, health) || !isCircuitEligible(e.Provider, health) {
+		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isCircuitEligible(e.Provider, health)) {
+			continue
+		}
+		if hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health) {
+			continue
+		}
+		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
 			continue
 		}
 		if !isEntryAllowedByPolicy(*e, task.RepoKey, policy, repoPolicy) {
@@ -333,7 +350,7 @@ func selectBestInTier(
 		if task.NeedsTools && !e.Capabilities.Tools && !e.Capabilities.WorkspaceAgent {
 			continue
 		}
-		if task.HasPendingToolCall && e.Capabilities.WorkspaceAgent {
+		if (task.HasPendingToolCall || task.InStep) && e.Capabilities.WorkspaceAgent {
 			continue
 		}
 		if checkAgyQuota && strings.EqualFold(e.Provider, "agy") && hasPaidHTTP {
@@ -461,7 +478,10 @@ func isCredentialed(provider string, free bool, health HealthSnapshot) bool {
 	if health.Credentials == nil {
 		return true
 	}
-	if health.Credentials[strings.ToLower(strings.TrimSpace(provider))] {
+	if health.Credentials[provider] {
+		return true
+	}
+	if low := strings.ToLower(strings.TrimSpace(provider)); low != provider && health.Credentials[low] {
 		return true
 	}
 	return free && health.Credentials["opencode_free"]
@@ -473,10 +493,33 @@ func modelIsFree(cat Catalog, provider, model string) bool {
 }
 
 func isCircuitEligible(provider string, health HealthSnapshot) bool {
-	if health.Circuits == nil {
+	if len(health.Circuits) == 0 {
 		return true
 	}
-	st, ok := health.Circuits[strings.ToLower(strings.TrimSpace(provider))]
+	st, ok := health.Circuits[provider]
+	if !ok {
+		if low := strings.ToLower(strings.TrimSpace(provider)); low != provider {
+			st, ok = health.Circuits[low]
+		}
+	}
+	if !ok || st.Circuit == "" || st.Circuit == CircuitClosed {
+		return true
+	}
+	return st.Circuit == CircuitHalfOpen && st.HalfOpenSlots > 0
+}
+
+func isPairCircuitEligible(provider, model string, health HealthSnapshot) bool {
+	if !isCircuitEligible(provider, health) {
+		return false
+	}
+	return isModelCircuitOnlyEligible(provider, model, health)
+}
+
+func isModelCircuitOnlyEligible(provider, model string, health HealthSnapshot) bool {
+	if len(health.ModelCircuits) == 0 {
+		return true
+	}
+	st, ok := health.ModelCircuits[catalogKey(provider, model)]
 	if !ok || st.Circuit == "" || st.Circuit == CircuitClosed {
 		return true
 	}

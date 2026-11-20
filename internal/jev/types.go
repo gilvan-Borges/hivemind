@@ -63,6 +63,7 @@ type Task struct {
 	NeedsTools         bool
 	NeedsVision        bool
 	HasPendingToolCall bool
+	InStep             bool
 	QAStall            int
 	RepoKey            string
 }
@@ -101,15 +102,31 @@ type Catalog struct {
 
 // ProviderHealth summarizes the current eligibility and daily spend of a provider.
 type ProviderHealth struct {
-	Circuit   CircuitState `json:"circuit"`
-	Until     time.Time    `json:"until,omitempty"`
-	HalfOpenSlots int      `json:"halfOpenSlots,omitempty"`
+	Circuit       CircuitState `json:"circuit"`
+	Until         time.Time    `json:"until,omitempty"`
+	Reason        string       `json:"reason,omitempty"`
+	HalfOpenSlots int          `json:"halfOpenSlots,omitempty"`
+}
+
+// ProviderHealthView is the secret-safe status item emitted to the IDE and mobile SSE.
+type ProviderHealthView struct {
+	Provider          string `json:"provider"`
+	State             string `json:"state"` // "closed" | "open" | "half_open"
+	Reason            string `json:"reason,omitempty"`
+	Until             string `json:"until,omitempty"`
+	DailySpentMicro   int64  `json:"dailySpentMicroUsd,omitempty"`
+	DailyCapMicro     int64  `json:"dailyCapMicroUsd,omitempty"`
+	QuotaRemainingPct float64 `json:"quotaRemainingPct,omitempty"`
+	QuotaStale        bool   `json:"quotaStale,omitempty"`
+	HasCredential     bool   `json:"hasCredential"`
 }
 
 // HealthSnapshot holds in-memory credential presence, circuit states, and daily spend.
 type HealthSnapshot struct {
 	Credentials        map[string]bool
 	Circuits           map[string]ProviderHealth
+	ModelCircuits      map[string]ProviderHealth
+	ExcludePairs       map[string]bool
 	DailySpentMicroUSD map[string]int64
 	// AgyRemainingPct holds the last known remaining quota percentage for agy.
 	// A negative value means unknown (still eligible).

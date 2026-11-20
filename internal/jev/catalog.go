@@ -238,7 +238,7 @@ func (s *CatalogStore) MergeSource(source string, entries []ModelEntry) {
 	s.mu.Lock()
 	kept := make([]ModelEntry, 0, len(s.catalog.Entries)+len(cleaned))
 	for _, e := range s.catalog.Entries {
-		if strings.EqualFold(e.Source, source) {
+		if strings.EqualFold(e.Source, source) || (strings.EqualFold(e.Source, "static") && strings.EqualFold(e.Provider, source)) {
 			continue
 		}
 		kept = append(kept, e)
@@ -359,10 +359,17 @@ func defaultQualityPrior(tier Tier) float64 {
 
 func mergeWithStaticSeeds(cat Catalog) Catalog {
 	seen := make(map[string]bool, len(cat.Entries))
+	hasLiveProvider := make(map[string]bool, len(cat.Sources))
 	for _, e := range cat.Entries {
 		seen[catalogKey(e.Provider, e.Model)] = true
+		if e.Source != "" && !strings.EqualFold(e.Source, "static") {
+			hasLiveProvider[strings.ToLower(e.Provider)] = true
+		}
 	}
 	for _, seed := range StaticSeedEntries() {
+		if hasLiveProvider[strings.ToLower(seed.Provider)] {
+			continue
+		}
 		if !seen[catalogKey(seed.Provider, seed.Model)] {
 			cat.Entries = append(cat.Entries, seed)
 		}

@@ -122,6 +122,19 @@ func newOpenAI(ctx context.Context, provider, modelName string) (model.LLM, erro
 	})
 }
 
+// ProbeOpenRouterAuth validates the configured OPENROUTER_API_KEY via GET /key.
+func ProbeOpenRouterAuth(ctx context.Context) error {
+	key := EnvOrStored("OPENROUTER_API_KEY")
+	if key == "" {
+		return fmt.Errorf("defina OPENROUTER_API_KEY para validar o OpenRouter")
+	}
+	base := EnvOrStored("OPENROUTER_BASE_URL")
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	return openRouterCheckAuth(ctx, key, base)
+}
+
 // openRouterCheckAuth preflights the API key against GET /key so a bad/revoked
 // key fails immediately with a clear message instead of a raw 401 mid-run.
 // Successful checks are cached in memory for a few minutes per key.

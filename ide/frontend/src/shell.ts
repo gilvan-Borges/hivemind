@@ -224,6 +224,7 @@ export function mountShell() {
         <span id="status-team">Equipe: -</span>
         <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
         <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
+        <button type="button" id="status-providers" class="dim plain-chip" title="Saúde e circuitos dos provedores (Jev)">ia: …</button>
         <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
         <button type="button" id="status-jira" class="dim plain-chip" title="Clique para conectar ao Jira Cloud">jira: …</button>
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
@@ -331,6 +332,7 @@ export function bindStaticShellEvents() {
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
   document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
+  document.getElementById("status-providers")?.addEventListener("click", () => void openAIUsageModal());
   document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
   document.getElementById("status-jira")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
@@ -997,6 +999,30 @@ export function updateStatusBar() {
       mbEl.textContent = "mobile: off";
       mbEl.style.color = "var(--text-dim)";
       mbEl.title = "App Mobile desligado — clique para ligar a LAN ou o relay";
+    }
+  }
+  const provEl = document.getElementById("status-providers");
+  if (provEl) {
+    const list = state.providerHealth || [];
+    const configured = list.filter((p) => p.hasCredential);
+    const openCount = configured.filter((p) => p.state === "open").length;
+    const halfCount = configured.filter((p) => p.state === "half_open").length;
+    if (configured.length === 0) {
+      provEl.textContent = "ia: …";
+      provEl.style.color = "var(--text-dim)";
+      provEl.title = "Saúde dos provedores Jev — clique para abrir";
+    } else if (openCount === configured.length) {
+      provEl.textContent = `ia: ${openCount} pausa`;
+      provEl.style.color = "var(--red)";
+      provEl.title = "Todos os provedores configurados estão em pausa/esgotados — clique para sondar";
+    } else if (openCount > 0 || halfCount > 0) {
+      provEl.textContent = `ia: ${openCount > 0 ? `${openCount} pausa` : `${halfCount} sonda`}`;
+      provEl.style.color = "var(--amber)";
+      provEl.title = "Alguns provedores Jev estão degradados/em cooldown — clique para ver detalhes";
+    } else {
+      provEl.textContent = `ia: ok (${configured.length})`;
+      provEl.style.color = "var(--green)";
+      provEl.title = `${configured.length} provedor(es) Jev ativos — clique para ver saúde e limites`;
     }
   }
   const probEl = document.getElementById("status-problems");

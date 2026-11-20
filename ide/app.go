@@ -14,6 +14,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
@@ -48,9 +49,10 @@ type App struct {
 	editCancel       context.CancelFunc
 	watcherMu        sync.Mutex
 	watchers         map[string]*idecore.FileWatcher
-	mobile           *mobileBridge
-	relay            *relayclient.Client
-	resident         *idecore.ResidentManager
+	mobile              *mobileBridge
+	relay               *relayclient.Client
+	resident            *idecore.ResidentManager
+	healthMonitorCancel context.CancelFunc
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -190,9 +192,15 @@ func (a *App) startup(ctx context.Context) {
 	if a.relay != nil && !a.smokeCheck {
 		a.relay.Start()
 	}
+	if !a.smokeCheck {
+		a.startJevHealthMonitor(ctx)
+	}
 }
 
 func (a *App) shutdown(_ context.Context) {
+	if a.healthMonitorCancel != nil {
+		a.healthMonitorCancel()
+	}
 	if a.pty != nil {
 		a.pty.CloseAll()
 	}
@@ -1206,6 +1214,68 @@ func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens in
 		return modelx.AIUsageReport{}, err
 	}
 	return a.GetAIUsage(), nil
+}
+
+func (a *App) currentJevPolicy() jev.Policy {
+	pol, err := jev.LoadPolicy()
+	if err != nil {
+		return jev.DefaultPolicy()
+	}
+	return pol
+}
+
+func (a *App) emitProviderHealth(views []jev.ProviderHealthView, force bool) {
+	if a.ctx != nil && !a.smokeCheck {
+		wailsrt.EventsEmit(a.ctx, "hivemind:provider-health", views)
+	}
+	if a.mobile != nil && a.mobile.hub != nil {
+		a.mobile.hub.HandleProviderHealth(views, force)
+	}
+}
+
+func (a *App) startJevHealthMonitor(parent context.Context) {
+	monCtx, cancel := context.WithCancel(parent)
+	a.healthMonitorCancel = cancel
+
+	hs := modelx.DefaultJevHealthStore()
+	hs.SetOnChange(func(opened, allClosed bool) {
+		views := hs.Summary(a.currentJevPolicy(), modelx.JevCredentialPresence())
+		a.emitProviderHealth(views, opened || allClosed)
+	})
+
+	go func() {
+		a.emitProviderHealth(a.GetProviderHealth(), false)
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-monCtx.Done():
+				return
+			case <-ticker.C:
+				probeCtx, cancelProbe := context.WithTimeout(monCtx, 15*time.Second)
+				views := modelx.ProbeAllProvidersHealth(probeCtx, hs, a.currentJevPolicy())
+				cancelProbe()
+				a.emitProviderHealth(views, false)
+			}
+		}
+	}()
+}
+
+// GetProviderHealth returns the current Jev circuit breaker and daily spend snapshot for every known provider.
+func (a *App) GetProviderHealth() []jev.ProviderHealthView {
+	hs := modelx.DefaultJevHealthStore()
+	hs.SyncCredentialFingerprints(modelx.JevCredentialFingerprints())
+	return hs.Summary(a.currentJevPolicy(), modelx.JevCredentialPresence())
+}
+
+// ProbeProviders runs recovery probes for degraded/quota-tracked providers and broadcasts the updated health state.
+func (a *App) ProbeProviders() []jev.ProviderHealthView {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	hs := modelx.DefaultJevHealthStore()
+	views := modelx.ProbeAllProvidersHealth(ctx, hs, a.currentJevPolicy())
+	a.emitProviderHealth(views, true)
+	return views
 }
 
 // StartPTY ensures an interactive PTY shell (ConPTY on Windows) is running for termID in workspace,

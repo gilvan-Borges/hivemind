@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderProfileSummary } from "./types";
+import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary } from "./types";
 import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
@@ -1724,13 +1724,78 @@ export async function openAIUsageModal() {
     return;
   }
   try {
-    state.aiUsageModal.report = await backend.GetAIUsage();
+    const [rep, health] = await Promise.all([
+      backend.GetAIUsage(),
+      backend.GetProviderHealth ? backend.GetProviderHealth() : Promise.resolve(state.providerHealth),
+    ]);
+    state.aiUsageModal.report = rep;
+    if (Array.isArray(health)) {
+      state.providerHealth = health;
+      updateStatusBar();
+    }
   } catch (err: any) {
     toastError("carregar uso e limites das IAs", err);
   } finally {
     state.aiUsageModal.loading = false;
     if (state.aiUsageModal.open) renderModalLayer();
   }
+}
+
+function formatHealthUsdMicro(micro?: number): string {
+  const val = Number(micro || 0) / 1_000_000;
+  return `$${val.toFixed(2)}`;
+}
+
+export function renderJevProviderHealthPanelHtml(list: ProviderHealthView[], probing: boolean): string {
+  const rows = list.length === 0
+    ? `<div class="dim" style="font-size:11.5px;padding:6px 0">Nenhum dado de circuito registrado ainda.</div>`
+    : list.map((p) => {
+        const st = String(p.state || "closed");
+        const pillCls = st === "open" ? "changes_requested" : st === "half_open" ? "commented" : "approved";
+        const pillText = st === "open" ? "aberto (pausa)" : st === "half_open" ? "sondando" : "ativo";
+        const credText = p.hasCredential ? "" : " · sem credencial";
+        const cooldown = p.until ? ` · ${formatResetCountdown(p.until)}` : "";
+        const reason = p.reason ? ` · ${escapeHtml(p.reason)}` : "";
+        const spend = p.dailyCapMicroUsd && p.dailyCapMicroUsd > 0
+          ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}/${formatHealthUsdMicro(p.dailyCapMicroUsd)}`
+          : (p.dailySpentMicroUsd && p.dailySpentMicroUsd > 0 ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}` : "");
+        const quota = typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0
+          ? ` · cota ${Math.round(p.quotaRemainingPct)}%${p.quotaStale ? " (desatual.)" : ""}`
+          : "";
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-subtle)">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11.5px">
+              <strong>${escapeHtml(p.provider)}</strong>
+              <span class="flow-pill ${pillCls}">${pillText}</span>
+              <span class="dim">${reason.replace(/^ · /, "")}${cooldown}${spend}${quota}${credText}</span>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+  const allExhausted = list.length > 0 && list.every((p) => !p.hasCredential || p.state === "open");
+  const warnBanner = allExhausted
+    ? `<div style="margin:6px 0;padding:6px 8px;border-radius:6px;background:rgba(248,81,73,0.12);border:1px solid rgba(248,81,73,0.35);font-size:11.5px;color:#ff8a80">Todos os provedores configurados estão esgotados ou em pausa. Clique em "Sondar agora" ou aguarde o fim do cooldown.</div>`
+    : "";
+
+  return `
+    <div class="aiu-card">
+      <div class="aiu-card-head">
+        <div class="aiu-card-title">
+          <strong>Saúde dos Provedores (Jev)</strong>
+          <span class="dim" style="font-size:11px">circuit breaker · cooldown · teto diário</span>
+        </div>
+        <button type="button" class="mini" id="aiu-probe-providers" ${probing ? "disabled" : ""}>
+          ${probing ? icons.spinner : icons.refresh}
+          <span>Sondar agora</span>
+        </button>
+      </div>
+      <div class="aiu-card-body">
+        ${warnBanner}
+        ${rows}
+      </div>
+    </div>
+  `;
 }
 
 export function formatResetCountdown(iso?: string): string {
@@ -2023,6 +2088,7 @@ export function renderAIUsageModal(layer: HTMLElement) {
         </div>
 
         <div class="aiu-cards-wrap">
+          ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
           ${m.loading && !rep
             ? `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`
             : !rep
@@ -2051,6 +2117,24 @@ export function renderAIUsageModal(layer: HTMLElement) {
     if ((e.target as HTMLElement).id === "aiu-backdrop") closeModal();
   });
   document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsageModal());
+  document.getElementById("aiu-probe-providers")?.addEventListener("click", async () => {
+    const b = api();
+    if (!b?.ProbeProviders) return;
+    state.providerHealthProbing = true;
+    renderModalLayer();
+    try {
+      const views = await b.ProbeProviders();
+      if (Array.isArray(views)) {
+        state.providerHealth = views;
+        updateStatusBar();
+      }
+    } catch (err: any) {
+      toastError("sondar provedores Jev", err);
+    } finally {
+      state.providerHealthProbing = false;
+      if (state.aiUsageModal.open) renderModalLayer();
+    }
+  });
   document.getElementById("aiu-open-opencode-cfg")?.addEventListener("click", () => {
     state.aiUsageModal.open = false;
     openOpenCodeModal();

@@ -44,27 +44,30 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind              string   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route"
-	Stage             string   `json:"stage,omitempty"`
-	Author            string   `json:"author,omitempty"`
-	Label             string   `json:"label,omitempty"`
-	Text              string   `json:"text,omitempty"`
-	ToolName          string   `json:"toolName,omitempty"`
-	Detail            string   `json:"detail,omitempty"`
-	Devs              []string `json:"devs,omitempty"`
-	Gate              string   `json:"gate,omitempty"`       // "docs" | "jira" | "budget"
-	ApprovalID        string   `json:"approvalId,omitempty"` // identificador único da aprovação pendente (permite aprovações concorrentes na mesma lane)
-	Partial           bool     `json:"partial,omitempty"`
-	Thought           bool     `json:"thought,omitempty"`
-	InputTokens       int32    `json:"inputTokens,omitempty"`
-	OutputTokens      int32    `json:"outputTokens,omitempty"`
-	Tokens            int32    `json:"tokens,omitempty"`
-	Provider          string   `json:"provider,omitempty"`
-	Model             string   `json:"model,omitempty"`
-	Tier              string   `json:"tier,omitempty"`
-	Reasons           []string `json:"reasons,omitempty"`
-	EstimatedMicroUSD int64    `json:"estimatedMicroUsd,omitempty"`
-	DecisionMicros    int64    `json:"decisionMicros,omitempty"`
+	Kind              string                   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route", "provider_failover", "provider_exhausted"
+	Stage             string                   `json:"stage,omitempty"`
+	Author            string                   `json:"author,omitempty"`
+	Label             string                   `json:"label,omitempty"`
+	Text              string                   `json:"text,omitempty"`
+	ToolName          string                   `json:"toolName,omitempty"`
+	Detail            string                   `json:"detail,omitempty"`
+	Devs              []string                 `json:"devs,omitempty"`
+	Gate              string                   `json:"gate,omitempty"`       // "docs" | "jira" | "budget" | "worktree"
+	ApprovalID        string                   `json:"approvalId,omitempty"` // identificador único da aprovação pendente (permite aprovações concorrentes na mesma lane)
+	Partial           bool                     `json:"partial,omitempty"`
+	Thought           bool                     `json:"thought,omitempty"`
+	InputTokens       int32                    `json:"inputTokens,omitempty"`
+	OutputTokens      int32                    `json:"outputTokens,omitempty"`
+	Tokens            int32                    `json:"tokens,omitempty"`
+	Provider          string                   `json:"provider,omitempty"`
+	Model             string                   `json:"model,omitempty"`
+	FromProvider      string                   `json:"fromProvider,omitempty"`
+	FromModel         string                   `json:"fromModel,omitempty"`
+	Tier              string                   `json:"tier,omitempty"`
+	Reasons           []string                 `json:"reasons,omitempty"`
+	EstimatedMicroUSD int64                    `json:"estimatedMicroUsd,omitempty"`
+	DecisionMicros    int64                    `json:"decisionMicros,omitempty"`
+	Health            []jev.ProviderHealthView `json:"health,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
@@ -886,10 +889,12 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		NeedsTools:   true,
 		QAStall:      r.qaStallCount,
 		Workspace:    r.Workspace,
+		WorkDir:      root,
 		RepoKey:      r.jevRepo,
 		Author:       adkName,
 		Label:        label,
 		Stage:        inferStage(adkName, label),
+		Git:          r.Git,
 		Approve:      r.Approve,
 		OnEvent:      r.OnEvent,
 	})
@@ -1086,6 +1091,7 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	if strings.EqualFold(strings.TrimSpace(a.Provider), "jev") {
 		return NewJevModelFactory(JevFactoryOptions{
 			Workspace: r.Workspace,
+			Git:       r.Git,
 			Approve:   r.Approve,
 			OnEvent:   r.OnEvent,
 		})(ctx, a)
@@ -1906,10 +1912,12 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		NeedsTools:   true,
 		QAStall:      r.qaStallCount,
 		Workspace:    r.Workspace,
+		WorkDir:      toolRoot,
 		RepoKey:      r.jevRepo,
 		Author:       chief.Name,
 		Label:        roleLabel(chief.Role) + " · " + chief.Name,
 		Stage:        "chief",
+		Git:          r.Git,
 		Approve:      r.Approve,
 		OnEvent:      r.OnEvent,
 	})

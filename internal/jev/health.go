@@ -1,0 +1,701 @@
+package jev
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// ErrorClass identifies the failure mode of a model call after provider-level retries.
+type ErrorClass string
+
+const (
+	ErrClassNone      ErrorClass = ""
+	ErrClassQuota     ErrorClass = "quota"
+	ErrClassRateLimit ErrorClass = "rate_limit"
+	ErrClassAuth      ErrorClass = "auth"
+	ErrClassOutage    ErrorClass = "outage"
+	ErrClassSpike     ErrorClass = "spike"
+	ErrClassPolicy    ErrorClass = "policy" // 400, jail, approval denial, context.Canceled — never opens circuit
+)
+
+// ClassifyError maps a provider error (already past internal/modelx retries)
+// into a circuit-breaker ErrorClass per SPEC_JEV_ORQUESTRADOR §9.
+func ClassifyError(err error) ErrorClass {
+	if err == nil {
+		return ErrClassNone
+	}
+	if errors.Is(err, context.Canceled) {
+		return ErrClassPolicy
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrClassOutage
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return ErrClassOutage
+	}
+
+	// 1. Policy / client-side / 400 errors NEVER open circuits and NEVER failover.
+	for _, pat := range []string{
+		"http 400", "status 400", "400 bad request", "invalid_argument",
+		"recusado pela", "recusado fora", "fora do workspace", "jail",
+		"política", "aprovação", "não permitido", "context canceled",
+	} {
+		if strings.Contains(msg, pat) {
+			return ErrClassPolicy
+		}
+	}
+
+	// 2. Quota / billing exhaustion -> opens entire provider.
+	for _, pat := range []string{
+		"402", "payment required", "créditos insuficientes", "insufficient credits",
+		"resource_exhausted", "esgotou a quota", "quota/créditos", "quota exceeded",
+		"insufficient_quota",
+	} {
+		if strings.Contains(msg, pat) {
+			return ErrClassQuota
+		}
+	}
+
+	// 3. Authentication / authorization -> opens entire provider until credential changes.
+	for _, pat := range []string{
+		"401", "403", "unauthorized", "forbidden", "rejeitou a chave",
+		"não autenticado", "sem login", "invalid api key", "invalid_api_key",
+		"authentication", "token do opencode não configurado", "defina cursor_api_key",
+		"defina openrouter_api_key", "defina openai_api_key", "defina anthropic_api_key",
+		"defina google_api_key", "defina google_cloud_project",
+	} {
+		if strings.Contains(msg, pat) {
+			return ErrClassAuth
+		}
+	}
+
+	// 4. Rate limit surviving provider retry -> opens model.
+	for _, pat := range []string{
+		"429", "too many requests", "rate limit", "rate_limit",
+	} {
+		if strings.Contains(msg, pat) {
+			return ErrClassRateLimit
+		}
+	}
+
+	// 5. Timeouts, 5xx, connection errors, CLI failures -> outage.
+	return ErrClassOutage
+}
+
+type outcomeSample struct {
+	At time.Time `json:"at"`
+	OK bool      `json:"ok"`
+}
+
+type circuitRecord struct {
+	Circuit            CircuitState    `json:"circuit"`
+	Reason             string          `json:"reason,omitempty"`
+	FailureCount       int             `json:"failureCount,omitempty"`
+	ConsecutiveOutages int             `json:"consecutiveOutages,omitempty"`
+	OpenedAt           time.Time       `json:"openedAt,omitempty"`
+	Until              time.Time       `json:"until,omitempty"`
+	HalfOpenInFlight   bool            `json:"-"`
+	Recent             []outcomeSample `json:"recent,omitempty"`
+}
+
+type providerStateRecord struct {
+	circuitRecord
+	QuotaRemainingPct float64 `json:"quotaRemainingPct"`
+	QuotaResetsAt     time.Time `json:"quotaResetsAt,omitempty"`
+	QuotaStale        bool    `json:"quotaStale,omitempty"`
+	CredFingerprint   string  `json:"credFingerprint,omitempty"`
+	DailyDate         string  `json:"dailyDate,omitempty"`
+	DailySpentMicro   int64   `json:"dailySpentMicroUsd,omitempty"`
+}
+
+type healthFile struct {
+	Version   int                             `json:"version"`
+	Providers map[string]*providerStateRecord `json:"providers,omitempty"`
+	Models    map[string]*circuitRecord       `json:"models,omitempty"`
+}
+
+// HealthStore manages process-wide provider/model circuit breakers, exponential backoff,
+// UTC daily spend counters, and health.json persistence.
+type HealthStore struct {
+	mu       sync.Mutex
+	path     string
+	state    healthFile
+	cooldown CooldownConfig
+	nowFn    func() time.Time
+	onChange func(opened bool, allClosed bool)
+}
+
+// HealthPath returns the default user-level health.json path.
+func HealthPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "health.json"), nil
+}
+
+// NewHealthStore loads persisted circuit/spend state from path (or default path)
+// and configures cooldown durations.
+func NewHealthStore(path string, cooldown CooldownConfig) *HealthStore {
+	if path == "" {
+		if def, err := HealthPath(); err == nil {
+			path = def
+		}
+	}
+	if cooldown == (CooldownConfig{}) {
+		cooldown = DefaultPolicy().Cooldown
+	}
+	hs := &HealthStore{
+		path:     path,
+		cooldown: cooldown,
+		nowFn:    time.Now,
+		state: healthFile{
+			Version:   1,
+			Providers: map[string]*providerStateRecord{},
+			Models:    map[string]*circuitRecord{},
+		},
+	}
+	if path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var loaded healthFile
+			if json.Unmarshal(data, &loaded) == nil {
+				if loaded.Providers == nil {
+					loaded.Providers = map[string]*providerStateRecord{}
+				}
+				if loaded.Models == nil {
+					loaded.Models = map[string]*circuitRecord{}
+				}
+				for _, pr := range loaded.Providers {
+					if pr.QuotaRemainingPct == 0 && !pr.QuotaStale && pr.Reason != "quota" {
+						pr.QuotaRemainingPct = -1
+					}
+				}
+				hs.state = loaded
+			}
+		}
+	}
+	return hs
+}
+
+// SetOnChange registers a callback invoked whenever a circuit opens or all circuits close.
+func (h *HealthStore) SetOnChange(fn func(opened bool, allClosed bool)) {
+	h.mu.Lock()
+	h.onChange = fn
+	h.mu.Unlock()
+}
+
+func (h *HealthStore) ensureProviderLocked(provider string, now time.Time) *providerStateRecord {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	rec, ok := h.state.Providers[p]
+	if !ok {
+		rec = &providerStateRecord{
+			circuitRecord:     circuitRecord{Circuit: CircuitClosed},
+			QuotaRemainingPct: -1,
+			DailyDate:         now.UTC().Format("2006-01-02"),
+		}
+		h.state.Providers[p] = rec
+	}
+	today := now.UTC().Format("2006-01-02")
+	if rec.DailyDate != today {
+		rec.DailyDate = today
+		rec.DailySpentMicro = 0
+	}
+	return rec
+}
+
+func (h *HealthStore) ensureModelLocked(provider, model string) *circuitRecord {
+	k := catalogKey(provider, model)
+	rec, ok := h.state.Models[k]
+	if !ok {
+		rec = &circuitRecord{Circuit: CircuitClosed}
+		h.state.Models[k] = rec
+	}
+	return rec
+}
+
+// SyncCredentialFingerprints resets auth-opened provider circuits when the
+// SHA-256 credential fingerprint changes (e.g., user fixed an invalid API key).
+func (h *HealthStore) SyncCredentialFingerprints(fps map[string]string) {
+	if len(fps) == 0 {
+		return
+	}
+	h.mu.Lock()
+	now := h.nowFn()
+	changed := false
+	for prov, fp := range fps {
+		rec := h.ensureProviderLocked(prov, now)
+		if rec.CredFingerprint != "" && rec.CredFingerprint != fp && rec.Circuit == CircuitOpen && rec.Reason == string(ErrClassAuth) {
+			rec.Circuit = CircuitClosed
+			rec.Reason = ""
+			rec.Until = time.Time{}
+			rec.FailureCount = 0
+			rec.HalfOpenInFlight = false
+			changed = true
+		}
+		rec.CredFingerprint = fp
+	}
+	allClosed := h.allClosedLocked(now)
+	fn := h.onChange
+	if changed {
+		h.saveLocked()
+	}
+	h.mu.Unlock()
+	if changed && fn != nil {
+		fn(false, allClosed)
+	}
+}
+
+// TryAcquireHalfOpen atomically claims the single probe slot for a half-open
+// provider or model so concurrent devs do not stampede recovery probes.
+func (h *HealthStore) TryAcquireHalfOpen(provider, model string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.nowFn()
+	pr := h.ensureProviderLocked(provider, now)
+	advanceLazyState(&pr.circuitRecord, now)
+	if pr.Circuit == CircuitOpen {
+		return false
+	}
+	if pr.Circuit == CircuitHalfOpen {
+		if pr.HalfOpenInFlight {
+			return false
+		}
+		pr.HalfOpenInFlight = true
+	}
+	if strings.TrimSpace(model) != "" {
+		mr := h.ensureModelLocked(provider, model)
+		advanceLazyState(mr, now)
+		if mr.Circuit == CircuitOpen {
+			if pr.Circuit == CircuitHalfOpen {
+				pr.HalfOpenInFlight = false
+			}
+			return false
+		}
+		if mr.Circuit == CircuitHalfOpen {
+			if mr.HalfOpenInFlight {
+				if pr.Circuit == CircuitHalfOpen {
+					pr.HalfOpenInFlight = false
+				}
+				return false
+			}
+			mr.HalfOpenInFlight = true
+		}
+	}
+	return true
+}
+
+// RecordSuccess closes any open/half-open circuits on provider+model and records a clean outcome.
+func (h *HealthStore) RecordSuccess(provider, model string) {
+	h.mu.Lock()
+	now := h.nowFn()
+	pr := h.ensureProviderLocked(provider, now)
+	wasOpen := pr.Circuit != CircuitClosed
+	pr.Circuit = CircuitClosed
+	pr.Reason = ""
+	pr.Until = time.Time{}
+	pr.FailureCount = 0
+	pr.ConsecutiveOutages = 0
+	pr.HalfOpenInFlight = false
+
+	if strings.TrimSpace(model) != "" {
+		mr := h.ensureModelLocked(provider, model)
+		if mr.Circuit != CircuitClosed {
+			wasOpen = true
+		}
+		mr.Circuit = CircuitClosed
+		mr.Reason = ""
+		mr.Until = time.Time{}
+		mr.FailureCount = 0
+		mr.HalfOpenInFlight = false
+		mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: true})
+	}
+	allClosed := h.allClosedLocked(now)
+	fn := h.onChange
+	if wasOpen {
+		h.saveLocked()
+	}
+	h.mu.Unlock()
+	if wasOpen && fn != nil {
+		fn(false, allClosed)
+	}
+}
+
+// RecordSpend adds estimated/actual microUSD spend to provider for the current UTC day.
+func (h *HealthStore) RecordSpend(provider string, microUSD int64) {
+	if microUSD <= 0 {
+		return
+	}
+	h.mu.Lock()
+	now := h.nowFn()
+	pr := h.ensureProviderLocked(provider, now)
+	pr.DailySpentMicro += microUSD
+	h.saveLocked()
+	h.mu.Unlock()
+}
+
+// RecordFailure classifies and records a call failure, opening the appropriate
+// provider- or model-scoped circuit with exponential backoff.
+func (h *HealthStore) RecordFailure(provider, model string, class ErrorClass, resetsAt time.Time) (scope string, state CircuitState) {
+	if class == ErrClassNone || class == ErrClassPolicy {
+		return "", CircuitClosed
+	}
+	h.mu.Lock()
+	now := h.nowFn()
+	pr := h.ensureProviderLocked(provider, now)
+	mr := h.ensureModelLocked(provider, model)
+	pr.HalfOpenInFlight = false
+	mr.HalfOpenInFlight = false
+	mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: false})
+
+	opened := false
+	switch class {
+	case ErrClassQuota:
+		pr.FailureCount++
+		pr.ConsecutiveOutages = 0
+		pr.Circuit = CircuitOpen
+		pr.Reason = string(ErrClassQuota)
+		pr.OpenedAt = now
+		if resetsAt.After(now) {
+			pr.Until = resetsAt
+		} else {
+			pr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassQuota), pr.FailureCount))
+		}
+		scope = "provider"
+		state = CircuitOpen
+		opened = true
+
+	case ErrClassAuth:
+		pr.FailureCount++
+		pr.Circuit = CircuitOpen
+		pr.Reason = string(ErrClassAuth)
+		pr.OpenedAt = now
+		pr.Until = now.Add(24 * time.Hour) // cleared immediately when credential fingerprint changes
+		scope = "provider"
+		state = CircuitOpen
+		opened = true
+
+	case ErrClassRateLimit:
+		mr.FailureCount++
+		mr.Circuit = CircuitOpen
+		mr.Reason = string(ErrClassRateLimit)
+		mr.OpenedAt = now
+		mr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassRateLimit), mr.FailureCount))
+		scope = "model"
+		state = CircuitOpen
+		opened = true
+
+	case ErrClassOutage:
+		mr.FailureCount++
+		mr.Circuit = CircuitOpen
+		mr.Reason = string(ErrClassOutage)
+		mr.OpenedAt = now
+		mr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassOutage), mr.FailureCount))
+		scope = "model"
+		state = CircuitOpen
+		opened = true
+
+		pr.ConsecutiveOutages++
+		if pr.ConsecutiveOutages >= 5 {
+			pr.FailureCount++
+			pr.Circuit = CircuitOpen
+			pr.Reason = string(ErrClassOutage)
+			pr.OpenedAt = now
+			pr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassOutage), pr.FailureCount))
+			scope = "provider"
+		}
+	}
+
+	// Spike detector (§9): >50% of last 10 model calls failed in last 2 min with >=4 failures.
+	if isSpike(mr.Recent, now) && mr.Circuit != CircuitOpen {
+		mr.FailureCount++
+		mr.Circuit = CircuitOpen
+		mr.Reason = string(ErrClassSpike)
+		mr.OpenedAt = now
+		mr.Until = now.Add(2 * time.Minute)
+		if scope == "" {
+			scope = "model"
+			state = CircuitOpen
+		}
+		opened = true
+	}
+
+	fn := h.onChange
+	if opened {
+		h.saveLocked()
+	}
+	h.mu.Unlock()
+	if opened && fn != nil {
+		fn(true, false)
+	}
+	return scope, state
+}
+
+// UpdateQuotaProbe applies a background probe result without opening outage on probe failure.
+func (h *HealthStore) UpdateQuotaProbe(provider string, remainingPct float64, resetsAt time.Time, probeErr error) {
+	h.mu.Lock()
+	now := h.nowFn()
+	pr := h.ensureProviderLocked(provider, now)
+	changed := false
+	opened := false
+	if probeErr != nil {
+		// Spec §9: "Falha da sonda não marca outage. A última quota conhecida vale, com o flag stale."
+		if !pr.QuotaStale {
+			pr.QuotaStale = true
+			changed = true
+		}
+	} else {
+		pr.QuotaStale = false
+		if remainingPct >= 0 {
+			pr.QuotaRemainingPct = remainingPct
+			pr.QuotaResetsAt = resetsAt
+		}
+		if remainingPct >= 0 && remainingPct < 5 {
+			if pr.Circuit != CircuitOpen || pr.Reason != string(ErrClassQuota) {
+				opened = true
+			}
+			pr.Circuit = CircuitOpen
+			pr.Reason = string(ErrClassQuota)
+			pr.OpenedAt = now
+			if resetsAt.After(now) {
+				pr.Until = resetsAt
+			} else {
+				pr.Until = now.Add(h.cooldownDuration(ErrClassQuota))
+			}
+			changed = true
+		} else if pr.Circuit == CircuitHalfOpen || (pr.Circuit == CircuitOpen && pr.Reason == string(ErrClassQuota) && remainingPct >= 5) {
+			pr.Circuit = CircuitClosed
+			pr.Reason = ""
+			pr.Until = time.Time{}
+			pr.FailureCount = 0
+			pr.HalfOpenInFlight = false
+			changed = true
+		}
+	}
+	allClosed := h.allClosedLocked(now)
+	fn := h.onChange
+	if changed {
+		h.saveLocked()
+	}
+	h.mu.Unlock()
+	if changed && fn != nil && (opened || allClosed) {
+		fn(opened, allClosed)
+	}
+}
+
+// Snapshot returns a read-consistent HealthSnapshot for Score/Route in pure memory.
+func (h *HealthStore) Snapshot(creds map[string]bool, excludePairs map[string]bool) HealthSnapshot {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.nowFn()
+	snap := HealthSnapshot{
+		Credentials:        creds,
+		Circuits:           make(map[string]ProviderHealth, len(h.state.Providers)),
+		ModelCircuits:      make(map[string]ProviderHealth, len(h.state.Models)),
+		ExcludePairs:       excludePairs,
+		DailySpentMicroUSD: make(map[string]int64, len(h.state.Providers)),
+		AgyRemainingPct:    -1,
+	}
+	for prov, pr := range h.state.Providers {
+		today := now.UTC().Format("2006-01-02")
+		if pr.DailyDate != today {
+			pr.DailyDate = today
+			pr.DailySpentMicro = 0
+		}
+		advanceLazyState(&pr.circuitRecord, now)
+		slots := 0
+		if pr.Circuit == CircuitHalfOpen && !pr.HalfOpenInFlight {
+			slots = 1
+		}
+		snap.Circuits[prov] = ProviderHealth{
+			Circuit:       pr.Circuit,
+			Until:         pr.Until,
+			Reason:        pr.Reason,
+			HalfOpenSlots: slots,
+		}
+		snap.DailySpentMicroUSD[prov] = pr.DailySpentMicro
+		if prov == "agy" && pr.QuotaRemainingPct >= 0 {
+			snap.AgyRemainingPct = pr.QuotaRemainingPct
+		}
+	}
+	for key, mr := range h.state.Models {
+		advanceLazyState(mr, now)
+		slots := 0
+		if mr.Circuit == CircuitHalfOpen && !mr.HalfOpenInFlight {
+			slots = 1
+		}
+		snap.ModelCircuits[key] = ProviderHealth{
+			Circuit:       mr.Circuit,
+			Until:         mr.Until,
+			Reason:        mr.Reason,
+			HalfOpenSlots: slots,
+		}
+	}
+	return snap
+}
+
+// Summary returns the secret-safe status list of known providers for UI and provider_health SSE.
+func (h *HealthStore) Summary(policy Policy, creds map[string]bool) []ProviderHealthView {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.nowFn()
+
+	provSet := map[string]bool{
+		"agy": true, "opencode": true, "openrouter": true, "cursor": true,
+		"gemini": true, "anthropic": true, "openai": true,
+	}
+	for p := range h.state.Providers {
+		provSet[p] = true
+	}
+	for p, ok := range creds {
+		if ok && p != "opencode_free" {
+			provSet[p] = true
+		}
+	}
+	provs := make([]string, 0, len(provSet))
+	for p := range provSet {
+		provs = append(provs, p)
+	}
+	sort.Strings(provs)
+
+	out := make([]ProviderHealthView, 0, len(provs))
+	for _, p := range provs {
+		pr := h.ensureProviderLocked(p, now)
+		advanceLazyState(&pr.circuitRecord, now)
+		untilStr := ""
+		if !pr.Until.IsZero() && pr.Circuit != CircuitClosed {
+			untilStr = pr.Until.UTC().Format(time.RFC3339)
+		}
+		var capMicro int64
+		if dailyUSD, ok := policy.DailyUSD[p]; ok && dailyUSD > 0 {
+			capMicro = int64(dailyUSD * 1_000_000)
+		}
+		var remPct float64
+		if pr.QuotaRemainingPct >= 0 {
+			remPct = pr.QuotaRemainingPct
+		}
+		out = append(out, ProviderHealthView{
+			Provider:          p,
+			State:             string(pr.Circuit),
+			Reason:            pr.Reason,
+			Until:             untilStr,
+			DailySpentMicro:   pr.DailySpentMicro,
+			DailyCapMicro:     capMicro,
+			QuotaRemainingPct: remPct,
+			QuotaStale:        pr.QuotaStale,
+			HasCredential:     creds[p],
+		})
+	}
+	return out
+}
+
+func (h *HealthStore) allClosedLocked(now time.Time) bool {
+	for _, pr := range h.state.Providers {
+		advanceLazyState(&pr.circuitRecord, now)
+		if pr.Circuit != CircuitClosed {
+			return false
+		}
+	}
+	for _, mr := range h.state.Models {
+		advanceLazyState(mr, now)
+		if mr.Circuit != CircuitClosed {
+			return false
+		}
+	}
+	return true
+}
+
+func advanceLazyState(rec *circuitRecord, now time.Time) {
+	if rec.Circuit == CircuitOpen && !rec.Until.IsZero() && !now.Before(rec.Until) {
+		rec.Circuit = CircuitHalfOpen
+		rec.HalfOpenInFlight = false
+	}
+}
+
+func (h *HealthStore) cooldownDuration(class ErrorClass) time.Duration {
+	switch class {
+	case ErrClassQuota:
+		if d, err := time.ParseDuration(h.cooldown.Quota); err == nil && d > 0 {
+			return d
+		}
+		return 15 * time.Minute
+	case ErrClassRateLimit:
+		if d, err := time.ParseDuration(h.cooldown.RateLimit); err == nil && d > 0 {
+			return d
+		}
+		return 2 * time.Minute
+	default:
+		if d, err := time.ParseDuration(h.cooldown.Outage); err == nil && d > 0 {
+			return d
+		}
+		return 1 * time.Minute
+	}
+}
+
+func (h *HealthStore) backoffCooldown(base time.Duration, failureCount int) time.Duration {
+	shift := failureCount - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 4 {
+		shift = 4
+	}
+	d := base << shift
+	const maxBackoff = 30 * time.Minute
+	if d > maxBackoff {
+		d = maxBackoff
+	}
+	return d
+}
+
+func appendOutcomeSample(list []outcomeSample, s outcomeSample) []outcomeSample {
+	list = append(list, s)
+	if len(list) > 10 {
+		list = list[len(list)-10:]
+	}
+	return list
+}
+
+func isSpike(list []outcomeSample, now time.Time) bool {
+	cutoff := now.Add(-2 * time.Minute)
+	total := 0
+	fails := 0
+	for _, s := range list {
+		if s.At.Before(cutoff) {
+			continue
+		}
+		total++
+		if !s.OK {
+			fails++
+		}
+	}
+	return fails >= 4 && fails*2 > total
+}
+
+func (h *HealthStore) saveLocked() {
+	if h.path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(h.state, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := h.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, h.path); err != nil {
+		_ = os.Remove(tmp)
+		_ = os.WriteFile(h.path, data, 0o600)
+	}
+}
