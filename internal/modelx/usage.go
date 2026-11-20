@@ -132,11 +132,21 @@ var (
 
 // usageMem buffers ledger events so RecordAIUsage does not rewrite the whole
 // JSON file on every call. A crash loses only the events since the last flush.
+// pending and limitEdits are this process's unsaved delta. The flush re-reads
+// the file under an exclusive lock and merges that delta, so a concurrent IDE,
+// CLI, or hivemind serve does not lose its own writes.
 type usageMem struct {
-	path    string
-	store   usageStoreFile
-	dirty   bool
-	modTime time.Time
+	path       string
+	store      usageStoreFile
+	pending    []usageEvent
+	limitEdits map[string]limitEdit
+	dirty      bool
+	modTime    time.Time
+}
+
+type limitEdit struct {
+	remove bool
+	value  ProviderLimits
 }
 
 func defaultUsageFilePath() (string, error) {
@@ -249,16 +259,6 @@ func loadUsageMemLocked(path string) error {
 	return nil
 }
 
-func saveUsageStoreLocked(path string, store usageStoreFile) error {
-	if usageMemState == nil || usageMemState.path != path {
-		usageMemState = &usageMem{path: path, store: store, dirty: true}
-	} else {
-		usageMemState.store = store
-		usageMemState.dirty = true
-	}
-	return flushUsageLocked()
-}
-
 func flushUsageLocked() error {
 	if usageFlushTimer != nil {
 		usageFlushTimer.Stop()
@@ -267,24 +267,82 @@ func flushUsageLocked() error {
 	if usageMemState == nil || !usageMemState.dirty {
 		return nil
 	}
+	unlock, err := lockUsageFile(usageMemState.path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	disk := readUsageFile(usageMemState.path)
+	merged := mergeUsage(disk, usageMemState.pending, usageMemState.limitEdits)
 	cutoff := time.Now().Add(-31 * 24 * time.Hour)
-	pruned := make([]usageEvent, 0, len(usageMemState.store.Events))
-	for _, ev := range usageMemState.store.Events {
+	pruned := make([]usageEvent, 0, len(merged.Events))
+	for _, ev := range merged.Events {
 		if !ev.Timestamp.Before(cutoff) {
 			pruned = append(pruned, ev)
 		}
 	}
-	toSave := usageMemState.store
-	toSave.Events = pruned
-	if err := writeUsageAtomic(usageMemState.path, toSave); err != nil {
+	merged.Events = pruned
+	if err := writeUsageAtomic(usageMemState.path, merged); err != nil {
 		return err
 	}
-	usageMemState.store.Events = pruned
+	usageMemState.store = merged
+	usageMemState.pending = nil
+	usageMemState.limitEdits = nil
 	usageMemState.dirty = false
 	if info, statErr := os.Stat(usageMemState.path); statErr == nil {
 		usageMemState.modTime = info.ModTime()
 	}
 	return nil
+}
+
+func readUsageFile(path string) usageStoreFile {
+	store := usageStoreFile{Version: 1, Limits: make(map[string]ProviderLimits)}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return store
+	}
+	_ = json.Unmarshal(data, &store)
+	if store.Version == 0 {
+		store.Version = 1
+	}
+	if store.Limits == nil {
+		store.Limits = make(map[string]ProviderLimits)
+	}
+	return store
+}
+
+func mergeUsage(disk usageStoreFile, pending []usageEvent, edits map[string]limitEdit) usageStoreFile {
+	if disk.Version == 0 {
+		disk.Version = 1
+	}
+	if disk.Limits == nil {
+		disk.Limits = make(map[string]ProviderLimits)
+	}
+	for _, ev := range pending {
+		if containsUsageEvent(disk.Events, ev) {
+			continue
+		}
+		disk.Events = append(disk.Events, ev)
+	}
+	for bucket, edit := range edits {
+		if edit.remove {
+			delete(disk.Limits, bucket)
+			continue
+		}
+		disk.Limits[bucket] = edit.value
+	}
+	return disk
+}
+
+func containsUsageEvent(events []usageEvent, ev usageEvent) bool {
+	for _, got := range events {
+		if got.Timestamp.Equal(ev.Timestamp) && got.Provider == ev.Provider && got.Model == ev.Model &&
+			got.InputTokens == ev.InputTokens && got.OutputTokens == ev.OutputTokens && got.TotalTokens == ev.TotalTokens {
+			return true
+		}
+	}
+	return false
 }
 
 func writeUsageAtomic(path string, store usageStoreFile) error {
@@ -349,14 +407,16 @@ func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 	if err := ensureUsageLocked(); err != nil || usageMemState == nil {
 		return
 	}
-	usageMemState.store.Events = append(usageMemState.store.Events, usageEvent{
+	ev := usageEvent{
 		Timestamp:    time.Now().UTC(),
 		Provider:     bucket,
 		Model:        strings.TrimSpace(modelSpec),
 		InputTokens:  inTok,
 		OutputTokens: outTok,
 		TotalTokens:  totTok,
-	})
+	}
+	usageMemState.store.Events = append(usageMemState.store.Events, ev)
+	usageMemState.pending = append(usageMemState.pending, ev)
 	usageMemState.dirty = true
 	scheduleUsageFlushLocked()
 }
@@ -372,19 +432,25 @@ func SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens int64) erro
 	}
 	usageMu.Lock()
 	defer usageMu.Unlock()
-	store, path, err := loadUsageStoreLocked()
-	if err != nil {
+	if err := ensureUsageLocked(); err != nil || usageMemState == nil {
 		return err
 	}
-	if fiveHourTokens == 0 && weeklyTokens == 0 {
-		delete(store.Limits, bucket)
-	} else {
-		store.Limits[bucket] = ProviderLimits{
-			FiveHourTokens: fiveHourTokens,
-			WeeklyTokens:   weeklyTokens,
-		}
+	if usageMemState.store.Limits == nil {
+		usageMemState.store.Limits = make(map[string]ProviderLimits)
 	}
-	return saveUsageStoreLocked(path, store)
+	if usageMemState.limitEdits == nil {
+		usageMemState.limitEdits = make(map[string]limitEdit)
+	}
+	if fiveHourTokens == 0 && weeklyTokens == 0 {
+		delete(usageMemState.store.Limits, bucket)
+		usageMemState.limitEdits[bucket] = limitEdit{remove: true}
+	} else {
+		value := ProviderLimits{FiveHourTokens: fiveHourTokens, WeeklyTokens: weeklyTokens}
+		usageMemState.store.Limits[bucket] = value
+		usageMemState.limitEdits[bucket] = limitEdit{value: value}
+	}
+	usageMemState.dirty = true
+	return flushUsageLocked()
 }
 
 // ParseOpenCodeUsageJSON parses the OpenCode Go usage response JSON into OpenCodeQuota.

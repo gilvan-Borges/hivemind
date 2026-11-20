@@ -337,6 +337,53 @@ func TestRecordAIUsagePrunesAfter31Days(t *testing.T) {
 	}
 }
 
+func TestFlushMergesLedgerWrittenByAnotherProcess(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "ai-usage.json")
+	useUsageFile(t, tmp)
+
+	RecordAIUsage("agy", "agy:local", 4, 1, 5)
+	other := usageStoreFile{
+		Version: 1,
+		Events: []usageEvent{{
+			Timestamp: time.Now().UTC().Add(-time.Minute), Provider: "cursor", Model: "auto",
+			InputTokens: 8, OutputTokens: 2, TotalTokens: 10,
+		}},
+		Limits: map[string]ProviderLimits{"cursor": {WeeklyTokens: 77}},
+	}
+	raw, err := json.Marshal(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	FlushAIUsage()
+
+	data, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var store usageStoreFile
+	if err := json.Unmarshal(data, &store); err != nil {
+		t.Fatal(err)
+	}
+	if store.Limits["cursor"].WeeklyTokens != 77 {
+		t.Fatalf("limite do outro processo sumiu: %+v", store.Limits)
+	}
+	var sawLocal, sawOther bool
+	for _, ev := range store.Events {
+		if ev.Model == "agy:local" && ev.TotalTokens == 5 {
+			sawLocal = true
+		}
+		if ev.Provider == "cursor" && ev.TotalTokens == 10 {
+			sawOther = true
+		}
+	}
+	if !sawLocal || !sawOther {
+		t.Fatalf("eventos dos dois processos: %+v", store.Events)
+	}
+}
+
 func BenchmarkRecordAIUsage(b *testing.B) {
 	tmp := filepath.Join(b.TempDir(), "ai-usage.json")
 	prevPath := usageFilePathFn
