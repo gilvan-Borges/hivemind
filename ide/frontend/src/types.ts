@@ -903,6 +903,7 @@ export interface ResidentStatus {
   allowedBinaries?: string[];
   allowedHosts?: string[];
   vaultSecrets?: string[];
+  eventTriggers?: boolean;
 }
 
 export interface ResidentTurnResult {
@@ -1089,6 +1090,7 @@ export interface WailsBackendApp {
   ExternalSessions?(): Promise<ExternalSession[]>;
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
+  ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;

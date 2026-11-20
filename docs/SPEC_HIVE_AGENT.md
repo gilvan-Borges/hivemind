@@ -415,9 +415,9 @@ Aceite:
 - Com o filtro de egress derrubado de propósito, o espaço não inicia.
 - Um gesto sintético cuja coordenada cai numa janela de consentimento é recusado, se o desktop isolado expuser input.
 
-### Fase 5 — Workstream no dia a dia
+### Fase 5 — Workstream no dia a dia — implementada
 
-Busca de memória medida com um arquivo de 5 mil linhas sem passar de 4 KiB injetados. Gatilhos de evento opt-in. Ajuste da rota `auto` com o número de tokens por turno de uso real, no mesmo espírito do dogfooding. Nada desta fase muda a falha fechada nem a aprovação remota.
+A busca numa memória de 5 mil linhas devolve no máximo 8 trechos e 4 KiB. Gatilhos de arquivo, fim de lane e aprovação nascem desligados; ligados, só emitem um aviso e não executam ferramenta. A rota `auto` do residente passa pelo `Score` do Jev. A entrada do turno anterior ajusta a classe: até 20 mil tokens continua trivial, acima de 100 mil sobe a complexidade. Isso não muda a falha fechada nem a aprovação remota.
 
 ## 15. Plano de teste
 

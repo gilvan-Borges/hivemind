@@ -78,11 +78,12 @@ type AuditEntry struct {
 // Config is persisted in %LOCALAPPDATA%\HiveMind\resident\resident.json (mode 0600).
 // It never stores secrets (§11).
 type Config struct {
-	Enabled    bool     `json:"enabled"`
-	Provider   string   `json:"provider,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	Workstream string   `json:"workstream,omitempty"`
-	Roots      []string `json:"roots,omitempty"`
+	Enabled       bool     `json:"enabled"`
+	Provider      string   `json:"provider,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	Workstream    string   `json:"workstream,omitempty"`
+	Roots         []string `json:"roots,omitempty"`
+	EventTriggers bool     `json:"eventTriggers,omitempty"`
 }
 
 // MemoryFact is one personal long-term memory record stored in
@@ -125,6 +126,7 @@ type Status struct {
 	AllowedBinaries  []string `json:"allowedBinaries"`
 	AllowedHosts     []string `json:"allowedHosts"`
 	VaultSecrets     []string `json:"vaultSecrets"`
+	EventTriggers    bool     `json:"eventTriggers"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.
@@ -178,14 +180,14 @@ type TurnRequest struct {
 
 // TurnResult summarizes the completed turn.
 type TurnResult struct {
-	SessionID    string `json:"sessionId"`
-	Workstream   string `json:"workstream"`
-	FinalText    string `json:"finalText"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model"`
-	InputTokens  int64  `json:"inputTokens"`
-	OutputTokens int64  `json:"outputTokens"`
-	TotalTokens  int64  `json:"totalTokens"`
-	ToolCalls    int    `json:"toolCalls"`
-	PromptBuildMs int64 `json:"promptBuildMs"`
+	SessionID     string `json:"sessionId"`
+	Workstream    string `json:"workstream"`
+	FinalText     string `json:"finalText"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	InputTokens   int64  `json:"inputTokens"`
+	OutputTokens  int64  `json:"outputTokens"`
+	TotalTokens   int64  `json:"totalTokens"`
+	ToolCalls     int    `json:"toolCalls"`
+	PromptBuildMs int64  `json:"promptBuildMs"`
 }
