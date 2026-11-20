@@ -5,6 +5,7 @@ import {jirax} from '../models';
 import {main} from '../models';
 import {idecore} from '../models';
 import {team} from '../models';
+import {extsess} from '../models';
 import {jev} from '../models';
 import {mcpx} from '../models';
 import {remote} from '../models';
@@ -73,6 +74,8 @@ export function DiscardFile(arg1:string,arg2:string):Promise<void>;
 export function DoctorAgy():Promise<modelx.AgyStatus>;
 
 export function EnsureTeamMemory(arg1:string):Promise<string>;
+
+export function ExternalSessions():Promise<Array<extsess.ExternalSession>>;
 
 export function GetAIUsage():Promise<modelx.AIUsageReport>;
 

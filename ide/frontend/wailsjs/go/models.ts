@@ -1,3 +1,32 @@
+export namespace extsess {
+	
+	export class ExternalSession {
+	    id: string;
+	    source: string;
+	    state: string;
+	    pid: number;
+	    createMs: number;
+	    title?: string;
+	    actions: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ExternalSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.source = source["source"];
+	        this.state = source["state"];
+	        this.pid = source["pid"];
+	        this.createMs = source["createMs"];
+	        this.title = source["title"];
+	        this.actions = source["actions"];
+	    }
+	}
+
+}
+
 export namespace githubx {
 	
 	export class PullRequest {
@@ -1441,6 +1470,42 @@ export namespace modelx {
 		    return a;
 		}
 	}
+	export class AgyAccountQuota {
+	    profileId: string;
+	    name: string;
+	    email?: string;
+	    quota: AgyQuota;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgyAccountQuota(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.name = source["name"];
+	        this.email = source["email"];
+	        this.quota = this.convertValues(source["quota"], AgyQuota);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AgyQuotaBucket {
 	    id: string;
 	    name: string;
@@ -1536,6 +1601,7 @@ export namespace modelx {
 	export class AIUsageReport {
 	    generatedAt: string;
 	    agyQuota: AgyQuota;
+	    agyAccounts?: AgyAccountQuota[];
 	    openCodeQuota: OpenCodeQuota;
 	    providers: AIProviderUsage[];
 	
@@ -1547,6 +1613,7 @@ export namespace modelx {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.generatedAt = source["generatedAt"];
 	        this.agyQuota = this.convertValues(source["agyQuota"], AgyQuota);
+	        this.agyAccounts = this.convertValues(source["agyAccounts"], AgyAccountQuota);
 	        this.openCodeQuota = this.convertValues(source["openCodeQuota"], OpenCodeQuota);
 	        this.providers = this.convertValues(source["providers"], AIProviderUsage);
 	    }
@@ -1569,6 +1636,7 @@ export namespace modelx {
 		    return a;
 		}
 	}
+	
 	export class AgyModel {
 	    slug: string;
 	    name: string;
@@ -1729,80 +1797,6 @@ export namespace modelx {
 	        this.readyDetail = source["readyDetail"];
 	    }
 	}
-	export class ProviderScanAccount {
-	    id?: string;
-	    name: string;
-	    source: string;
-	    active: boolean;
-	    ready: boolean;
-	    maskedHint?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ProviderScanAccount(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.source = source["source"];
-	        this.active = source["active"];
-	        this.ready = source["ready"];
-	        this.maskedHint = source["maskedHint"];
-	    }
-	}
-	export class ProviderScanItem {
-	    id: string;
-	    name: string;
-	    found: boolean;
-	    connected: boolean;
-	    statusLabel: string;
-	    source?: string;
-	    path?: string;
-	    detail: string;
-	    modelCount: number;
-	    modelsSample?: string[];
-	    accounts: ProviderScanAccount[];
-
-	    static createFrom(source: any = {}) {
-	        return new ProviderScanItem(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.found = source["found"];
-	        this.connected = source["connected"];
-	        this.statusLabel = source["statusLabel"];
-	        this.source = source["source"];
-	        this.path = source["path"];
-	        this.detail = source["detail"];
-	        this.modelCount = source["modelCount"];
-	        this.modelsSample = source["modelsSample"];
-	        this.accounts = source["accounts"] || [];
-	    }
-	}
-	export class ProvidersScanReport {
-	    scannedAt: string;
-	    totalProviders: number;
-	    connectedProviders: number;
-	    totalAccounts: number;
-	    providers: ProviderScanItem[];
-
-	    static createFrom(source: any = {}) {
-	        return new ProvidersScanReport(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.scannedAt = source["scannedAt"];
-	        this.totalProviders = source["totalProviders"];
-	        this.connectedProviders = source["connectedProviders"];
-	        this.totalAccounts = source["totalAccounts"];
-	        this.providers = source["providers"] || [];
-	    }
-	}
 	export class ProfilesOverview {
 	    identity: orgx.Identity;
 	    profiles: ProviderProfileSummary[];
@@ -1839,6 +1833,116 @@ export namespace modelx {
 	}
 	
 	
+	export class ProviderScanAccount {
+	    id?: string;
+	    name: string;
+	    source: string;
+	    active: boolean;
+	    ready: boolean;
+	    maskedHint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderScanAccount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.active = source["active"];
+	        this.ready = source["ready"];
+	        this.maskedHint = source["maskedHint"];
+	    }
+	}
+	export class ProviderScanItem {
+	    id: string;
+	    name: string;
+	    found: boolean;
+	    connected: boolean;
+	    statusLabel: string;
+	    source?: string;
+	    path?: string;
+	    detail: string;
+	    modelCount: number;
+	    modelsSample?: string[];
+	    accounts: ProviderScanAccount[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderScanItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.found = source["found"];
+	        this.connected = source["connected"];
+	        this.statusLabel = source["statusLabel"];
+	        this.source = source["source"];
+	        this.path = source["path"];
+	        this.detail = source["detail"];
+	        this.modelCount = source["modelCount"];
+	        this.modelsSample = source["modelsSample"];
+	        this.accounts = this.convertValues(source["accounts"], ProviderScanAccount);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProvidersScanReport {
+	    scannedAt: string;
+	    totalProviders: number;
+	    connectedProviders: number;
+	    totalAccounts: number;
+	    providers: ProviderScanItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProvidersScanReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scannedAt = source["scannedAt"];
+	        this.totalProviders = source["totalProviders"];
+	        this.connectedProviders = source["connectedProviders"];
+	        this.totalAccounts = source["totalAccounts"];
+	        this.providers = this.convertValues(source["providers"], ProviderScanItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
 	export class SaveProfileRequest {
@@ -2068,6 +2172,7 @@ export namespace resident {
 	    decision: string;
 	    approvalId?: string;
 	    sandbox?: string;
+	    target?: string;
 	    targetClass?: string;
 	    targetHash?: string;
 	    outcome?: string;
@@ -2091,6 +2196,7 @@ export namespace resident {
 	        this.decision = source["decision"];
 	        this.approvalId = source["approvalId"];
 	        this.sandbox = source["sandbox"];
+	        this.target = source["target"];
 	        this.targetClass = source["targetClass"];
 	        this.targetHash = source["targetHash"];
 	        this.outcome = source["outcome"];

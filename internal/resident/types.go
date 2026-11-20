@@ -38,11 +38,22 @@ const (
 
 // Call is a single structured tool invocation passed to the policy & broker (§4).
 type Call struct {
-	Name       string         `json:"name"`
-	Args       map[string]any `json:"args,omitempty"`
-	Origin     Origin         `json:"origin"`
-	Workstream string         `json:"workstream,omitempty"`
-	ParentTier Tier           `json:"parentTier,omitempty"`
+	Name         string         `json:"name"`
+	Args         map[string]any `json:"args,omitempty"`
+	Origin       Origin         `json:"origin"`
+	Workstream   string         `json:"workstream,omitempty"`
+	ParentTier   Tier           `json:"parentTier,omitempty"`
+	AllowedTiers []Tier         `json:"-"`
+}
+
+// SquadHandoff is the structured charge sent to the squad after approval.
+// The host fills PermissionMode from team.yaml; the model cannot set it.
+type SquadHandoff struct {
+	Workspace      string
+	Team           string
+	Objective      string
+	Facts          []string
+	PermissionMode string
 }
 
 // Decision is the pure policy result for a Call (§4).

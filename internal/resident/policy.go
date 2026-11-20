@@ -121,43 +121,43 @@ func SavePolicy(baseDir string, pol Policy) error {
 }
 
 var phase2AllowedTools = map[string]Tier{
-	"read_file":      TierRead,
-	"list_dir":       TierRead,
-	"search_text":    TierRead,
-	"find_files":     TierRead,
-	"list_projects":  TierRead,
-	"memory_search":  TierRead,
-	"write_file":     TierWrite,
-	"edit_file":      TierWrite,
-	"memory_write":   TierWrite,
-	"memory_forget":  TierWrite,
-	"exec_command":   TierExec,
-	"net_fetch":      TierNetwork,
-	"use_credential": TierCredentials,
-	"delete_file":    TierDestructive,
+	"read_file":             TierRead,
+	"list_dir":              TierRead,
+	"search_text":           TierRead,
+	"find_files":            TierRead,
+	"list_projects":         TierRead,
+	"memory_search":         TierRead,
+	"write_file":            TierWrite,
+	"edit_file":             TierWrite,
+	"memory_write":          TierWrite,
+	"memory_forget":         TierWrite,
+	"exec_command":          TierExec,
+	"net_fetch":             TierNetwork,
+	"use_credential":        TierCredentials,
+	"delete_file":           TierDestructive,
+	"cron_add":              TierWrite,
+	"spawn_subagent":        TierExec,
+	"delegate_to_hive_team": TierDestructive,
 }
 
 // knownDisallowedToolTiers classifies Phase 3/4/shell tools that MUST fail closed in Phase 2.
 var knownDisallowedToolTiers = map[string]Tier{
-	"write_doc":             TierWrite,
-	"run_shell":             TierExec,
-	"exec":                  TierExec,
-	"shell":                 TierExec,
-	"spawn_subagent":        TierExec,
-	"cron_add":              TierWrite,
-	"http_get":              TierNetwork,
-	"http_request":          TierNetwork,
-	"web_fetch":             TierNetwork,
-	"mcp_enable_server":     TierNetwork,
-	"read_secret":           TierCredentials,
-	"get_credential":        TierCredentials,
-	"git_commit":            TierWrite,
-	"git_push":              TierDestructive,
-	"git_reset":             TierDestructive,
-	"delegate_to_hive_team": TierDestructive,
-	"desktop_click":         TierDestructive,
-	"desktop_type":          TierDestructive,
-	"browser_open":          TierNetwork,
+	"write_doc":         TierWrite,
+	"run_shell":         TierExec,
+	"exec":              TierExec,
+	"shell":             TierExec,
+	"http_get":          TierNetwork,
+	"http_request":      TierNetwork,
+	"web_fetch":         TierNetwork,
+	"mcp_enable_server": TierNetwork,
+	"read_secret":       TierCredentials,
+	"get_credential":    TierCredentials,
+	"git_commit":        TierWrite,
+	"git_push":          TierDestructive,
+	"git_reset":         TierDestructive,
+	"desktop_click":     TierDestructive,
+	"desktop_type":      TierDestructive,
+	"browser_open":      TierNetwork,
 }
 
 // ClassifyTool returns the privilege tier for a call and whether it belongs to the
@@ -279,6 +279,13 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			}
 		}
 	}
+	if len(call.AllowedTiers) > 0 && !tierAllowed(call.AllowedTiers, tier) {
+		return Decision{
+			Allow:  false,
+			Ask:    false,
+			Reason: fmt.Sprintf("classe %s fora do manifesto desta rotina ou subagente", tier),
+		}
+	}
 
 	if !inPhase2 {
 		if tier == TierCredentials {
@@ -342,6 +349,42 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			Ask:    true,
 			Reason: "uso de credencial do cofre exige aprovação humana",
 		}
+
+	case "cron_add":
+		if call.Origin == OriginSubagent {
+			return Decision{Allow: false, Ask: false, Reason: "subagente não cria rotina"}
+		}
+		if cronLooksLikeShell(cleanArgs) {
+			return Decision{Allow: false, Ask: false, Reason: "rotina não aceita comando de shell"}
+		}
+		if _, err := parseCron(strArg(cleanArgs, "expr")); err != nil {
+			return Decision{Allow: false, Ask: false, Reason: err.Error()}
+		}
+		if strings.TrimSpace(strArg(cleanArgs, "text")) == "" {
+			return Decision{Allow: false, Ask: false, Reason: "texto da rotina vazio"}
+		}
+		if _, err := parseClassList(strSliceArg(cleanArgs, "classes")); err != nil {
+			return Decision{Allow: false, Ask: false, Reason: err.Error()}
+		}
+		return Decision{Allow: false, Ask: true, Reason: "gravar rotina exige aprovação humana"}
+
+	case "spawn_subagent":
+		if call.Origin == OriginSubagent {
+			return Decision{Allow: false, Ask: false, Reason: "subagente não pode criar outro subagente"}
+		}
+		if strings.TrimSpace(strArg(cleanArgs, "objective")) == "" {
+			return Decision{Allow: false, Ask: false, Reason: "objetivo do subagente vazio"}
+		}
+		return Decision{Allow: false, Ask: true, Reason: "criar subagente exige aprovação humana"}
+
+	case "delegate_to_hive_team":
+		if call.Origin == OriginSubagent {
+			return Decision{Allow: false, Ask: false, Reason: "subagente não entrega trabalho ao time"}
+		}
+		if strings.TrimSpace(strArg(cleanArgs, "objective")) == "" {
+			return Decision{Allow: false, Ask: false, Reason: "objetivo do handoff vazio"}
+		}
+		return Decision{Allow: false, Ask: true, Reason: "handoff para o time exige aprovação humana"}
 	}
 
 	switch tier {
