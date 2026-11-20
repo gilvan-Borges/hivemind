@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/genai"
@@ -68,6 +69,8 @@ type Event struct {
 	EstimatedMicroUSD int64                    `json:"estimatedMicroUsd,omitempty"`
 	DecisionMicros    int64                    `json:"decisionMicros,omitempty"`
 	Health            []jev.ProviderHealthView `json:"health,omitempty"`
+	FromRole          string                   `json:"fromRole,omitempty"`
+	ToRole            string                   `json:"toRole,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
@@ -125,6 +128,12 @@ type Runner struct {
 	turnTotalTokens  int64
 	qaLastStatus     string
 	qaStallCount     int
+	qaStallFired     bool
+	qaLoopIter       int
+	handoffMu        sync.Mutex
+	handoffTo        string
+	handoffHash      string
+	handoffEdges     []handoffEdge
 	hasImages        bool
 	jevRepo          string
 	devBudgets       map[string]*devTurnBudget
@@ -941,6 +950,9 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 	beforeModelCBs := []llmagent.BeforeModelCallback{
 		newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
 	}
+	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {
+		beforeModelCBs = append([]llmagent.BeforeModelCallback{r.handoffModelGuard(a.Role)}, beforeModelCBs...)
+	}
 	beforeToolCBs := []llmagent.BeforeToolCallback{
 		newRepeatReadGuardCallback(),
 	}
@@ -1056,6 +1068,7 @@ func (r *Runner) recordQAStall() string {
 		return ""
 	}
 	r.qaStallCount = 0
+	r.qaStallFired = true
 	return "O QA reprovou de novo sem nenhuma alteração nova na entrega desde a reprovação anterior; o ciclo Dev→QA foi interrompido para não queimar mais chamadas. Revise manualmente o feedback do QA e o estado da entrega."
 }
 
@@ -1198,8 +1211,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			return nil, fmt.Errorf("não há docs SDD pendentes de aprovação nesta sessão; execute primeiro o modo Planejar · Projeto SDD (plan:sdd) e aprove o Gate 1 (Docs & Arquitetura)")
 		}
 		isResume := isResumeSquadPrompt(objective)
-		shouldRestorePlan := hasExistingPlan && (
-			(runMode == "squad" && (isPendingPlan || !isQAApproved)) ||
+		shouldRestorePlan := hasExistingPlan && ((runMode == "squad" && (isPendingPlan || !isQAApproved)) ||
 			(isResume && (isPendingPlan || !isQAApproved)))
 
 		if shouldRestorePlan {
@@ -2088,10 +2100,10 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	isAutoReview := runMode == "auto-review"
 
 	var (
-		preloadedPR        int
-		preloadedOwnPR     bool
-		preloadedAllDiffs  bool
-		preloadedJiraKey   string
+		preloadedPR       int
+		preloadedOwnPR    bool
+		preloadedAllDiffs bool
+		preloadedJiraKey  string
 	)
 	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
 		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
@@ -2375,6 +2387,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			skillNames := skillx.Names(r.selectedSkills)
 			nativeNames := skillx.Names(r.selectedNative)
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
+			r.sealHandoff(sess.ID())
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("chief_context_brief", r.chiefContextBrief)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
@@ -2406,7 +2419,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				"selected_skills":        strings.Join(skillNames, "\n"),
 				"selected_native_skills": strings.Join(nativeNames, "\n"),
 			})
-			r.writeHandoffDossier(sess.ID())
+			r.sealHandoff(sess.ID())
 
 			resolved := r.resolveDynamicDevs()
 			if r.OnEvent != nil {
@@ -2721,6 +2734,9 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			}
 		}
 	}
+	if delegated {
+		r.sealHandoff(sess.ID())
+	}
 	if delegated && r.chiefPlan != "" {
 		_ = sess.State().Set("chief_plan", r.chiefPlan)
 	}
@@ -2739,48 +2755,7 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 	return delegated, summary, nil
 }
 
-// writeHandoffDossier persists the Chief's extracted contracts, plan, and task slices
-// under .hivemind/handoff/ (already gitignored) so Devs, QA, and the user have a single
-// durable reference without forcing Devs to re-read entire spec/plan files from scratch.
+// writeHandoffDossier grava o pacote sanitizado. O markdown no worktree nasce 0600.
 func (r *Runner) writeHandoffDossier(sessionID string) {
-	if strings.TrimSpace(r.Workspace) == "" || (r.chiefPlan == "" && r.chiefContextBrief == "") {
-		return
-	}
-	dir := filepath.Join(r.Workspace, ".hivemind", "handoff")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	var b strings.Builder
-	b.WriteString("# Dossiê de Handoff do Chefe\n\n")
-	if sessionID != "" {
-		fmt.Fprintf(&b, "- **Sessão:** `%s`\n", sessionID)
-	}
-	if r.issueKey != "" {
-		fmt.Fprintf(&b, "- **Issue Jira:** `%s`\n", r.issueKey)
-	}
-	fmt.Fprintf(&b, "- **Gerado em:** %s\n\n", time.Now().Format(time.RFC3339))
-	if r.chiefPlan != "" {
-		b.WriteString("## Plano Técnico\n\n")
-		b.WriteString(r.chiefPlan)
-		b.WriteString("\n\n")
-	}
-	if r.chiefContextBrief != "" {
-		b.WriteString("## Contratos & Pontos Importantes (Context Brief)\n\n")
-		b.WriteString(r.chiefContextBrief)
-		b.WriteString("\n\n")
-	}
-	if len(r.devSlices) > 0 {
-		b.WriteString("## Subtarefas do Squad\n\n")
-		for i, sl := range r.devSlices {
-			fmt.Fprintf(&b, "%d. %s\n", i+1, strings.TrimSpace(sl))
-		}
-		b.WriteString("\n")
-	}
-	payload := []byte(b.String())
-	_ = os.WriteFile(filepath.Join(dir, "latest.md"), payload, 0o644)
-	if safeID := strings.TrimSpace(sessionID); safeID != "" {
-		safeID = strings.ReplaceAll(safeID, "/", "_")
-		safeID = strings.ReplaceAll(safeID, "\\", "_")
-		_ = os.WriteFile(filepath.Join(dir, safeID+".md"), payload, 0o644)
-	}
+	r.sealHandoff(sessionID)
 }
