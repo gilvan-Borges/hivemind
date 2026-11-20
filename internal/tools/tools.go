@@ -18,6 +18,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
+	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -66,17 +67,7 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 	if deps.Git == nil {
 		deps.Git = gitx.Local{}
 	}
-	if deps.Settings.IsFullAccess() {
-		deps.Allowlist = []string{"*"}
-		deps.Confirm = func(string) bool { return true }
-	} else {
-		if len(deps.Allowlist) == 0 {
-			deps.Allowlist = deps.Settings.EffectiveAllowlist()
-		}
-		if !deps.Settings.NeedsShellConfirm() {
-			deps.Confirm = func(string) bool { return true }
-		}
-	}
+	deps = applyShellPolicy(deps)
 
 	var out []tool.Tool
 	add := func(t tool.Tool, err error) error {
@@ -306,9 +297,15 @@ func (d Deps) canRead() (tool.Tool, error) {
 }
 
 func readFileRange(root string, args readFileArgs) (string, error) {
+	if pathsec.IsSensitivePath(args.Path) {
+		return "", fmt.Errorf("leitura recusada: %s é um arquivo sensível (credencial, chave ou .env)", args.Path)
+	}
 	path, err := workspace.ResolveWithOptions(root, args.Path, workspace.Options{AllowMemoryRead: true})
 	if err != nil {
 		return "", err
+	}
+	if pathsec.IsSensitivePath(path) {
+		return "", fmt.Errorf("leitura recusada: %s é um arquivo sensível (credencial, chave ou .env)", args.Path)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -619,6 +616,43 @@ func (d Deps) writeDoc() (tool.Tool, error) {
 type shellArgs struct {
 	Command string `json:"command" jsonschema:"Comando em formato argv, por exemplo: go test ./..."`
 	Dir     string `json:"dir,omitempty" jsonschema:"Diretório relativo ao workspace. Vazio usa a raiz do agente."`
+}
+
+// applyShellPolicy installs the shell confirmer for the permission mode.
+// auto_edit still runs ordinary allowlisted commands without a prompt, but a
+// line with shell metacharacters must be confirmed (or refused when nobody
+// can ask). full_access keeps running them and writes an audit line first.
+func applyShellPolicy(deps Deps) Deps {
+	if deps.Settings.IsFullAccess() {
+		deps.Allowlist = []string{"*"}
+		deps.Confirm = func(command string) bool {
+			if shellx.HasShellMetacharacters(command) {
+				shellx.AuditFullAccessShell(command)
+			}
+			return true
+		}
+		return deps
+	}
+	if len(deps.Allowlist) == 0 {
+		deps.Allowlist = deps.Settings.EffectiveAllowlist()
+	}
+	if deps.Settings.EffectivePermissionMode() == team.PermissionAutoEdit {
+		inner := deps.Confirm
+		deps.Confirm = func(command string) bool {
+			if !deps.Settings.ShellLineNeedsConfirm(command) {
+				return true
+			}
+			if inner == nil {
+				return false
+			}
+			return inner(command)
+		}
+		return deps
+	}
+	if !deps.Settings.NeedsShellConfirm() {
+		deps.Confirm = func(string) bool { return true }
+	}
+	return deps
 }
 
 func (d Deps) shellBlocksGitWrite() bool {

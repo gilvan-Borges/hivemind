@@ -2,10 +2,10 @@ package resident
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 )
 
@@ -17,18 +17,18 @@ const (
 // forgedControlArgKeys are stripped from model tool arguments before policy
 // evaluation (§12.6): the model must never supply or spoof authorization fields.
 var forgedControlArgKeys = map[string]bool{
-	"approved":     true,
-	"origin":       true,
-	"tier":         true,
-	"sandbox":      true,
-	"approval_id":  true,
-	"approvalid":   true,
-	"bypass":       true,
-	"allow":        true,
-	"force_allow":  true,
-	"permission":   true,
-	"permissions":  true,
-	"sudo":         true,
+	"approved":    true,
+	"origin":      true,
+	"tier":        true,
+	"sandbox":     true,
+	"approval_id": true,
+	"approvalid":  true,
+	"bypass":      true,
+	"allow":       true,
+	"force_allow": true,
+	"permission":  true,
+	"permissions": true,
+	"sudo":        true,
 }
 
 // SanitizeArgs returns a shallow copy of args without any forged authorization
@@ -113,76 +113,12 @@ func RedactTarget(raw string) string {
 	return s
 }
 
-var sensitiveFileNames = map[string]bool{
-	"api-keys.json":        true,
-	"remote-bridge.json":   true,
-	"relay.json":           true,
-	"jira-connector.json":  true,
-	"github-connector.json": true,
-	"credentials.json":     true,
-	"policy.json":          true,
-	"resident.json":        true,
-	"initial-password.txt": true,
-	".env":                 true,
-	".npmrc":               true,
-	".pypirc":              true,
-	".netrc":               true,
-	"_netrc":               true,
-	"id_rsa":               true,
-	"id_ed25519":           true,
-	"id_ecdsa":             true,
-	"id_dsa":               true,
-}
-
-var sensitiveFileExts = map[string]bool{
-	".pem":      true,
-	".key":      true,
-	".p12":      true,
-	".pfx":      true,
-	".jks":      true,
-	".keystore": true,
-	".kdbx":     true,
-}
-
 // IsSensitivePath reports whether relOrAbs points to a secret, credential store,
 // private key, .env file, .git metadata, or protected HiveMind config (§12.4).
 // Paths matching this rule are upgraded from TierRead to TierCredentials.
+// The rule lives in pathsec so squad read_file/search_text use the same check.
 func IsSensitivePath(relOrAbs string) bool {
-	s := strings.TrimSpace(relOrAbs)
-	if s == "" {
-		return false
-	}
-	norm := strings.ToLower(filepath.ToSlash(filepath.Clean(s)))
-	parts := strings.Split(norm, "/")
-	for i, part := range parts {
-		clean := strings.TrimRight(strings.TrimSpace(part), ". ")
-		if clean == "" {
-			continue
-		}
-		if clean == ".git" || strings.HasPrefix(clean, "git~") || clean == ".ssh" || clean == ".aws" || clean == ".gnupg" {
-			return true
-		}
-		if clean == ".hivemind" || strings.HasPrefix(clean, "hivemi~") {
-			// Only .hivemind/MEMORY.md is readable as project team memory (§2, §6).
-			if i+1 == len(parts)-1 && strings.TrimRight(strings.TrimSpace(parts[i+1]), ". ") == "memory.md" {
-				continue
-			}
-			return true
-		}
-		if sensitiveFileNames[clean] {
-			return true
-		}
-		if strings.HasPrefix(clean, ".env.") && !strings.HasSuffix(clean, ".example") && !strings.HasSuffix(clean, ".sample") && !strings.HasSuffix(clean, ".template") {
-			return true
-		}
-		if strings.Contains(clean, "secret") && (strings.HasSuffix(clean, ".json") || strings.HasSuffix(clean, ".yaml") || strings.HasSuffix(clean, ".yml") || strings.HasSuffix(clean, ".env")) {
-			return true
-		}
-		if sensitiveFileExts[filepath.Ext(clean)] {
-			return true
-		}
-	}
-	return false
+	return pathsec.IsSensitivePath(relOrAbs)
 }
 
 // HasSensitiveArg checks if any tool argument names or targets an environment

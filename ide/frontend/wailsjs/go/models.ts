@@ -1677,6 +1677,8 @@ export namespace modelx {
 	    path: string;
 	    hasKey: boolean;
 	    detail: string;
+	    sandbox?: string;
+	    sandboxWarning?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CursorStatus(source);
@@ -1688,6 +1690,8 @@ export namespace modelx {
 	        this.path = source["path"];
 	        this.hasKey = source["hasKey"];
 	        this.detail = source["detail"];
+	        this.sandbox = source["sandbox"];
+	        this.sandboxWarning = source["sandboxWarning"];
 	    }
 	}
 	

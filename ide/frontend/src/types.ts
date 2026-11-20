@@ -17,6 +17,8 @@ export interface CursorCLIStatus {
   path: string;
   hasKey: boolean;
   detail: string;
+  sandbox?: string;
+  sandboxWarning?: string;
 }
 
 export interface OpenRouterModelInfo {
