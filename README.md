@@ -2,7 +2,7 @@
 
 Time de software multiagente no terminal e no desktop: você descreve o objetivo na pasta do projeto e o time planeja, implementa e revisa.
 
-[![HiveMind CI](https://github.com/gilvan-Borges/HiveMind/actions/workflows/ci.yml/badge.svg)](https://github.com/gilvan-Borges/HiveMind/actions/workflows/ci.yml)
+[![HiveMind CI](https://github.com/gilvan-Borges/hivemind/actions/workflows/ci.yml/badge.svg)](https://github.com/gilvan-Borges/hivemind/actions/workflows/ci.yml)
 [![Go 1.26.10](https://img.shields.io/badge/Go-1.26.10-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Licença Apache 2.0](https://img.shields.io/badge/Licen%C3%A7a-Apache_2.0-blue.svg)](LICENSE)
 
@@ -65,7 +65,7 @@ O Remote Bridge (`ide/internal/remote`) nasce desligado. Na LAN ele escuta a por
 Requisitos para compilar: **Go 1.26.10** (`go.mod` e `ide/go.mod`; o workflow usa essa versão) e Git. A IDE também pede Node.js e npm. O script do instalador pede Node.js 20 ou mais novo; o CI usa Node 22. O caminho com Wails CLI pede o comando `wails` no PATH. `ide/go.mod` declara Wails **v2.17.1**.
 
 ```powershell
-git clone https://github.com/gilvan-Borges/HiveMind.git
+git clone https://github.com/gilvan-Borges/hivemind.git
 cd HiveMind
 ```
 
@@ -154,7 +154,7 @@ O workflow **HiveMind CI** (`.github/workflows/ci.yml`) roda `go vet` e `go test
 A CLI cruza a mesma receita do CI:
 
 ```bash
-git clone https://github.com/gilvan-Borges/HiveMind.git
+git clone https://github.com/gilvan-Borges/hivemind.git
 cd HiveMind
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o hivemind ./cmd/hivemind
 ./hivemind version
