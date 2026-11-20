@@ -6,7 +6,8 @@
 import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType, crosshairCursor, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection, scrollPastEnd, type Tooltip } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { StreamLanguage, bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
+import { StreamLanguage, HighlightStyle, bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
+import { tags as highlightTags } from "@lezer/highlight";
 import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -23,7 +24,10 @@ import { clike } from "@codemirror/legacy-modes/mode/clike";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 
-// Tema visual casado com o Obsidian Graphite (#12121a / #e2e0ec) sem roxo/violeta.
+// Tema visual casado com o Obsidian. Palavra-chave usa o dourado de --accent-strong.
+const goldTokenStyle = syntaxHighlighting(HighlightStyle.define([
+  { tag: highlightTags.keyword, color: "var(--accent-strong)" },
+]));
 const hivemindTheme = EditorView.theme(
   {
     "&": { height: "100%", backgroundColor: "transparent", fontSize: "13px" },
@@ -473,6 +477,7 @@ export function createBaseExtensions(onDocChange: CmDocChange, fileName: string)
     ]),
     languageExtensionFor(fileName),
     oneDark,
+    goldTokenStyle,
     hivemindTheme,
     EditorView.updateListener.of((v) => {
       if (v.docChanged) onDocChange(v.state.doc.toString());
