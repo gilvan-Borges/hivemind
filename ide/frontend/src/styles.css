@@ -1264,12 +1264,268 @@ button.icon-btn:hover:not(:disabled) {
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12), 0 12px 30px rgba(0, 0, 0, 0.65);
 }
 .composer-mode-bar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  flex-wrap: nowrap;
+}
+.composer-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.composer-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 8px 0 7px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.composer-select-trigger:hover,
+.composer-select-trigger.open {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+.composer-select-trigger.is-plan {
+  background: rgba(139, 92, 246, 0.14);
+  border-color: rgba(167, 139, 250, 0.34);
+  color: #ede9fe;
+}
+.composer-trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent, #a78bfa);
+}
+.composer-trigger-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.composer-trigger-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+.composer-select-trigger.open .composer-trigger-caret {
+  transform: rotate(180deg);
+  color: var(--text);
+}
+.composer-trigger-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.composer-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 316px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border-radius: 12px;
+  background: #141824;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: composerPopIn 0.11s ease-out;
+}
+.composer-popover-perm {
+  width: 288px;
+}
+@keyframes composerPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.composer-popover-section {
+  padding: 5px 8px 3px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.composer-popover-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 4px 6px;
+}
+.composer-popover-item {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  white-space: normal;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.composer-popover-item:hover {
+  background: rgba(255, 255, 255, 0.065);
+}
+.composer-popover-item.active {
+  background: rgba(124, 92, 255, 0.15);
+  border-color: rgba(167, 139, 250, 0.28);
+}
+.composer-popover-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.composer-popover-item.active .composer-popover-icon {
+  color: var(--accent, #a78bfa);
+}
+.composer-popover-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.composer-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.composer-popover-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
+}
+.composer-popover-title-row strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.25;
+}
+.composer-popover-item.active .composer-popover-title-row strong {
+  color: #ffffff;
+}
+.composer-popover-tag {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+.composer-popover-item.active .composer-popover-tag {
+  background: rgba(167, 139, 250, 0.22);
+  color: #ddd6fe;
+}
+.composer-popover-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.38;
+  white-space: normal;
+}
+.composer-popover-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--accent, #a78bfa);
+}
+.composer-popover-check svg {
+  width: 13px;
+  height: 13px;
+}
+.perm-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.perm-dot-governed {
+  background: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+.perm-dot-auto {
+  background: #a78bfa;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.22);
+}
+.perm-dot-full {
+  background: #34d399;
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.22);
+}
+.composer-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.composer-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+.composer-icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.composer-jira-input {
+  width: 82px !important;
+  height: 27px;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+  border-radius: 7px !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  color: var(--text-dim) !important;
+  transition: width 0.14s ease, border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.composer-jira-input:focus {
+  width: 108px !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(167, 139, 250, 0.45) !important;
+  color: var(--text) !important;
+}
+.composer-lane-tag {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
 }
 .mode-chip {
   display: inline-flex;
@@ -1294,43 +1550,22 @@ button.icon-btn:hover:not(:disabled) {
   color: #f2f4f6;
   font-weight: 600;
 }
-.plan-chip-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.plan-chip-wrap .plan-caret {
-  padding: 2px 4px;
-}
-.plan-chip-wrap .plan-caret svg {
-  width: 12px;
-  height: 12px;
-}
-.plan-submenu {
-  left: 0;
-  right: auto;
-  min-width: 300px;
-  top: calc(100% + 4px);
-}
-.plan-submenu .dropdown-item strong {
-  font-size: 12px;
-  color: var(--text);
-}
-.plan-submenu .dropdown-item.active strong {
-  color: var(--accent, #7aa2f7);
-}
 .composer-box textarea {
   border: none;
-  padding: 0;
+  padding: 2px 2px 4px 2px;
   background: transparent;
   resize: none;
-  line-height: 1.48;
+  font-size: 13px;
+  line-height: 1.5;
   box-shadow: none !important;
 }
 .composer-footer {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  flex-wrap: wrap;
 }
 .mention-popup {
   position: absolute;

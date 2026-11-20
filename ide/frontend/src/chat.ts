@@ -75,17 +75,17 @@ export function renderRightPane() {
     <div class="composer-wrap">
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
-        <div class="composer-mode-bar" id="composer-mode-bar"></div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
-        <textarea id="chat-input" rows="3" placeholder="O que vamos construir ou resolver agora? (@arquivo · Ctrl+V print · Ctrl+L seleção)"></textarea>
+        <textarea id="chat-input" rows="3" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
         <div class="composer-footer">
+          <div class="composer-mode-bar" id="composer-mode-bar"></div>
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
-          <button class="mini" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)">${icons.image}<span>Foto</span></button>
-          <input id="jira-key-input" style="width:94px" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" />
-          <span class="dim" id="composer-team-label"></span>
+          <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}</button>
+          <input id="jira-key-input" class="composer-jira-input" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
+          <span class="dim composer-lane-tag" id="composer-team-label"></span>
           <div class="spacer"></div>
-          <button class="danger mini" id="btn-cancel-run" ${lane?.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
-          <button class="primary composer-send" id="btn-send-run" title="${lane?.running ? "Interrompe a execução atual imediatamente e envia sua nova instrução" : "Enviar tarefa para a equipe (Enter)"}">${icons.send}<span>${lane?.running ? "Redirecionar" : "Enviar"}</span></button>
+          <button type="button" class="danger mini composer-stop-btn" id="btn-cancel-run" ${lane?.running ? "" : "disabled"} style="${lane?.running ? "" : "display:none"}" title="Interromper execução atual">${icons.stop}<span>Parar</span></button>
+          <button type="button" class="primary composer-send" id="btn-send-run" title="${lane?.running ? "Interrompe a execução atual imediatamente e envia sua nova instrução" : "Enviar tarefa para a equipe (Enter)"}">${icons.send}<span>${lane?.running ? "Redirecionar" : "Enviar"}</span></button>
         </div>
       </div>
     </div>
@@ -107,86 +107,184 @@ export function renderComposerModeBar() {
   const bar = document.getElementById("composer-mode-bar");
   if (!bar) return;
   const perm = (state.project?.teamConfig?.settings?.permission_mode || "governed") as PermissionMode;
-  const isFull = perm === "full_access";
-  const modes: Array<{ id: RunMode; label: string; icon: string; tip: string }> = [
-    { id: "auto", label: "Auto", icon: icons.sparkle, tip: "Triagem inteligente: responde direto, aciona o Squad em worktree ou pausa para aprovação quando a task for grande/arriscada" },
-    { id: "direct", label: "Direto", icon: icons.bolt, tip: "1 Agente (Chefe) sem delegar — rápido e econômico em tokens" },
-    { id: "squad", label: "Squad", icon: icons.swarm, tip: "Força pipeline completo em worktree: Chefe → Devs → QA → Fecho" },
+
+  const execModes: Array<{ id: RunMode; label: string; shortLabel: string; tag: string; icon: string; desc: string }> = [
+    {
+      id: "auto",
+      label: "Auto",
+      shortLabel: "Auto",
+      tag: "Triagem",
+      icon: icons.sparkle,
+      desc: "Decide sozinho: responde direto ou aciona o Squad em worktree isolada",
+    },
+    {
+      id: "direct",
+      label: "Direto",
+      shortLabel: "Direto",
+      tag: "1 Agente",
+      icon: icons.bolt,
+      desc: "Resposta direta do Chefe sem delegar — rápido e econômico em tokens",
+    },
+    {
+      id: "squad",
+      label: "Squad",
+      shortLabel: "Squad",
+      tag: "Paralelo",
+      icon: icons.swarm,
+      desc: "Pipeline completo em worktree: Chefe → Devs paralelos → QA → Fecho",
+    },
   ];
-  const planActive = state.runMode === "plan" || state.runMode === "plan:sdd";
-  const planLabel = state.runMode === "plan:sdd" ? "Planejar · SDD" : "Planejar";
+
+  const planModes: Array<{ id: RunMode; label: string; shortLabel: string; tag: string; icon: string; desc: string }> = [
+    {
+      id: "plan",
+      label: "Planejar · Feature / Task",
+      shortLabel: "Planejar",
+      tag: "Gate",
+      icon: icons.plan,
+      desc: "Plano arquitetural + fatiamento em projeto existente com aprovação humana",
+    },
+    {
+      id: "plan:sdd",
+      label: "Planejar · Projeto do Zero",
+      shortLabel: "Planejar · SDD",
+      tag: "SDD",
+      icon: icons.plan,
+      desc: "Entrevista → Docs & Arquitetura → Jira → Squad travado por gates",
+    },
+  ];
+
+  const allModes = [...execModes, ...planModes];
+  const curMode = allModes.find((m) => m.id === state.runMode) || execModes[0];
+  const modeOpen = state.composerMenuOpen === "mode";
+  const permOpen = state.composerMenuOpen === "perm";
+
+  const permOptions: Array<{ id: PermissionMode; label: string; dotClass: string; desc: string }> = [
+    {
+      id: "governed",
+      label: "Governado",
+      dotClass: "perm-dot-governed",
+      desc: "Pede aprovação antes de gravar arquivos ou executar comandos",
+    },
+    {
+      id: "auto_edit",
+      label: "Auto-Edição",
+      dotClass: "perm-dot-auto",
+      desc: "Edita arquivos automaticamente; pede confirmação para comandos",
+    },
+    {
+      id: "full_access",
+      label: "Full Acesso",
+      dotClass: "perm-dot-full",
+      desc: "Autonomia total no workspace para fluxos contínuos sem pausas",
+    },
+  ];
+  const curPerm = permOptions.find((p) => p.id === perm) || permOptions[0];
+
+  const renderModeOption = (m: (typeof allModes)[number]) => {
+    const active = state.runMode === m.id;
+    return `
+      <button type="button" class="composer-popover-item ${active ? "active" : ""}" data-run-mode="${m.id}">
+        <span class="composer-popover-icon">${m.icon}</span>
+        <span class="composer-popover-body">
+          <span class="composer-popover-title-row">
+            <strong>${escapeHtml(m.label)}</strong>
+            <span class="composer-popover-tag">${escapeHtml(m.tag)}</span>
+          </span>
+          <span class="composer-popover-desc">${escapeHtml(m.desc)}</span>
+        </span>
+        <span class="composer-popover-check">${active ? icons.check : ""}</span>
+      </button>
+    `;
+  };
+
   bar.innerHTML = `
-    ${modes.map((m) => `
-      <button class="mode-chip ${state.runMode === m.id ? "active" : ""}" data-run-mode="${m.id}" title="${escapeHtml(m.tip)}">
-        ${m.icon}
-        <span>${m.label}</span>
+    <div class="composer-select-wrap">
+      <button type="button" class="composer-select-trigger ${modeOpen ? "open" : ""} ${state.runMode.startsWith("plan") ? "is-plan" : ""}" id="btn-composer-mode-select" title="Escolher modo de execução ou planejamento">
+        <span class="composer-trigger-icon">${curMode.icon}</span>
+        <span class="composer-trigger-label">${escapeHtml(curMode.shortLabel)}</span>
+        <span class="composer-trigger-caret">${icons.chevronDown}</span>
       </button>
-    `).join("")}
-    <div class="plan-chip-wrap">
-      <button class="mode-chip ${planActive ? "active" : ""}" data-plan-mode="plan" title="Planejamento com aprovação humana — clique na seta para escolher o submodo">
-        ${icons.plan}
-        <span>${planLabel}</span>
-      </button>
-      <button class="mode-chip plan-caret ${planActive ? "active" : ""}" data-plan-caret="1" title="Escolher submodo de planejamento">${icons.chevronDown}</button>
-      ${state.planMenuOpen ? `
-        <div class="scm-dropdown plan-submenu" id="plan-submenu">
-          <button type="button" class="dropdown-item ${state.runMode === "plan" ? "active" : ""}" data-plan-sub="plan">
-            <strong>Planejar · Feature / Task Grande</strong>
-            <span class="dim" style="display:block;font-size:11px">Plano arquitetural + fatiamento paralelo em projeto existente; pausa em Aprovar & Executar Squad</span>
-          </button>
-          <button type="button" class="dropdown-item ${state.runMode === "plan:sdd" ? "active" : ""}" data-plan-sub="plan:sdd">
-            <strong>Planejar · Projeto do Zero (SDD)</strong>
-            <span class="dim" style="display:block;font-size:11px">Entrevista → Docs & Arquitetura → Tasks no Jira → Squad, travado por gates de aprovação</span>
-          </button>
+      ${modeOpen ? `
+        <div class="composer-popover composer-popover-mode" id="composer-mode-popover" role="listbox">
+          <div class="composer-popover-section">Modo de execução</div>
+          ${execModes.map(renderModeOption).join("")}
+          <div class="composer-popover-divider"></div>
+          <div class="composer-popover-section">Planejamento com aprovação</div>
+          ${planModes.map(renderModeOption).join("")}
         </div>
       ` : ""}
     </div>
-    <div class="spacer"></div>
-    <button class="mode-chip ${isFull ? "active" : ""}" id="btn-composer-perm" title="Alternar nível de permissão e autonomia (Governado / Auto-Edição / Full Acesso)">
-      ${icons.bolt}
-      <span>${escapeHtml(permissionModeLabel(perm))}</span>
-    </button>
-    <button class="mode-chip" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)">
+
+    <div class="composer-select-wrap">
+      <button type="button" class="composer-select-trigger ${permOpen ? "open" : ""}" id="btn-composer-perm-select" title="Escolher nível de permissão e autonomia">
+        <span class="perm-dot ${curPerm.dotClass}"></span>
+        <span class="composer-trigger-label">${escapeHtml(curPerm.label)}</span>
+        <span class="composer-trigger-caret">${icons.chevronDown}</span>
+      </button>
+      ${permOpen ? `
+        <div class="composer-popover composer-popover-perm" id="composer-perm-popover" role="listbox">
+          <div class="composer-popover-section">Autonomia da equipe</div>
+          ${permOptions.map((p) => {
+            const active = perm === p.id;
+            return `
+              <button type="button" class="composer-popover-item ${active ? "active" : ""}" data-perm-mode="${p.id}">
+                <span class="composer-popover-icon"><span class="perm-dot ${p.dotClass}"></span></span>
+                <span class="composer-popover-body">
+                  <span class="composer-popover-title-row">
+                    <strong>${escapeHtml(p.label)}</strong>
+                  </span>
+                  <span class="composer-popover-desc">${escapeHtml(p.desc)}</span>
+                </span>
+                <span class="composer-popover-check">${active ? icons.check : ""}</span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
+    </div>
+
+    <button type="button" class="composer-icon-btn" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)" aria-label="Memória compartilhada">
       ${icons.memory}
-      <span>Memória</span>
     </button>
   `;
-  bar.querySelectorAll("[data-run-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.runMode = (btn as HTMLElement).dataset.runMode as RunMode;
-      renderComposerModeBar();
-      updateStatusBar();
-      updateMissionBoardIfOpen();
-    });
-  });
-  bar.querySelector("[data-plan-mode]")?.addEventListener("click", () => {
-    // Clique no corpo do chip: ativa o último submodo de planejamento escolhido (padrão: Feature).
-    state.runMode = state.runMode === "plan:sdd" ? "plan:sdd" : "plan";
+
+  bar.querySelector("#btn-composer-mode-select")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.composerMenuOpen = state.composerMenuOpen === "mode" ? "" : "mode";
     state.planMenuOpen = false;
     renderComposerModeBar();
-    updateStatusBar();
-    updateMissionBoardIfOpen();
   });
-  bar.querySelector("[data-plan-caret]")?.addEventListener("click", (e) => {
+
+  bar.querySelector("#btn-composer-perm-select")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    state.planMenuOpen = !state.planMenuOpen;
+    state.composerMenuOpen = state.composerMenuOpen === "perm" ? "" : "perm";
+    state.planMenuOpen = false;
     renderComposerModeBar();
   });
-  bar.querySelectorAll("[data-plan-sub]").forEach((btn) => {
+
+  bar.querySelectorAll("[data-run-mode]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.runMode = (btn as HTMLElement).dataset.planSub as RunMode;
+      state.runMode = (btn as HTMLElement).dataset.runMode as RunMode;
+      state.composerMenuOpen = "";
       state.planMenuOpen = false;
       renderComposerModeBar();
       updateStatusBar();
       updateMissionBoardIfOpen();
     });
   });
-  bar.querySelector("#btn-composer-perm")?.addEventListener("click", () => {
-    const order: PermissionMode[] = ["governed", "auto_edit", "full_access"];
-    const next = order[(order.indexOf(perm) + 1) % order.length];
-    setProjectPermissionMode(next);
+
+  bar.querySelectorAll("[data-perm-mode]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const next = (btn as HTMLElement).dataset.permMode as PermissionMode;
+      state.composerMenuOpen = "";
+      setProjectPermissionMode(next);
+      renderComposerModeBar();
+    });
   });
+
   bar.querySelector("#btn-composer-memory")?.addEventListener("click", () => openTeamMemoryFile());
 }
 
@@ -758,7 +856,10 @@ export function syncComposerButtons() {
   const cancelBtn = document.getElementById("btn-cancel-run") as HTMLButtonElement | null;
   const sendBtn = document.getElementById("btn-send-run") as HTMLButtonElement | null;
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
-  if (cancelBtn) cancelBtn.disabled = !running;
+  if (cancelBtn) {
+    cancelBtn.disabled = !running;
+    cancelBtn.style.display = running ? "" : "none";
+  }
   if (sendBtn) {
     sendBtn.disabled = false;
     sendBtn.innerHTML = running
