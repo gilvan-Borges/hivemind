@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -31,7 +32,8 @@ func TestHandoffObjectiveIsCutAt4KiB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// No Windows o Go reporta 0666 mesmo com WriteFile(..., 0600). A criação não muda.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("latest.md deveria nascer 0600, veio %o", info.Mode().Perm())
 	}
 	body, err := os.ReadFile(md)
@@ -46,7 +48,7 @@ func TestHandoffObjectiveIsCutAt4KiB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jinfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && jinfo.Mode().Perm() != 0o600 {
 		t.Fatalf("json do handoff deveria ser 0600, veio %o", jinfo.Mode().Perm())
 	}
 }
