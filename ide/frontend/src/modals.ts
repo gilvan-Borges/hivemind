@@ -554,15 +554,15 @@ export function renderModalLayer() {
                 ${state.agyOAuthWaitingCode ? `
                   <div style="padding:12px 14px;border-radius:10px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.55);display:flex;flex-direction:column;gap:8px">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                      <strong style="font-size:12.5px;color:#7dd3fc">Passo 2 · Cole o código gerado pelo Google Antigravity</strong>
+                      <strong style="font-size:12.5px;color:#7dd3fc">${icons.spinner} Aguardando seleção da Conta Google no navegador…</strong>
                       <button type="button" class="mini" id="btn-cancel-agy-oauth">Cancelar</button>
                     </div>
                     <div class="dim" style="font-size:11.5px;line-height:1.45">
-                      1. Na página <code>antigravity.google/oauth-callback</code> que abriu no navegador, clique em <strong>Copy to Clipboard</strong>.<br/>
-                      2. Clique em <strong>Colar &amp; Conectar</strong> abaixo (ou cole o código <code>4/0A…</code> no campo e confirme):
+                      1. Escolha sua conta Google e clique em <strong>Continuar</strong> no navegador — o HiveMind recebe o retorno automaticamente em <code>localhost</code> e já salva na pasta isolada pelo e-mail.<br/>
+                      2. Caso seu navegador não redirecione sozinho, você também pode colar o código <code>4/0A…</code> ou a URL abaixo:
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
-                      <input id="agy-oauth-code-input" type="text" value="${escapeHtml(state.agyOAuthCodeInput || "")}" placeholder="Cole aqui o código 4/0AUn6Hd9..." style="flex:1;font-family:var(--font-mono);font-size:12px" />
+                      <input id="agy-oauth-code-input" type="text" value="${escapeHtml(state.agyOAuthCodeInput || "")}" placeholder="Opcional: cole aqui o código 4/0A... ou a URL de callback" style="flex:1;font-family:var(--font-mono);font-size:12px" />
                       <button type="button" class="mini" id="btn-paste-agy-oauth" title="Colar da área de transferência e conectar">Colar &amp; Conectar</button>
                       <button type="button" class="primary mini" id="btn-submit-agy-oauth">${icons.check}<span>Confirmar Código</span></button>
                     </div>
@@ -700,6 +700,8 @@ export function renderModalLayer() {
       const backend = api();
       if (!backend?.ConnectNewAgyGoogleAccount) return;
       const btn = document.getElementById("btn-connect-google-agy") as HTMLButtonElement | null;
+      const prevIds = new Set(agyAccounts.map((a) => a.id));
+      const prevCount = agyAccounts.length;
       if (btn) {
         btn.disabled = true;
         btn.innerHTML = `${icons.spinner}<span>Abrindo login Google no navegador…</span>`;
@@ -709,8 +711,33 @@ export function renderModalLayer() {
         state.agyOAuthWaitingCode = true;
         state.agyOAuthCodeInput = "";
         renderModalLayer();
-        (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.focus();
-        toast("Copie o código 4/0A... da página do Google Antigravity que abriu e clique em 'Colar & Conectar'!", "info");
+        toast("Escolha sua conta Google no navegador que abriu — o HiveMind conecta e salva na pasta isolada automaticamente!", "info");
+
+        let checks = 0;
+        const timer = window.setInterval(async () => {
+          checks++;
+          if (!state.showAPIKeysModal || !state.agyOAuthWaitingCode || checks > 90 || !backend.GetProviderProfilesOverview) {
+            window.clearInterval(timer);
+            return;
+          }
+          try {
+            const latest = await backend.GetProviderProfilesOverview(wsRoot);
+            const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
+            const added = newAgy.find((p) => !prevIds.has(p.id));
+            if (added || newAgy.length > prevCount) {
+              window.clearInterval(timer);
+              state.profilesOverview = latest;
+              state.agyOAuthWaitingCode = false;
+              state.agyOAuthCodeInput = "";
+              updateStatusBar();
+              updateMissionBoardIfOpen();
+              renderModalLayer();
+              toast(`Nova conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
+            }
+          } catch {
+            // ignore poll error
+          }
+        }, 1200);
       } catch (err: any) {
         toastError("iniciar login Google do Antigravity", err);
         if (btn) {
