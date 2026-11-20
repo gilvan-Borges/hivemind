@@ -18,6 +18,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/resident"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -49,6 +50,7 @@ type App struct {
 	watchers         map[string]*idecore.FileWatcher
 	mobile           *mobileBridge
 	relay            *relayclient.Client
+	resident         *idecore.ResidentManager
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -124,7 +126,52 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			wailsrt.EventsEmit(app.ctx, "hivemind:lsp-diagnostics", ev)
 		}
 	})
-	app.mobile = newMobileBridge(app.sessions, app.autoReview)
+	app.resident = idecore.NewResidentManager(idecore.ResidentManagerOptions{
+		Sessions: app.sessions,
+		AccountFn: func() (string, string) {
+			if app.relay == nil {
+				return resident.DefaultAccountID, ""
+			}
+			st := app.relay.Status()
+			if st.LoggedIn && strings.TrimSpace(st.Email) != "" {
+				return st.Email, st.DeviceID
+			}
+			return resident.DefaultAccountID, st.DeviceID
+		},
+		ProjectsFn: func() []resident.ProjectRef {
+			var out []resident.ProjectRef
+			seen := map[string]bool{}
+			if app.mobile != nil && app.mobile.hub != nil {
+				for _, p := range app.mobile.hub.Projects() {
+					key := strings.ToLower(filepath.Clean(p.Workspace))
+					if key == "" || seen[key] {
+						continue
+					}
+					seen[key] = true
+					out = append(out, resident.ProjectRef{
+						Name:   p.Name,
+						Root:   p.Workspace,
+						Branch: p.Branch,
+						Stack:  p.Stack,
+						Active: true,
+					})
+				}
+			}
+			for _, dir := range idecore.LoadRecentProjects("") {
+				key := strings.ToLower(filepath.Clean(dir))
+				if key == "" || seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, resident.ProjectRef{
+					Name: filepath.Base(dir),
+					Root: dir,
+				})
+			}
+			return out
+		},
+	})
+	app.mobile = newMobileBridge(app.sessions, app.resident, app.autoReview)
 	app.relay = newRelayClient(app)
 	return app
 }
@@ -163,6 +210,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.sessions != nil {
 		a.sessions.CancelAll()
+	}
+	if a.resident != nil {
+		a.resident.Cancel()
 	}
 	a.CancelInlineAI()
 	a.termMu.Lock()
@@ -1228,4 +1278,93 @@ func (a *App) CheckWorkspaceProblems(workspace, customCmd string) (idecore.Probl
 // ParseOutputProblems extracts clickable ProblemItem diagnostics from arbitrary terminal/build text.
 func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.ProblemItem {
 	return idecore.ParseBuildProblems(rawOutput, workspace)
+}
+
+// --- Agente Residente Hive (Fase 1 · Somente Leitura) ---
+
+// ResidentStatus returns the resident agent's live state (zero secrets).
+func (a *App) ResidentStatus() resident.Status {
+	if a.resident == nil {
+		return resident.Status{State: "ocioso", Phase: 1, ReadOnly: true, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
+	}
+	return a.resident.Status()
+}
+
+// ResidentSaveConfig persists local resident preferences (provider, model, workstream).
+func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SaveConfig(provider, modelName, workstream)
+}
+
+// ResidentStartTurn executes a local read-only chat turn with the Hive resident agent.
+func (a *App) ResidentStartTurn(workspace, workstream, message string) (resident.TurnResult, error) {
+	if a.resident == nil {
+		return resident.TurnResult{}, fmt.Errorf("agente residente indisponível")
+	}
+	if a.mobile != nil && a.mobile.hub != nil {
+		a.mobile.hub.RegisterRun(resident.LaneID, workspace, "hive-resident", message, "", resident.RunMode)
+	}
+	res, err := a.resident.RunTurn(context.Background(), workspace, workstream, message, resident.OriginLocal)
+	if err != nil && a.mobile != nil && a.mobile.hub != nil {
+		a.mobile.hub.HandleRunError(resident.LaneID, workspace, err)
+	}
+	return res, err
+}
+
+// ResidentCancel stops the active resident turn.
+func (a *App) ResidentCancel() bool {
+	if a.resident == nil {
+		return false
+	}
+	return a.resident.Cancel()
+}
+
+// ResidentSessionMessages loads short-term conversation messages for the active account/workstream.
+func (a *App) ResidentSessionMessages(workstream string) ([]resident.LocalTurnMessage, error) {
+	if a.resident == nil {
+		return nil, nil
+	}
+	return a.resident.SessionMessages(workstream)
+}
+
+// ResidentClearSession clears the short-term conversation history for workstream.
+func (a *App) ResidentClearSession(workstream string) error {
+	if a.resident == nil {
+		return nil
+	}
+	return a.resident.ClearSession(workstream)
+}
+
+// ResidentListMemory lists personal memory facts isolated to the active account.
+func (a *App) ResidentListMemory(workstream string) ([]resident.MemoryFact, error) {
+	if a.resident == nil {
+		return nil, nil
+	}
+	return a.resident.ListMemory(workstream)
+}
+
+// ResidentAddMemory saves an explicit user fact to the active account's local memory.
+func (a *App) ResidentAddMemory(workstream, text string, pinned bool) (resident.MemoryFact, error) {
+	if a.resident == nil {
+		return resident.MemoryFact{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.AddMemory(workstream, text, pinned)
+}
+
+// ResidentDeleteMemory deletes a personal memory fact by ID for the active account.
+func (a *App) ResidentDeleteMemory(id string) (bool, error) {
+	if a.resident == nil {
+		return false, nil
+	}
+	return a.resident.DeleteMemory(id)
+}
+
+// ResidentAuditLog returns recent audit entries (read-only).
+func (a *App) ResidentAuditLog(limit int) ([]resident.AuditEntry, error) {
+	if a.resident == nil {
+		return nil, nil
+	}
+	return a.resident.AuditLog(limit)
 }

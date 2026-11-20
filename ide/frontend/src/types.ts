@@ -268,7 +268,7 @@ export interface TerminalEntry {
 }
 
 export interface EditorTab {
-  kind: "file" | "diff" | "mission" | "team-config" | "commit";
+  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident";
   relPath: string;
   name: string;
   content: string;
@@ -726,6 +726,65 @@ export interface RelayLinkCode {
   qrDataUrl: string;
 }
 
+export interface ResidentStatus {
+  state: string;
+  phase: number;
+  readOnly: boolean;
+  accountId: string;
+  workstream: string;
+  provider: string;
+  model: string;
+  memoryDir?: string;
+  auditPath?: string;
+  lastError?: string;
+}
+
+export interface ResidentTurnResult {
+  sessionId: string;
+  workstream: string;
+  finalText: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  toolCalls: number;
+  promptBuildMs: number;
+}
+
+export interface ResidentMemoryFact {
+  id: string;
+  workstream: string;
+  text: string;
+  pinned?: boolean;
+  source?: string;
+  createdAt: string;
+}
+
+export interface ResidentAuditEntry {
+  ts: string;
+  phase: string;
+  accountId: string;
+  deviceId?: string;
+  origin: string;
+  workstream?: string;
+  tool: string;
+  tier: string;
+  decision: string;
+  approvalId?: string;
+  sandbox?: string;
+  target?: string;
+  outcome?: string;
+  errorClass?: string;
+  reason?: string;
+}
+
+export interface ResidentLocalMessage {
+  role: "user" | "model";
+  text: string;
+  at: string;
+}
+
 export interface WailsBackendApp {
   GetInitialState(): Promise<InitialStatePayload>;
   BootstrapAgy(force: boolean): Promise<{ status: AgyStatus; models: AgyModel[] }>;
@@ -844,4 +903,14 @@ export interface WailsBackendApp {
   DeleteNativeSkill(name: string): Promise<void>;
   InstallSkillToProject(workspace: string, name: string): Promise<void>;
   RemoveProjectSkill(workspace: string, name: string): Promise<void>;
+  ResidentStatus?(): Promise<ResidentStatus>;
+  ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
+  ResidentStartTurn?(workspace: string, workstream: string, message: string): Promise<ResidentTurnResult>;
+  ResidentCancel?(): Promise<boolean>;
+  ResidentSessionMessages?(workstream: string): Promise<ResidentLocalMessage[]>;
+  ResidentClearSession?(workstream: string): Promise<void>;
+  ResidentListMemory?(workstream: string): Promise<ResidentMemoryFact[]>;
+  ResidentAddMemory?(workstream: string, text: string, pinned: boolean): Promise<ResidentMemoryFact>;
+  ResidentDeleteMemory?(id: string): Promise<boolean>;
+  ResidentAuditLog?(limit: number): Promise<ResidentAuditEntry[]>;
 }

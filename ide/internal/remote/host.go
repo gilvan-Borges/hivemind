@@ -21,8 +21,11 @@ func RunHeadless(ctx context.Context, workspace string) error {
 
 	hub := NewHub()
 	sessions := idecore.NewSessionManager(hub.HandleLaneEvent)
+	residentMgr := idecore.NewResidentManager(idecore.ResidentManagerOptions{
+		Sessions: sessions,
+	})
 	autoReview := idecore.NewAutoReviewManager(sessions, hub.HandleAutoReviewStatus)
-	adapter := &Adapter{Sessions: sessions, AutoReview: autoReview, Hub: hub}
+	adapter := &Adapter{Sessions: sessions, Resident: residentMgr, AutoReview: autoReview, Hub: hub}
 
 	if ws := workspace; ws != "" {
 		if abs, err := filepath.Abs(ws); err == nil {
@@ -38,7 +41,9 @@ func RunHeadless(ctx context.Context, workspace string) error {
 
 	st := srv.Status()
 	fmt.Printf("\nHiveMind Remote Bridge (headless) · v%s\n", st.Version)
-	fmt.Printf("Host: %s\n\n", st.Host)
+	fmt.Printf("Host: %s\n", st.Host)
+	fmt.Println(residentMgr.FormatHeadlessStatus())
+	fmt.Println()
 	if len(st.URLs) == 0 {
 		fmt.Println("Aviso: nenhum IP Tailscale/LAN detectado — pareie via rede ativa.")
 	} else {

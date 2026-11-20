@@ -322,6 +322,46 @@ export function RenamePath(arg1, arg2, arg3) {
   return window['go']['main']['App']['RenamePath'](arg1, arg2, arg3);
 }
 
+export function ResidentAddMemory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ResidentAddMemory'](arg1, arg2, arg3);
+}
+
+export function ResidentAuditLog(arg1) {
+  return window['go']['main']['App']['ResidentAuditLog'](arg1);
+}
+
+export function ResidentCancel() {
+  return window['go']['main']['App']['ResidentCancel']();
+}
+
+export function ResidentClearSession(arg1) {
+  return window['go']['main']['App']['ResidentClearSession'](arg1);
+}
+
+export function ResidentDeleteMemory(arg1) {
+  return window['go']['main']['App']['ResidentDeleteMemory'](arg1);
+}
+
+export function ResidentListMemory(arg1) {
+  return window['go']['main']['App']['ResidentListMemory'](arg1);
+}
+
+export function ResidentSaveConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ResidentSaveConfig'](arg1, arg2, arg3);
+}
+
+export function ResidentSessionMessages(arg1) {
+  return window['go']['main']['App']['ResidentSessionMessages'](arg1);
+}
+
+export function ResidentStartTurn(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ResidentStartTurn'](arg1, arg2, arg3);
+}
+
+export function ResidentStatus() {
+  return window['go']['main']['App']['ResidentStatus']();
+}
+
 export function ResizePTY(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizePTY'](arg1, arg2, arg3);
 }
