@@ -63,6 +63,7 @@ export function buildDraftFromProject(): TeamConfigDraft {
     worktrees: settings?.worktrees !== false,
     autoCommit: settings ? settings.auto_commit === true : false,
     autoPR: settings ? settings.auto_pr === true : false,
+    shellUnsandboxed: settings?.shell_unsandboxed === true,
     jiraEnabled: settings?.jira_enabled === true || Boolean(state.jiraStatus?.connected && state.jiraStatus?.matchMode !== "isolated_none"),
     jiraProject: resolveAutoJiraProj(),
     skillAssignments: (settings?.skill_assignments || []).map((a) => ({
@@ -521,6 +522,13 @@ export function renderTeamConfigPageHtml(): string {
                 </div>
               </label>
               <label class="tc-toggle-row">
+                <input id="tc-shell-unsandboxed" type="checkbox" ${draft.shellUnsandboxed ? "checked" : ""} />
+                <div>
+                  <div class="tc-toggle-title">Shell do squad sem sandbox</div>
+                  <div class="dim">Desligado por padrão: run_shell roda na sandbox. Ligado, o comando roda na sessão do host, SEM sandbox, só em Full Acesso ou com confirmação. O ambiente continua sem segredos do cofre.</div>
+                </div>
+              </label>
+              <label class="tc-toggle-row">
                 <input id="tc-autopr" type="checkbox" ${draft.autoPR ? "checked" : ""} />
                 <div>
                   <div class="tc-toggle-title">Criar PR automático</div>
@@ -578,6 +586,7 @@ export function syncTeamConfigDraftFromDom(draft: TeamConfigDraft) {
   if (chk("tc-worktrees") !== undefined) draft.worktrees = Boolean(chk("tc-worktrees"));
   if (chk("tc-autocommit") !== undefined) draft.autoCommit = Boolean(chk("tc-autocommit"));
   if (chk("tc-autopr") !== undefined) draft.autoPR = Boolean(chk("tc-autopr"));
+  if (chk("tc-shell-unsandboxed") !== undefined) draft.shellUnsandboxed = Boolean(chk("tc-shell-unsandboxed"));
   if (chk("tc-jira") !== undefined) draft.jiraEnabled = Boolean(chk("tc-jira"));
   if (val("tc-jira-select") !== undefined) draft.jiraProject = (val("tc-jira-select") || "").trim().toUpperCase();
   else if (val("tc-jira-key") !== undefined) draft.jiraProject = (val("tc-jira-key") || "").trim().toUpperCase();
@@ -694,6 +703,7 @@ export function bindTeamConfigEvents() {
         worktrees: draft.worktrees,
         autoCommit: draft.autoCommit,
         autoPR: draft.autoPR,
+        shellUnsandboxed: draft.shellUnsandboxed,
         jiraEnabled: draft.jiraEnabled,
         jiraProject: draft.jiraProject,
         baseBranch: draft.baseBranch || "main",

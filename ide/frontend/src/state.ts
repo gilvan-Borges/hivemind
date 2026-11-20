@@ -39,6 +39,7 @@ export interface TeamConfigDraft {
   worktrees: boolean;
   autoCommit: boolean;
   autoPR: boolean;
+  shellUnsandboxed: boolean;
   jiraEnabled: boolean;
   jiraProject: string;
   skillAssignments: SkillAssignment[];

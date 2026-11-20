@@ -34,6 +34,7 @@ type WizardInput struct {
 	DefaultModel     string                 `json:"defaultModel"`
 	AgentModels      map[string]string      `json:"agentModels,omitempty"`
 	PermissionMode   string                 `json:"permissionMode,omitempty"` // "governed", "auto_edit", "full_access"
+	ShellUnsandboxed bool                   `json:"shellUnsandboxed,omitempty"`
 	Worktrees        bool                   `json:"worktrees"`
 	AutoCommit       bool                   `json:"autoCommit"`
 	AutoPR           bool                   `json:"autoPR"`
@@ -132,6 +133,7 @@ func BuildTeamFromWizard(workspace string, in WizardInput) (team.File, error) {
 	if strings.TrimSpace(in.PermissionMode) != "" {
 		file.Settings.PermissionMode = team.NormalizePermissionMode(in.PermissionMode)
 	}
+	file.Settings.ShellUnsandboxed = in.ShellUnsandboxed
 	file.Settings.MaxDynamicDevs = maxDyn
 	wt := in.Worktrees
 	file.Settings.Worktrees = &wt

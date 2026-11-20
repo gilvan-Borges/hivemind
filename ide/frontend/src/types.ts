@@ -128,6 +128,7 @@ export interface TeamSettings {
   review_model?: string;
   inline_model?: string;
   auto_review?: AutoReviewSettings;
+  shell_unsandboxed?: boolean;
   skill_assignments?: SkillAssignment[];
 }
 
@@ -579,6 +580,7 @@ export interface WizardInputPayload {
   worktrees: boolean;
   autoCommit: boolean;
   autoPR: boolean;
+  shellUnsandboxed?: boolean;
   jiraEnabled: boolean;
   jiraProject: string;
   baseBranch?: string;

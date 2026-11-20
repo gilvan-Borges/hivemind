@@ -68,29 +68,34 @@ func TestAutoEditShellMetaRequiresConfirm(t *testing.T) {
 	settings := team.DefaultSettings()
 	settings.PermissionMode = team.PermissionAutoEdit
 	asked := 0
+	sb := &recordSandbox{}
 	deps := applyShellPolicy(Deps{
 		Root:      t.TempDir(),
 		Settings:  settings,
 		Shell:     sh,
+		Sandbox:   sb,
 		Allowlist: []string{"go", "git"},
-		Confirm: func(string) bool {
+		Confirm: func(command string) bool {
 			asked++
-			return false
+			return strings.Contains(command, "SEM SANDBOX")
 		},
 	})
-	if _, err := deps.runShell(context.Background(), "go test ./...", ""); err != nil {
+	if _, err := deps.runShell(context.Background(), "go test ./...", "", false); err != nil {
 		t.Fatalf("comando allowlisted: %v", err)
 	}
-	if asked != 0 {
-		t.Fatalf("confirmações indevidas: %d", asked)
+	if asked != 0 || sb.runs != 1 {
+		t.Fatalf("sandbox=%d confirmações=%d", sb.runs, asked)
 	}
-	if _, err := deps.runShell(context.Background(), "go test ./... && git status", ""); err == nil || !strings.Contains(err.Error(), "perigoso") {
-		t.Fatalf("metacaractere recusado: %v", err)
+	if _, err := deps.runShell(context.Background(), "go test ./... && git status", "", false); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("metacaractere na sandbox: %v", err)
 	}
-	if asked != 1 {
-		t.Fatalf("confirmações = %d", asked)
+	if asked != 0 || sh.ran != "" {
+		t.Fatalf("linha de shell não pode rodar na sandbox asked=%d ran=%q", asked, sh.ran)
 	}
-	if strings.Contains(sh.ran, "&&") {
+	if _, err := deps.runShell(context.Background(), "go test ./... && git status", "", true); err == nil || !strings.Contains(err.Error(), "perigoso") {
+		t.Fatalf("metacaractere sem sandbox ainda pede confirmação: %v", err)
+	}
+	if sh.ran != "" {
 		t.Fatalf("comando com metacaractere rodou: %q", sh.ran)
 	}
 
@@ -98,10 +103,11 @@ func TestAutoEditShellMetaRequiresConfirm(t *testing.T) {
 		Root:      t.TempDir(),
 		Settings:  settings,
 		Shell:     sh,
+		Sandbox:   sb,
 		Allowlist: []string{"go"},
 	})
-	if _, err := headless.runShell(context.Background(), "go test ./... | echo x", ""); err == nil {
-		t.Fatal("headless em auto_edit não pode rodar metacaractere")
+	if _, err := headless.runShell(context.Background(), "go test ./... | echo x", "", true); err == nil {
+		t.Fatal("headless em auto_edit não pode rodar metacaractere sem sandbox")
 	}
 }
 
@@ -111,21 +117,28 @@ func TestFullAccessShellMetaRunsAndAudits(t *testing.T) {
 	t.Cleanup(restore)
 
 	sh := &gateShell{}
+	sb := &recordSandbox{}
 	settings := team.DefaultSettings()
 	settings.PermissionMode = team.PermissionFullAccess
+	settings.ShellUnsandboxed = true
 	deps := applyShellPolicy(Deps{
 		Root:     t.TempDir(),
 		Settings: settings,
 		Shell:    sh,
+		Sandbox:  sb,
 		Confirm:  func(string) bool { return false },
 	})
 	secret := "super-secret-token"
 	cmd := "go test ./... && echo " + secret
-	if _, err := deps.runShell(context.Background(), cmd, ""); err != nil {
+	out, err := deps.runShell(context.Background(), cmd, "", false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if sh.ran != cmd {
-		t.Fatalf("full_access deveria executar: %q", sh.ran)
+	if sh.ran != cmd || sb.runs != 0 {
+		t.Fatalf("full_access sem sandbox deveria executar no host: ran=%q sandbox=%d", sh.ran, sb.runs)
+	}
+	if !strings.Contains(out, "SEM SANDBOX") {
+		t.Fatalf("saída sem aviso: %q", out)
 	}
 	data, err := os.ReadFile(auditPath)
 	if err != nil {
