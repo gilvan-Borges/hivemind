@@ -27,10 +27,11 @@ type ResidentManager struct {
 	sandbox    sandboxx.Runner
 	vault      secretx.Vault
 
-	mu        sync.Mutex
-	state     string // "ocioso" | "pensando" | "aguardando você"
-	lastError string
-	cancel    context.CancelFunc
+	mu           sync.Mutex
+	state        string // "ocioso" | "pensando" | "aguardando você"
+	lastError    string
+	cancel       context.CancelFunc
+	detectorSeen map[string]struct{}
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
@@ -382,15 +383,30 @@ func (m *ResidentManager) DeleteMemory(id string) (bool, error) {
 	return m.memoryForCurrentAccount().DeleteFact(id)
 }
 
-// NoteDetectorRejected records a skipped detector file without its body.
-func (m *ResidentManager) NoteDetectorRejected(id, reason string) {
+// NoteDetectorRejected records a skipped detector once per file content.
+// The tier is read: this is not use of the credential vault.
+func (m *ResidentManager) NoteDetectorRejected(id, reason, fingerprint string) {
 	if m == nil || m.audit == nil {
 		return
 	}
+	key := fingerprint
+	if key == "" {
+		key = id + "\x00" + reason
+	}
+	m.mu.Lock()
+	if m.detectorSeen == nil {
+		m.detectorSeen = map[string]struct{}{}
+	}
+	if _, ok := m.detectorSeen[key]; ok {
+		m.mu.Unlock()
+		return
+	}
+	m.detectorSeen[key] = struct{}{}
+	m.mu.Unlock()
 	_ = m.audit.RecordDecision(resident.AuditEntry{
 		Origin:     resident.OriginLocal,
 		Tool:       "detector_rejected",
-		Tier:       resident.TierCredentials,
+		Tier:       resident.TierRead,
 		Decision:   "deny",
 		Target:     id,
 		Outcome:    "denied",

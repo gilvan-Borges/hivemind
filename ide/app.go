@@ -1492,7 +1492,7 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
 	extsess.OnReject = func(r extsess.Reject) {
 		if a != nil && a.resident != nil {
-			a.resident.NoteDetectorRejected(r.ID, r.Reason)
+			a.resident.NoteDetectorRejected(r.ID, r.Reason, r.Fingerprint)
 		}
 	}
 	return extsess.List()
