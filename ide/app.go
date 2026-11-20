@@ -480,6 +480,9 @@ func (a *App) onFSChange(ev idecore.FileChangeEvent) {
 			_ = a.fileIndex.Refresh(target)
 		}(ev.Root)
 	}
+	if a.resident != nil {
+		a.resident.NoteHostEvent("arquivo")
+	}
 	if a.ctx != nil && !a.smokeCheck {
 		wailsrt.EventsEmit(a.ctx, "hivemind:fs-event", map[string]any{
 			"workspace": ev.Root,
@@ -1306,6 +1309,19 @@ func (a *App) SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens in
 	return a.GetAIUsage(), nil
 }
 
+// GetJevPolicy returns the local Jev policy. The bridge has no route for this.
+func (a *App) GetJevPolicy() jev.Policy {
+	return a.currentJevPolicy()
+}
+
+// SaveJevPolicy writes policy.json from the local IDE only.
+func (a *App) SaveJevPolicy(pol jev.Policy) (jev.Policy, error) {
+	if err := jev.SavePolicy(pol); err != nil {
+		return jev.Policy{}, err
+	}
+	return a.currentJevPolicy(), nil
+}
+
 func (a *App) currentJevPolicy() jev.Policy {
 	pol, err := jev.LoadPolicy()
 	if err != nil {
@@ -1531,6 +1547,14 @@ func (a *App) ResidentDeleteSecret(name string) (resident.Status, error) {
 }
 
 // ResidentSaveConfig persists local resident preferences (provider, model, workstream).
+// ResidentSetEventTriggers turns opt-in host wakes on or off. Off does nothing.
+func (a *App) ResidentSetEventTriggers(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetEventTriggers(on)
+}
+
 func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (resident.Status, error) {
 	if a.resident == nil {
 		return resident.Status{}, fmt.Errorf("agente residente indisponível")
@@ -1599,6 +1623,53 @@ func (a *App) ResidentDeleteMemory(id string) (bool, error) {
 		return false, nil
 	}
 	return a.resident.DeleteMemory(id)
+}
+
+// ResidentListRoutines returns structured routines. There is no command field.
+func (a *App) ResidentListRoutines() ([]resident.Routine, error) {
+	if a.resident == nil {
+		return nil, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.ListRoutines()
+}
+
+// ResidentSaveRoutine stores one routine from the local UI and rearms the timer.
+func (a *App) ResidentSaveRoutine(expr, timezone, text, workstream string, classes []string) (resident.Routine, error) {
+	if a.resident == nil {
+		return resident.Routine{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SaveRoutine(resident.Routine{
+		Expr:       expr,
+		Timezone:   timezone,
+		Text:       text,
+		Workstream: workstream,
+		Classes:    classes,
+		Enabled:    true,
+	})
+}
+
+// ResidentSetRoutineEnabled pauses or resumes one routine.
+func (a *App) ResidentSetRoutineEnabled(id string, enabled bool) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetRoutineEnabled(id, enabled)
+}
+
+// ResidentDeleteRoutine removes one routine.
+func (a *App) ResidentDeleteRoutine(id string) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.DeleteRoutine(id)
+}
+
+// ResidentReviewSkill stores the SHA-256 of a native skill the person reviewed.
+func (a *App) ResidentReviewSkill(name string) (string, error) {
+	if a.resident == nil {
+		return "", fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.ReviewSkill(name)
 }
 
 // ResidentAuditLog returns recent audit entries (read-only).

@@ -82,10 +82,19 @@ type AgyQuota struct {
 	Groups    []AgyQuotaGroup `json:"groups,omitempty"`
 }
 
-// AIUsageReport is the full snapshot shown in the IDE's AI Usage & Limits modal.
+// AgyAccountQuota is the official /usage snapshot for one Antigravity pool account.
+type AgyAccountQuota struct {
+	ProfileID string   `json:"profileId"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email,omitempty"`
+	Quota     AgyQuota `json:"quota"`
+}
+
+// AIUsageReport is the full snapshot shown in the IDE's AI Usage & Limits page.
 type AIUsageReport struct {
 	GeneratedAt   string            `json:"generatedAt"`
 	AgyQuota      AgyQuota          `json:"agyQuota"`
+	AgyAccounts   []AgyAccountQuota `json:"agyAccounts,omitempty"`
 	OpenCodeQuota OpenCodeQuota     `json:"openCodeQuota"`
 	Providers     []AIProviderUsage `json:"providers"`
 }
@@ -106,10 +115,16 @@ type usageStoreFile struct {
 }
 
 var (
-	usageMu              sync.Mutex
-	usageFilePathFn      = defaultUsageFilePath
-	fetchAgyUsageFn      = FetchAgyUsage
-	fetchOpenCodeUsageFn = FetchOpenCodeUsage
+	usageMu                 sync.Mutex
+	usageFilePathFn         = defaultUsageFilePath
+	fetchAgyUsageFn         = FetchAgyUsage
+	fetchOpenCodeUsageFn    = FetchOpenCodeUsage
+	listAgyProfilesUsageFn  = listAgyProfilesForUsage
+	activateAgyProfileFn    = ActivateAgyProfileSession
+	readLiveAgyCredFn       = ReadLiveAgyOAuthCredential
+	writeLiveAgyCredFn      = WriteLiveAgyOAuthCredential
+	hasAgyVaultSessionFn    = HasAgyVaultSession
+	restoreLiveAgyCredFn    = EnsureLiveAgyCredentialRestored
 )
 
 func defaultUsageFilePath() (string, error) {
@@ -542,6 +557,64 @@ func FetchAgyUsage(ctx context.Context) AgyQuota {
 	return AgyQuota{Available: false, Detail: "Resposta vazia de `agy /usage`."}
 }
 
+func listAgyProfilesForUsage() []ProviderProfileSummary {
+	ov := ListProfilesOverview("")
+	out := make([]ProviderProfileSummary, 0)
+	for _, p := range ov.Profiles {
+		if p.Provider == "agy" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// fetchAllAgyAccountQuotas queries /usage for every Antigravity pool account.
+// It temporarily switches the live OAuth slot per vault and restores the previous session.
+func fetchAllAgyAccountQuotas(ctx context.Context) []AgyAccountQuota {
+	profiles := listAgyProfilesUsageFn()
+	if len(profiles) == 0 {
+		q := fetchAgyUsageFn(ctx)
+		if !q.Available && strings.TrimSpace(q.Detail) == "" {
+			return nil
+		}
+		return []AgyAccountQuota{{
+			ProfileID: "",
+			Name:      "Antigravity CLI (agy)",
+			Quota:     q,
+		}}
+	}
+
+	prevRaw, _, _ := readLiveAgyCredFn()
+	defer func() {
+		if len(prevRaw) > 0 {
+			_ = writeLiveAgyCredFn(prevRaw)
+			return
+		}
+		restoreLiveAgyCredFn()
+	}()
+
+	out := make([]AgyAccountQuota, 0, len(profiles))
+	for _, p := range profiles {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = p.ID
+		}
+		email := ""
+		if ok, em := hasAgyVaultSessionFn(p.ID); ok {
+			email = strings.TrimSpace(em)
+		}
+		acc := AgyAccountQuota{ProfileID: p.ID, Name: name, Email: email}
+		if err := activateAgyProfileFn(p.ID); err != nil {
+			acc.Quota = AgyQuota{Available: false, Detail: err.Error()}
+			out = append(out, acc)
+			continue
+		}
+		acc.Quota = fetchAgyUsageFn(ctx)
+		out = append(out, acc)
+	}
+	return out
+}
+
 // GetAIUsageReport returns live Antigravity (/usage) and OpenCode Go quotas plus rolling 5h/weekly/monthly local telemetry.
 func GetAIUsageReport(ctx context.Context) AIUsageReport {
 	now := time.Now().UTC()
@@ -627,14 +700,14 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 	}
 
 	var (
-		agyQ AgyQuota
-		ocQ  OpenCodeQuota
-		wg   sync.WaitGroup
+		agyAccounts []AgyAccountQuota
+		ocQ         OpenCodeQuota
+		wg          sync.WaitGroup
 	)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		agyQ = fetchAgyUsageFn(ctx)
+		agyAccounts = fetchAllAgyAccountQuotas(ctx)
 	}()
 	go func() {
 		defer wg.Done()
@@ -642,15 +715,21 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 	}()
 	wg.Wait()
 
+	agyQ := AgyQuota{}
+	if len(agyAccounts) > 0 {
+		agyQ = agyAccounts[0].Quota
+	}
+
 	out := AIUsageReport{
 		GeneratedAt:   now.Format(time.RFC3339),
 		AgyQuota:      agyQ,
+		AgyAccounts:   agyAccounts,
 		OpenCodeQuota: ocQ,
 	}
 
 	ocKey, _, _ := LoadOpenCodeCredentials()
 	hasOpenCode := strings.TrimSpace(ocKey) != ""
-	hasAgy := agyQ.Available || AgyAvailable()
+	hasAgy := len(agyAccounts) > 0 || agyQ.Available || AgyAvailable()
 
 	for _, p := range order {
 		u := byProv[p]
@@ -666,7 +745,7 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 			out.Providers = append(out.Providers, *u)
 		}
 	}
-	// Guarantee at least agy + opencode-go on fresh unconfigured machines so the modal is never empty.
+	// Guarantee at least agy + opencode-go on fresh unconfigured machines so the page is never empty.
 	if len(out.Providers) == 0 {
 		out.Providers = append(out.Providers, *byProv["agy"], *byProv["opencode-go"])
 	}

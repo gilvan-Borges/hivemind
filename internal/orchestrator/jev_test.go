@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -325,5 +327,33 @@ func TestClassifierStaysOffUnlessEnabled(t *testing.T) {
 	}
 	if *onCalls != 1 {
 		t.Fatalf("confiança baixa deveria chamar uma vez, calls=%d", *onCalls)
+	}
+}
+
+func TestRepoDenyCursorSkipsBuildEvenWhenPinned(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".hivemind"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("deny_providers: [cursor]\n")
+	if err := os.WriteFile(filepath.Join(ws, ".hivemind", "jev.yaml"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pol := jev.DefaultPolicy()
+	built := 0
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy: &pol,
+		BuildModel: func(context.Context, string, string) (model.LLM, error) {
+			built++
+			return &modelx.Scripted{}, nil
+		},
+	})
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{Workspace: ws, Step: "dev_report"})
+	_, err := factory(ctx, team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "cursor", Model: "auto"})
+	if err == nil {
+		t.Fatal("pin cursor com deny_providers deveria falhar")
+	}
+	if built != 0 {
+		t.Fatalf("NewCursor não pode ser construído com o provedor negado, build=%d", built)
 	}
 }

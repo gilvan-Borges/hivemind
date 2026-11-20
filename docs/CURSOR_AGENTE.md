@@ -13,7 +13,7 @@ Não dá para tratar essa chave como OpenRouter ou OpenCode. Aqueles falam HTTP 
 2. Na IDE, abra **Chaves de API** e cole `CURSOR_API_KEY`. O arquivo é `api-keys.json` na pasta de config do usuário (`%APPDATA%\HiveMind` no Windows), fora do Git. Se a variável de ambiente existir, ela ganha da chave salva. `hivemind doctor` só diz se a chave está definida, sem mostrar o valor.
 3. No seletor de modelo, escolha **Cursor (agente CLI)**. O padrão é `auto`: o CLI escolhe o modelo da conta. `agent models` preenche o restante da lista quando a chave e o CLI existem.
 
-O rótulo deixa claro que isto é um agente, não um modelo cru. Ele grava arquivos nesse workspace. Não faz `git commit`, `git push` nem pull request: isso continua com o HiveMind, depois do QA.
+O rótulo deixa claro que isto é um agente, não um modelo cru. Ele grava arquivos nesse workspace. Commit, push e PR seguem a governança do time: Chefe/Arquiteto podem; Dev e QA não.
 
 ## O que o processo faz
 

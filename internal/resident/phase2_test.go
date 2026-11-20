@@ -341,11 +341,22 @@ func TestPhase2RealSandboxExecCommandEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// bwrap esconde /tmp. O broker só monta o workspace; no teste, acrescenta
+	// ro-bind só do diretório do binário. Não monta /tmp inteiro.
+	runner := sandboxx.Runner(sb)
+	if runtime.GOOS == "linux" {
+		dir := filepath.Clean(filepath.Dir(exe))
+		switch dir {
+		case "/", "/tmp", "/var/tmp", "/private/tmp", ".":
+			t.Fatalf("recuso montar %s inteiro só para o binário de teste", dir)
+		}
+		runner = linuxExeReadRoot{inner: sb, dir: dir}
+	}
 	b := NewBroker(BrokerConfig{
 		Workspace: ws,
 		Origin:    OriginLocal,
 		Policy:    Policy{AllowedBinaries: []string{exe}},
-		Sandbox:   sb,
+		Sandbox:   runner,
 		Audit:     audit,
 		Approve:   func(context.Context, string, string) bool { return true },
 	})
@@ -367,6 +378,24 @@ func TestPhase2RealSandboxExecCommandEndToEnd(t *testing.T) {
 func TestPhase2SandboxSubprocessNoop(t *testing.T) {
 	// Helper target for TestPhase2RealSandboxExecCommandEndToEnd.
 	fmt.Print("")
+}
+
+// linuxExeReadRoot ro-binds only the test executable directory on Linux.
+type linuxExeReadRoot struct {
+	inner sandboxx.Runner
+	dir   string
+}
+
+func (m linuxExeReadRoot) Probe() sandboxx.ProbeResult { return m.inner.Probe() }
+
+func (m linuxExeReadRoot) Run(ctx context.Context, opts sandboxx.Options) (sandboxx.Result, error) {
+	if m.dir != "" {
+		roots := make([]string, 0, len(opts.ReadRoots)+1)
+		roots = append(roots, opts.ReadRoots...)
+		roots = append(roots, m.dir)
+		opts.ReadRoots = roots
+	}
+	return m.inner.Run(ctx, opts)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

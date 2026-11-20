@@ -14,6 +14,8 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
 	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
+	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
 // ResidentManager owns the Phase 2 Hive resident assistant inside the
@@ -26,12 +28,15 @@ type ResidentManager struct {
 	audit      *resident.FileAuditLogger
 	sandbox    sandboxx.Runner
 	vault      secretx.Vault
+	sched      *resident.Scheduler
+	release    func()
 
-	mu           sync.Mutex
-	state        string // "ocioso" | "pensando" | "aguardando você"
-	lastError    string
-	cancel       context.CancelFunc
-	detectorSeen map[string]struct{}
+	mu            sync.Mutex
+	state         string // "ocioso" | "pensando" | "aguardando você"
+	lastError     string
+	eventTriggers bool
+	cancel        context.CancelFunc
+	detectorSeen  map[string]struct{}
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
@@ -63,17 +68,90 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	if vault == nil {
 		vault = secretx.NewOSVault()
 	}
-	return &ResidentManager{
-		baseDir:    baseDir,
-		sessions:   opts.Sessions,
-		accountFn:  opts.AccountFn,
-		projectsFn: opts.ProjectsFn,
-		audit:      resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
-		sandbox:    sb,
-		vault:      vault,
-		state:      "ocioso",
-		testModel:  opts.TestModel,
+	cfg, _ := resident.LoadConfig(baseDir)
+	m := &ResidentManager{
+		baseDir:       baseDir,
+		sessions:      opts.Sessions,
+		accountFn:     opts.AccountFn,
+		projectsFn:    opts.ProjectsFn,
+		audit:         resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
+		sandbox:       sb,
+		vault:         vault,
+		state:         "ocioso",
+		eventTriggers: cfg.EventTriggers,
+		testModel:     opts.TestModel,
 	}
+	if release, ok := resident.TryAcquireLock(baseDir); ok {
+		m.release = release
+		m.sched = resident.NewScheduler(baseDir, m.fireRoutine)
+		m.sched.Arm()
+	}
+	if m.sessions != nil {
+		m.sessions.HostSignal = func(kind string) { m.NoteHostEvent(kind) }
+	}
+	return m
+}
+
+// NoteHostEvent records an opt-in wake. It never starts a turn or a tool.
+func (m *ResidentManager) NoteHostEvent(kind string) {
+	if m == nil {
+		return
+	}
+	switch kind {
+	case "arquivo", "lane", "aprovacao":
+	default:
+		return
+	}
+	m.mu.Lock()
+	on := m.eventTriggers
+	m.mu.Unlock()
+	if !on || m.sessions == nil || m.sessions.Emit == nil {
+		return
+	}
+	m.sessions.Emit(LaneEvent{
+		LaneID: resident.LaneID,
+		Team:   "hive-resident",
+		Event: orchestrator.Event{
+			Kind:  "stage",
+			Stage: "chief",
+			Label: "Hive Residente",
+			Text:  "evento " + kind,
+		},
+	})
+}
+
+// SetEventTriggers persists the opt-in wake switch. Default is off.
+func (m *ResidentManager) SetEventTriggers(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.EventTriggers = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	m.mu.Lock()
+	m.eventTriggers = on
+	m.mu.Unlock()
+	return m.Status(), nil
+}
+
+// Close solta a trava do processo para o diretório temporário do teste poder sair.
+func (m *ResidentManager) Close() {
+	if m == nil {
+		return
+	}
+	if m.sched != nil {
+		m.sched.Stop()
+	}
+	if m.release != nil {
+		m.release()
+		m.release = nil
+	}
+}
+
+func (m *ResidentManager) fireRoutine(rt resident.Routine) {
+	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, resident.OriginRoutine, rt.Classes)
 }
 
 func (m *ResidentManager) currentAccount() (accountID, deviceID string) {
@@ -136,25 +214,32 @@ func (m *ResidentManager) Status() resident.Status {
 		st = "ocioso"
 	}
 
+	browserOK, browserReason := resident.IsolatedBrowserAvailable()
+	desktopOK, desktopReason := resident.IsolatedDesktopAvailable()
 	return resident.Status{
-		State:            st,
-		Phase:            2,
-		ReadOnly:         false,
-		AccountID:        acct,
-		Workstream:       resident.SanitizeWorkstream(cfg.Workstream),
-		Provider:         prov,
-		Model:            mod,
-		MemoryDir:        mem.AccountDir(),
-		AuditPath:        m.audit.Path(),
-		LastError:        lastErr,
-		SandboxAvailable: probe.Available,
-		SandboxMechanism: probe.Mechanism,
-		SandboxReason:    probe.Reason,
-		VaultAvailable:   vaultOK,
-		VaultReason:      vaultReason,
-		AllowedBinaries:  pol.AllowedBinaries,
-		AllowedHosts:     pol.AllowedHosts,
-		VaultSecrets:     vaultNames,
+		State:                 st,
+		Phase:                 3,
+		ReadOnly:              false,
+		AccountID:             acct,
+		Workstream:            resident.SanitizeWorkstream(cfg.Workstream),
+		Provider:              prov,
+		Model:                 mod,
+		MemoryDir:             mem.AccountDir(),
+		AuditPath:             m.audit.Path(),
+		LastError:             lastErr,
+		SandboxAvailable:      probe.Available,
+		SandboxMechanism:      probe.Mechanism,
+		SandboxReason:         probe.Reason,
+		VaultAvailable:        vaultOK,
+		VaultReason:           vaultReason,
+		AllowedBinaries:       pol.AllowedBinaries,
+		AllowedHosts:          pol.AllowedHosts,
+		VaultSecrets:          vaultNames,
+		EventTriggers:         cfg.EventTriggers,
+		IsolatedBrowser:       browserOK,
+		IsolatedBrowserReason: browserReason,
+		IsolatedDesktop:       desktopOK,
+		IsolatedDesktopReason: desktopReason,
 	}
 }
 
@@ -228,6 +313,15 @@ func (m *ResidentManager) RunTurn(
 	workspaceDir, workstream, message string,
 	origin resident.Origin,
 ) (resident.TurnResult, error) {
+	return m.runTurn(parentCtx, workspaceDir, workstream, message, origin, nil)
+}
+
+func (m *ResidentManager) runTurn(
+	parentCtx context.Context,
+	workspaceDir, workstream, message string,
+	origin resident.Origin,
+	classes []string,
+) (resident.TurnResult, error) {
 	cfg, err := resident.LoadConfig(m.baseDir)
 	if err != nil {
 		return resident.TurnResult{}, err
@@ -279,6 +373,10 @@ func (m *ResidentManager) RunTurn(
 		return ok
 	}
 
+	narrow, err := resident.NarrowTiers(classes)
+	if err != nil {
+		return resident.TurnResult{}, err
+	}
 	prov, mod := resident.ResolveModelRoute(cfg)
 	runner := &resident.Runner{
 		BaseDir:         m.baseDir,
@@ -291,6 +389,15 @@ func (m *ResidentManager) RunTurn(
 		ListProjects:    m.knownProjects,
 		ApproveDetailed: approveDetailed,
 		Model:           m.testModel,
+		SkillsDir:       skillx.UserSkillsDir(),
+		AllowedTiers:    narrow,
+		PermissionMode:  m.permissionMode,
+		SquadHandoff:    m.squadHandoff,
+		OnRoutineSaved: func() {
+			if m.sched != nil {
+				m.sched.Arm()
+			}
+		},
 		OnEvent: func(ev resident.Event) {
 			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
 				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
@@ -337,6 +444,7 @@ func (m *ResidentManager) RunTurn(
 		m.mu.Unlock()
 		return resident.TurnResult{}, runErr
 	}
+	_ = resident.SaveRouteTokens(m.baseDir, res.InputTokens)
 	return res, nil
 }
 
@@ -421,6 +529,88 @@ func (m *ResidentManager) AuditLog(limit int) ([]resident.AuditEntry, error) {
 		limit = 50
 	}
 	return m.audit.ReadRecent(limit)
+}
+
+func (m *ResidentManager) permissionMode(ws string) string {
+	cfg, err := team.Load(strings.TrimSpace(ws))
+	if err != nil {
+		return "indisponível"
+	}
+	return cfg.Settings.EffectivePermissionMode()
+}
+
+func (m *ResidentManager) squadHandoff(_ context.Context, h resident.SquadHandoff) (string, error) {
+	if m.sessions == nil {
+		return "", fmt.Errorf("sessão indisponível para handoff")
+	}
+	ws := strings.TrimSpace(h.Workspace)
+	if ws == "" {
+		return "", fmt.Errorf("workspace ausente para handoff")
+	}
+	cfg, err := team.Load(ws)
+	if err != nil {
+		return "", err
+	}
+	selected, err := cfg.ActiveTeam(h.Team)
+	if err != nil {
+		return "", err
+	}
+	pkg := orchestrator.ExternalHandoff(resident.LaneID, h.Objective, h.Facts)
+	if err := orchestrator.DeliverExternalHandoff(ws, pkg); err != nil {
+		return "", err
+	}
+	text := pkg.Objective
+	if len(pkg.Facts) > 0 {
+		text += "\n\n" + strings.Join(pkg.Facts, "\n")
+	}
+	go func() {
+		_, _ = m.sessions.RunTurnWithOptions(context.Background(), "resident-squad", ws, selected.Name, text, "", "", "auto", nil)
+	}()
+	return pkg.DeliveryHash, nil
+}
+
+// ListRoutines returns the structured schedules. There is no shell field.
+func (m *ResidentManager) ListRoutines() ([]resident.Routine, error) {
+	return resident.LoadRoutines(m.baseDir)
+}
+
+// SaveRoutine writes one structured routine and rearms the in-process timer.
+func (m *ResidentManager) SaveRoutine(rt resident.Routine) (resident.Routine, error) {
+	saved, err := resident.SaveRoutine(m.baseDir, rt)
+	if err != nil {
+		return resident.Routine{}, err
+	}
+	if m.sched != nil {
+		m.sched.Arm()
+	}
+	return saved, nil
+}
+
+// SetRoutineEnabled pauses or resumes one routine.
+func (m *ResidentManager) SetRoutineEnabled(id string, enabled bool) error {
+	if err := resident.SetRoutineEnabled(m.baseDir, id, enabled); err != nil {
+		return err
+	}
+	if m.sched != nil {
+		m.sched.Arm()
+	}
+	return nil
+}
+
+// DeleteRoutine removes one routine.
+func (m *ResidentManager) DeleteRoutine(id string) error {
+	if err := resident.DeleteRoutine(m.baseDir, id); err != nil {
+		return err
+	}
+	if m.sched != nil {
+		m.sched.Arm()
+	}
+	return nil
+}
+
+// ReviewSkill stores the hash of a native skill. Project skills are refused.
+func (m *ResidentManager) ReviewSkill(name string) (string, error) {
+	return resident.ReviewSkill(m.baseDir, skillx.UserSkillsDir(), name)
 }
 
 // FormatHeadlessStatus formats the one-line status printed by `hivemind serve` (§11).

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -31,7 +32,8 @@ func TestHandoffObjectiveIsCutAt4KiB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// No Windows o Go reporta 0666 mesmo com WriteFile(..., 0600). A criação não muda.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("latest.md deveria nascer 0600, veio %o", info.Mode().Perm())
 	}
 	body, err := os.ReadFile(md)
@@ -46,7 +48,7 @@ func TestHandoffObjectiveIsCutAt4KiB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jinfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && jinfo.Mode().Perm() != 0o600 {
 		t.Fatalf("json do handoff deveria ser 0600, veio %o", jinfo.Mode().Perm())
 	}
 }
@@ -135,5 +137,33 @@ func TestParallelDevelopersShareTheSameHandoff(t *testing.T) {
 	}
 	if r.qaLoopIter != 0 {
 		t.Fatalf("volta de qa não deveria contar: %d", r.qaLoopIter)
+	}
+}
+
+func TestExternalHandoffDropsShellAndCaps(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("HIVEMIND_DATA_DIR", t.TempDir())
+	pkg := ExternalHandoff("run 1", "corrija o parser\nsh -c echo x\ncmd /c whoami", []string{
+		"fato seguro",
+		"powershell -Command Get-Process",
+	})
+	if strings.Contains(pkg.Objective, "sh -c") || strings.Contains(pkg.Objective, "cmd /c") {
+		t.Fatalf("objetivo manteve shell: %q", pkg.Objective)
+	}
+	if strings.Contains(strings.Join(pkg.Facts, "\n"), "powershell") {
+		t.Fatalf("fato manteve shell: %#v", pkg.Facts)
+	}
+	if !strings.Contains(pkg.Objective, "corrija o parser") || pkg.DeliveryHash == "" {
+		t.Fatalf("pacote incompleto: %+v", pkg)
+	}
+	if err := DeliverExternalHandoff(ws, pkg); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(ws, ".hivemind", "handoff", "latest.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sh -c") {
+		t.Fatalf("arquivo de handoff manteve shell: %s", body)
 	}
 }
