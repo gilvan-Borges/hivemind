@@ -55,12 +55,24 @@ func fetchJevOpenRouter(ctx context.Context) ([]jev.ModelEntry, error) {
 		if !m.SupportsTools || !jev.IsTrustedOpenRouterModel(m.ID) {
 			continue
 		}
+		disp, curTier, curQual, baseDisc, _ := jev.CuratedModelMeta("openrouter", m.ID)
+		if disp == "" {
+			disp = m.Name
+		}
+		disc := m.DiscountPct
+		if disc <= 0 && baseDisc > 0 {
+			disc = baseDisc
+		}
 		out = append(out, jev.ModelEntry{
 			Provider:           "openrouter",
 			Model:              m.ID,
+			DisplayName:        disp,
 			ContextLength:      m.ContextLength,
 			PromptMicroUSD:     m.PromptPrice * 1_000_000.0,
 			CompletionMicroUSD: m.CompletionPrice * 1_000_000.0,
+			DiscountPct:        disc,
+			Quality:            curQual,
+			Tier:               curTier,
 			Capabilities: jev.Capabilities{
 				Tools:  m.SupportsTools,
 				Vision: m.SupportsVision,
@@ -68,6 +80,7 @@ func fetchJevOpenRouter(ctx context.Context) ([]jev.ModelEntry, error) {
 			},
 			DataClass: jev.DataClassHTTPAPI,
 			Source:    "openrouter",
+			Free:      strings.HasSuffix(strings.ToLower(m.ID), ":free"),
 		})
 	}
 	return out, nil

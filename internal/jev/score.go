@@ -138,7 +138,10 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 	return finish(Choice{
 		Provider:          best.Provider,
 		Model:             best.Model,
+		DisplayName:       best.DisplayName,
 		Tier:              best.Tier,
+		Complexity:        task.Complexity,
+		DiscountPct:       best.DiscountPct,
 		Reasons:           reasons,
 		EstimatedMicroUSD: estMicro,
 	}), Refusal{}
@@ -188,8 +191,8 @@ func parseScopedJevProvider(pin AgentPin) string {
 
 func initialTierFor(class Class, comp Complexity) Tier {
 	switch class {
-	case ClassCoding:
-		if comp == ComplexityHigh {
+	case ClassCoding, ClassPlanning, ClassReview:
+		if comp == ComplexityHigh || comp == ComplexityMedium {
 			return TierMid
 		}
 		return TierCheap
@@ -198,15 +201,32 @@ func initialTierFor(class Class, comp Complexity) Tier {
 			return TierMid
 		}
 		return TierCheap
-	case ClassPlanning:
-		if comp == ComplexityHigh {
+	case ClassVision:
+		if comp == ComplexityHigh || comp == ComplexityMedium {
 			return TierMid
 		}
 		return TierCheap
-	case ClassVision:
-		return TierCheap
 	default:
 		return TierCheap
+	}
+}
+
+func weightsForTask(policy Policy, task Task) Weights {
+	base := policy.normalizedWeights()
+	// Respect custom user weights if explicitly modified away from DefaultPolicy.
+	isDefaultWeights := math.Abs(policy.Weights.Quality-0.35) < 1e-6 &&
+		math.Abs(policy.Weights.Cost-0.50) < 1e-6 &&
+		math.Abs(policy.Weights.Latency-0.15) < 1e-6
+	if !isDefaultWeights {
+		return base
+	}
+	switch task.Complexity {
+	case ComplexityHigh:
+		return Weights{Quality: 0.78, Cost: 0.12, Latency: 0.10}
+	case ComplexityMedium:
+		return Weights{Quality: 0.62, Cost: 0.23, Latency: 0.15}
+	default:
+		return base
 	}
 }
 
@@ -245,10 +265,13 @@ func selectBestInTier(
 			continue
 		}
 		if e.Tier != "" && e.Tier != targetTier {
-			continue
+			// On high complexity tasks, also allow strong-tier models that have an active promotion discount.
+			if !(task.Complexity == ComplexityHigh && targetTier == TierMid && e.Tier == TierStrong && e.DiscountPct > 0) {
+				continue
+			}
 		}
-		if e.Tier == TierStrong {
-			// strong never enters automatic selection without explicit escalation approval.
+		if e.Tier == TierStrong && !(task.Complexity == ComplexityHigh && e.DiscountPct > 0) {
+			// strong never enters automatic selection without explicit escalation approval unless promoted on high complexity.
 			continue
 		}
 		if hasCreds && !isCredentialed(e.Provider, e.Free, health) {
@@ -307,12 +330,20 @@ func selectBestInTier(
 			}
 			continue
 		}
-		if autoCapMicroUSD > 0 && estMicro > autoCapMicroUSD {
+		effectiveAutoCap := autoCapMicroUSD
+		if effectiveAutoCap > 0 && e.DiscountPct > 0 {
+			// Discounted models (e.g. -50% promotion) get proportional headroom under the auto-escalation ceiling.
+			effectiveAutoCap = int64(float64(effectiveAutoCap) * (1.0 + float64(e.DiscountPct)/25.0))
+		}
+		if effectiveAutoCap > 0 && estMicro > effectiveAutoCap {
 			if overBudgetNeed == nil || estMicro < overBudgetNeed.EstimatedMicroUSD {
 				cp := Choice{
 					Provider:          e.Provider,
 					Model:             e.Model,
+					DisplayName:       e.DisplayName,
 					Tier:              tierForEst,
+					Complexity:        task.Complexity,
+					DiscountPct:       e.DiscountPct,
 					Reasons:           []string{"budget_wait"},
 					EstimatedMicroUSD: estMicro,
 				}
@@ -355,7 +386,7 @@ func selectBestInTier(
 	}
 
 	// Pass 2: score eligible entries and pick the winner with zero allocations.
-	w := policy.normalizedWeights()
+	w := weightsForTask(policy, task)
 	bestIdx := -1
 	bestScore := math.Inf(-1)
 	var bestCost, bestLat float64
@@ -370,9 +401,11 @@ func selectBestInTier(
 			continue
 		}
 		if e.Tier != "" && e.Tier != targetTier {
-			continue
+			if !(task.Complexity == ComplexityHigh && targetTier == TierMid && e.Tier == TierStrong && e.DiscountPct > 0) {
+				continue
+			}
 		}
-		if e.Tier == TierStrong {
+		if e.Tier == TierStrong && !(task.Complexity == ComplexityHigh && e.DiscountPct > 0) {
 			continue
 		}
 		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isEntryCircuitEligible(*e, health)) {
@@ -411,7 +444,11 @@ func selectBestInTier(
 		if checkDailyBudget(e.Provider, estMicro, policy, health) != nil {
 			continue
 		}
-		if autoCapMicroUSD > 0 && estMicro > autoCapMicroUSD {
+		effectiveAutoCap := autoCapMicroUSD
+		if effectiveAutoCap > 0 && e.DiscountPct > 0 {
+			effectiveAutoCap = int64(float64(effectiveAutoCap) * (1.0 + float64(e.DiscountPct)/25.0))
+		}
+		if effectiveAutoCap > 0 && estMicro > effectiveAutoCap {
 			continue
 		}
 
@@ -427,7 +464,13 @@ func selectBestInTier(
 		if maxLat > 0 {
 			latNorm = lat / maxLat
 		}
-		score := w.Quality*e.Quality - w.Cost*costNorm - w.Latency*latNorm
+		promoBonus := 0.0
+		if e.DiscountPct > 0 {
+			// Daily promotion priority boost: models on discount (e.g. -50% Google Carbon)
+			// get priority within their difficulty tier.
+			promoBonus = 0.22 * (float64(e.DiscountPct) / 50.0)
+		}
+		score := w.Quality*e.Quality - w.Cost*costNorm - w.Latency*latNorm + promoBonus
 		if bestIdx < 0 || score > bestScore+1e-12 ||
 			(math.Abs(score-bestScore) <= 1e-12 && (estExact < bestCost || (estExact == bestCost && lat < bestLat))) {
 			bestIdx = i
@@ -617,8 +660,18 @@ func tierOrDefault(t, def Tier) Tier {
 
 func buildReasons(task Task, e ModelEntry, targetTier Tier) []string {
 	var reasons []string
-	if targetTier == TierCheap || e.Tier == TierCheap {
-		reasons = append(reasons, "cheap_default")
+	if e.DiscountPct > 0 {
+		reasons = append(reasons, fmt.Sprintf("promo_-%d%%", e.DiscountPct))
+	}
+	switch task.Complexity {
+	case ComplexityHigh:
+		reasons = append(reasons, "dificuldade_alta")
+	case ComplexityMedium:
+		reasons = append(reasons, "dificuldade_media")
+	default:
+		if targetTier == TierCheap || e.Tier == TierCheap {
+			reasons = append(reasons, "cheap_default")
+		}
 	}
 	if task.InputTokens > 0 && e.ContextLength > 0 {
 		reasons = append(reasons, "context_fit")

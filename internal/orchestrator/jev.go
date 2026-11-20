@@ -430,12 +430,37 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 	}
 }
 
+func difficultyLabelPT(comp jev.Complexity) string {
+	switch comp {
+	case jev.ComplexityHigh:
+		return "dificuldade alta"
+	case jev.ComplexityMedium:
+		return "dificuldade média"
+	default:
+		return "dificuldade baixa"
+	}
+}
+
 func formatModelRouteText(c jev.Choice) string {
 	reasonStr := strings.Join(c.Reasons, ", ")
 	if c.Pinned {
+		if c.DiscountPct > 0 {
+			return fmt.Sprintf("Modelo fixado: %s/%s -%d%% (%s)", c.Provider, c.Model, c.DiscountPct, reasonStr)
+		}
 		return fmt.Sprintf("Modelo fixado: %s/%s (%s)", c.Provider, c.Model, reasonStr)
 	}
-	return fmt.Sprintf("Jev escolheu %s/%s (faixa %s · %s)", c.Provider, c.Model, c.Tier, reasonStr)
+	diffStr := difficultyLabelPT(c.Complexity)
+	display := strings.TrimSpace(c.DisplayName)
+	if c.DiscountPct > 0 {
+		if display != "" {
+			return fmt.Sprintf("Jev escolheu %s -%d%% (%s/%s · %s · faixa %s · %s)", display, c.DiscountPct, c.Provider, c.Model, diffStr, c.Tier, reasonStr)
+		}
+		return fmt.Sprintf("Jev escolheu %s/%s -%d%% (%s · faixa %s · %s)", c.Provider, c.Model, c.DiscountPct, diffStr, c.Tier, reasonStr)
+	}
+	if display != "" && !strings.EqualFold(display, c.Model) {
+		return fmt.Sprintf("Jev escolheu %s (%s/%s · %s · faixa %s · %s)", display, c.Provider, c.Model, diffStr, c.Tier, reasonStr)
+	}
+	return fmt.Sprintf("Jev escolheu %s/%s (%s · faixa %s · %s)", c.Provider, c.Model, diffStr, c.Tier, reasonStr)
 }
 
 func firstNonEmptyString(vals ...string) string {

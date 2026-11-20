@@ -81,9 +81,11 @@ type Capabilities struct {
 type ModelEntry struct {
 	Provider           string       `json:"provider"`
 	Model              string       `json:"model"`
+	DisplayName        string       `json:"displayName,omitempty"`
 	ContextLength      int64        `json:"contextLength"`
 	PromptMicroUSD     float64      `json:"promptMicroUsd"`
 	CompletionMicroUSD float64      `json:"completionMicroUsd"`
+	DiscountPct        int          `json:"discountPct,omitempty"`
 	Capabilities       Capabilities `json:"capabilities"`
 	LatencyP50Ms       int64        `json:"latencyP50Ms"`
 	Quality            float64      `json:"quality"`
@@ -142,13 +144,16 @@ type AgentPin struct {
 
 // Choice is the selected provider+model pair and routing rationale.
 type Choice struct {
-	Provider          string   `json:"provider"`
-	Model             string   `json:"model"`
-	Tier              Tier     `json:"tier"`
-	Reasons           []string `json:"reasons"`
-	EstimatedMicroUSD int64    `json:"estimatedMicroUsd"`
-	DecisionMicros    int64    `json:"decisionMicros"`
-	Pinned            bool     `json:"pinned,omitempty"`
+	Provider          string     `json:"provider"`
+	Model             string     `json:"model"`
+	DisplayName       string     `json:"displayName,omitempty"`
+	Tier              Tier       `json:"tier"`
+	Complexity        Complexity `json:"complexity,omitempty"`
+	DiscountPct       int        `json:"discountPct,omitempty"`
+	Reasons           []string   `json:"reasons"`
+	EstimatedMicroUSD int64      `json:"estimatedMicroUsd"`
+	DecisionMicros    int64      `json:"decisionMicros"`
+	Pinned            bool       `json:"pinned,omitempty"`
 }
 
 // Refusal explains why no candidate could be chosen without further approval or change.

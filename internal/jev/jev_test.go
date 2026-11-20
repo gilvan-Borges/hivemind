@@ -251,6 +251,44 @@ func TestScoreAgyQuotaBelow5Percent(t *testing.T) {
 	}
 }
 
+func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
+	cat := DefaultStaticCatalog()
+	if len(CuratedOpenRouterSeedEntries()) != 21 {
+		t.Fatalf("expected 21 curated OpenRouter models, got %d", len(CuratedOpenRouterSeedEntries()))
+	}
+	for _, seed := range CuratedOpenRouterSeedEntries() {
+		if !IsTrustedOpenRouterModel(seed.Model) {
+			t.Fatalf("curated model %s must be trusted by IsTrustedOpenRouterModel", seed.Model)
+		}
+		if _, ok := cat.Lookup("openrouter", seed.Model); !ok {
+			t.Fatalf("curated model %s missing from DefaultStaticCatalog", seed.Model)
+		}
+	}
+
+	pol := DefaultPolicy()
+	health := HealthSnapshot{
+		Credentials:     map[string]bool{"openrouter": true},
+		AgyRemainingPct: -1,
+	}
+
+	// Medium difficulty coding task must route to TierMid and prioritize Google Carbon (-50% discount).
+	medTask := Task{
+		Role:        team.RoleDeveloper,
+		Class:       ClassCoding,
+		Complexity:  ComplexityMedium,
+		InputTokens: 6000,
+		NeedsTools:  true,
+		OnlyProvider: "openrouter",
+	}
+	choice, ref := Score(medTask, cat, pol, health, AgentPin{}, RepoPolicy{})
+	if ref.Code != "" {
+		t.Fatalf("unexpected refusal on medium task: %+v", ref)
+	}
+	if choice.Model != "google/gemini-4-carbon" || choice.DiscountPct != 50 || choice.DisplayName != "Google Carbon" {
+		t.Fatalf("expected google/gemini-4-carbon (-50%%) to win on medium difficulty coding task, got %+v", choice)
+	}
+}
+
 func TestRouteRejectsNonCatalogIDAndAsyncRefresh(t *testing.T) {
 	dir := t.TempDir()
 	catPath := filepath.Join(dir, "catalog.json")

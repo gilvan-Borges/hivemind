@@ -148,20 +148,44 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         items.push({ value: `cursor:${slug}`, label: slug });
       }
       break;
-    case "openrouter":
+    case "openrouter": {
+      const curatedOR: Array<{ value: string; label: string }> = [
+        { value: "google/gemini-4-carbon", label: "★ Google Gemini 4 Carbon -50% (google/gemini-4-carbon · 1M · Promoção)" },
+        { value: "deepseek/deepseek-v4.1-flash-1017", label: "★ DeepSeek V4.1 Flash 1017 (deepseek/deepseek-v4.1-flash-1017 · 1.05M)" },
+        { value: "deepseek/deepseek-v4.1-flash", label: "★ DeepSeek V4.1 Flash (deepseek/deepseek-v4.1-flash · 1.05M)" },
+        { value: "deepseek/deepseek-v4-pro", label: "★ DeepSeek V4 Pro (deepseek/deepseek-v4-pro · 1M · Engenharia pesada)" },
+        { value: "google/gemini-4-neon", label: "★ Google Gemini 4 Neon (google/gemini-4-neon · 1M · Coding agêntico)" },
+        { value: "google/gemini-4-argon", label: "★ Google Gemini 4 Argon (google/gemini-4-argon · 1M · Frontier)" },
+        { value: "google/gemini-3.8-flash", label: "★ Google Gemini 3.8 Flash (google/gemini-3.8-flash · 1M · Multimodal)" },
+        { value: "openai/gpt-6.1-sol", label: "★ OpenAI GPT-6.1 Sol (openai/gpt-6.1-sol · 1M · Multi-arquivo)" },
+        { value: "openai/gpt-6.1-terra", label: "★ OpenAI GPT-6.1 Terra (openai/gpt-6.1-terra · 1M · Coding & Testes)" },
+        { value: "openai/gpt-6-luna", label: "★ OpenAI GPT-6 Luna (openai/gpt-6-luna · 1M · Rápido/JSON)" },
+        { value: "anthropic/claude-opus-5.5", label: "★ Claude Opus 5.5 (anthropic/claude-opus-5.5 · 1M · Arquitetura/Revisão)" },
+        { value: "anthropic/claude-haiku-5.5", label: "★ Claude Haiku 5.5 (anthropic/claude-haiku-5.5 · 200K · Ultra rápido)" },
+        { value: "x-ai/grok-4.7", label: "★ Grok 4.7 (x-ai/grok-4.7 · 1M · Long-running tasks)" },
+        { value: "z-ai/glm-5.3", label: "★ Z.ai GLM 5.3 (z-ai/glm-5.3 · 1M · Programação)" },
+        { value: "z-ai/glm-5.3-flash", label: "★ Z.ai GLM 5.3 Flash (z-ai/glm-5.3-flash · 1M · Baixo custo)" },
+        { value: "moonshotai/kimi-k3.1-pro", label: "★ Moonshot Kimi K3.1 Pro (moonshotai/kimi-k3.1-pro · 1M · Contexto longo)" },
+        { value: "qwen/qwen3-coder", label: "★ Qwen3 Coder 480B A35B (qwen/qwen3-coder · 1M · MoE Coding)" },
+        { value: "tencent/hy4", label: "★ Tencent Hy4 (tencent/hy4 · 1.05M · Agêntico/Visual)" },
+        { value: "tencent/hy4-flash", label: "★ Tencent Hy4 Flash (tencent/hy4-flash · 1.05M · Alto volume)" },
+        { value: "particle-ai/particle-1:free", label: "★ Particle-1 Gratuito (particle-ai/particle-1:free · 1.05M · Free)" },
+        { value: "cohere/north-mini-code:free", label: "★ Cohere North Mini Code Gratuito (cohere/north-mini-code:free · 256K · Free)" },
+      ];
+      const curatedSet = new Set(curatedOR.map((c) => c.value.toLowerCase()));
+      const extraOR = state.openRouterModels
+        .filter((m) => !curatedSet.has(m.id.toLowerCase()))
+        .map((m) => ({
+          value: m.id,
+          label: m.discountPct && m.discountPct > 0 ? `${m.id} (-${m.discountPct}% OFF)` : m.id,
+        }));
       items = [
-        { value: "openrouter:auto", label: "auto (Jev escolhe o melhor/mais barato no OpenRouter)" },
-        ...(state.openRouterModels.length > 0
-          ? state.openRouterModels.map((m) => ({ value: m.id, label: m.id }))
-          : [
-              { value: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5 (carregando catálogo…)" },
-              { value: "openai/gpt-4.1", label: "openai/gpt-4.1" },
-              { value: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
-              { value: "deepseek/deepseek-chat", label: "deepseek/deepseek-chat" },
-              { value: "qwen/qwen3-coder", label: "qwen/qwen3-coder" },
-            ]),
+        { value: "openrouter:auto", label: "auto (Jev escolhe por dificuldade da tarefa + promoções do dia)" },
+        ...curatedOR,
+        ...extraOR,
       ];
       break;
+    }
   }
   const normalizedCur = cur.replace("/", ":");
   if (cur && inferModelProvider(cur, false) === providerId && !items.some((x) => x.value === cur || x.value === normalizedCur)) {

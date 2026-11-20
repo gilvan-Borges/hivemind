@@ -25,6 +25,7 @@ export interface OpenRouterModelInfo {
   contextLength?: number;
   promptPrice?: number;
   completionPrice?: number;
+  discountPct?: number;
 }
 
 export interface AgyStatus {

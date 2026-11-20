@@ -1655,6 +1655,7 @@ export namespace modelx {
 	    contextLength?: number;
 	    promptPrice?: number;
 	    completionPrice?: number;
+	    discountPct?: number;
 	    supportsTools?: boolean;
 	    supportsVision?: boolean;
 	
@@ -1669,6 +1670,7 @@ export namespace modelx {
 	        this.contextLength = source["contextLength"];
 	        this.promptPrice = source["promptPrice"];
 	        this.completionPrice = source["completionPrice"];
+	        this.discountPct = source["discountPct"];
 	        this.supportsTools = source["supportsTools"];
 	        this.supportsVision = source["supportsVision"];
 	    }
