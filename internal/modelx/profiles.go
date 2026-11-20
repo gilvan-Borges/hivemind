@@ -289,8 +289,11 @@ func ResolveProfile(ctx context.Context, provider string) (*ProviderProfile, str
 		return nil
 	}
 
-	// 1. Explicit ctx override.
+	// 1. Explicit ctx override. "__global__" forces the default/system credential without profile isolation.
 	if oid := profileOverrideFromContext(ctx, prov); oid != "" {
+		if strings.EqualFold(oid, "__global__") || strings.EqualFold(oid, "global") {
+			return nil, "global", ""
+		}
 		if p := byID(oid); p != nil {
 			return p, "override", ""
 		}

@@ -533,8 +533,8 @@ export function renderModalLayer() {
           <label for="prof-env-CLOUDSDK_CONFIG">Pasta CLOUDSDK_CONFIG:</label>
           <input id="prof-env-CLOUDSDK_CONFIG" value="${escapeHtml(editingProf?.configValues?.["CLOUDSDK_CONFIG"] || "")}" placeholder="Automática em %APPDATA%\\HiveMind\\agy-profiles se vazio" />
           <div class="dim" style="grid-column:1/-1;font-size:11px;line-height:1.45;background:var(--bg-deep);border:1px solid var(--border);padding:8px;border-radius:8px">
-            Cada perfil ADC ganha sua própria pasta isolada de credenciais gcloud (permite rodar <strong>conta pessoal</strong> e <strong>conta Vibetex</strong> ao mesmo tempo sem deslogar). Após salvar, rode no terminal com o caminho gerado:<br />
-            <code>set CLOUDSDK_CONFIG=&lt;pasta&gt; &amp;&amp; gcloud auth application-default login</code>
+            Cada perfil ADC ganha sua própria pasta isolada de credenciais gcloud (permite rodar <strong>Conta 1 Empresa</strong>, <strong>Conta 2 Particular</strong> e <strong>Conta 3 Reserva</strong> ao mesmo tempo sem deslogar). Quando o limite de um modelo (ex.: <code>argon</code>) acaba na Conta 1, o HiveMind mantém os outros modelos na Conta 1 e chaveia só o <code>argon</code> para a Conta 2!
+            ${editingProf ? `<div style="margin-top:6px"><button type="button" class="mini primary" data-login-agy-profile="${escapeHtml(editingProf.id)}">Autenticar Conta no Google (abrir login ADC)</button></div>` : `<div style="margin-top:4px">Salve o perfil primeiro e depois clique em <strong>Autenticar Google ADC</strong> no card da conta.</div>`}
           </div>
         ` : curAuthMode === "env" ? `
           <label for="prof-command">Caminho do agy (opcional):</label>
@@ -619,19 +619,29 @@ export function renderModalLayer() {
               ${renderProfileEditor()}
 
               <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                <div class="dim" style="font-size:11.5px;padding:8px 10px;border-radius:8px;background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.22);line-height:1.45">
+                  <strong>Pool Multi-Contas &amp; Reserva Inteligente por Modelo (Conta 1 → 2 → 3):</strong>
+                  Contas prontas do mesmo provedor formam uma cascata automática por modelo. Se o limite de tokens do <code>argon</code> acabar na <strong>Conta 1</strong>, os demais modelos (<code>gemini-4-neon</code>, etc.) <strong>continuam na Conta 1</strong> enquanto apenas o <code>argon</code> muda automaticamente para a <strong>Conta 2</strong> (e depois <strong>Conta 3</strong>).
+                </div>
                 ${profilesList.length === 0 ? `
                   <div class="dim" style="font-size:12px;padding:14px;text-align:center;border:1px dashed var(--border);border-radius:10px">
-                    Nenhuma conta extra configurada ainda. Clique em <strong>+ Nova conta / perfil</strong> para cadastrar múltiplas contas do <strong>agy</strong> (pessoal vs empresa), OpenRouter, Cursor, etc.
+                    Nenhuma conta extra configurada ainda. Clique em <strong>+ Nova conta / perfil</strong> para cadastrar múltiplas contas do <strong>agy</strong> (Conta 1 Empresa, Conta 2 Particular, Conta 3 Reserva), OpenRouter, Cursor, etc.
                   </div>
-                ` : profilesList.map((p) => {
-                  const orgTag = p.orgPatterns?.length ? `Orgs: ${p.orgPatterns.map((o) => `<code>${escapeHtml(o)}</code>`).join(", ")}` : (p.isDefault ? "Padrão global do provedor" : "Uso manual / sob demanda");
-                  const maskedList = Object.entries(p.envMasked || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(" · ");
-                  return `
+                ` : (() => {
+                  const provRank: Record<string, number> = {};
+                  return profilesList.map((p) => {
+                    provRank[p.provider] = (provRank[p.provider] || 0) + 1;
+                    const rank = provRank[p.provider];
+                    const poolBadge = rank === 1 ? "Conta #1 (Principal)" : `Conta #${rank} (Reserva ${rank - 1})`;
+                    const orgTag = p.orgPatterns?.length ? `Orgs: ${p.orgPatterns.map((o) => `<code>${escapeHtml(o)}</code>`).join(", ")}` : (p.isDefault ? "Padrão global do provedor" : "Pool automático / sob demanda");
+                    const maskedList = Object.entries(p.envMasked || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(" · ");
+                    return `
                     <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
                       <div style="min-width:0;flex:1">
                         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                           <span style="font-size:11px;padding:2px 7px;border-radius:999px;background:var(--bg-elevated);border:1px solid var(--border);font-weight:600">${escapeHtml(provLabels[p.provider] || p.provider)}</span>
                           <strong>${escapeHtml(p.name)}</strong>
+                          <span class="flow-pill pending" title="Posição desta conta na fila de failover por modelo">${escapeHtml(poolBadge)}</span>
                           ${p.authMode && p.provider === "agy" ? `<span class="dim" style="font-size:11px">(${escapeHtml(p.authMode.toUpperCase())})</span>` : ""}
                           <span style="font-size:11px;color:${p.ready ? "var(--green)" : "var(--amber)"}">${p.ready ? "Pronto" : "Pendente"}</span>
                         </div>
@@ -639,14 +649,16 @@ export function renderModalLayer() {
                         ${p.readyDetail ? `<div class="dim" style="font-size:11px;margin-top:2px;word-break:break-word">${escapeHtml(p.readyDetail)}</div>` : ""}
                         ${maskedList ? `<div class="dim" style="font-size:11px;margin-top:2px">${maskedList}</div>` : ""}
                       </div>
-                      <div style="display:flex;gap:6px;flex-shrink:0">
+                      <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+                        ${p.provider === "agy" && p.authMode === "adc" ? `<button type="button" class="mini primary" data-login-agy-profile="${escapeHtml(p.id)}" title="Abrir login do Google Cloud ADC na pasta isolada desta conta">Autenticar Google</button>` : ""}
                         ${wsRoot ? `<button type="button" class="mini prof-pin" data-id="${escapeHtml(p.id)}" data-prov="${escapeHtml(p.provider)}">Usar aqui</button>` : ""}
                         <button type="button" class="mini prof-edit" data-id="${escapeHtml(p.id)}">Editar</button>
                         <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}">Excluir</button>
                       </div>
                     </div>
                   `;
-                }).join("")}
+                  }).join("");
+                })()}
               </div>
             ` : `
               <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
@@ -789,6 +801,19 @@ export function renderModalLayer() {
           renderModalLayer();
         } catch (err: any) {
           toastError("excluir perfil", err);
+        }
+      });
+    });
+    document.querySelectorAll<HTMLElement>("[data-login-agy-profile]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const backend = api();
+        const pid = btn.dataset.loginAgyProfile || "";
+        if (!backend?.LoginAgyProfile || !pid) return;
+        try {
+          const dir = await backend.LoginAgyProfile(pid);
+          toast(`Terminal de login Google ADC aberto (${dir}). Após autenticar no navegador, clique em Atualizar.`, "success");
+        } catch (err: any) {
+          toastError("abrir login Google ADC", err);
         }
       });
     });

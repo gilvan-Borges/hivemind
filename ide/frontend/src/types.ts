@@ -970,6 +970,7 @@ export interface WailsBackendApp {
   SaveProviderProfile?(req: SaveProfileRequest): Promise<ProfilesOverview>;
   DeleteProviderProfile?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   BindProviderWorkspace?(workspace: string, provider: string, profileID: string): Promise<ProfilesOverview>;
+  LoginAgyProfile?(profileID: string): Promise<string>;
   MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
   RotateMobileToken?(): Promise<MobileBridgeStatus>;

@@ -278,6 +278,10 @@ export function LoadSession(arg1, arg2) {
   return window['go']['main']['App']['LoadSession'](arg1, arg2);
 }
 
+export function LoginAgyProfile(arg1) {
+  return window['go']['main']['App']['LoginAgyProfile'](arg1);
+}
+
 export function MobileBridgeStatus() {
   return window['go']['main']['App']['MobileBridgeStatus']();
 }

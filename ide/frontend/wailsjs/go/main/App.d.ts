@@ -150,6 +150,8 @@ export function ListSkills(arg1:string):Promise<Array<idecore.SkillInfo>>;
 
 export function LoadSession(arg1:string,arg2:string):Promise<idecore.SessionDetail>;
 
+export function LoginAgyProfile(arg1:string):Promise<string>;
+
 export function MobileBridgeStatus():Promise<remote.StatusInfo>;
 
 export function MobilePairing():Promise<remote.PairingInfo>;

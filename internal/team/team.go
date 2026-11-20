@@ -592,9 +592,14 @@ func NormalizeRole(role string) string {
 	}
 }
 
-// NormalizeProvider picks a provider from an explicit value or the model id.
+// NormalizeProvider maps aliases and empty provider strings to the canonical
+// provider id used by modelx.New.
 func NormalizeProvider(provider, model string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
+	rawProv := strings.ToLower(strings.TrimSpace(provider))
+	if i := strings.IndexByte(rawProv, '@'); i > 0 {
+		rawProv = rawProv[:i]
+	}
+	switch rawProv {
 	case "agy", "antigravity":
 		return "agy"
 	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
@@ -618,12 +623,31 @@ func NormalizeProvider(provider, model string) string {
 	case "":
 		return inferProvider(model)
 	default:
-		return strings.ToLower(strings.TrimSpace(provider))
+		return rawProv
 	}
 }
 
 func inferProvider(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.IndexByte(m, '@'); i > 0 {
+		prefix := m[:i]
+		switch prefix {
+		case "agy", "antigravity":
+			return "agy"
+		case "openrouter":
+			return "openrouter"
+		case "opencode", "opencode-go":
+			return "opencode"
+		case "cursor":
+			return "cursor"
+		case "gemini":
+			return "gemini"
+		case "anthropic":
+			return "anthropic"
+		case "openai":
+			return "openai"
+		}
+	}
 	switch {
 	case m == "jev" || strings.HasPrefix(m, "jev:") || strings.HasPrefix(m, "jev/"):
 		return "jev"

@@ -13,6 +13,18 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   const cur = (modelSpec || "").trim();
   if (!cur && includeDefaultBlank) return "default";
   const low = cur.toLowerCase();
+  const atIdx = low.indexOf("@");
+  if (atIdx > 0) {
+    const pref = low.slice(0, atIdx);
+    if (pref === "agy" || pref === "antigravity") return "agy";
+    if (pref === "openrouter") return "openrouter";
+    if (pref === "opencode-go") return "opencode-go";
+    if (pref === "opencode") return "opencode";
+    if (pref === "gemini") return "gemini";
+    if (pref === "anthropic") return "anthropic";
+    if (pref === "openai") return "openai";
+    if (pref === "cursor") return "cursor";
+  }
   if (low === "openrouter:auto" || low === "openrouter/auto" || low === "openrouter:jev") return "openrouter";
   if (low === "opencode-go:auto" || low === "opencode-go/auto") return "opencode-go";
   if (low === "opencode:auto" || low === "opencode/auto") return "opencode";
@@ -72,14 +84,24 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe)" },
         { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
       ];
-    case "agy":
+    case "agy": {
+      const agyProfiles = (state.profilesOverview?.profiles || []).filter((p) => p.provider === "agy");
+      const poolHint = agyProfiles.length > 0 ? ` — Pool (${agyProfiles.length + 1} contas c/ failover por modelo)` : "";
+      const baseModels = state.models.length > 0
+        ? state.models.map((m) => ({ slug: m.slug, value: `agy:${m.slug}`, label: `${m.slug}${poolHint}` }))
+        : [{ slug: "agy", value: "agy", label: `agy (padrão)${poolHint}` }];
       items = [
-        { value: "agy:auto", label: "auto (Jev escolhe no Antigravity)" },
-        ...(state.models.length > 0
-          ? state.models.map((m) => ({ value: `agy:${m.slug}`, label: m.slug }))
-          : [{ value: "agy", label: "agy (padrão)" }]),
+        { value: "agy:auto", label: `auto (Jev escolhe no Antigravity${poolHint})` },
+        ...baseModels.map((m) => ({ value: m.value, label: m.label })),
       ];
+      for (const prof of agyProfiles) {
+        for (const m of baseModels) {
+          const val = m.slug === "agy" ? `agy@${prof.id}` : `agy@${prof.id}:${m.slug}`;
+          items.push({ value: val, label: `[Conta: ${prof.name}] ${m.slug}` });
+        }
+      }
       break;
+    }
     case "opencode-go":
       items = [
         { value: "opencode:auto", label: "auto (Jev escolhe no OpenCode)" },

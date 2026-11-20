@@ -356,14 +356,26 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	msg := buildUserContent(objective+r.teamMemorySnippet(), req.Attachments)
 
-	useTriage := (runMode == "" && r.EnableTriage) ||
+	useTriage := ((runMode == "" && r.EnableTriage) ||
 		runMode == "auto" ||
 		runMode == "direct" ||
 		runMode == "auto-review" ||
 		runMode == "plan" ||
 		runMode == "plan:sdd" ||
 		runMode == "plan:sdd-jira" ||
-		(runMode == "squad" && r.EnableTriage && r.chiefPlan == "")
+		(runMode == "squad" && r.EnableTriage)) &&
+		(r.chiefPlan == "" || runMode == "plan" || runMode == "plan:sdd" || runMode == "plan:sdd-jira" || runMode == "direct" || runMode == "auto-review")
+	if !useTriage && r.chiefPlan != "" {
+		if r.OnEvent != nil {
+			r.OnEvent(Event{
+				Kind:  "handoff",
+				Stage: "dev",
+				Label: "Retomando direto no Desenvolvedor (plano do Chefe preservado)",
+				Text:  "O plano técnico e a divisão de tarefas do Chefe já estão prontos nesta sessão — pulando nova triagem e retomando direto na worktree do Desenvolvedor.",
+			})
+		}
+		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
+	}
 	if useTriage {
 		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode, runMode)
 		result.InputTokens = r.turnInputTokens
@@ -1133,8 +1145,41 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	return m, err
 }
 
+// isResumeSquadPrompt returns true when the user sends a short continuation prompt
+// (e.g. "continua", "continue", "pode continuar", "tenta de novo", "prosseguir") to
+// resume an interrupted/failed Dev/QA squad run without re-running the Triage Chief.
+func isResumeSquadPrompt(raw string) bool {
+	text := strings.TrimSpace(raw)
+	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
+	}
+	if idx := strings.Index(text, "\n\nIssue "); idx > 0 {
+		text = strings.TrimSpace(text[:idx])
+	}
+	low := strings.ToLower(strings.TrimSpace(text))
+	if low == "" || len(low) > 120 {
+		return false
+	}
+	switch low {
+	case "continua", "continue", "continuar", "pode continuar", "podes continuar",
+		"prosseguir", "prossiga", "retomar", "retome", "segue", "seguir", "vai",
+		"tenta de novo", "tentar de novo", "tente novamente", "rodar dev", "roda o dev",
+		"continue da onde parou", "continua de onde parou", "continuar de onde parou",
+		"ok", "aprovar", "aprovado", "go", "resume":
+		return true
+	}
+	for _, prefix := range []string{
+		"continua ", "continue ", "continuar ", "pode continuar", "retomar ", "retome ",
+		"prossiga", "prosseguir", "tenta de novo", "tente novamente", "segue ",
+	} {
+		if strings.HasPrefix(low, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode string) (session.Session, error) {
-	consumePendingPlan := runMode == "squad"
 	if id != "" {
 		got, err := r.Sessions.Get(ctx, &session.GetRequest{AppName: sessionx.AppName, UserID: sessionx.UserID, SessionID: id})
 		if err != nil {
@@ -1144,13 +1189,21 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		isPendingPlan := strings.TrimSpace(fmt.Sprint(pendingFlag)) == "1"
 		docsFlag, _ := got.Session.State().Get("sdd_docs_pending")
 		isDocsPending := strings.TrimSpace(fmt.Sprint(docsFlag)) == "1"
+		qaApprovedFlag, _ := got.Session.State().Get("qa_approved")
+		isQAApproved := strings.TrimSpace(fmt.Sprint(qaApprovedFlag)) == "1"
+		existingPlanRaw, _ := got.Session.State().Get("chief_plan")
+		hasExistingPlan := existingPlanRaw != nil && strings.TrimSpace(fmt.Sprint(existingPlanRaw)) != ""
+
 		if runMode == "plan:sdd-jira" && !isDocsPending {
 			return nil, fmt.Errorf("não há docs SDD pendentes de aprovação nesta sessão; execute primeiro o modo Planejar · Projeto SDD (plan:sdd) e aprove o Gate 1 (Docs & Arquitetura)")
 		}
-		if consumePendingPlan && isPendingPlan {
-			if prevPlan, err := got.Session.State().Get("chief_plan"); err == nil && prevPlan != nil {
-				r.chiefPlan = strings.TrimSpace(fmt.Sprint(prevPlan))
-			}
+		isResume := isResumeSquadPrompt(objective)
+		shouldRestorePlan := hasExistingPlan && (
+			(runMode == "squad" && (isPendingPlan || !isQAApproved)) ||
+			(isResume && (isPendingPlan || !isQAApproved)))
+
+		if shouldRestorePlan {
+			r.chiefPlan = strings.TrimSpace(fmt.Sprint(existingPlanRaw))
 			if prevBrief, err := got.Session.State().Get("chief_context_brief"); err == nil && prevBrief != nil {
 				r.chiefContextBrief = strings.TrimSpace(fmt.Sprint(prevBrief))
 			}
@@ -1180,12 +1233,21 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 					r.selectedNative = skillx.Match(r.NativeSkills, strings.Split(raw, "\n"))
 				}
 			}
+			// Preserve the original task objective in the session when the user just typed "continua".
+			if isResume {
+				if prevObj, err := got.Session.State().Get("objective"); err == nil && prevObj != nil {
+					if origObj := strings.TrimSpace(fmt.Sprint(prevObj)); origObj != "" && !isResumeSquadPrompt(origObj) {
+						objective = origObj
+						r.objectiveText = origObj
+					}
+				}
+			}
 		}
 		if err := sessionx.SetObjective(got.Session, objective, key); err != nil {
 			return nil, err
 		}
 		priorCtx := summarizePriorSessionContext(got.Session)
-		keepPlan := (consumePendingPlan && isPendingPlan && r.chiefPlan != "") ||
+		keepPlan := (shouldRestorePlan && r.chiefPlan != "") ||
 			(runMode == "plan:sdd") ||
 			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
@@ -1196,10 +1258,6 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			"qa_approved":           "",
 			"integrate_status":      "",
 			"plan_pending_approval": "",
-			"dev_slices_joined":     "",
-			"pr_number":             "",
-			"pr_branch":             "",
-			"pr_reviewers":          "",
 		}
 		if runMode == "plan:sdd" || runMode == "plan:sdd-jira" {
 			resetMap["sdd_stage"] = map[bool]string{true: "docs", false: "backlog"}[runMode == "plan:sdd"]
@@ -1213,6 +1271,10 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		if !keepPlan {
 			resetMap["chief_plan"] = ""
 			resetMap["chief_context_brief"] = ""
+			resetMap["dev_slices_joined"] = ""
+			resetMap["pr_number"] = ""
+			resetMap["pr_branch"] = ""
+			resetMap["pr_reviewers"] = ""
 			resetMap["selected_skills"] = ""
 			resetMap["selected_native_skills"] = ""
 		}
@@ -2316,6 +2378,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("chief_context_brief", r.chiefContextBrief)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
+			_ = tctx.State().Set("pr_number", strconv.Itoa(r.prNumber))
+			_ = tctx.State().Set("pr_branch", r.prBranch)
+			_ = tctx.State().Set("pr_reviewers", strings.Join(r.prReviewers, ","))
 			_ = tctx.State().Set("selected_skills", strings.Join(skillNames, "\n"))
 			_ = tctx.State().Set("selected_native_skills", strings.Join(nativeNames, "\n"))
 			if actions := tctx.Actions(); actions != nil {
@@ -2325,9 +2390,22 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				actions.StateDelta["chief_plan"] = r.chiefPlan
 				actions.StateDelta["chief_context_brief"] = r.chiefContextBrief
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
+				actions.StateDelta["pr_number"] = strconv.Itoa(r.prNumber)
+				actions.StateDelta["pr_branch"] = r.prBranch
+				actions.StateDelta["pr_reviewers"] = strings.Join(r.prReviewers, ",")
 				actions.StateDelta["selected_skills"] = strings.Join(skillNames, "\n")
 				actions.StateDelta["selected_native_skills"] = strings.Join(nativeNames, "\n")
 			}
+			_ = sessionx.UpdateState(sess, map[string]any{
+				"chief_plan":             r.chiefPlan,
+				"chief_context_brief":    r.chiefContextBrief,
+				"dev_slices_joined":      joinedSlices,
+				"pr_number":              strconv.Itoa(r.prNumber),
+				"pr_branch":              r.prBranch,
+				"pr_reviewers":           strings.Join(r.prReviewers, ","),
+				"selected_skills":        strings.Join(skillNames, "\n"),
+				"selected_native_skills": strings.Join(nativeNames, "\n"),
+			})
 			r.writeHandoffDossier(sess.ID())
 
 			resolved := r.resolveDynamicDevs()

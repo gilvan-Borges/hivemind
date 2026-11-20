@@ -24,7 +24,70 @@ var (
 )
 
 // New returns the ADK model for a provider id produced by team.NormalizeProvider.
+// When multiple accounts/profiles are configured for the provider (e.g. Conta 1, Conta 2, Conta 3),
+// it automatically wraps the model in an Account-Scoped Quota Pool so that if one model
+// (e.g. "argon") exhausts quota on Conta 1, only that model fails over to Conta 2 while
+// other models continue running on Conta 1.
 func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
+	baseProv, preferredAccountID, cleanModel := SplitAccountModelSpec(provider, modelName)
+	if preferredAccountID != "" {
+		ctx = WithProfileOverride(ctx, baseProv, preferredAccountID)
+	}
+	pool := ListAccountPoolForProvider(ctx, baseProv, preferredAccountID)
+	if len(pool) > 1 {
+		idx := 0
+		for i, acc := range pool {
+			if IsAccountModelSlotHealthy(baseProv, acc.ID, cleanModel) {
+				idx = i
+				break
+			}
+		}
+		accCtx := ctx
+		if pool[idx].ID == "__system__" {
+			accCtx = WithProfileOverride(ctx, baseProv, "__global__")
+		} else if pool[idx].ID != "" {
+			accCtx = WithProfileOverride(ctx, baseProv, pool[idx].ID)
+		}
+		initialLLM, err := newSingleAccountModel(accCtx, baseProv, cleanModel)
+		if err != nil {
+			// Try remaining healthy accounts in the pool right at initialization time (e.g. if Conta 1 OpenRouter key failed preflight).
+			for i, acc := range pool {
+				if i == idx {
+					continue
+				}
+				altCtx := ctx
+				if acc.ID == "__system__" {
+					altCtx = WithProfileOverride(ctx, baseProv, "__global__")
+				} else if acc.ID != "" {
+					altCtx = WithProfileOverride(ctx, baseProv, acc.ID)
+				}
+				if altLLM, altErr := newSingleAccountModel(altCtx, baseProv, cleanModel); altErr == nil {
+					RecordAccountModelFailure(baseProv, pool[idx].ID, pool[idx].Name, cleanModel, err)
+					idx = i
+					initialLLM = altLLM
+					err = nil
+					break
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &pooledAccountLLM{
+			baseCtx:     ctx,
+			provider:    NormalizeProfileProvider(baseProv),
+			rawProvider: baseProv,
+			modelName:   cleanModel,
+			pool:        pool,
+			buildRaw:    newSingleAccountModel,
+			activeIdx:   idx,
+			activeLLM:   initialLLM,
+		}, nil
+	}
+	return newSingleAccountModel(ctx, baseProv, cleanModel)
+}
+
+func newSingleAccountModel(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {

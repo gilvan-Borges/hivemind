@@ -621,6 +621,12 @@ func (a *App) BindProviderWorkspace(workspace, provider, profileID string) (mode
 	return modelx.BindProviderWorkspace(workspace, provider, profileID)
 }
 
+// LoginAgyProfile opens an interactive terminal window running `gcloud auth application-default login`
+// inside the isolated CLOUDSDK_CONFIG directory for the given AGY profile ID.
+func (a *App) LoginAgyProfile(profileID string) (string, error) {
+	return modelx.LaunchAgyADCLogin(profileID)
+}
+
 // ListOpenRouterModels returns the full public OpenRouter catalog (cached ~30min).
 func (a *App) ListOpenRouterModels() ([]modelx.OpenRouterModel, error) {
 	return modelx.OpenRouterModels(a.ctx)
