@@ -72,6 +72,7 @@ func TestBridgeResidentRemoteRequiresApprovalOverExistingRoutes(t *testing.T) {
 		Sessions:  sessions,
 		TestModel: scripted,
 	})
+	t.Cleanup(resMgr.Close)
 	adapter := &Adapter{Sessions: sessions, Resident: resMgr, Hub: hub}
 	path := filepath.Join(t.TempDir(), "remote-bridge.json")
 	cfg, err := LoadConfigFrom(path)

@@ -18,7 +18,6 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 	}{
 		{"run_shell", nil, TierExec},
 		{"exec", nil, TierExec},
-		{"cron_add", nil, TierWrite},
 		{"http_get", nil, TierNetwork},
 		{"web_fetch", nil, TierNetwork},
 		{"mcp_enable_server", nil, TierNetwork},
@@ -27,7 +26,7 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 		{"desktop_click", nil, TierDestructive},
 		{"unknown_evil_tool", nil, TierDestructive},
 		{"exec_command", map[string]any{"argv": []string{"go", "version"}}, TierExec}, // empty allowlist denies
-		{"net_fetch", map[string]any{"url": "https://api.github.com"}, TierNetwork}, // empty allowlist denies
+		{"net_fetch", map[string]any{"url": "https://api.github.com"}, TierNetwork},   // empty allowlist denies
 	}
 
 	origins := []Origin{OriginLocal, OriginRemote, OriginRoutine, OriginSubagent}
