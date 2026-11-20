@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
+import type { AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
 import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
@@ -1833,6 +1833,60 @@ export function renderModalLayer() {
   layer.innerHTML = "";
 }
 
+let jevPolicyDraft: JevPolicy | null = null;
+
+function numField(id: string, fallback: number): number {
+  const raw = (document.getElementById(id) as HTMLInputElement | null)?.value ?? "";
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
+  const p = pol ?? {
+    version: 1,
+    enabled: false,
+    weights: { quality: 0.35, cost: 0.5, latency: 0.15 },
+    autoEscalateUsd: 0.02,
+    maxEscalateRatio: 3,
+    dailyUsd: { openrouter: 1, opencode: 1, gemini: 1, openai: 1, anthropic: 1 },
+    allowDataClass: ["cli_account", "http_api", "workspace_agent"],
+  };
+  const daily = p.dailyUsd || {};
+  const allow = new Set(p.allowDataClass || []);
+  const check = (id: string, on: boolean, label: string) =>
+    `<label class="dim"><input type="checkbox" id="${id}" ${on ? "checked" : ""}/> ${label}</label>`;
+  return `
+    <div class="aiu-card">
+      <div class="aiu-card-head">
+        <div class="aiu-card-title">
+          <strong>Política do Jev</strong>
+          <span class="dim" style="font-size:11px">só neste PC · o bridge não grava</span>
+        </div>
+        <button type="button" class="primary mini" id="aiu-save-jev-policy">Salvar</button>
+      </div>
+      <div class="aiu-card-body" style="display:grid;gap:6px;font-size:12px">
+        ${check("jev-enabled", p.enabled, "Jev ligado")}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <label class="dim">qualidade <input id="jev-w-quality" type="number" step="0.01" min="0" value="${p.weights.quality}" style="width:70px"/></label>
+          <label class="dim">custo <input id="jev-w-cost" type="number" step="0.01" min="0" value="${p.weights.cost}" style="width:70px"/></label>
+          <label class="dim">latência <input id="jev-w-latency" type="number" step="0.01" min="0" value="${p.weights.latency}" style="width:70px"/></label>
+          <label class="dim">teto US$ <input id="jev-escalate" type="number" step="0.01" min="0" value="${p.autoEscalateUsd}" style="width:70px"/></label>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${["openrouter", "opencode", "gemini", "openai", "anthropic"].map((name) =>
+            `<label class="dim">${name} <input id="jev-daily-${name}" type="number" step="0.1" min="0" value="${daily[name] ?? 1}" style="width:64px"/></label>`
+          ).join("")}
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${check("jev-dc-cli", allow.has("cli_account"), "conta CLI")}
+          ${check("jev-dc-http", allow.has("http_api"), "API HTTP")}
+          ${check("jev-dc-ws", allow.has("workspace_agent"), "agente no workspace")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export async function openAIUsageModal() {
   state.aiUsageModal.open = true;
   state.aiUsageModal.loading = true;
@@ -1845,10 +1899,12 @@ export async function openAIUsageModal() {
     return;
   }
   try {
-    const [rep, health] = await Promise.all([
+    const [rep, health, policy] = await Promise.all([
       backend.GetAIUsage(),
       backend.GetProviderHealth ? backend.GetProviderHealth() : Promise.resolve(state.providerHealth),
+      backend.GetJevPolicy ? backend.GetJevPolicy() : Promise.resolve(jevPolicyDraft),
     ]);
+    if (policy) jevPolicyDraft = policy;
     state.aiUsageModal.report = rep;
     if (Array.isArray(health)) {
       state.providerHealth = health;
@@ -2247,6 +2303,7 @@ export function renderAIUsageModal(layer: HTMLElement) {
         </div>
 
         <div class="aiu-cards-wrap">
+          ${renderJevPolicyEditorHtml(jevPolicyDraft)}
           ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
           ${m.loading && !rep
             ? `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`
@@ -2276,6 +2333,45 @@ export function renderAIUsageModal(layer: HTMLElement) {
     if ((e.target as HTMLElement).id === "aiu-backdrop") closeModal();
   });
   document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsageModal());
+  document.getElementById("aiu-save-jev-policy")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.SaveJevPolicy) return;
+    const base = jevPolicyDraft ?? {
+      version: 1,
+      enabled: false,
+      weights: { quality: 0.35, cost: 0.5, latency: 0.15 },
+      autoEscalateUsd: 0.02,
+      maxEscalateRatio: 3,
+    };
+    const allow: string[] = [];
+    if ((document.getElementById("jev-dc-cli") as HTMLInputElement | null)?.checked) allow.push("cli_account");
+    if ((document.getElementById("jev-dc-http") as HTMLInputElement | null)?.checked) allow.push("http_api");
+    if ((document.getElementById("jev-dc-ws") as HTMLInputElement | null)?.checked) allow.push("workspace_agent");
+    const next: JevPolicy = {
+      ...base,
+      enabled: Boolean((document.getElementById("jev-enabled") as HTMLInputElement | null)?.checked),
+      weights: {
+        quality: numField("jev-w-quality", base.weights.quality),
+        cost: numField("jev-w-cost", base.weights.cost),
+        latency: numField("jev-w-latency", base.weights.latency),
+      },
+      autoEscalateUsd: numField("jev-escalate", base.autoEscalateUsd),
+      dailyUsd: {
+        openrouter: numField("jev-daily-openrouter", 1),
+        opencode: numField("jev-daily-opencode", 1),
+        gemini: numField("jev-daily-gemini", 1),
+        openai: numField("jev-daily-openai", 1),
+        anthropic: numField("jev-daily-anthropic", 1),
+      },
+      allowDataClass: allow,
+    };
+    try {
+      jevPolicyDraft = await backend.SaveJevPolicy(next);
+      toast("Política do Jev salva neste PC.", "success");
+    } catch (err: any) {
+      toastError("salvar política do Jev", err);
+    }
+  });
   document.getElementById("aiu-probe-providers")?.addEventListener("click", async () => {
     const b = api();
     if (!b?.ProbeProviders) return;

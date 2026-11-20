@@ -191,6 +191,9 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/autoreview/status", s.handleAutoReviewStatus)
 	mux.HandleFunc("POST /api/v1/autoreview/poll", s.handleAutoReviewPoll)
 	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusBadRequest, "rota não permitida")
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.authorize(w, r, mux)
 	})
