@@ -1729,6 +1729,80 @@ export namespace modelx {
 	        this.readyDetail = source["readyDetail"];
 	    }
 	}
+	export class ProviderScanAccount {
+	    id?: string;
+	    name: string;
+	    source: string;
+	    active: boolean;
+	    ready: boolean;
+	    maskedHint?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ProviderScanAccount(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.active = source["active"];
+	        this.ready = source["ready"];
+	        this.maskedHint = source["maskedHint"];
+	    }
+	}
+	export class ProviderScanItem {
+	    id: string;
+	    name: string;
+	    found: boolean;
+	    connected: boolean;
+	    statusLabel: string;
+	    source?: string;
+	    path?: string;
+	    detail: string;
+	    modelCount: number;
+	    modelsSample?: string[];
+	    accounts: ProviderScanAccount[];
+
+	    static createFrom(source: any = {}) {
+	        return new ProviderScanItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.found = source["found"];
+	        this.connected = source["connected"];
+	        this.statusLabel = source["statusLabel"];
+	        this.source = source["source"];
+	        this.path = source["path"];
+	        this.detail = source["detail"];
+	        this.modelCount = source["modelCount"];
+	        this.modelsSample = source["modelsSample"];
+	        this.accounts = source["accounts"] || [];
+	    }
+	}
+	export class ProvidersScanReport {
+	    scannedAt: string;
+	    totalProviders: number;
+	    connectedProviders: number;
+	    totalAccounts: number;
+	    providers: ProviderScanItem[];
+
+	    static createFrom(source: any = {}) {
+	        return new ProvidersScanReport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scannedAt = source["scannedAt"];
+	        this.totalProviders = source["totalProviders"];
+	        this.connectedProviders = source["connectedProviders"];
+	        this.totalAccounts = source["totalAccounts"];
+	        this.providers = source["providers"] || [];
+	    }
+	}
 	export class ProfilesOverview {
 	    identity: orgx.Identity;
 	    profiles: ProviderProfileSummary[];

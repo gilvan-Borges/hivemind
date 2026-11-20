@@ -256,6 +256,8 @@ export function SaveSkillAssignments(arg1:string,arg2:Array<team.SkillAssignment
 
 export function SaveTeamWizard(arg1:string,arg2:idecore.WizardInput):Promise<team.File>;
 
+export function ScanAllProviders(arg1:string):Promise<modelx.ProvidersScanReport>;
+
 export function SearchFiles(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSearchMatch>>;

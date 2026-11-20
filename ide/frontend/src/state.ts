@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -81,7 +81,6 @@ export const state = {
   diffs: [] as FileDiff[],
   showFileMenu: false,
   teamConfigDraft: null as TeamConfigDraft | null,
-  showOpenCodeModal: false,
   showGitHubModal: false,
   showJiraModal: false,
   showAPIKeysModal: false,
@@ -99,9 +98,11 @@ export const state = {
   },
   providerHealth: [] as ProviderHealthView[],
   providerHealthProbing: false,
-  doctorModal: null as AgyStatus | null,
+  providersScan: null as ProvidersScanReport | null,
+  providersScanning: false,
+  providersScanExpanded: {} as Record<string, boolean>,
   apiKeysStatus: {} as Record<string, string>,
-  apiKeysTab: "profiles" as "profiles" | "global",
+  apiKeysTab: "profiles" as "profiles" | "global" | "scan",
   agyOAuthWaitingCode: false,
   agyOAuthSubmitting: false,
   agyOAuthCodeInput: "",

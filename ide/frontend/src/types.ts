@@ -397,6 +397,37 @@ export interface ProfilesOverview {
   resolved: Record<string, ResolvedProviderInfo>;
 }
 
+export interface ProviderScanAccount {
+  id?: string;
+  name: string;
+  source: "pool" | "global" | "env" | "cli" | string;
+  active: boolean;
+  ready: boolean;
+  maskedHint?: string;
+}
+
+export interface ProviderScanItem {
+  id: string;
+  name: string;
+  found: boolean;
+  connected: boolean;
+  statusLabel: string;
+  source?: string;
+  path?: string;
+  detail: string;
+  modelCount: number;
+  modelsSample?: string[];
+  accounts: ProviderScanAccount[];
+}
+
+export interface ProvidersScanReport {
+  scannedAt: string;
+  totalProviders: number;
+  connectedProviders: number;
+  totalAccounts: number;
+  providers: ProviderScanItem[];
+}
+
 export interface TokenStat {
   inputTokens: number;
   outputTokens: number;
@@ -925,6 +956,7 @@ export interface WailsBackendApp {
   SaveFile(workspace: string, relOrAbs: string, content: string): Promise<void>;
   ListModels(): Promise<AgyModel[]>;
   DoctorAgy(): Promise<AgyStatus>;
+  ScanAllProviders?(workspace: string): Promise<ProvidersScanReport>;
   SaveTeamWizard(workspace: string, input: WizardInputPayload): Promise<TeamFile>;
   SaveSkillAssignments(workspace: string, assignments: SkillAssignment[]): Promise<TeamFile>;
   SetActiveTeam(workspace: string, teamName: string): Promise<TeamFile>;

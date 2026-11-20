@@ -6,7 +6,7 @@ import { renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindAgentModelSelects, refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, ensureThinkingTicker, renderLaneBarOnly } from "./lanes";
-import { openJiraModal, openOpenCodeModal, refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openJiraModal, refreshJiraStatusAndProjects, renderModalLayer } from "./modals";
 import { bindModelPickerPairs, refreshSkills, renderModelPickerPairHtml, skillTargetLabel } from "./models";
 import { openSidebarView, updateStatusBar } from "./shell";
 import { MISSION_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
@@ -365,7 +365,7 @@ export function renderTeamConfigPageHtml(): string {
         </div>
         <div class="tc-header-actions">
           <button type="button" class="mini" id="tc-jira-connect-top" title="Conectar ao Jira Cloud (ou importar de mcp_config.json)">${icons.bolt}<span>${state.jiraStatus?.connected ? "Jira: Conectado" : "Conectar Jira"}</span></button>
-          <button type="button" class="mini" id="tc-opencode-btn" title="Configurar token portátil do OpenCode Zen">${icons.bolt}<span>Token OpenCode</span></button>
+          <button type="button" class="mini" id="tc-providers-btn" title="Gerenciar Pool de Provedores, Contas Google e Chaves de API">${icons.bolt}<span>Provedores</span></button>
           ${state.project?.hasTeam && (state.project.teamConfig?.teams?.length || 0) > 0 ? `<button type="button" class="mini danger" id="tc-delete-team-btn" title="Excluir equipe e parar todos os serviços">${icons.trash}<span>Excluir Equipe</span></button>` : ""}
           <button type="button" class="mini" id="tc-close-btn">Fechar</button>
           <button type="button" class="primary" id="tc-save-btn">${icons.save}<span>Salvar Configurações</span></button>
@@ -642,7 +642,7 @@ export function bindTeamConfigEvents() {
 
   bindTeamConfigSkillPills(draft);
 
-  document.getElementById("tc-opencode-btn")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("tc-providers-btn")?.addEventListener("click", () => void openAPIKeysModal("profiles"));
   document.getElementById("tc-jira-connect-top")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("tc-jira-connect-btn")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("tc-jira-refresh")?.addEventListener("click", () => void refreshJiraStatusAndProjects());

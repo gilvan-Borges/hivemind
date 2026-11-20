@@ -490,6 +490,10 @@ export function SaveTeamWizard(arg1, arg2) {
   return window['go']['main']['App']['SaveTeamWizard'](arg1, arg2);
 }
 
+export function ScanAllProviders(arg1) {
+  return window['go']['main']['App']['ScanAllProviders'](arg1);
+}
+
 export function SearchFiles(arg1, arg2) {
   return window['go']['main']['App']['SearchFiles'](arg1, arg2);
 }

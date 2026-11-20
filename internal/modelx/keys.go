@@ -12,6 +12,8 @@ import (
 // SupportedStoredKeyNames lists the API key/setting names the IDE can persist
 // outside environment variables (saved in the user config dir, never in the repo).
 var SupportedStoredKeyNames = []string{
+	"OPENCODE_API_KEY",
+	"OPENCODE_BASE_URL",
 	"CURSOR_API_KEY",
 	"OPENROUTER_API_KEY",
 	"OPENROUTER_BASE_URL",
@@ -131,10 +133,25 @@ func StoredAPIKeysStatus() map[string]string {
 	}
 	for _, name := range SupportedStoredKeyNames {
 		if v := stored[name]; v != "" {
-			out[name] = MaskKey(v)
+			if strings.HasSuffix(name, "_URL") || name == "GOOGLE_CLOUD_PROJECT" || name == "GOOGLE_CLOUD_LOCATION" {
+				out[name] = v
+			} else {
+				out[name] = MaskKey(v)
+			}
 		}
 		if strings.TrimSpace(os.Getenv(name)) != "" {
 			out["env_"+name] = "1"
+		}
+	}
+	// Mirror legacy credentials.json OpenCode token into the unified global status view.
+	if ocKey, ocBase, ocSrc := LoadOpenCodeCredentials(); ocKey != "" {
+		if ocSrc == "env" {
+			out["env_OPENCODE_API_KEY"] = "1"
+		} else if out["OPENCODE_API_KEY"] == "" {
+			out["OPENCODE_API_KEY"] = MaskKey(ocKey)
+		}
+		if ocBase != "" && out["OPENCODE_BASE_URL"] == "" {
+			out["OPENCODE_BASE_URL"] = ocBase
 		}
 	}
 	return out

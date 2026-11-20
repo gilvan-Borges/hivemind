@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getModelsForProvider, getProviderList, inferModelProvider } from "./models";
-import { renderJevProviderHealthPanelHtml } from "./modals";
+import { renderJevProviderHealthPanelHtml, renderProvidersScanTabHtml } from "./modals";
+import { computeUnifiedProviderChip } from "./shell";
+import { state } from "./state";
 
 describe("seletor de provedor Jev", () => {
   it("inclui a opção Jev automático na lista de provedores", () => {
@@ -45,5 +47,80 @@ describe("seletor de provedor Jev", () => {
       { provider: "openai", state: "closed", hasCredential: false },
     ], false);
     expect(allDownHtml).toContain("Todos os provedores configurados estão esgotados");
+  });
+
+  it("renderiza varredura unificada de todos os provedores e contas sem vazar segredos", () => {
+    const html = renderProvidersScanTabHtml({
+      scannedAt: "2026-11-20T20:00:00Z",
+      totalProviders: 7,
+      connectedProviders: 3,
+      totalAccounts: 4,
+      providers: [
+        {
+          id: "agy",
+          name: "Antigravity (Google)",
+          found: true,
+          connected: true,
+          statusLabel: "Conectado",
+          source: "Pool (2 conta(s) Google)",
+          detail: "2 conta(s) pronta(s)",
+          modelCount: 23,
+          modelsSample: ["gemini-3.8-flash-high"],
+          accounts: [
+            { id: "a1", name: "conta1@gmail.com", source: "pool", active: true, ready: true, maskedHint: "Pasta isolada salva" },
+            { id: "a2", name: "conta2@gmail.com", source: "pool", active: false, ready: true, maskedHint: "Pasta isolada salva" },
+          ],
+        },
+        {
+          id: "opencode",
+          name: "OpenCode Go & Zen",
+          found: true,
+          connected: true,
+          statusLabel: "Conectado",
+          source: "Chave global",
+          detail: "Go (31) + Zen (73)",
+          modelCount: 104,
+          accounts: [{ name: "Token global OpenCode", source: "global", active: true, ready: true, maskedHint: "••••QVDh" }],
+        },
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          found: false,
+          connected: false,
+          statusLabel: "Desconectado",
+          detail: "Nenhuma chave configurada.",
+          modelCount: 0,
+          accounts: [],
+        },
+      ],
+    }, false, { agy: true });
+
+    expect(html).toContain("Diagnóstico e Varredura de Provedores");
+    expect(html).toContain("3 de 7 provedores conectados");
+    expect(html).toContain("conta1@gmail.com");
+    expect(html).toContain("conta2@gmail.com");
+    expect(html).toContain("OpenCode Go &amp; Zen");
+    expect(html).toContain("OpenRouter");
+    expect(html).toContain("gemini-3.8-flash-high");
+    expect(html).not.toContain("Doctor — Antigravity");
+  });
+
+  it("gera chip único 'provedor' na barra de status com contagem dos conectados", () => {
+    state.providersScan = {
+      scannedAt: "2026-11-20T20:00:00Z",
+      totalProviders: 7,
+      connectedProviders: 2,
+      totalAccounts: 3,
+      providers: [
+        { id: "agy", name: "Antigravity (Google)", found: true, connected: true, statusLabel: "Conectado", detail: "ok", modelCount: 10, accounts: [] },
+        { id: "openrouter", name: "OpenRouter", found: true, connected: true, statusLabel: "Conectado", detail: "ok", modelCount: 5, accounts: [] },
+      ],
+    };
+    state.providerHealth = [];
+    const chip = computeUnifiedProviderChip();
+    expect(chip.text).toBe("provedor: 2");
+    expect(chip.title).toContain("Antigravity (Google)");
+    expect(chip.title).toContain("OpenRouter");
+    state.providersScan = null;
   });
 });

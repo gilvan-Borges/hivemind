@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitGraph, refreshDiffs } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsageModal, openDoctorModal, openJiraModal, openMobileModal, openOpenCodeModal, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsageModal, openJiraModal, openMobileModal, openProvidersScanModal, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
@@ -223,9 +223,7 @@ export function mountShell() {
         <span id="status-stack"></span>
         <span id="status-team">Equipe: -</span>
         <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
-        <button type="button" id="status-agy" class="dim plain-chip" title="Clique para abrir Doctor (agy)">agy: verificando…</button>
-        <button type="button" id="status-providers" class="dim plain-chip" title="Saúde e circuitos dos provedores (Jev)">ia: …</button>
-        <button type="button" id="status-opencode" class="dim plain-chip" title="Clique para configurar Token OpenCode Zen (API portátil)">opencode: …</button>
+        <button type="button" id="status-providers" class="dim plain-chip" title="Pool de Provedores & Contas LLM — clique para gerenciar ou varrer">provedor: …</button>
         <button type="button" id="status-jira" class="dim plain-chip" title="Clique para conectar ao Jira Cloud">jira: …</button>
         <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
@@ -331,9 +329,7 @@ export function bindStaticShellEvents() {
   });
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
-  document.getElementById("status-agy")?.addEventListener("click", () => openDoctorModal());
-  document.getElementById("status-providers")?.addEventListener("click", () => void openAIUsageModal());
-  document.getElementById("status-opencode")?.addEventListener("click", () => openOpenCodeModal());
+  document.getElementById("status-providers")?.addEventListener("click", () => void openAPIKeysModal("profiles"));
   document.getElementById("status-jira")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
   document.getElementById("status-autoreview")?.addEventListener("click", () => {
@@ -547,9 +543,6 @@ export function bindStaticShellEvents() {
       } else if (state.mentionResults.length > 0) {
         state.mentionResults = [];
         renderMentionPopup();
-      } else if (state.showOpenCodeModal) {
-        state.showOpenCodeModal = false;
-        renderModalLayer();
       } else if (state.showGitHubModal) {
         state.showGitHubModal = false;
         renderModalLayer();
@@ -561,9 +554,6 @@ export function bindStaticShellEvents() {
         renderModalLayer();
       } else if (state.showJiraModal) {
         state.showJiraModal = false;
-        renderModalLayer();
-      } else if (state.doctorModal) {
-        state.doctorModal = null;
         renderModalLayer();
       } else if (state.skillEditor) {
         state.skillEditor = null;
@@ -738,9 +728,8 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Substituir Projeto na Aba Atual…</span></button>
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
     <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
-    <button class="dropdown-item" id="menu-opencode">${icons.bolt}<span>Token OpenCode Zen (API portátil)…</span></button>
-    <button class="dropdown-item" id="menu-api-keys">${icons.settings}<span>Chaves de API (OpenRouter, OpenAI, …)…</span></button>
-    <button class="dropdown-item" id="menu-doctor">${icons.bolt}<span>Doctor — Antigravity CLI (agy)</span></button>
+    <button class="dropdown-item" id="menu-providers-pool">${icons.settings}<span>Provedores &amp; Contas (Pool)…</span></button>
+    <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
       ? `<div class="dim" style="padding:6px 10px">Nenhum projeto recente</div>`
@@ -767,20 +756,15 @@ export function renderFileMenu() {
     renderFileMenu();
     void openTeamConfigTab();
   });
-  menu.querySelector("#menu-opencode")?.addEventListener("click", () => {
+  menu.querySelector("#menu-providers-pool")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    openOpenCodeModal();
+    void openAPIKeysModal("profiles");
   });
-  menu.querySelector("#menu-api-keys")?.addEventListener("click", () => {
+  menu.querySelector("#menu-providers-scan")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    void openAPIKeysModal();
-  });
-  menu.querySelector("#menu-doctor")?.addEventListener("click", () => {
-    state.showFileMenu = false;
-    renderFileMenu();
-    openDoctorModal();
+    void openProvidersScanModal();
   });
   menu.querySelectorAll("[data-recent]").forEach((el) => {
     el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!, true));
@@ -815,6 +799,73 @@ export function updateHeaderAndStatusBar() {
   updateStatusBar();
 }
 
+export function computeUnifiedProviderChip(): { text: string; color: string; title: string } {
+  const scan = state.providersScan;
+  const health = state.providerHealth || [];
+  const configuredHealth = health.filter((p) => p.hasCredential);
+  const openCount = configuredHealth.filter((p) => p.state === "open").length;
+  const halfCount = configuredHealth.filter((p) => p.state === "half_open").length;
+
+  const connectedNames: string[] = [];
+  if (scan && scan.providers?.length > 0) {
+    for (const p of scan.providers) {
+      if (p.connected) connectedNames.push(p.name);
+    }
+  } else {
+    if (state.agyStatus?.LoggedIn) connectedNames.push("Antigravity (Google)");
+    if (state.openCodeStatus?.configured) connectedNames.push("OpenCode");
+    for (const h of configuredHealth) {
+      if (!connectedNames.some((n) => n.toLowerCase().includes(h.provider.toLowerCase()))) {
+        connectedNames.push(h.provider);
+      }
+    }
+    const profiles = state.profilesOverview?.profiles || [];
+    for (const pr of profiles) {
+      if (pr.ready && !connectedNames.some((n) => n.toLowerCase().includes(pr.provider.toLowerCase()))) {
+        connectedNames.push(pr.provider);
+      }
+    }
+  }
+
+  const totalAccounts = scan?.totalAccounts || (state.profilesOverview?.profiles?.length || 0);
+  const activeCount = connectedNames.length;
+
+  if (!scan && !state.agyStatus && !state.openCodeStatus && configuredHealth.length === 0) {
+    return {
+      text: "provedor: …",
+      color: "var(--text-dim)",
+      title: "Verificando provedores e contas — clique para abrir o Pool de Provedores",
+    };
+  }
+  if (activeCount === 0) {
+    return {
+      text: "provedor: off",
+      color: "var(--amber)",
+      title: "Nenhum provedor conectado ainda — clique para configurar contas ou fazer varredura",
+    };
+  }
+  if (configuredHealth.length > 0 && openCount === configuredHealth.length) {
+    return {
+      text: `provedor: ${openCount} pausa`,
+      color: "var(--red)",
+      title: `Todos os provedores estão em pausa/cooldown (${connectedNames.join(", ")}) — clique para abrir o Pool de Provedores`,
+    };
+  }
+  if (openCount > 0 || halfCount > 0) {
+    const warn = openCount > 0 ? `${openCount} pausa` : `${halfCount} sonda`;
+    return {
+      text: `provedor: ${activeCount} (${warn})`,
+      color: "var(--amber)",
+      title: `Conectados: ${connectedNames.join(", ")} · ${totalAccounts} conta(s) · clique para abrir o Pool de Provedores`,
+    };
+  }
+  return {
+    text: `provedor: ${activeCount}`,
+    color: "var(--green)",
+    title: `Provedores conectados (${activeCount}): ${connectedNames.join(", ")}${totalAccounts > 0 ? ` · ${totalAccounts} conta(s)` : ""} — clique para abrir o Pool de Provedores`,
+  };
+}
+
 export function updateStatusBar() {
   const proj = state.project;
   const lane = activeLane();
@@ -822,7 +873,6 @@ export function updateStatusBar() {
   const stackEl = document.getElementById("status-stack");
   const teamEl = document.getElementById("status-team");
   const tokEl = document.getElementById("status-tokens");
-  const agyEl = document.getElementById("status-agy");
   const envEl = document.getElementById("status-env");
 
   if (branchEl) {
@@ -848,45 +898,7 @@ export function updateStatusBar() {
     tokEl.innerHTML = `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
     tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
   }
-  if (agyEl) {
-    const resolvedAgy = state.profilesOverview?.resolved?.["agy"];
-    const profBadge = resolvedAgy?.profileName ? ` · ${resolvedAgy.profileName}` : "";
-    if (!state.agyStatus) {
-      agyEl.textContent = `agy: …${profBadge}`;
-      agyEl.style.color = "";
-      agyEl.title = "Verificando Antigravity CLI (agy)…";
-    } else if (resolvedAgy?.matchMode === "isolated") {
-      agyEl.textContent = "agy: isolado";
-      agyEl.style.color = "var(--text-dim)";
-      agyEl.title = "Nenhuma conta AGY vinculada a esta organização. A sessão global não será usada.";
-    } else if (state.agyStatus.LoggedIn) {
-      agyEl.textContent = resolvedAgy?.profileName
-        ? `agy: ${resolvedAgy.profileName}`
-        : `agy: ok (${state.models.length})`;
-      agyEl.style.color = "var(--green)";
-      agyEl.title = `Antigravity CLI conectado (${state.models.length} modelos disponíveis)${resolvedAgy?.profileName ? ` · Conta ativa: ${resolvedAgy.profileName} (${resolvedAgy.matchMode})` : ""}`;
-    } else {
-      agyEl.textContent = `agy: off${profBadge}`;
-      agyEl.style.color = "var(--amber)";
-      agyEl.title = `agy: ${state.agyStatus.Detail}`;
-    }
-  }
-  const ocEl = document.getElementById("status-opencode");
-  if (ocEl) {
-    const oc = state.openCodeStatus;
-    if (!oc) {
-      ocEl.textContent = "opencode: …";
-      ocEl.style.color = "";
-    } else if (oc.configured) {
-      ocEl.textContent = `opencode: ok`;
-      ocEl.style.color = "var(--green)";
-      ocEl.title = `${oc.detail} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
-    } else {
-      ocEl.textContent = `opencode: off`;
-      ocEl.style.color = "var(--text-dim)";
-      ocEl.title = `${oc.detail || "Clique para configurar OPENCODE_API_KEY"} (Go ${state.openCodeGoModels.length} · Zen ${state.openCodeModels.length})`;
-    }
-  }
+
   const jiraEl = document.getElementById("status-jira");
   if (jiraEl) {
     const j = state.jiraStatus;
@@ -1003,27 +1015,10 @@ export function updateStatusBar() {
   }
   const provEl = document.getElementById("status-providers");
   if (provEl) {
-    const list = state.providerHealth || [];
-    const configured = list.filter((p) => p.hasCredential);
-    const openCount = configured.filter((p) => p.state === "open").length;
-    const halfCount = configured.filter((p) => p.state === "half_open").length;
-    if (configured.length === 0) {
-      provEl.textContent = "ia: …";
-      provEl.style.color = "var(--text-dim)";
-      provEl.title = "Saúde dos provedores Jev — clique para abrir";
-    } else if (openCount === configured.length) {
-      provEl.textContent = `ia: ${openCount} pausa`;
-      provEl.style.color = "var(--red)";
-      provEl.title = "Todos os provedores configurados estão em pausa/esgotados — clique para sondar";
-    } else if (openCount > 0 || halfCount > 0) {
-      provEl.textContent = `ia: ${openCount > 0 ? `${openCount} pausa` : `${halfCount} sonda`}`;
-      provEl.style.color = "var(--amber)";
-      provEl.title = "Alguns provedores Jev estão degradados/em cooldown — clique para ver detalhes";
-    } else {
-      provEl.textContent = `ia: ok (${configured.length})`;
-      provEl.style.color = "var(--green)";
-      provEl.title = `${configured.length} provedor(es) Jev ativos — clique para ver saúde e limites`;
-    }
+    const summary = computeUnifiedProviderChip();
+    provEl.textContent = summary.text;
+    provEl.style.color = summary.color;
+    provEl.title = summary.title;
   }
   const probEl = document.getElementById("status-problems");
   if (probEl) {

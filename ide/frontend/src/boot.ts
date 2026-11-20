@@ -393,7 +393,7 @@ export function bootstrapAsync(rootDir?: string) {
     updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-    if (state.doctorModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderModalLayer();
   }).catch(() => {});
 
   backend.BootstrapOpenCode?.(false).then((res) => {
@@ -409,7 +409,13 @@ export function bootstrapAsync(rootDir?: string) {
     void refreshInlineAIStatus();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-    if (state.showOpenCodeModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderModalLayer();
+  }).catch(() => {});
+
+  backend.ScanAllProviders?.(rootDir || "").then((report) => {
+    state.providersScan = report;
+    updateStatusBar();
+    if (state.showAPIKeysModal) renderModalLayer();
   }).catch(() => {});
 
   void refreshInlineAIStatus();

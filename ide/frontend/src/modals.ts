@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary } from "./types";
+import type { AIProviderUsage, AIUsageReport, GitHubStatus, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
 import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
@@ -9,19 +9,61 @@ import { updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
-export async function openDoctorModal() {
+export async function runProvidersScan() {
   const backend = api();
   if (!backend) return;
-  setStatus("Verificando agy…");
-  const status = await backend.DoctorAgy();
-  state.agyStatus = status;
-  if (status.LoggedIn) {
-    state.models = (await backend.ListModels()) || state.models;
+  state.providersScanning = true;
+  if (state.showAPIKeysModal) renderModalLayer();
+  setStatus("Varrendo provedores e contas…");
+  const root = state.project?.root || "";
+  try {
+    if (backend.ScanAllProviders) {
+      const report = await backend.ScanAllProviders(root);
+      state.providersScan = report;
+      const agyItem = report.providers.find((p) => p.id === "agy");
+      if (agyItem && backend.BootstrapAgy) {
+        backend.BootstrapAgy(false).then((res) => {
+          state.agyStatus = res.status;
+          if (res.models && res.models.length > 0) state.models = res.models;
+          updateStatusBar();
+        }).catch(() => {});
+      }
+      if (backend.GetProviderProfilesOverview) {
+        state.profilesOverview = await backend.GetProviderProfilesOverview(root);
+      }
+      if (backend.GetAPIKeysStatus) {
+        state.apiKeysStatus = await backend.GetAPIKeysStatus();
+      }
+      if (backend.GetProviderHealth) {
+        const h = await backend.GetProviderHealth();
+        if (Array.isArray(h)) state.providerHealth = h;
+      }
+      setStatus(`Varredura concluída: ${report.connectedProviders}/${report.totalProviders} provedor(es) conectados.`);
+    } else {
+      const status = await backend.DoctorAgy();
+      state.agyStatus = status;
+      if (status.LoggedIn) {
+        state.models = (await backend.ListModels()) || state.models;
+      }
+      setStatus("Pronto");
+    }
+  } catch (err: any) {
+    toastError("varrer provedores e contas", err);
+    setStatus("Erro ao varrer provedores.");
+  } finally {
+    state.providersScanning = false;
+    updateStatusBar();
+    if (state.showAPIKeysModal) renderModalLayer();
   }
-  state.doctorModal = status;
-  updateStatusBar();
-  renderModalLayer();
-  setStatus("Pronto");
+}
+
+export async function openProvidersScanModal() {
+  await openAPIKeysModal("scan");
+  await runProvidersScan();
+}
+
+export async function openDoctorModal() {
+  await openProvidersScanModal();
 }
 
 export async function openGitHubModal() {
@@ -100,55 +142,131 @@ export async function openJiraModal() {
 }
 
 export async function openOpenCodeModal() {
-  state.showOpenCodeModal = true;
-  renderModalLayer();
-  const backend = api();
-  if (backend?.GetAPIKeysStatus) {
-    try {
-      state.apiKeysStatus = await backend.GetAPIKeysStatus();
-      renderModalLayer();
-    } catch {
-      // mantém status anterior
-    }
-  }
-  if (!backend?.BootstrapOpenCode) return;
-  try {
-    const res = await backend.BootstrapOpenCode(true);
-    state.openCodeStatus = res.status;
-    if (res.goModels && res.goModels.length > 0) {
-      state.openCodeGoModels = res.goModels;
-    }
-    if (res.models && res.models.length > 0) {
-      state.openCodeModels = res.models;
-    }
-    updateStatusBar();
-    renderModalLayer();
-  } catch {
-    // keep modal open for token entry
-  }
+  await openAPIKeysModal("profiles", "opencode");
 }
 
-export async function openAPIKeysModal(initialTab?: "profiles" | "global", initialProvider?: string) {
+export async function openAPIKeysModal(initialTab?: "profiles" | "global" | "scan", initialProvider?: string) {
   if (initialTab) state.apiKeysTab = initialTab;
   if (initialProvider) {
     state.apiKeysTab = "profiles";
-    state.profileEditor = { open: true, id: "", provider: initialProvider, authMode: initialProvider === "agy" ? "adc" : "key" };
+    if (initialProvider === "agy") {
+      state.profileEditor = { open: false, id: "", provider: "agy", authMode: "adc" };
+    } else {
+      state.profileEditor = { open: true, id: "", provider: initialProvider, authMode: "key" };
+    }
   }
   state.showAPIKeysModal = true;
   renderModalLayer();
   const backend = api();
   try {
+    const root = state.project?.root || "";
+    const tasks: Array<Promise<unknown>> = [];
     if (backend?.GetProviderProfilesOverview) {
-      state.profilesOverview = await backend.GetProviderProfilesOverview(state.project?.root || "");
+      tasks.push(backend.GetProviderProfilesOverview(root).then((ov) => { state.profilesOverview = ov; }).catch(() => {}));
     }
     if (backend?.GetAPIKeysStatus) {
-      state.apiKeysStatus = await backend.GetAPIKeysStatus();
+      tasks.push(backend.GetAPIKeysStatus().then((st) => { state.apiKeysStatus = st; }).catch(() => {}));
     }
-    if (backend?.CursorCLIStatus) state.cursorCLI = await backend.CursorCLIStatus();
+    if (backend?.CursorCLIStatus) {
+      tasks.push(backend.CursorCLIStatus().then((st) => { state.cursorCLI = st; }).catch(() => {}));
+    }
+    if (backend?.GetProviderHealth) {
+      tasks.push(backend.GetProviderHealth().then((h) => { if (Array.isArray(h)) state.providerHealth = h; }).catch(() => {}));
+    }
+    await Promise.all(tasks);
+    updateStatusBar();
     renderModalLayer();
   } catch {
     // mantém o modal aberto sem status
   }
+}
+
+export function renderProvidersScanTabHtml(
+  report: ProvidersScanReport | null,
+  scanning: boolean,
+  expanded: Record<string, boolean>,
+): string {
+  const headerBar = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border);flex-wrap:wrap">
+      <div>
+        <div style="font-weight:700;font-size:13px;color:var(--text)">Diagnóstico e Varredura de Provedores</div>
+        <div class="dim" style="font-size:11.5px;margin-top:2px;font-variant-numeric:tabular-nums">
+          ${scanning
+            ? "Varrendo todas as contas Google (Antigravity), OpenCode, OpenRouter, Claude, OpenAI, Gemini e Cursor CLI…"
+            : report
+              ? `${report.connectedProviders} de ${report.totalProviders} provedores conectados · ${report.totalAccounts} conta(s)/credencial(is) detectada(s)`
+              : "Clique em Varrer Agora para inspecionar todos os provedores e contas configuradas neste computador."
+          }
+        </div>
+      </div>
+      <button type="button" class="primary mini" id="btn-scan-all-providers" ${scanning ? "disabled" : ""}>
+        ${scanning ? icons.spinner : icons.refresh}
+        <span>${scanning ? "Varrendo…" : "Varrer Agora"}</span>
+      </button>
+    </div>
+  `;
+
+  if (!report) {
+    return `
+      ${headerBar}
+      <div class="dim" style="padding:26px 14px;text-align:center;font-size:12px">
+        ${scanning ? `${icons.spinner} Verificando CLIs locais, contas Google isoladas e chaves de API…` : "Nenhuma varredura executada nesta sessão."}
+      </div>
+    `;
+  }
+
+  const cards = report.providers.map((item) => {
+    const pillClass = item.connected
+      ? "approved"
+      : item.statusLabel === "Parcial"
+        ? "pending"
+        : "neutral";
+    const statusColor = item.connected
+      ? "var(--green)"
+      : item.statusLabel === "Parcial"
+        ? "var(--amber)"
+        : "var(--text-dim)";
+    const isExpanded = Boolean(expanded[item.id]);
+    const hasModels = (item.modelsSample?.length || 0) > 0;
+    const accRows = (item.accounts || []).map((a) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:7px;background:var(--bg-deep);border:1px solid var(--border);font-size:11.5px">
+        <div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1">
+          <span style="display:inline-flex;color:${a.ready ? "var(--green)" : "var(--amber)"}">${icons.dot}</span>
+          <strong style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(a.name)}</strong>
+          ${a.active ? `<span class="flow-pill approved" style="font-size:10px;padding:1px 6px">Ativa</span>` : ""}
+          <span class="tok-pill" style="font-size:10px">${escapeHtml(a.source)}</span>
+        </div>
+        ${a.maskedHint ? `<span class="dim" style="font-family:var(--mono);font-size:10.5px;flex-shrink:0">${escapeHtml(a.maskedHint)}</span>` : ""}
+      </div>
+    `).join("");
+
+    return `
+      <div style="padding:12px 14px;border-radius:10px;background:var(--bg-card);border:1px solid ${item.connected ? "rgba(52,211,153,0.28)" : "var(--border)"};display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
+            <span style="display:inline-flex;color:${statusColor}">${icons.dot}</span>
+            <strong style="font-size:13px;color:var(--text)">${escapeHtml(item.name)}</strong>
+            <span class="flow-pill ${pillClass}">${escapeHtml(item.statusLabel)}</span>
+            ${item.source ? `<span class="tok-pill">${escapeHtml(item.source)}</span>` : ""}
+            ${item.modelCount > 0 ? `<span class="tok-pill" style="font-variant-numeric:tabular-nums">${item.modelCount} modelo(s)</span>` : ""}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+            ${hasModels ? `<button type="button" class="mini ghost" data-scan-toggle-models="${escapeHtml(item.id)}">${isExpanded ? "Ocultar modelos" : "Ver modelos"}</button>` : ""}
+            <button type="button" class="mini" data-scan-configure="${escapeHtml(item.id)}">${item.connected ? "Gerenciar" : "+ Conectar"}</button>
+          </div>
+        </div>
+        <div class="dim" style="font-size:11.5px;line-height:1.45">${escapeHtml(item.detail)}${item.path ? ` · <code>${escapeHtml(item.path)}</code>` : ""}</div>
+        ${accRows ? `<div style="display:flex;flex-direction:column;gap:4px">${accRows}</div>` : ""}
+        ${isExpanded && hasModels ? `
+          <div style="max-height:140px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11px;font-family:var(--mono);border:1px solid var(--border)">
+            ${(item.modelsSample || []).map((m) => `<div>${escapeHtml(m)}</div>`).join("")}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }).join("");
+
+  return `${headerBar}<div style="display:flex;flex-direction:column;gap:8px">${cards}</div>`;
 }
 
 function relayStatusLine(): string {
@@ -402,46 +520,17 @@ export function renderModalLayer() {
     return;
   }
 
-  if (state.doctorModal) {
-    const d = state.doctorModal;
-    layer.innerHTML = `
-      <div class="modal-backdrop">
-        <div class="modal-box">
-          <h3 class="modal-title">Doctor — Antigravity CLI (agy)</h3>
-          <p><strong>Encontrado:</strong> ${d.Found ? "Sim" : "Não"}</p>
-          <p><strong>Caminho:</strong> ${escapeHtml(d.Path || "-")}</p>
-          <p><strong>Autenticado:</strong> ${d.LoggedIn ? "Sim (Google Pro)" : "Não"}</p>
-          <p><strong>Detalhe:</strong> ${escapeHtml(d.Detail)}</p>
-          <p><strong>Modelos (${state.models.length}):</strong></p>
-          <div style="max-height:160px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:12px;border:1px solid var(--border)">
-            ${state.models.length === 0 ? "Nenhum modelo carregado." : state.models.map((m) => `<div>${escapeHtml(m.slug)} — <span class="dim">${escapeHtml(m.name)}</span></div>`).join("")}
-          </div>
-          <div class="modal-footer">
-            <button id="doc-api-keys">${icons.settings}<span>Contas por Org &amp; Chaves…</span></button>
-            <div class="spacer"></div>
-            <button class="primary" id="doc-close">Fechar</button>
-          </div>
-        </div>
-      </div>
-    `;
-    document.getElementById("doc-close")?.addEventListener("click", () => {
-      state.doctorModal = null;
-      renderModalLayer();
-    });
-    document.getElementById("doc-api-keys")?.addEventListener("click", () => {
-      state.doctorModal = null;
-      void openAPIKeysModal("profiles", "agy");
-    });
-    return;
-  }
-
   if (state.showAPIKeysModal) {
     const tab = state.apiKeysTab || "profiles";
     const ov = state.profilesOverview;
     const saved = state.apiKeysStatus || {};
-    const field = (id: string, label: string, placeholder: string, savedMask?: string) => `
+    const scan = state.providersScan;
+    const field = (id: string, keyName: string, label: string, placeholder: string, savedMask?: string) => `
       <label for="${id}">${escapeHtml(label)}${savedMask ? ` <span class="dim" style="font-weight:500">(salvo: ${escapeHtml(savedMask)})</span>` : ""}</label>
-      <input id="${id}" type="${id.includes("KEY") ? "password" : "text"}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" />
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="${id}" type="${keyName.includes("KEY") ? "password" : "text"}" placeholder="${savedMask ? "Cole novo valor apenas se quiser trocar" : escapeHtml(placeholder)}" autocomplete="off" style="flex:1" />
+        ${savedMask ? `<button type="button" class="mini danger ghost" data-ak-clear="${escapeHtml(keyName)}" title="Remover chave salva">${icons.trash}</button>` : ""}
+      </div>
     `;
 
     const provLabels: Record<string, string> = {
@@ -523,14 +612,15 @@ export function renderModalLayer() {
     layer.innerHTML = `
       <div class="modal-backdrop" id="ak-modal-backdrop">
         <div class="modal-box" role="dialog" aria-modal="true" style="width:660px;max-height:88vh;display:flex;flex-direction:column;padding:18px 20px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap">
             <div>
-              <h3 class="modal-title" style="margin:0;font-size:16px">Pool de Contas Google (Antigravity) &amp; Provedores LLM</h3>
-              <div class="dim" style="font-size:11.5px;margin-top:2px">Cada conta Google fica salva em pasta isolada pelo e-mail — logar em outra conta nunca apaga a anterior.</div>
+              <h3 class="modal-title" style="margin:0;font-size:16px">Provedores &amp; Contas LLM</h3>
+              <div class="dim" style="font-size:11.5px;margin-top:2px">Gerencie contas Google (Antigravity), pool de chaves de API, chaves globais e faça varredura de todos os provedores.</div>
             </div>
-            <div style="display:flex;gap:6px;flex-shrink:0">
+            <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap">
               <button type="button" class="mini ${tab === "profiles" ? "primary" : ""}" id="ak-tab-profiles">Pool de Contas (${profilesList.length})</button>
               <button type="button" class="mini ${tab === "global" ? "primary" : ""}" id="ak-tab-global">Chaves Globais</button>
+              <button type="button" class="mini ${tab === "scan" ? "primary" : ""}" id="ak-tab-scan">Varredura${scan ? ` (${scan.connectedProviders}/${scan.totalProviders})` : ""}</button>
             </div>
           </div>
 
@@ -643,22 +733,28 @@ export function renderModalLayer() {
                   </div>
                 ` : ""}
               </div>
-            ` : `
+            ` : tab === "global" ? `
               <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
-                Chaves globais padrão (<code>%APPDATA%\\HiveMind\\api-keys.json</code>). No OpenRouter, o Jev mantém <strong>US$ 1,00 de reserva mínima</strong> intacta e alterna sozinho para as suas contas do Antigravity (agy) ou Cursor quando o saldo chega em US$ 1,00.
+                Chaves globais padrão salvas fora do repositório (<code>api-keys.json</code> e credenciais OpenCode). Campos deixados em branco mantêm o valor já salvo; use o botão de lixeira para remover uma chave específica.
               </p>
-              ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:10px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema.</div>` : ""}
+              ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
+              ${state.apiKeysStatus?.["env_OPENCODE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENCODE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
               <div class="form-grid">
-                ${field("ak-OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
-                ${field("ak-OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
-                ${field("ak-CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
-                ${field("ak-ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
-                ${field("ak-OPENAI_API_KEY", "OpenAI API Key:", "sk-…", saved["OPENAI_API_KEY"])}
-                ${field("ak-OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
-                ${field("ak-GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
-                ${field("ak-GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
-                ${field("ak-GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
+                ${field("ak-OPENCODE_API_KEY", "OPENCODE_API_KEY", "OpenCode Go & Zen Token:", "oc_… (OPENCODE_API_KEY)", saved["OPENCODE_API_KEY"])}
+                ${field("ak-OPENCODE_BASE_URL", "OPENCODE_BASE_URL", "OpenCode Base URL:", "https://opencode.ai/zen/v1", saved["OPENCODE_BASE_URL"])}
+                ${field("ak-OPENROUTER_API_KEY", "OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
+                ${field("ak-OPENROUTER_BASE_URL", "OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
+                ${field("ak-CURSOR_API_KEY", "CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
+                ${field("ak-ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
+                ${field("ak-OPENAI_API_KEY", "OPENAI_API_KEY", "OpenAI / Grok API Key:", "sk-…", saved["OPENAI_API_KEY"])}
+                ${field("ak-OPENAI_BASE_URL", "OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
+                ${field("ak-GOOGLE_API_KEY", "GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
+                ${field("ak-GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
+                ${field("ak-GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
               </div>
+            ` : `
+              ${renderProvidersScanTabHtml(scan, state.providersScanning, state.providersScanExpanded)}
+              ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
             `}
             <div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:4px;display:none"></div>
           </div>
@@ -694,6 +790,54 @@ export function renderModalLayer() {
     document.getElementById("ak-tab-global")?.addEventListener("click", () => {
       state.apiKeysTab = "global";
       renderModalLayer();
+    });
+    document.getElementById("ak-tab-scan")?.addEventListener("click", () => {
+      state.apiKeysTab = "scan";
+      renderModalLayer();
+      if (!state.providersScan && !state.providersScanning) {
+        void runProvidersScan();
+      }
+    });
+    document.getElementById("btn-scan-all-providers")?.addEventListener("click", () => {
+      void runProvidersScan();
+    });
+    document.querySelectorAll<HTMLElement>("[data-scan-toggle-models]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.scanToggleModels || "";
+        if (!id) return;
+        state.providersScanExpanded[id] = !state.providersScanExpanded[id];
+        renderModalLayer();
+      });
+    });
+    document.querySelectorAll<HTMLElement>("[data-scan-configure]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.scanConfigure || "";
+        state.apiKeysTab = "profiles";
+        if (id && id !== "agy") {
+          state.profileEditor = { open: true, id: "", provider: id, authMode: "key" };
+        } else {
+          state.profileEditor.open = false;
+        }
+        renderModalLayer();
+      });
+    });
+    document.getElementById("aiu-probe-providers")?.addEventListener("click", async () => {
+      const b = api();
+      if (!b?.ProbeProviders) return;
+      state.providerHealthProbing = true;
+      renderModalLayer();
+      try {
+        const views = await b.ProbeProviders();
+        if (Array.isArray(views)) {
+          state.providerHealth = views;
+          updateStatusBar();
+        }
+      } catch (err: any) {
+        toastError("sondar provedores Jev", err);
+      } finally {
+        state.providerHealthProbing = false;
+        if (state.showAPIKeysModal) renderModalLayer();
+      }
     });
 
     document.getElementById("btn-connect-google-agy")?.addEventListener("click", async () => {
@@ -926,16 +1070,54 @@ export function renderModalLayer() {
       });
     });
 
+    document.querySelectorAll<HTMLElement>("[data-ak-clear]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const backend = api();
+        const keyName = btn.dataset.akClear || "";
+        if (!backend?.SaveAPIKeys || !keyName) return;
+        try {
+          state.apiKeysStatus = await backend.SaveAPIKeys({ [keyName]: "" });
+          if (keyName === "OPENCODE_API_KEY" || keyName === "OPENCODE_BASE_URL") {
+            const ocRes = await backend.BootstrapOpenCode?.(true);
+            if (ocRes) state.openCodeStatus = ocRes.status;
+          }
+          state.providersScan = null;
+          updateStatusBar();
+          toast(`Chave ${keyName} removida.`, "info");
+          renderModalLayer();
+        } catch (err: any) {
+          toastError(`remover ${keyName}`, err);
+        }
+      });
+    });
+
     document.getElementById("ak-save")?.addEventListener("click", async () => {
       const backend = api();
       if (!backend?.SaveAPIKeys) return;
       const entries: Record<string, string> = {};
-      for (const name of ["CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
+      for (const name of ["OPENCODE_API_KEY", "OPENCODE_BASE_URL", "CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
         const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
-        entries[name] = el?.value?.trim() || "";
+        const val = el?.value?.trim() || "";
+        if (val !== "") {
+          entries[name] = val;
+        }
+      }
+      if (Object.keys(entries).length === 0) {
+        toast("Nenhuma nova chave informada para atualizar.", "info");
+        return;
       }
       try {
         state.apiKeysStatus = await backend.SaveAPIKeys(entries);
+        if (entries["OPENCODE_API_KEY"] || entries["OPENCODE_BASE_URL"]) {
+          const ocRes = await backend.BootstrapOpenCode?.(true);
+          if (ocRes) {
+            state.openCodeStatus = ocRes.status;
+            if (ocRes.goModels?.length) state.openCodeGoModels = ocRes.goModels;
+            if (ocRes.models?.length) state.openCodeModels = ocRes.models;
+          }
+        }
+        state.providersScan = null;
+        updateStatusBar();
         toast("Chaves globais salvas.", "success");
         setStatus("Chaves de API atualizadas.");
         renderModalLayer();
@@ -1580,184 +1762,6 @@ export function renderModalLayer() {
     };
     document.getElementById("jira-save")?.addEventListener("click", () => void saveJiraAction(false));
     document.getElementById("jira-save-pin")?.addEventListener("click", () => void saveJiraAction(true));
-    return;
-  }
-
-  if (state.showOpenCodeModal) {
-    const oc = state.openCodeStatus;
-    const baseUrl = oc?.baseUrl || "https://opencode.ai/zen/v1";
-    const statusBadge = oc?.configured
-      ? `<span style="color:var(--green);font-weight:600">Conectado (${escapeHtml(oc.keyMasked)}${oc.source === "env" ? " via OPENCODE_API_KEY" : " salvo localmente"})</span>`
-      : `<span style="color:var(--amber)">Sem token salvo (apenas modelos <code>-free</code> liberados)</span>`;
-
-    layer.innerHTML = `
-      <div class="modal-backdrop" id="oc-modal-backdrop">
-        <div class="modal-box" role="dialog" aria-modal="true" style="width:520px">
-          <h3 class="modal-title">OpenCode Zen — Autenticação via Token (Portátil)</h3>
-          <p class="dim" style="font-size:12px;margin-top:-4px;margin-bottom:10px">
-            Funciona via HTTPS puro em qualquer máquina sem precisar do CLI do OpenCode instalado.
-            O token é salvo fora do repositório Git (em <code>credentials.json</code> do seu usuário) ou lido de <code>OPENCODE_API_KEY</code>.
-          </p>
-          <div style="font-size:12px;margin-bottom:10px"><strong>Status:</strong> ${statusBadge}</div>
-          <div class="form-grid">
-            <label>Token OpenCode:</label>
-            <input id="oc-api-key" type="password" placeholder="${oc?.configured ? "Cole novo token para substituir…" : "Cole sua chave OpenCode Zen (OPENCODE_API_KEY)"}" autocomplete="off" />
-
-            <label>Base URL:</label>
-            <input id="oc-base-url" value="${escapeHtml(baseUrl)}" placeholder="https://opencode.ai/zen/v1" />
-          </div>
-          <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-            <div class="dim" style="font-size:11.5px;margin-bottom:6px;font-weight:600;color:var(--text-dim)">
-              ${icons.bolt} OpenRouter — Chave de API (modelos <code>fornecedor/modelo</code>)
-              ${state.apiKeysStatus?.["OPENROUTER_API_KEY"] ? `<span style="color:var(--green)">(salvo: ${escapeHtml(state.apiKeysStatus["OPENROUTER_API_KEY"])})</span>` : `<span style="color:var(--amber)">(não salvo)</span>`}
-            </div>
-            ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:11.5px;margin-bottom:6px">⚠ A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e TEM prioridade sobre o valor salvo aqui. Se der 401, corrija ou remova essa variável (Configurações → Variáveis de Ambiente).</div>` : ""}
-            <div class="form-grid">
-              <label>OpenRouter API Key:</label>
-              <input id="or-api-key" type="password" placeholder="sk-or-v1-… (chave em https://openrouter.ai/keys)" autocomplete="off" />
-
-              <label>OpenRouter Base URL:</label>
-              <input id="or-base-url" placeholder="https://openrouter.ai/api/v1" />
-            </div>
-            <div id="or-modal-err" style="color:var(--red);font-size:12px;margin-top:6px;display:none"></div>
-            <div class="modal-footer" style="padding:8px 0 0 0">
-              ${state.apiKeysStatus?.["OPENROUTER_API_KEY"] ? `<button class="danger mini" id="or-clear-key">Remover Chave Salva</button>` : ""}
-              <div class="spacer"></div>
-              <button class="primary mini" id="or-save">Salvar Chave OpenRouter</button>
-            </div>
-          </div>
-          <div style="margin-top:10px">
-            <div class="dim" style="font-size:11.5px;margin-bottom:4px">
-              Catálogo OpenCode Go (${state.openCodeGoModels.length}) + OpenCode Zen (${state.openCodeModels.length}) — use <code>opencode-go:&lt;id&gt;</code> ou <code>opencode:&lt;id&gt;</code>:
-            </div>
-            <div style="max-height:170px;overflow:auto;background:var(--bg-deep);padding:8px;border-radius:6px;font-size:11.5px;font-family:var(--mono);border:1px solid var(--border)">
-              ${state.openCodeGoModels.length === 0 && state.openCodeModels.length === 0
-                ? `<span class="dim">Carregando catálogos OpenCode Go e Zen…</span>`
-                : [
-                    ...(state.openCodeGoModels.length > 0
-                      ? [`<div style="color:var(--accent);font-weight:600;margin-bottom:3px">— OpenCode Go (Assinatura: ${state.openCodeGoModels.length}) —</div>`]
-                          .concat(state.openCodeGoModels.map((m) => `<div>opencode-go:${escapeHtml(m.slug)}</div>`))
-                      : []),
-                    ...(state.openCodeModels.length > 0
-                      ? [`<div style="color:var(--accent);font-weight:600;margin:6px 0 3px 0">— OpenCode Zen (${state.openCodeModels.length}) —</div>`]
-                          .concat(state.openCodeModels.map((m) => `<div>opencode:${escapeHtml(m.slug)}</div>`))
-                      : []),
-                  ].join("")
-              }
-            </div>
-          </div>
-          <div id="oc-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
-          <div class="modal-footer">
-            ${oc?.configured && oc.source !== "env" ? `<button class="danger mini" id="oc-clear-token">Remover Token</button>` : ""}
-            <div class="spacer"></div>
-            <button id="oc-close">Fechar</button>
-            <button class="primary" id="oc-save">Salvar & Testar</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    const closeOc = () => {
-      state.showOpenCodeModal = false;
-      renderModalLayer();
-    };
-    document.getElementById("oc-close")?.addEventListener("click", closeOc);
-    document.getElementById("oc-modal-backdrop")?.addEventListener("click", (e) => {
-      if ((e.target as HTMLElement).id === "oc-modal-backdrop") closeOc();
-    });
-    document.getElementById("oc-clear-token")?.addEventListener("click", async () => {
-      const backend = api();
-      if (!backend?.SaveOpenCodeConfig) return;
-      try {
-        const res = await backend.SaveOpenCodeConfig("", "");
-        state.openCodeStatus = res.status;
-        if (res.goModels) state.openCodeGoModels = res.goModels;
-        if (res.models) state.openCodeModels = res.models;
-        updateStatusBar();
-        updateMissionBoardIfOpen();
-        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-        renderModalLayer();
-        setStatus("Token do OpenCode removido.");
-      } catch (err: any) {
-        const errEl = document.getElementById("oc-modal-err");
-        if (errEl) {
-          const reason = err instanceof Error ? err.message : String(err);
-          errEl.textContent = `Não foi possível remover o token: ${reason}`;
-          errEl.style.display = "block";
-        }
-      }
-    });
-    document.getElementById("oc-save")?.addEventListener("click", async () => {
-      const backend = api();
-      if (!backend?.SaveOpenCodeConfig) return;
-      const keyIn = (document.getElementById("oc-api-key") as HTMLInputElement | null)?.value.trim() || "";
-      const urlIn = (document.getElementById("oc-base-url") as HTMLInputElement | null)?.value.trim() || "";
-      if (!keyIn && !state.openCodeStatus?.configured) {
-        const errEl = document.getElementById("oc-modal-err");
-        if (errEl) {
-          errEl.textContent = "Cole seu token do OpenCode antes de salvar.";
-          errEl.style.display = "block";
-        }
-        return;
-      }
-      try {
-        setStatus("Salvando e validando token OpenCode (Go + Zen)…");
-        const res = keyIn
-          ? await backend.SaveOpenCodeConfig(keyIn, urlIn)
-          : await backend.BootstrapOpenCode(true);
-        state.openCodeStatus = res.status;
-        if (res.goModels && res.goModels.length > 0) state.openCodeGoModels = res.goModels;
-        if (res.models && res.models.length > 0) state.openCodeModels = res.models;
-        updateStatusBar();
-        updateMissionBoardIfOpen();
-        if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-        renderModalLayer();
-        setStatus(`OpenCode pronto: ${res.status.detail}`);
-      } catch (err: any) {
-        const errEl = document.getElementById("oc-modal-err");
-        if (errEl) {
-          const reason = err instanceof Error ? err.message : String(err);
-          errEl.textContent = `Não foi possível salvar e testar o token: ${reason}. Confira a chave e a Base URL e tente novamente.`;
-          errEl.style.display = "block";
-        }
-      }
-    });
-
-    const saveOpenRouterKey = async (key: string, baseURL: string) => {
-      const backend = api();
-      if (!backend?.SaveAPIKeys) return;
-      try {
-        state.apiKeysStatus = await backend.SaveAPIKeys({
-          OPENROUTER_API_KEY: key,
-          OPENROUTER_BASE_URL: baseURL,
-        });
-        toast(key ? "Chave do OpenRouter salva." : "Chave do OpenRouter removida.", "success");
-        setStatus("OpenRouter atualizado.");
-        renderModalLayer();
-      } catch (err: any) {
-        const errEl = document.getElementById("or-modal-err");
-        if (errEl) {
-          errEl.textContent = `Falha ao salvar a chave do OpenRouter: ${err?.message || String(err)}`;
-          errEl.style.display = "block";
-        }
-      }
-    };
-    document.getElementById("or-save")?.addEventListener("click", () => {
-      const keyIn = (document.getElementById("or-api-key") as HTMLInputElement | null)?.value.trim() || "";
-      const urlIn = (document.getElementById("or-base-url") as HTMLInputElement | null)?.value.trim() || "";
-      if (!keyIn && !state.apiKeysStatus?.["OPENROUTER_API_KEY"]) {
-        const errEl = document.getElementById("or-modal-err");
-        if (errEl) {
-          errEl.textContent = "Cole sua chave OpenRouter (sk-or-v1-…) antes de salvar.";
-          errEl.style.display = "block";
-        }
-        return;
-      }
-      void saveOpenRouterKey(keyIn, urlIn);
-    });
-    document.getElementById("or-clear-key")?.addEventListener("click", () => {
-      void saveOpenRouterKey("", "");
-    });
     return;
   }
 

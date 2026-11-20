@@ -588,6 +588,20 @@ func (a *App) DoctorAgy() modelx.AgyStatus {
 	return a.BootstrapAgy(true).Status
 }
 
+// ScanAllProviders scans every supported LLM provider and saved account in parallel
+// (Antigravity Google pool, OpenCode, OpenRouter, Anthropic, OpenAI/Grok, Gemini/Vertex,
+// and Cursor CLI) and refreshes cached IDE bootstrap statuses.
+func (a *App) ScanAllProviders(workspace string) modelx.ProvidersScanReport {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	report := modelx.ScanAllProviders(ctx, workspace)
+	// Refresh Jev health summary quietly in background after scan.
+	hs := modelx.DefaultJevHealthStore()
+	hs.SyncCredentialFingerprints(modelx.JevCredentialFingerprints())
+	a.emitProviderHealth(hs.Summary(a.currentJevPolicy(), modelx.JevCredentialPresence()), false)
+	return report
+}
+
 // GetAPIKeysStatus returns the masked persisted LLM API keys/settings
 // (env vars always take precedence at call time; this shows the saved store).
 func (a *App) GetAPIKeysStatus() map[string]string {
@@ -597,7 +611,29 @@ func (a *App) GetAPIKeysStatus() map[string]string {
 // SaveAPIKeys persists LLM API keys/settings in the user config dir
 // (outside the repo) and returns the new masked status. Empty values clear.
 func (a *App) SaveAPIKeys(entries map[string]string) (map[string]string, error) {
-	return modelx.SaveStoredAPIKeys(entries)
+	if entries != nil {
+		_, hasOCKey := entries["OPENCODE_API_KEY"]
+		_, hasOCBase := entries["OPENCODE_BASE_URL"]
+		if hasOCKey || hasOCBase {
+			curKey, curBase, _ := modelx.LoadOpenCodeCredentials()
+			newKey := curKey
+			newBase := curBase
+			if hasOCKey {
+				newKey = strings.TrimSpace(entries["OPENCODE_API_KEY"])
+			}
+			if hasOCBase {
+				newBase = strings.TrimSpace(entries["OPENCODE_BASE_URL"])
+			}
+			if err := modelx.SaveOpenCodeCredentials(newKey, newBase); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if _, err := modelx.SaveStoredAPIKeys(entries); err != nil {
+		return nil, err
+	}
+	// Re-read unified status including mirrored OpenCode credentials.
+	return modelx.StoredAPIKeysStatus(), nil
 }
 
 // GetProviderProfilesOverview returns detected workspace org info, saved multi-account

@@ -6,7 +6,7 @@ import { renderComposerModeBar } from "./chat";
 import { openEditorFind, openFileInEditor, renderEditorBody } from "./editor";
 import { setProjectPermissionMode } from "./explorer";
 import { openInlineEdit, toggleGhostText } from "./inline-ai";
-import { openDoctorModal, openGitHubModal, openJiraModal, openOpenCodeModal } from "./modals";
+import { openAPIKeysModal, openGitHubModal, openJiraModal, openProvidersScanModal } from "./modals";
 import { openSidebarView, updateStatusBar } from "./shell";
 import { api, state } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
@@ -35,10 +35,10 @@ export function getCommandActions(): CommandAction[] {
     { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
     { id: "wizard", label: "Configurar Equipe e Skills (.hivemind/team.yaml)", run: () => void openTeamConfigTab() },
-    { id: "opencode-token", label: "Configurar Token OpenCode Zen (OPENCODE_API_KEY)", run: () => openOpenCodeModal() },
+    { id: "providers-pool", label: "Provedores & Contas (Pool de Chaves e Google Antigravity)", run: () => void openAPIKeysModal("profiles") },
+    { id: "providers-scan", label: "Varredura de Provedores — Diagnosticar Contas e Modelos", run: () => void openProvidersScanModal() },
     { id: "github-connector", label: "Conector GitHub Nativo (Token / API REST)", run: () => openGitHubModal() },
     { id: "jira-connector", label: "Conector Jira Nativo (URL / E-mail / API Token)", run: () => openJiraModal() },
-    { id: "doctor", label: "Doctor — Verificar Antigravity CLI (agy)", run: () => openDoctorModal() },
     { id: "open-folder-tab", label: "Abrir Outro Projeto em Nova Aba Isolada…", shortcut: "Ctrl+Shift+O", run: () => openFolderDialog(true) },
     { id: "open-folder", label: "Substituir Projeto na Aba Atual…", run: () => openFolderDialog(false) },
   ];
