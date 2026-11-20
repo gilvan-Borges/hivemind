@@ -419,6 +419,11 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 				}
 			},
 		}
+		r.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
+			Workspace: workspaceDir,
+			Approve:   askHuman,
+			OnEvent:   r.OnEvent,
+		})
 		res, runErr := r.Run(ctx, orchestrator.Request{
 			Objective: text,
 			SessionID: reqSessionID,
@@ -491,6 +496,15 @@ func (m model) onStream(msg streamed) (tea.Model, tea.Cmd) {
 			lbl = "Handoff"
 		}
 		m.blocks = append(m.blocks, block{Kind: "agent", Author: lbl, Body: ev.Text})
+	case "model_route":
+		if ev.Model != "" {
+			if row := m.matchAgent(ev.Author, ev.Label); row != nil {
+				row.Model = shortModel(ev.Model)
+			}
+		}
+		if ev.Text != "" {
+			m.blocks = append(m.blocks, block{Kind: "system", Author: "Jev", Body: ev.Text})
+		}
 	case "text":
 		if !ev.Thought && ev.Text != "" {
 			agName := m.agentKeyFor(ev.Author, ev.Label)

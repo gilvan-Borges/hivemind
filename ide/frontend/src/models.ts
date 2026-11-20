@@ -7,12 +7,13 @@ import { activeLane } from "./lanes";
 import { TEAM_CONFIG_TAB_KEY, api, setStatus, state, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
-export type ModelProviderId = "default" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter" | "cursor";
+export type ModelProviderId = "default" | "jev" | "agy" | "opencode-go" | "opencode" | "gemini" | "anthropic" | "openai" | "openrouter" | "cursor";
 
 export function inferModelProvider(modelSpec: string, includeDefaultBlank = false): ModelProviderId {
   const cur = (modelSpec || "").trim();
   if (!cur && includeDefaultBlank) return "default";
   const low = cur.toLowerCase();
+  if (low === "jev" || low === "jev:auto" || low === "jev/auto" || low.startsWith("jev:") || low === "auto") return "jev";
   if (low === "cursor" || low.startsWith("cursor:") || low.startsWith("cursor/")) return "cursor";
   if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
   if (low.startsWith("opencode:") || low.startsWith("opencode/") || low === "opencode") return "opencode";
@@ -39,6 +40,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   const goCount = state.openCodeGoModels.length > 0 ? ` (${state.openCodeGoModels.length})` : "";
   const zenCount = state.openCodeModels.length > 0 ? ` (${state.openCodeModels.length})` : "";
   out.push(
+    { id: "jev", label: "Jev (automático, barato primeiro)" },
     { id: "agy", label: `Antigravity (agy)${agyCount}` },
     { id: "opencode-go", label: `OpenCode Go${goCount}` },
     { id: "opencode", label: `OpenCode Zen${zenCount}` },
@@ -57,6 +59,8 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
   switch (providerId) {
     case "default":
       return [{ value: "", label: "(herdar modelo padrão)" }];
+    case "jev":
+      return [{ value: "jev:auto", label: "auto (Jev escolhe o mais barato)" }];
     case "agy":
       items = state.models.length > 0
         ? state.models.map((m) => ({ value: `agy:${m.slug}`, label: m.slug }))
@@ -115,7 +119,7 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
   }
   const normalizedCur = cur.replace("/", ":");
   if (cur && inferModelProvider(cur, false) === providerId && !items.some((x) => x.value === cur || x.value === normalizedCur)) {
-    const shortLabel = cur.replace(/^(agy|opencode-go|opencode)[:/]/i, "");
+    const shortLabel = cur.replace(/^(agy|opencode-go|opencode|jev)[:/]/i, "");
     items = [{ value: cur, label: shortLabel || cur }, ...items];
   }
   return items;

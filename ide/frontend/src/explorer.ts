@@ -707,6 +707,7 @@ export function renderAgentCardsHtml(agents: AgentRuntime[]): string {
         disabled: Boolean(lane?.running),
         compact: true,
       })}
+      ${a.routeModel ? `<div class="agent-meta" style="color:var(--muted)">Jev: ${escapeHtml(a.routeModel)}${a.routeTier ? ` (${escapeHtml(a.routeTier)})` : ""}</div>` : ""}
       ${a.tool ? `<div class="agent-meta" style="color:var(--green)">Ferramenta: ${escapeHtml(a.tool)}</div>` : ""}
       ${a.tokens > 0
         ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`

@@ -183,6 +183,7 @@ export function renderMissionBoardHtml(): string {
                 <span class="dim" data-mc-activity="${escapeHtml(a.name)}">${a.tool ? `Ativo: ${escapeHtml(a.tool)}` : `${a.calls} chamada(s)`}</span>
                 <span style="color:var(--accent)" data-mc-tok="${escapeHtml(a.name)}">${exactTokens(a.tokens)} tok (${pct}%)</span>
               </div>
+              ${a.routeModel ? `<div class="dim" style="font-size:10.5px;font-family:var(--mono)">Jev: ${escapeHtml(a.routeModel)}${a.routeTier ? ` (${escapeHtml(a.routeTier)})` : ""}</div>` : ""}
               <div class="mc-tok-track">
                 <div class="mc-tok-fill" data-mc-fill="${escapeHtml(a.name)}" style="width:${pct}%"></div>
               </div>
