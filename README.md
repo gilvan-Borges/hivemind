@@ -1,315 +1,227 @@
-# HiveMind CLI & IDE
+# HiveMind
 
-Time de software multiagente no terminal (TUI com Bubble Tea) e no desktop (**HiveMind IDE** em Go + Wails v2 em [`ide/`](ide/README.md)). Você abre o projeto, descreve um objetivo, e um grupo de agentes — gerente de projeto, tech lead, arquiteto, desenvolvedores e QA — se organiza para planejar, implementar em paralelo, testar e, se você quiser, abrir o pull request.
+Time de software multiagente no terminal e no desktop: você descreve o objetivo na pasta do projeto e o time planeja, implementa e revisa.
 
-O binário da CLI é estático (`hivemind` no Linux e no macOS, `hivemind.exe` no Windows), e a IDE desktop gera `hivemind-ide.exe` (veja [`ide/README.md`](ide/README.md)). Os identificadores do código ficam em inglês; os textos do programa e este guia estão em português.
+[![HiveMind CI](https://github.com/gilvan-Borges/HiveMind/actions/workflows/ci.yml/badge.svg)](https://github.com/gilvan-Borges/HiveMind/actions/workflows/ci.yml)
+[![Go 1.26.10](https://img.shields.io/badge/Go-1.26.10-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Licença Apache 2.0](https://img.shields.io/badge/Licen%C3%A7a-Apache_2.0-blue.svg)](LICENSE)
 
-## Sessão interativa
+## O que é
 
-`hivemind` sem argumentos, dentro da pasta do projeto, abre a tela cheia (Bubble Tea). No primeiro uso, um assistente monta o time: nome, quantidade de desenvolvedores, modelo de cada agente a partir de `agy models` (atalho “mesmo para todos”), esforço e as integrações (worktree, commit, pull request, GitHub e Jira).
+O HiveMind é um módulo Go (`github.com/gilvan-Borges/HiveMind`) com duas frentes no mesmo repositório. A CLI `hivemind` abre uma TUI em Bubble Tea (`charm.land/bubbletea/v2`) ou executa um objetivo até o fim. A [HiveMind IDE](ide/README.md) é o app desktop em Go e Wails v2 (`ide/`, binário `hivemind-ide`). As duas usam o orquestrador em `internal/orchestrator`, em cima do ADK Go (`google.golang.org/adk/v2` v2.8.0): agentes em sequência, em paralelo e em loop.
 
-A conversa fica no centro, com markdown. A barra da esquerda mostra cada agente (gerente, líder, arquiteto, dev e QA), o modelo e o estado ao vivo: aguardando, pensando, usando ferramenta, concluído ou erro. A barra da direita lista os arquivos alterados. Embaixo, o campo aceita várias linhas (Enter envia, Shift+Enter ou Alt+Enter quebra a linha). `/ajuda` descreve os comandos; `/time`, `/modelo`, `/agentes`, `/sessoes`, `/jira`, `/git`, `/pr`, `/limpar`, `/tema` e `/sair` também. `@arquivo` anexa o conteúdo. Esc cancela a execução (os processos `agy` são encerrados). Ctrl+C duas vezes sai.
+O time padrão tem Chefe (arquiteto), desenvolvedores e QA. Um time completo pode incluir gerente de projeto e tech lead. A configuração do projeto fica em `.hivemind/team.yaml`. Essa pasta está no `.gitignore`.
 
-Uma saudação ou uma pergunta curta passa só pelo gerente. Um pedido de mudança percorre o time inteiro, com o texto chegando em fluxo (`agy --output-format stream-json`). O checkout da sua branch não é trocado em silêncio: no fim, a tela pergunta se você quer trazer a integração. Diagnósticos vão para `.hivemind/logs/`, não para a tela. A pasta `.hivemind/` entra no `.gitignore`.
+## Destaques
 
-## O que o time faz
+- **CLI.** `hivemind` sem argumentos abre a sessão interativa. `run`, `team`, `agent`, `session`, `jira`, `git`, `mcp`, `doctor`, `serve` e `version` são os comandos públicos.
+- **IDE.** Desktop Windows em Wails v2.17.1 (`ide/go.mod`), frontend TypeScript/Vite e o mesmo núcleo da CLI. Detalhes em [ide/README.md](ide/README.md).
+- **Orquestrador Jev.** Roteador de modelo em `internal/jev`: classifica a tarefa, consulta o catálogo em cache e aplica circuit breaker. A política padrão nasce desligada (`Enabled: false`). O roteamento entra quando a política está ligada ou quando o agente usa o provedor `jev`.
+- **Agente residente e sandbox.** Assistente no processo da IDE e no modo headless de `hivemind serve`. A execução de processo passa por `internal/sandboxx` e falha fechada se o mecanismo do sistema não existir: AppContainer e Job Object no Windows, bubblewrap e seccomp no Linux, Seatbelt no macOS.
+- **Host MCP.** CLI, IDE e Remote Bridge compartilham `internal/mcpx`. Context7 e Code Review Graph nascem ligados; Playwright, Chrome DevTools, Toolbox, GitHub, Figma Context e Codebase Memory nascem desligados. Guia em [docs/MCP.md](docs/MCP.md).
+- **Perfis multi-organização.** Contas de provedor em `provider-profiles.json` (pasta de config do usuário), com regras por organização Git detectadas em `internal/orgx`.
+- **Revisão automática.** Na IDE, a aba de fluxo pode revisar pull requests numa lane própria. O modo automático omite `github_merge_pr` e a escrita Git. O interruptor nasce desligado.
+- **Skills.** O catálogo nativo semeia `ponytail` e `improve-codebase-architecture`. `untangle-codebase` vai para o disco e nasce desligada. O projeto também lê `.agents/skills/`.
+- **Provedores.** `agy` (Antigravity CLI), OpenCode, Gemini, Vertex, Anthropic, OpenAI, OpenAI Responses, OpenRouter e Cursor CLI (`agent`). Sem `GOOGLE_API_KEY` e com `agy` no PATH, o time novo usa `agy`.
+- **App Android.** O Remote Bridge e o `hivemind-relay` atendem o [HiveMind-App](https://github.com/gilvan-Borges/HiveMind-App). O código do app não está neste repositório.
 
-1. O gerente de projeto lê o objetivo (ou a issue do Jira) e monta o plano. Se o Jira estiver ligado, ele pode criar subtarefas.
-2. O tech lead divide o trabalho entre os desenvolvedores, sem dois agentes no mesmo arquivo.
-3. O arquiteto define a abordagem mínima.
-4. Os desenvolvedores trabalham **em paralelo** (goroutines do ADK). Em um repositório Git com pelo menos um commit, cada um recebe a própria branch e uma git worktree em `.hivemind/worktrees/`.
-5. O QA revisa e roda testes. Se reprovar, o ciclo volta para os desenvolvedores. Se aprovar, o ciclo para. O número de voltas tem limite (`max_qa_loops`).
+## Arquitetura
 
-A orquestração usa os agentes de workflow do ADK Go: `sequentialagent`, `parallelagent` e `loopagent`.
+```mermaid
+flowchart LR
+  subgraph pc [PC]
+    CLI[CLI hivemind]
+    IDE[HiveMind IDE]
+    ORCH[Orquestrador ADK]
+    JEV[Jev]
+    RES[Agente residente]
+    SB[Sandbox]
+    MCP[Host MCP]
+    BR[Remote Bridge]
+  end
+  RELAY[hivemind-relay]
+  APP[HiveMind-App]
 
-## Requisitos
-
-Para **usar** o binário pronto: Git, e as chaves dos provedores que o time usar. Go não precisa estar instalado.
-
-Para **compilar**: Go **1.26.10 ou mais novo**. O ADK Go v2 exige essa versão.
-
-## Instalação no Windows (PowerShell)
-
-### Baixar o binário
-
-No GitHub, abra a branch `main`, entre em **Actions**, abra a execução do workflow **HiveMind CI** e baixe o artefato `hivemind-windows-amd64` (`hivemind.exe`) ou `hivemind-ide-windows-amd64` (`hivemind-ide.exe`).
-
-Coloque-o numa pasta que esteja no `PATH`, ou chame-o pelo caminho completo.
-
-### Compilar
-
-```powershell
-winget install --id GoLang.Go -e
+  CLI --> ORCH
+  IDE --> ORCH
+  ORCH --> JEV
+  IDE --> RES
+  RES --> SB
+  CLI --> MCP
+  IDE --> MCP
+  IDE --> BR
+  CLI -->|hivemind serve| BR
+  BR -->|HTTP e SSE na LAN| APP
+  IDE -->|WebSocket de saída| RELAY
+  APP -->|WebSocket de saída| RELAY
 ```
 
-O `winget` pode instalar uma versão antiga. Confira com `go version`. Se for menor que 1.26.10, baixe o zip em [https://go.dev/dl/](https://go.dev/dl/) (`go1.26.10.windows-amd64.zip`), extraia e coloque `go\bin` no `PATH`.
+A CLI e a IDE chamam o mesmo orquestrador. O Jev envolve a fábrica de modelo (`internal/modelx`) quando a política ou o agente pedem roteamento. O residente mora no processo da IDE, com a sandbox do sistema operacional na frente de qualquer comando. O host MCP é o mesmo nas duas frentes.
+
+O Remote Bridge (`ide/internal/remote`) nasce desligado. Na LAN ele escuta a porta **47890**, com token bearer de 256 bits, e publica o pareamento `hivemind://pair`. Fora da rede local, a IDE e o app abrem só conexão de saída para o `hivemind-relay` (`cmd/hivemind-relay`). O relay encaminha; o motor de agentes continua no PC. O processo escuta em `127.0.0.1:8787` por padrão.
+
+## Começar no Windows
+
+Requisitos para compilar: **Go 1.26.10** (`go.mod` e `ide/go.mod`; o workflow usa essa versão) e Git. A IDE também pede Node.js e npm. O script do instalador pede Node.js 20 ou mais novo; o CI usa Node 22. O caminho com Wails CLI pede o comando `wails` no PATH. `ide/go.mod` declara Wails **v2.17.1**.
 
 ```powershell
 git clone https://github.com/gilvan-Borges/HiveMind.git
 cd HiveMind
-$env:CGO_ENABLED = "0"
-go build -trimpath -ldflags "-s -w" -o hivemind.exe .\cmd\hivemind
-.\hivemind.exe --help
-.\hivemind.exe version
 ```
 
-## Instalação no Linux e no macOS
+### CLI
+
+O workflow e o instalador compilam com `CGO_ENABLED=0`:
+
+```powershell
+$env:CGO_ENABLED = "0"
+go build -trimpath -ldflags "-s -w" -o hivemind.exe .\cmd\hivemind
+.\hivemind.exe version
+.\hivemind.exe --help
+```
+
+Na pasta de um projeto:
+
+```powershell
+cd C:\projetos\meu-app
+C:\caminho\HiveMind\hivemind.exe doctor
+C:\caminho\HiveMind\hivemind.exe team create --name padrao
+C:\caminho\HiveMind\hivemind.exe
+C:\caminho\HiveMind\hivemind.exe run "adicionar um endpoint de healthcheck"
+```
+
+`doctor` informa o que está configurado e não imprime o valor de segredo. `team create` grava `.hivemind/team.yaml`. Sem argumentos, a CLI abre a TUI. Um exemplo de time está em [examples/team.yaml](examples/team.yaml).
+
+### IDE
+
+O instalador procura o comando `wails` no PATH. A versão declarada em `ide/go.mod` é a v2.17.1:
+
+```powershell
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+```
+
+O texto de erro do script indica `go install github.com/wailsapp/wails/v2/cmd/wails@latest`. Na pasta `ide/`, o instalador compila assim:
+
+```powershell
+cd ide
+wails build -clean -trimpath -platform windows/amd64
+.\build\bin\hivemind-ide.exe --smoke-check
+```
+
+O CI, a partir da raiz, gera o executável com o frontend já compilado:
+
+```powershell
+cd ide\frontend
+npm ci
+npm run build
+cd ..
+go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o build\hivemind-ide.exe .
+.\build\hivemind-ide.exe --smoke-check
+```
+
+Para abrir a IDE na pasta atual, a partir da raiz do repositório já compilada:
+
+```powershell
+.\bin\hivemind-ide.cmd
+```
+
+O atalho procura `ide\build\bin\hivemind-ide.exe`, depois `ide\build\hivemind-ide.exe`.
+
+### Instalador
+
+Com Go, Node, npm, `wails` e Inno Setup 6 (`iscc`) no PATH:
+
+```powershell
+powershell -File .\scripts\build-installer.ps1
+```
+
+O script gera `dist\hivemind.exe` e `dist\HiveMindSetup-x64.exe`. Se o Inno Setup não estiver instalado, a mensagem do script indica `winget install --id JRSoftware.InnoSetup -e`.
+
+### Testes locais
+
+```powershell
+go test ./...
+cd ide
+go test ./internal/idecore/...
+cd frontend
+npm test
+```
+
+O workflow **HiveMind CI** (`.github/workflows/ci.yml`) roda `go vet` e `go test` da CLI no Ubuntu (com `-race`) e no Windows, testes da IDE nos dois sistemas e o build do frontend. Publica a CLI para `windows/amd64`, `linux/amd64`, `darwin/amd64` e `darwin/arm64`, a IDE `hivemind-ide.exe` no Windows e o relay para `linux/amd64` e `linux/arm64`. Os artefatos ficam na execução do workflow.
+
+## Linux e macOS
+
+A CLI cruza a mesma receita do CI:
 
 ```bash
 git clone https://github.com/gilvan-Borges/HiveMind.git
 cd HiveMind
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o hivemind ./cmd/hivemind
-./hivemind --help
+./hivemind version
 ```
 
-No Actions também há artefatos `hivemind-linux-amd64`, `hivemind-darwin-amd64` e `hivemind-darwin-arm64`.
-
-## Sem chave de API: Antigravity CLI
-
-O padrão é o `agy` (Google Antigravity CLI) quando ele está no `PATH` e `GOOGLE_API_KEY` não está definida. A conta é a Google Pro com a qual você já entrou no `agy`. O HiveMind não pede `GOOGLE_API_KEY`.
-
-No PowerShell, uma vez por máquina:
-
-```powershell
-agy
-agy models
-hivemind doctor
-```
-
-`agy` abre o login, se ainda não houver sessão. `agy models` lista os slugs. `hivemind doctor` diz se o executável foi encontrado (por `HIVEMIND_AGY_PATH`, pelo `PATH` ou em `%LOCALAPPDATA%\agy\bin\agy.exe`) e se `agy models` autenticou. `hivemind doctor --probe` manda `responda apenas OK` pelo mesmo caminho de uma execução real: texto UTF-8 no stdin (`--input-format text`) e `--json-schema` apontando para um arquivo temporário. O prompt nunca vai no argv, porque as aspas do Windows quebram `agy -p`. Nada disso imprime segredo nem a lista de modelos.
-
-```powershell
-cd C:\projetos\meu-app
-hivemind team create --name padrao
-hivemind run "adicionar um endpoint de healthcheck"
-```
-
-`team create` grava `provider: agy` e `model: agy` nesse caso. O modelo em si é o que o `agy` escolher. Para fixar um slug e o esforço:
-
-```powershell
-hivemind agent edit --name dev_1 --model "agy:gemini-3.8-flash-medium:high" --provider agy
-```
-
-O formato é `agy`, `agy:<slug>` ou `agy:<slug>:<effort>`, com effort `low`, `medium`, `high`, `xhigh` ou `max`. `AGY_MODEL` e `AGY_EFFORT` valem quando o agente fica só em `agy`.
-
-O `agy` não edita o repositório. Cada chamada roda numa pasta temporária, sem `--dangerously-skip-permissions`. O prompt vai em UTF-8 pelo stdin (`--input-format text`), nunca em `-p`. O `--json-schema` é o caminho de um arquivo temporário com a decisão (`text` ou `tool_calls`). Quem grava arquivo, roda comando, fala com o git, o GitHub e o Jira é o HiveMind.
-
-## Chaves e variáveis
-
-Gemini, Vertex, Anthropic e OpenAI continuam disponíveis por agente. Sem `GOOGLE_API_KEY`, eles não são o padrão.
-
-```powershell
-# Opcional. Se existir, team create volta a sugerir Gemini.
-$env:GOOGLE_API_KEY = "sua-chave"
-# alternativa aceita: $env:GEMINI_API_KEY
-
-# Vertex AI, em vez da API key
-$env:GOOGLE_GENAI_USE_VERTEXAI = "true"
-$env:GOOGLE_CLOUD_PROJECT = "seu-projeto"
-$env:GOOGLE_CLOUD_LOCATION = "us-central1"
-
-# Anthropic
-$env:ANTHROPIC_API_KEY = "sua-chave"
-# Claude no Vertex: $env:ANTHROPIC_BACKEND = "vertex"
-
-# OpenAI, ou um endpoint compatível
-$env:OPENAI_API_KEY = "sua-chave"
-$env:OPENAI_BASE_URL = "https://api.openai.com/v1"
-
-# OpenRouter (gateway multi-modelo). O modelo usa o formato fornecedor/modelo,
-# ex.: anthropic/claude-sonnet-4-5, openai/gpt-4.1, google/gemini-2.5-pro.
-$env:OPENROUTER_API_KEY = "sua-chave"
-# opcional (padrão: https://openrouter.ai/api/v1)
-$env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
-# Jira Cloud (variáveis OU Conector Jira Nativo salvo pela IDE em jira-connector.json)
-$env:JIRA_BASE_URL = "https://sua-empresa.atlassian.net"
-$env:JIRA_EMAIL = "voce@empresa.com"
-$env:JIRA_API_TOKEN = "seu-token"
-# opcional: projeto padrão para jira_create_issue no fluxo SDD
-$env:JIRA_PROJECT = "PROJ"
-
-# GitHub. Se o token existir, a CLI usa a API REST.
-# Sem token, usa o executável gh autenticado.
-$env:GITHUB_TOKEN = "seu-token"
-```
-
-`hivemind doctor` diz se cada variável está definida, sem mostrar o valor.
-
-## Configuração do time
-
-Tudo fica em `.hivemind/team.yaml`, na pasta do projeto. Pode haver vários times; um deles é o ativo.
-
-```powershell
-cd C:\projetos\meu-app
-hivemind team create --name padrao --devs 2
-# com chave do Gemini, o mesmo comando usa gemini-flash-latest
-# para forçar o modelo: --provider gemini --model gemini-flash-latest
-hivemind team list
-hivemind team show
-hivemind team use padrao
-```
-
-Sem `--name` e com o terminal interativo, `hivemind team create` abre um assistente.
-
-```powershell
-hivemind agent add --role dev --name dev_back --model agy:gemini-3.8-flash-medium
-hivemind agent add --role qa --name qa_api --model claude-sonnet-4-5 --provider anthropic
-hivemind agent edit --name dev_back --model gemini-2.5-pro
-hivemind agent remove --name dev_back
-hivemind agent list
-```
-
-Papéis: `pm` (gerente), `tech_lead`, `architect`, `dev`, `qa`.
-
-Um exemplo completo está em [examples/team.yaml](examples/team.yaml). Campos úteis em `settings`:
-
-| Campo | Efeito |
-| --- | --- |
-| `permission_mode` | `governed` (padrão), `auto_edit` ou `full_access` (autonomia e permissão total estilo Claude Code / Codex) |
-| `worktrees` | Sempre trabalha em worktree separada por padrão (`true`) |
-| `jira_enabled` | Liga ou desliga as ferramentas de Jira e o comentário final |
-| `auto_commit` | Commit consolidado pelo Chefe/Arquiteto na worktree de entrega (`true` por padrão), **somente após `qa_approve`** |
-| `auto_pr` | `git push` e abertura do pull request da worktree de entrega (`true` por padrão), **somente após `qa_approve`** |
-| `homolog_branch` | Branch de homologação (`homolog`) onde o Chefe pode mesclar após aprovação do revisor |
-| `base_branch` | Branch base principal (`main`); merge em `main` pede permissão explícita ao usuário (salvo em `full_access`) |
-| `max_qa_loops` | Máximo de voltas desenvolvedor/QA |
-| `max_llm_calls` | Limite de chamadas de modelo. `0` usa o padrão do ADK (500). `-1` não limita |
-| `max_dev_calls` | Limite rígido de chamadas LLM por dev a cada rodada Dev↔QA (padrão `80`; estourar aborta a execução para economizar tokens) |
-| `max_dev_explore_calls` | Máximo de buscas/leituras seguidas sem editar nenhum arquivo (padrão `40`; detecta loop exploratório e aborta) |
-| `max_dev_input_tokens` | Orçamento de tokens de entrada por dev por rodada (padrão `1500000`; aborta ao estourar) |
-| `max_tokens` | Limite de tokens por execução (padrão `0` = sem limite). `hivemind run --max-tokens N` sobrescreve |
-| `shell_allowlist` | Executáveis que `run_shell` pode chamar (`full_access` libera todos) |
-| `confirm_shell` | Pede confirmação para comando destrutivo |
-
-Comandos de shell fora da lista são recusados. `git push --force`, `git reset --hard`, `rm` e pipes pedem confirmação. Fora de um terminal a confirmação é negada, a menos que você passe `--yes`. O `run_shell` roda com ambiente sanitizado (sem `*_TOKEN`/`*_KEY`), timeout padrão de 20 minutos e saída limitada.
-
-Se o QA não aprovar a entrega, o run termina como **pendente de QA**: as alterações ficam na worktree de entrega e **não** há commit, push nem pull request.
-
-## Uso
-
-Na pasta do projeto:
-
-```powershell
-# sessão interativa
-hivemind
-
-# uma execução, com a saída de cada agente
-hivemind run "adicionar um endpoint de healthcheck"
-
-# limita o custo desta execução (sobrescreve settings.max_tokens)
-hivemind run --max-tokens 600000 "implementar o fluxo de login"
-
-# a issue vira o objetivo; a chave entra na branch, no commit e no PR
-hivemind run --jira PROJ-123
-
-# objetivo extra junto da issue, retomando uma sessão
-hivemind run "não mude o contrato público" --jira PROJ-123 --session abc123def456
-
-hivemind session list
-hivemind session show abc123def456
-hivemind session resume abc123def456
-
-hivemind jira search "project = PROJ AND statusCategory != Done ORDER BY updated DESC"
-hivemind jira show PROJ-123
-
-hivemind git status
-hivemind git diff
-hivemind git branch
-```
-
-Dentro da sessão interativa: escreva o objetivo, `/jira PROJ-123`, `/time`, `/sessoes`, `/ajuda`, `/sair`.
-
-A branch de cada desenvolvedor tem a forma `hivemind/proj-123/dev_1`. Sem issue, o trecho do meio é um resumo do objetivo. O commit automático usa `feat(PROJ-123): ...`.
-
-As sessões ficam em `.hivemind/sessions/` e sobrevivem ao fechar o terminal. A pasta `.hivemind/` guarda configuração e worktrees; vale a pena ignorá-la no Git do seu projeto.
-
-## Ferramentas dos agentes
-
-Todas as leituras e gravações ficam presas ao diretório de trabalho do agente (o projeto, ou a worktree daquele desenvolvedor). Um link simbólico que aponte para fora é recusado, e `.git` não é lido nem escrito por essas ferramentas.
-
-| Papel | Ferramentas |
-| --- | --- |
-| Gerente (Chefe) | ler, listar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull`, PR (`github_create_pr`, `github_get_pr`, `github_comment_pr`, `github_request_review`, `github_review_pr`, `github_merge_pr`, `github_ci_status`) e Jira (`jira_get`, `jira_search`, `jira_create_issue`, `jira_create_subtask`, `jira_comment`, `jira_transition`) |
-| Gerente (Chefe, fase SDD) | leitura + `write_doc` (grava APENAS `.md` em `docs/`, `specs/`, `.specify/` ou `README.md`) — código bloqueado até os gates serem aprovados |
-| Tech lead | ler, listar, status, diff, leitura de PR/CI e comentário no Jira |
-| Arquiteto | ler, listar, gravar, `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull` e governança de PR |
-| Desenvolvedor | ler, listar, gravar, shell (testes/build), `git_status` e `git_diff` (**nunca** comita nem opera PR) |
-| QA | ler, listar, shell, diff, `qa_approve`, `qa_request_changes`, comentário no Jira |
-
-`qa_approve` encerra o loop do ADK. `qa_request_changes` devolve o texto do ajuste aos desenvolvedores na volta seguinte.
-
-## Testes e CI
+O relay, a partir da raiz:
 
 ```bash
-go test ./...
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o hivemind-relay ./cmd/hivemind-relay
 ```
 
-Os testes não chamam Gemini, GitHub nem Jira de verdade. O modelo é um `model.LLM` scriptado, o Jira é um servidor HTTP falso, o GitHub REST também, e o git dos testes é um repositório temporário local. O shell é exercitado com comandos portáveis e com recusa de comando perigoso. Os testes que precisam de um `agy` falso compilam um binário Go em `internal/testutil/fakeagy`, então a suíte passa igualmente no Windows e no Linux.
+A imagem descrita em `deploy/relay/Dockerfile` é `docker build -f deploy/relay/Dockerfile -t hivemind-relay .`. O passo a passo da VM está em [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md).
 
-O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda análise estática (`go vet`), testes unitários do CLI **no Linux (com `-race`) e no Windows**, testes da IDE, build do frontend TypeScript e compila os binários de Windows, Linux e macOS a cada push em `main`. O mesmo workflow publica o relay (`hivemind-relay`) para `linux/amd64` e `linux/arm64`.
+## Estrutura
 
-## Relay (app fora da rede local)
+| Caminho | Conteúdo |
+| --- | --- |
+| `cmd/` | `hivemind` e `hivemind-relay` |
+| `ide/` | HiveMind IDE (Go, Wails v2, frontend TypeScript/Vite) |
+| `internal/` | Núcleo compartilhado: orquestrador, Jev, modelos, MCP, residente, sandbox, cofre, times, sessões, Git, GitHub e Jira |
+| `relaywire/` | Contrato compartilhado entre app, relay e IDE |
+| `deploy/relay/` | Dockerfile, Caddyfile, unit systemd e exemplo de ambiente |
+| `docs/` | Guias e especificações |
+| `examples/` | `team.yaml` de exemplo |
+| `scripts/` | Instalador Windows (PowerShell e Inno Setup) |
+| `bin/` | `hivemind-ide.cmd` |
+| `assets/` | Logo e ícone usados pelo instalador |
+| `.agents/` | Skills do projeto lidas pelo time |
+| `.github/` | Workflow HiveMind CI |
+| `.cursor/` | Configuração do agente Cursor neste repositório |
 
-O `hivemind-relay` é um processo pequeno que a IDE e o app alcançam só com conexão de saída. A conta, o vínculo das IDEs e o túnel do Remote Bridge estão em [`docs/SPEC_RELAY.md`](docs/SPEC_RELAY.md). O passo a passo da VM Oracle Always Free (portas 80/443, Caddy, systemd) está em [`docs/GUIA_ORACLE_RELAY.md`](docs/GUIA_ORACLE_RELAY.md). Na IDE, o chip **mobile** ganha a seção **Acesso remoto**; o pareamento LAN (`hivemind://pair`) continua no mesmo modal.
+## Documentação
 
-## Limitações do ADK Go (v2.8.0)
+| Documento | Assunto |
+| --- | --- |
+| [docs/MCP.md](docs/MCP.md) | Host MCP, servidores e skills nativas |
+| [docs/CURSOR.md](docs/CURSOR.md) | Agente do editor Cursor neste repositório |
+| [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md) | Provedor Cursor via CLI `agent` |
+| [docs/SPEC_JEV_ORQUESTRADOR.md](docs/SPEC_JEV_ORQUESTRADOR.md) | Desenho do orquestrador Jev |
+| [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md) | Desenho do agente residente |
+| [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md) | Contrato do relay |
+| [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md) | Relay na Oracle Cloud Always Free |
+| [docs/SPEC_APP_MOBILE_NATIVO.md](docs/SPEC_APP_MOBILE_NATIVO.md) | Remote Bridge e o app Android |
+| [docs/SPEC_AUTO_REVIEW_FLUXO.md](docs/SPEC_AUTO_REVIEW_FLUXO.md) | Revisão automática de pull requests |
+| [docs/SPEC_REVISAO_CONTEXTO.md](docs/SPEC_REVISAO_CONTEXTO.md) | Revisão de diff e compactação de contexto |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Fases do produto |
+| [docs/DOGSFOODING.md](docs/DOGSFOODING.md) | Protocolo de uso real da IDE |
+| [ide/README.md](ide/README.md) | Build e uso da IDE |
 
-O que o ADK entrega e o que esta CLI completa:
+## App Android
 
-- **Sequential, parallel e loop existem** em `google.golang.org/adk/v2/agent/workflowagents` e são o que o pipeline usa. No código Go 2.8.0 eles não emitem aviso de depreciação. A documentação do ADK 2.0 descreve grafos (`workflow`) como o estilo mais novo e marca sequential/parallel/loop como depreciados no TypeScript; no Go os três construtores continuam a API pública. Não há um predicado “até os testes passarem”: o `loopagent` para quando um evento vem com `Actions.Escalate` ou quando `MaxIterations` acaba. O QA liga `Escalate` em `qa_approve`.
-- **Não há serviço de sessão em arquivo.** O ADK oferece memória, banco via GORM/SQLite e Vertex AI. Para o binário estático continuar sem CGO e a sessão poder ser retomada depois de fechar o terminal, `.hivemind/sessions/*.json` implementa `session.Service`.
-- **Não há ferramentas de Git, GitHub ou Jira** no ADK. O CLI as implementa. GitHub usa a API REST quando `GITHUB_TOKEN` ou `GH_TOKEN` existe e, na ausência do token, o executável `gh`. Jira é só Jira Cloud (REST v3), com `JIRA_BASE_URL`, `JIRA_EMAIL` e `JIRA_API_TOKEN` — ou com as credenciais salvas pelo Conector Jira Nativo da IDE (`jira-connector.json`, fora do repo).
-- **Não há o conceito de time.** `.hivemind/team.yaml` é desta CLI. O ADK também não escolhe o modelo por agente sozinho: cada `llmagent` recebe o `model.LLM` que a fábrica cria (agy, Gemini, Vertex, Anthropic ou OpenAI). Outro provedor entra se falar a API compatível com OpenAI (`OPENAI_BASE_URL`). O provedor `openai-responses` usa a Responses API; o padrão `openai` usa Chat Completions.
-- **O ADK não fala com o Antigravity CLI.** O provedor `agy` implementa `model.LLM` chamando `agy` em modo headless (`--output-format json`). As ferramentas nativas do agy ficam de fora: o processo usa um diretório temporário e não recebe `--dangerously-skip-permissions`. A decisão de ferramenta volta em `--json-schema` e o ADK executa as ferramentas do HiveMind. A resposta chega inteira; o agy nesse modo não entrega token por token. `--conversation` do agy não é usado, porque o histórico e o resultado das ferramentas ficam na sessão do HiveMind.
-- **Confirmação de ferramenta (HITL) do ADK** pausa a execução à espera de um cliente que entenda `RequestedToolConfirmations` (o launcher e a UI web). No PowerShell isso não aparece sozinho. O `run_shell` confirma no próprio terminal e devolve erro ao modelo se você recusar.
-- **Agentes paralelos não leem a conversa uns dos outros.** O ADK isola a branch de cada um. O plano compartilhado viaja no estado da sessão (`OutputKey`), que é o mecanismo do ADK para isso.
-- **Worktree exige um commit.** Sem repositório ou sem commit, os desenvolvedores compartilham a pasta do projeto e a CLI avisa. Escrita paralela no mesmo arquivo pode colidir.
-- **Streaming** depende do provedor. Com `StreamingModeSSE` a CLI imprime os eventos parciais que o runner entrega. O teste usa o modo sem streaming para o modelo simulado.
-- **Não há teto de concorrência.** Cada desenvolvedor é uma goroutine, como o `parallelagent` do ADK faz. Muitos desenvolvedores significam muitas chamadas de modelo ao mesmo tempo. A saída de ferramenta é truncada para a sessão não crescer sem limite, e só a sessão ativa fica na memória.
-- O nome de agente `user` é reservado pelo ADK. A CLI reescreve nomes para identificadores (`dev-back` vira `dev_back`).
+O cliente móvel é o repositório [github.com/gilvan-Borges/HiveMind-App](https://github.com/gilvan-Borges/HiveMind-App). Este repositório é o lado do PC.
 
-## MCP e skills do time
+Na IDE, o chip do app controla o Remote Bridge. Ele permanece desligado até `SetMobileBridgeEnabled`. O pareamento é um QR `hivemind://pair` com as URLs locais e o token. `hivemind serve` localiza o `hivemind-ide` e o executa com `--serve-bridge`: o bridge sobe naquele processo, sem a janela, e o terminal mostra o QR. Ctrl+C encerra.
 
-O HiveMind passa a hospedar servidores MCP e três skills de ferramenta, na CLI, na IDE e quando o app mobile manda a execução pelo Remote Bridge. A aprovação para ligar um servidor no meio da tarefa usa o mesmo pedido de permissão que o restante do produto, então o celular também responde.
+Fora da LAN, a IDE abre um túnel de saída no relay. O contrato está em [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md) e [docs/SPEC_APP_MOBILE_NATIVO.md](docs/SPEC_APP_MOBILE_NATIVO.md).
 
-Nascem ligados: Context7 (documentação atual, `CONTEXT7_API_KEY`) e o Code Review Graph (grafo local, precisa de `uvx`). Nascem desligados, sem carregar o esquema das ferramentas no agente: Playwright, Chrome DevTools, Toolbox (Postgres só em `127.0.0.1`), GitHub MCP (toolsets `repos,issues,pull_requests`, token `GITHUB_MCP_TOKEN`), Figma e Codebase Memory. O guia está em [docs/MCP.md](docs/MCP.md).
+## Segurança
 
-As skills `ponytail` (modo `lite`) e `improve-codebase-architecture` entram no catálogo nativo para o Chefe escolher ao delegar. `untangle-codebase` fica no disco e nasce desligada: só entra se alguém pedir a limpeza do repositório pelo nome.
+Segredos do agente residente passam por `internal/secretx`. No Windows o cofre é o Credential Manager (`CredWriteW`), com o valor protegido por DPAPI (`CryptProtectData`), no alvo `HiveMind:resident:`. Se o cofre não estiver disponível, a operação falha fechada. O pacote não grava o valor em log, prompt nem telemetria. No macOS o mesmo pacote usa o Keychain; no Linux, o Secret Service.
 
-O provedor **Cursor** usa a assinatura da conta pelo CLI oficial (`agent -p`), não por uma API de chat. A chave `CURSOR_API_KEY` fica em Chaves de API (ou na variável de ambiente). O guia está em [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md).
+Chaves de provedor que a IDE persiste (`CURSOR_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` e as variáveis de projeto listadas em `internal/modelx/keys.go`) ficam em `api-keys.json` na pasta de config do usuário, fora do Git. Variável de ambiente, quando existe, prevalece sobre o arquivo.
 
-A proposta do agente residente (assistente sempre ligado, com sandbox) está em [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md). Ainda não há comando nem tela para ele.
+O Remote Bridge nasce com `enabled: false`. A config fica em `%LOCALAPPDATA%\HiveMind\remote-bridge.json`, modo `0600`, com token de 256 bits. Toda rota `/api/v1/*` exige o token, comparado em tempo constante, exceto `GET /api/v1/health`. O cliente do relay (`relay.json`, ao lado desse arquivo) também nasce desligado.
 
-A proposta do orquestrador Jev (escolha de modelo por tarefa e failover de provedor, acima do squad) está em [docs/SPEC_JEV_ORQUESTRADOR.md](docs/SPEC_JEV_ORQUESTRADOR.md). Ainda não há comando nem tela para ele.
+Comandos de shell dos agentes recebem o ambiente de `internal/shellx`: variáveis com sufixo de token, segredo, senha ou chave de API saem do ambiente do processo.
 
-## Cursor (agente do editor)
+## Licença
 
-Quem edita este repositório no Cursor tem outra config, só para esse agente, em [`docs/CURSOR.md`](docs/CURSOR.md). Context7 e o Code Review Graph ficam ligados em `.cursor/mcp.json`. Playwright, Chrome DevTools, Toolbox, GitHub, Figma, Codebase Memory e a skill `untangle-codebase` ficam de fora do que o Cursor carrega.
-
-As cópias em `.cursor/skills/` são desse agente. Não as copie para `.agents/skills/`: o time da IDE já recebe `ponytail` e `improve-codebase-architecture` pelo catálogo nativo, e `.agents/skills/` continua só com `ide-dark-islands-ui` e `multi-agent-ide-patterns`.
-
-## Layout
-
-```
-cmd/hivemind            comando principal da CLI
-cmd/hivemind-relay      relay (conta, vínculo de IDEs, túnel WebSocket)
-relaywire/              contrato compartilhado app↔relay↔IDE
-internal/relay          autenticação, SQLite e roteamento do relay
-deploy/relay            Dockerfile, systemd e Caddyfile
-ide/                    HiveMind IDE desktop (Go + Wails v2 + TypeScript/Vite)
-internal/cli            comandos em português
-internal/tui            interface interativa de terminal (Bubble Tea)
-internal/orchestrator   sequential + parallel + loop do ADK
-internal/tools          arquivos, shell, git, GitHub, Jira
-internal/modelx         agy, Gemini, Vertex, Anthropic, OpenAI e o modelo dos testes
-internal/sessionx       sessões persistidas em JSON
-internal/team           .hivemind/team.yaml
-internal/gitx           git e worktrees de integração
-internal/githubx        API REST e gh
-internal/jirax          Jira Cloud
-internal/shellx         lista de comandos e confirmação
-internal/procx          controle de subprocessos e árvore de processos (Windows/Unix)
-internal/strx           utilitários de truncamento seguro em UTF-8
-internal/workspace      confinamento de leitura e escrita na pasta do agente
-```
+[Apache License 2.0](LICENSE).
