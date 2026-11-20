@@ -238,6 +238,11 @@ func acceptHandoff(edges *[]handoffEdge, from, to, hash string, qaIter, maxLoops
 	if maxLoops <= 0 {
 		maxLoops = 3
 	}
+	for _, e := range *edges {
+		if e.Hash == hash && e.From == from && e.To == to {
+			return true, ""
+		}
+	}
 	visited := map[string]bool{}
 	for _, e := range *edges {
 		if e.Hash != hash {
@@ -267,6 +272,10 @@ func acceptHandoff(edges *[]handoffEdge, from, to, hash string, qaIter, maxLoops
 func (r *Runner) offerHandoff(from, to, hash string, callModel func() *model.LLMResponse) *model.LLMResponse {
 	r.handoffMu.Lock()
 	defer r.handoffMu.Unlock()
+	return r.offerHandoffLocked(from, to, hash, callModel)
+}
+
+func (r *Runner) offerHandoffLocked(from, to, hash string, callModel func() *model.LLMResponse) *model.LLMResponse {
 	maxLoops := r.Project.Settings.MaxQALoops
 	ok, reason := acceptHandoff(&r.handoffEdges, from, to, hash, r.qaLoopIter, maxLoops, r.qaStallFired)
 	if !ok {
@@ -292,22 +301,19 @@ func (r *Runner) offerHandoff(from, to, hash string, callModel func() *model.LLM
 func (r *Runner) handoffModelGuard(role string) llmagent.BeforeModelCallback {
 	return func(agent.Context, *model.LLMRequest) (*model.LLMResponse, error) {
 		r.handoffMu.Lock()
-		same := r.handoffTo == strings.ToLower(role)
-		from := r.handoffTo
-		hash := r.handoffHash
-		r.handoffMu.Unlock()
-		if same {
+		defer r.handoffMu.Unlock()
+		to := strings.ToLower(strings.TrimSpace(role))
+		if to == "" || r.handoffTo == to {
 			return nil, nil
 		}
+		from := r.handoffTo
 		if from == "" {
 			from = "chief"
 		}
-		if hash == "" {
-			hash = r.handoffHash
-		}
+		hash := r.handoffHash
 		if hash == "" {
 			hash = "sem-entrega"
 		}
-		return r.offerHandoff(from, role, hash, nil), nil
+		return r.offerHandoffLocked(from, to, hash, nil), nil
 	}
 }
