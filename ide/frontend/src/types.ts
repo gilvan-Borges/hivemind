@@ -874,6 +874,16 @@ export interface ProviderHealthView {
   hasCredential: boolean;
 }
 
+export interface ExternalSession {
+  id: string;
+  source: string;
+  state: "running" | "completed" | "failed" | "unknown" | string;
+  pid: number;
+  createMs: number;
+  title?: string;
+  actions: string[];
+}
+
 export interface ResidentStatus {
   state: string;
   phase: number;
@@ -1076,6 +1086,7 @@ export interface WailsBackendApp {
   DeleteNativeSkill(name: string): Promise<void>;
   InstallSkillToProject(workspace: string, name: string): Promise<void>;
   RemoveProjectSkill(workspace: string, name: string): Promise<void>;
+  ExternalSessions?(): Promise<ExternalSession[]>;
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;

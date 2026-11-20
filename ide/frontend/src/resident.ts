@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import { renderMarkdownLite } from "./markdown";
-import type { ChatMessage, ResidentAuditEntry, ResidentMemoryFact, ResidentStatus } from "./types";
+import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentStatus } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { updateStatusBar } from "./shell";
@@ -21,6 +21,7 @@ export const residentState = {
   memoryDraft: "",
   memoryPinned: false,
   audit: [] as ResidentAuditEntry[],
+  externalSessions: [] as ExternalSession[],
   auditFilter: "",
   binariesDraft: "",
   hostsDraft: "",
@@ -116,6 +117,12 @@ export async function refreshResidentData(): Promise<void> {
     }
     residentState.memory = Array.isArray(memList) ? memList : [];
     residentState.audit = Array.isArray(auditList) ? auditList : [];
+    try {
+      const ext = await backend.ExternalSessions?.();
+      residentState.externalSessions = Array.isArray(ext) ? ext : [];
+    } catch {
+      residentState.externalSessions = [];
+    }
     residentState.loadedOnce = true;
     updateResidentStatusChip();
     rerenderResidentIfOpen();
@@ -388,6 +395,16 @@ function renderResidentSecurityHtml(): string {
           </div>
           <div class="dim">Segredos nunca entram em prompt, log, auditoria ou evento SSE. Comandos que exibem token (ex.: <code>gh auth token</code>, <code>printenv</code>) são bloqueados.</div>
         </div>
+      </div>
+
+      <div class="resident-row-card">
+        <div class="resident-row-head">
+          <strong>Sessões externas</strong>
+          <span class="dim">só leitura</span>
+        </div>
+        ${residentState.externalSessions.length === 0
+          ? `<div class="dim">Nenhuma sessão externa encontrada.</div>`
+          : residentState.externalSessions.map((s) => `<div class="dim"><code>${escapeHtml(s.source)}</code> · ${escapeHtml(s.state)} · pid ${s.pid}</div>`).join("")}
       </div>
 
       <div class="resident-row-card">
