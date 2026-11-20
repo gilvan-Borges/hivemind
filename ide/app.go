@@ -540,6 +540,27 @@ func (a *App) SaveAPIKeys(entries map[string]string) (map[string]string, error) 
 	return modelx.SaveStoredAPIKeys(entries)
 }
 
+// GetProviderProfilesOverview returns detected workspace org info, saved multi-account
+// provider profiles (secrets masked), and resolved profile per provider.
+func (a *App) GetProviderProfilesOverview(workspace string) modelx.ProfilesOverview {
+	return modelx.ListProfilesOverview(workspace)
+}
+
+// SaveProviderProfile creates or updates a named account/profile for agy or any LLM provider.
+func (a *App) SaveProviderProfile(req modelx.SaveProfileRequest) (modelx.ProfilesOverview, error) {
+	return modelx.SaveProviderProfile(req)
+}
+
+// DeleteProviderProfile removes a saved provider profile by ID.
+func (a *App) DeleteProviderProfile(profileID, workspace string) (modelx.ProfilesOverview, error) {
+	return modelx.DeleteProviderProfile(profileID, workspace)
+}
+
+// BindProviderWorkspace pins or unpins a workspace+provider to a profile ("", "auto", "global", or profileID).
+func (a *App) BindProviderWorkspace(workspace, provider, profileID string) (modelx.ProfilesOverview, error) {
+	return modelx.BindProviderWorkspace(workspace, provider, profileID)
+}
+
 // ListOpenRouterModels returns the full public OpenRouter catalog (cached ~30min).
 func (a *App) ListOpenRouterModels() ([]modelx.OpenRouterModel, error) {
 	return modelx.OpenRouterModels(a.ctx)
@@ -871,6 +892,31 @@ func (a *App) SaveJiraConfig(baseURL, email, token, defaultProject string, clear
 		return jirax.ConnectorStatus{}, err
 	}
 	return a.JiraStatus(), nil
+}
+
+// SaveJiraProfile creates or updates a named Jira Cloud profile (with optional org patterns
+// and optional workspace pinning) and returns refreshed status for bindWorkspace.
+func (a *App) SaveJiraProfile(profile jirax.JiraProfile, bindWorkspace string) (jirax.ConnectorStatus, error) {
+	if err := jirax.SaveProfile(profile, bindWorkspace); err != nil {
+		return jirax.ConnectorStatus{}, err
+	}
+	return a.JiraStatusForWorkspace(bindWorkspace), nil
+}
+
+// DeleteJiraProfile removes a Jira Cloud profile by ID and returns refreshed status for workspace.
+func (a *App) DeleteJiraProfile(profileID, workspace string) (jirax.ConnectorStatus, error) {
+	if err := jirax.DeleteProfile(profileID); err != nil {
+		return jirax.ConnectorStatus{}, err
+	}
+	return a.JiraStatusForWorkspace(workspace), nil
+}
+
+// BindJiraWorkspace binds workspace to a profile ("", "auto", "none", or profileID).
+func (a *App) BindJiraWorkspace(workspace, target string) (jirax.ConnectorStatus, error) {
+	if err := jirax.BindWorkspace(workspace, target); err != nil {
+		return jirax.ConnectorStatus{}, err
+	}
+	return a.JiraStatusForWorkspace(workspace), nil
 }
 
 // StartRun runs one objective through Chefe -> Dev -> QA -> Chefe on the given lane.

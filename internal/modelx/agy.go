@@ -45,6 +45,12 @@ type Agy struct {
 	// Dir is the process working directory. Empty means a fresh temp dir,
 	// never the project, so agy's own tools cannot write the repo.
 	Dir string
+	// Env carries optional per-profile environment overrides (e.g. AGY_ADC_AUTH,
+	// CLOUDSDK_CONFIG, GOOGLE_CLOUD_PROJECT) isolated to this child process.
+	Env map[string]string
+	// IsolateEnv strips inherited API keys and CLOUDSDK_CONFIG before applying Env,
+	// so an org-scoped or ADC account does not see another org's credentials.
+	IsolateEnv bool
 }
 
 // AgyStatus is what `hivemind doctor` prints about the CLI. It never includes
@@ -156,12 +162,43 @@ func ParseAgySpec(modelName string) (slug, effort string) {
 
 // NewAgy builds a model that shells out to agy. Bin may be empty; then PATH is searched.
 func NewAgy(bin, modelName string) (*Agy, error) {
+	return NewAgyForContext(context.Background(), bin, modelName)
+}
+
+// NewAgyForContext resolves any workspace/org-scoped AGY profile from ctx and builds
+// an Agy adapter with isolated per-process environment variables.
+func NewAgyForContext(ctx context.Context, bin, modelName string) (*Agy, error) {
+	prof, mode, _ := ResolveProfile(ctx, "agy")
+	if mode == "isolated" {
+		return nil, fmt.Errorf("nenhuma conta AGY vinculada a esta organização")
+	}
+	var envMap map[string]string
+	isolate := false
+	if prof != nil {
+		isolate = len(prof.OrgPatterns) > 0 || strings.EqualFold(prof.AuthMode, "adc")
+		if len(prof.Env) > 0 {
+			envMap = make(map[string]string, len(prof.Env))
+			for k, v := range prof.Env {
+				envMap[k] = v
+			}
+		}
+		if bin == "" && strings.TrimSpace(prof.Command) != "" {
+			bin = strings.TrimSpace(prof.Command)
+		}
+	}
+
 	slug, effort := ParseAgySpec(modelName)
 	if slug == "" {
+		slug = strings.TrimSpace(envMap["AGY_MODEL"])
+	}
+	if slug == "" && !isolate {
 		slug = strings.TrimSpace(os.Getenv("AGY_MODEL"))
 	}
 	if effort == "" {
-		effort = strings.ToLower(strings.TrimSpace(os.Getenv("AGY_EFFORT")))
+		effort = strings.ToLower(strings.TrimSpace(envMap["AGY_EFFORT"]))
+		if effort == "" && !isolate {
+			effort = strings.ToLower(strings.TrimSpace(os.Getenv("AGY_EFFORT")))
+		}
 		if effort != "" && !isAgyEffort(effort) {
 			return nil, fmt.Errorf("AGY_EFFORT %q é inválido; use low, medium, high, xhigh ou max", effort)
 		}
@@ -173,7 +210,7 @@ func NewAgy(bin, modelName string) (*Agy, error) {
 		}
 		bin = found
 	}
-	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout}, nil
+	return &Agy{Bin: bin, Model: slug, Effort: effort, Timeout: DefaultAgyTimeout, Env: envMap, IsolateEnv: isolate}, nil
 }
 
 // Name implements model.LLM.
@@ -243,12 +280,12 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	defer os.Remove(schema)
 	args = append(args, "--json-schema", schema)
 
-	stdout, stderr, code, err := invokeAgy(runCtx, a.Bin, dir, args, prompt)
+	stdout, stderr, code, err := invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
 	if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
 		select {
 		case <-runCtx.Done():
 		case <-time.After(2 * time.Second):
-			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
 		}
 	}
 	// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
@@ -265,7 +302,7 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		select {
 		case <-runCtx.Done():
 		case <-time.After(agyRetryDelays[attempt]):
-			stdout, stderr, code, err = invokeAgy(runCtx, a.Bin, dir, args, prompt)
+			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
 		}
 	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
@@ -764,9 +801,20 @@ func localAppDataAgy() string {
 // A broken pipe on that write is ignored: the process often exits first when
 // it rejects the command, and the real exit code plus stderr are what matter.
 func invokeAgy(ctx context.Context, bin, dir string, args []string, stdinText string) (string, string, int, error) {
+	return invokeAgyWithEnv(ctx, bin, dir, args, stdinText, nil, false)
+}
+
+func invokeAgyWithEnv(ctx context.Context, bin, dir string, args []string, stdinText string, extraEnv map[string]string, isolate bool) (string, string, int, error) {
 	cmd := agyCommand(ctx, bin, args)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if isolate || len(extraEnv) > 0 {
+		base := os.Environ()
+		if isolate {
+			base = stripInheritedSecrets(base)
+		}
+		cmd.Env = mergeEnv(base, extraEnv)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -816,11 +864,18 @@ func ProbeAgyPrompt(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	a, err := NewAgy(bin, "")
-	if err != nil {
-		return "", err
+	// Doctor probes the CLI installed on the machine. It must not load an
+	// org profile or that profile's CLOUDSDK_CONFIG.
+	a := &Agy{Bin: bin, Timeout: 45 * time.Second}
+	if slug := strings.TrimSpace(os.Getenv("AGY_MODEL")); slug != "" {
+		a.Model = slug
 	}
-	a.Timeout = 45 * time.Second
+	if effort := strings.ToLower(strings.TrimSpace(os.Getenv("AGY_EFFORT"))); effort != "" {
+		if !isAgyEffort(effort) {
+			return "", fmt.Errorf("AGY_EFFORT %q é inválido; use low, medium, high, xhigh ou max", effort)
+		}
+		a.Effort = effort
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	resp, err := a.generate(probeCtx, &model.LLMRequest{

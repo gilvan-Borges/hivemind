@@ -237,6 +237,7 @@ type devEnv struct {
 func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+	ctx = modelx.WithWorkspace(ctx, r.Workspace)
 
 	var result Result
 	if err := r.Team.ValidateForRun(); err != nil {

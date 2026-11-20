@@ -1376,7 +1376,7 @@ func (d Deps) addJira(out *[]tool.Tool) error {
 			project = strings.ToUpper(strings.TrimSpace(d.JiraProject))
 		}
 		if project == "" {
-			if _, _, _, def, _ := jirax.LoadCredentials(); def != "" {
+			if _, _, _, def, _ := jirax.LoadCredentialsForWorkspace(d.Root); def != "" {
 				project = def
 			}
 		}
