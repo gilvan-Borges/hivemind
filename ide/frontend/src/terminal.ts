@@ -24,6 +24,81 @@ const xtermSessions = new Map<string, XtermInstance>();
 let resizeObserver: ResizeObserver | null = null;
 let activeObservedKey = "";
 
+const TERM_HEIGHT_KEY = "hivemind.terminalHeight";
+const DEFAULT_TERM_HEIGHT = 250;
+let terminalHeightPx = loadTerminalHeight();
+let terminalExpanded = false;
+let heightBeforeExpand = DEFAULT_TERM_HEIGHT;
+
+function loadTerminalHeight(): number {
+  try {
+    const raw = localStorage.getItem(TERM_HEIGHT_KEY);
+    const n = raw ? parseInt(raw, 10) : DEFAULT_TERM_HEIGHT;
+    return Number.isFinite(n) && n >= 130 && n <= 900 ? n : DEFAULT_TERM_HEIGHT;
+  } catch {
+    return DEFAULT_TERM_HEIGHT;
+  }
+}
+
+function saveTerminalHeight(px: number): void {
+  terminalHeightPx = Math.round(px);
+  try {
+    localStorage.setItem(TERM_HEIGHT_KEY, String(terminalHeightPx));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function clampTerminalHeight(desiredPx: number): number {
+  const center = document.getElementById("center-area");
+  const maxAllowed = center ? Math.max(240, Math.floor(center.clientHeight * 0.82)) : Math.floor(window.innerHeight * 0.78);
+  return Math.max(130, Math.min(maxAllowed, Math.round(desiredPx)));
+}
+
+function applyTerminalDrawerHeight(drawer: HTMLElement): void {
+  const h = clampTerminalHeight(terminalHeightPx);
+  drawer.style.height = `${h}px`;
+}
+
+function bindTerminalResizer(drawer: HTMLElement): void {
+  const handle = document.getElementById("terminal-resizer");
+  if (!handle) return;
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = drawer.getBoundingClientRect().height;
+    let rafId = 0;
+    handle.classList.add("dragging");
+    document.body.style.cursor = "ns-resize";
+
+    const onMove = (ev: MouseEvent) => {
+      const next = clampTerminalHeight(startH + (startY - ev.clientY));
+      terminalHeightPx = next;
+      terminalExpanded = false;
+      drawer.style.height = `${next}px`;
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          fitActiveXterm();
+        });
+      }
+    };
+
+    const onUp = () => {
+      handle.classList.remove("dragging");
+      document.body.style.cursor = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (rafId) cancelAnimationFrame(rafId);
+      saveTerminalHeight(terminalHeightPx);
+      fitActiveXterm();
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+}
+
 function activeTermKey(): string {
   return normalizePathKey(state.project?.root || "");
 }
@@ -231,8 +306,10 @@ export function renderTerminalDrawer(): void {
   }
 
   const probBadgeClass = counts.errors > 0 ? "err" : counts.warnings > 0 ? "warn" : "";
+  applyTerminalDrawerHeight(drawer);
 
   drawer.innerHTML = `
+    <div class="terminal-resizer" id="terminal-resizer" title="Arraste para cima ou para baixo para ajustar a altura do terminal"></div>
     <div class="terminal-header">
       <div class="drawer-tabs">
         <button type="button" class="drawer-tab ${isTerm ? "active" : ""}" id="tab-bottom-terminal">
@@ -245,12 +322,12 @@ export function renderTerminalDrawer(): void {
         </button>
       </div>
       ${isTerm ? `
-        ${hint ? `<button type="button" class="mini success" id="term-run-hint" title="Executar no terminal interativo">${icons.play}<span>${escapeHtml(hint)}</span></button>` : ""}
-        <button type="button" class="mini" id="term-run-status">git status</button>
+        ${hint ? `<button type="button" class="mini success term-hint-btn" id="term-run-hint" title="Executar: ${escapeHtml(hint)}">${icons.play}<span class="term-hint-text">${escapeHtml(hint)}</span></button>` : ""}
+        <button type="button" class="mini term-nowrap-btn" id="term-run-status">git status</button>
         <div class="spacer"></div>
-        <button type="button" class="mini ghost" id="term-check-problems" title="Executar verificação e preencher o painel Problemas">${icons.check}<span>Verificar</span></button>
-        <button type="button" class="mini ghost" id="term-restart" title="Reiniciar shell PowerShell (ConPTY)">${icons.refresh}<span>Reiniciar</span></button>
-        <button type="button" class="mini ghost" id="term-clear">Limpar</button>
+        <button type="button" class="mini ghost term-nowrap-btn" id="term-check-problems" title="Executar verificação e preencher o painel Problemas">${icons.check}<span>Verificar</span></button>
+        <button type="button" class="mini ghost term-nowrap-btn" id="term-restart" title="Reiniciar shell PowerShell (ConPTY)">${icons.refresh}<span>Reiniciar</span></button>
+        <button type="button" class="mini ghost term-nowrap-btn" id="term-clear">Limpar</button>
       ` : `
         <div class="problems-filter-pills">
           <button type="button" class="mini ${state.problemsFilter === "all" ? "primary" : "ghost"}" data-prob-filter="all">Todos (${counts.total})</button>
@@ -258,12 +335,13 @@ export function renderTerminalDrawer(): void {
           <button type="button" class="mini ${state.problemsFilter === "warning" ? "primary" : "ghost"}" data-prob-filter="warning">Avisos (${counts.warnings})</button>
         </div>
         <div class="spacer"></div>
-        <button type="button" class="mini primary" id="btn-run-problems-check" ${state.problemsChecking ? "disabled" : ""}>
+        <button type="button" class="mini primary term-nowrap-btn" id="btn-run-problems-check" ${state.problemsChecking ? "disabled" : ""}>
           ${state.problemsChecking ? icons.spinner : icons.play}
           <span>${state.problemsChecking ? "Verificando…" : "Verificar Projeto"}</span>
         </button>
-        ${state.buildProblems.length > 0 ? `<button type="button" class="mini ghost" id="btn-clear-build-problems">Limpar Build</button>` : ""}
+        ${state.buildProblems.length > 0 ? `<button type="button" class="mini ghost term-nowrap-btn" id="btn-clear-build-problems">Limpar Build</button>` : ""}
       `}
+      <button type="button" class="icon-btn" id="term-toggle-expand" title="${terminalExpanded ? "Restaurar altura do painel" : "Expandir altura do painel"}">${terminalExpanded ? icons.chevronDown : icons.winMax}</button>
       <button type="button" class="icon-btn" id="term-close" title="Fechar Painel Inferior (Ctrl+J)">${icons.closeSmall}</button>
     </div>
     ${isTerm
@@ -272,12 +350,27 @@ export function renderTerminalDrawer(): void {
     }
   `;
 
+  bindTerminalResizer(drawer);
+
   document.getElementById("tab-bottom-terminal")?.addEventListener("click", () => {
     state.bottomTab = "terminal";
     renderTerminalDrawer();
   });
   document.getElementById("tab-bottom-problems")?.addEventListener("click", () => {
     state.bottomTab = "problems";
+    renderTerminalDrawer();
+  });
+  document.getElementById("term-toggle-expand")?.addEventListener("click", () => {
+    const center = document.getElementById("center-area");
+    const targetExpanded = center ? Math.floor(center.clientHeight * 0.72) : Math.floor(window.innerHeight * 0.65);
+    if (!terminalExpanded) {
+      heightBeforeExpand = terminalHeightPx;
+      terminalExpanded = true;
+      saveTerminalHeight(clampTerminalHeight(targetExpanded));
+    } else {
+      terminalExpanded = false;
+      saveTerminalHeight(clampTerminalHeight(heightBeforeExpand || DEFAULT_TERM_HEIGHT));
+    }
     renderTerminalDrawer();
   });
   document.getElementById("term-close")?.addEventListener("click", () => {

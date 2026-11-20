@@ -120,7 +120,7 @@ export function renderProjectTabsBar() {
     }).join("")}
     <button class="project-tab-add" id="btn-add-project-tab" title="Abrir outro projeto em uma nova aba isolada (Ctrl+Shift+O)">
       ${icons.plus}
-      <span>Novo Projeto em Aba</span>
+      <span>Novo Projeto</span>
     </button>
   `;
 

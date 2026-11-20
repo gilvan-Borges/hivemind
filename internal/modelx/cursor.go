@@ -312,10 +312,14 @@ func cursorChildEnv(base []string, key string) []string {
 
 func cursorCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
 	ext := strings.ToLower(filepath.Ext(bin))
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" && (ext == ".cmd" || ext == ".bat") {
-		return exec.CommandContext(ctx, "cmd", append([]string{"/c", bin}, args...)...)
+		cmd = exec.CommandContext(ctx, "cmd.exe", append([]string{"/d", "/c", bin}, args...)...)
+	} else {
+		cmd = exec.CommandContext(ctx, bin, args...)
 	}
-	return exec.CommandContext(ctx, bin, args...)
+	procx.ConfigureContext(cmd)
+	return cmd
 }
 
 func writeCursorTask(dir, prompt string) (string, error) {

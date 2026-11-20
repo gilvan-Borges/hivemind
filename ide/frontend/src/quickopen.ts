@@ -90,8 +90,20 @@ export function renderQuickOpenModal() {
   layer.innerHTML = `
     <div class="quick-open-backdrop" id="qo-backdrop">
       <div class="quick-open-modal" role="dialog" aria-modal="true" aria-label="${isCmd ? "Paleta de Comandos" : "Busca Rápida de Arquivos"}">
-        <input id="qo-input" placeholder="${isCmd ? "Digite um comando (Ctrl+K)…" : "Buscar arquivo no projeto (Ctrl+P) ou comece com > para comandos…"}" value="${escapeHtml(state.quickOpen.query)}" />
+        <div class="qo-search-head">
+          <span class="qo-search-icon">${isCmd ? icons.command : icons.search}</span>
+          <input id="qo-input" class="qo-search-input" placeholder="${isCmd ? "Digite um comando…" : "Buscar arquivo no projeto ou digite > para comandos…"}" value="${escapeHtml(state.quickOpen.query)}" />
+          <span class="qo-mode-pill">${isCmd ? "Comandos" : "Arquivos"}</span>
+        </div>
         <div class="quick-open-list" id="qo-list"></div>
+        <div class="qo-footer">
+          <span><span class="kbd">↑↓</span> navegar</span>
+          <span><span class="kbd">Enter</span> ${isCmd ? "executar" : "abrir"}</span>
+          ${!isCmd ? `<span><span class="kbd">&gt;</span> comandos</span>` : ""}
+          <span><span class="kbd">Esc</span> fechar</span>
+          <span class="spacer"></span>
+          <span id="qo-count" class="qo-count"></span>
+        </div>
       </div>
     </div>
   `;
@@ -155,16 +167,21 @@ export function renderQuickOpenModal() {
 export function renderQuickOpenList() {
   const list = document.getElementById("qo-list");
   if (!list) return;
+  const countEl = document.getElementById("qo-count");
   if (state.quickOpen.mode === "commands") {
     const cmds = filteredCommands();
+    if (countEl) countEl.textContent = `${cmds.length} comando(s)`;
     if (cmds.length === 0) {
-      list.innerHTML = `<div class="dim" style="padding:8px">Nenhum comando correspondente</div>`;
+      list.innerHTML = `<div class="qo-empty">Nenhum comando encontrado para essa busca.</div>`;
       return;
     }
     list.innerHTML = cmds
       .map((c, idx) => `
-        <button class="dropdown-item ${idx === state.quickOpen.selected ? "selected" : ""}" data-qo-cmd="${idx}" style="justify-content:space-between">
-          <span style="display:inline-flex;align-items:center;gap:8px">${icons.command}<span>${escapeHtml(c.label)}</span></span>
+        <button type="button" class="qo-item ${idx === state.quickOpen.selected ? "selected" : ""}" data-qo-cmd="${idx}">
+          <span class="qo-item-main">
+            <span class="qo-cmd-icon">${icons.command}</span>
+            <span class="qo-file-name">${escapeHtml(c.label)}</span>
+          </span>
           ${c.shortcut ? `<span class="kbd">${escapeHtml(c.shortcut)}</span>` : ""}
         </button>
       `)
@@ -177,20 +194,29 @@ export function renderQuickOpenList() {
         cmd?.run();
       });
     });
+    list.querySelector<HTMLElement>(".qo-item.selected")?.scrollIntoView({ block: "nearest" });
     return;
   }
 
-  if (state.quickOpen.results.length === 0) {
-    list.innerHTML = `<div class="dim" style="padding:8px">Nenhum arquivo encontrado</div>`;
+  const results = state.quickOpen.results;
+  if (countEl) countEl.textContent = `${results.length} arquivo(s)`;
+  if (results.length === 0) {
+    list.innerHTML = `<div class="qo-empty">Nenhum arquivo encontrado.</div>`;
     return;
   }
-  list.innerHTML = state.quickOpen.results
+  list.innerHTML = results
     .map((p, idx) => {
-      const name = p.split("/").pop() || p;
+      const normalized = p.replace(/\\/g, "/");
+      const slash = normalized.lastIndexOf("/");
+      const name = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+      const dir = slash >= 0 ? normalized.slice(0, slash) : "";
       return `
-        <button class="dropdown-item ${idx === state.quickOpen.selected ? "selected" : ""}" data-qo-path="${escapeHtml(p)}">
-          ${fileBadge(name)}
-          <span>${escapeHtml(p)}</span>
+        <button type="button" class="qo-item ${idx === state.quickOpen.selected ? "selected" : ""}" data-qo-path="${escapeHtml(p)}" title="${escapeHtml(p)}">
+          <span class="qo-item-main">
+            ${fileBadge(name)}
+            <span class="qo-file-name">${escapeHtml(name)}</span>
+            ${dir ? `<span class="qo-file-dir">${escapeHtml(dir)}</span>` : ""}
+          </span>
         </button>
       `;
     })
@@ -202,4 +228,5 @@ export function renderQuickOpenList() {
       openFileInEditor(p, p.split("/").pop() || p);
     });
   });
+  list.querySelector<HTMLElement>(".qo-item.selected")?.scrollIntoView({ block: "nearest" });
 }

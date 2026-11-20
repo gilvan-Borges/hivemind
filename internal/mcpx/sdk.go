@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -58,10 +59,14 @@ func dialSDK(ctx context.Context, server Server) (session, error) {
 }
 
 func localCommand(name string, args ...string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		return exec.Command("cmd", append([]string{"/c", name}, args...)...)
+		cmd = exec.Command("cmd.exe", append([]string{"/d", "/c", name}, args...)...)
+	} else {
+		cmd = exec.Command(name, args...)
 	}
-	return exec.Command(name, args...)
+	procx.HideWindow(cmd)
+	return cmd
 }
 
 type headerTransport struct {

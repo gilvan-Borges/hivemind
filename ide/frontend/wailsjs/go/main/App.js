@@ -62,6 +62,10 @@ export function CreateFile(arg1, arg2) {
   return window['go']['main']['App']['CreateFile'](arg1, arg2);
 }
 
+export function CursorCLIStatus() {
+  return window['go']['main']['App']['CursorCLIStatus']();
+}
+
 export function DeleteNativeSkill(arg1) {
   return window['go']['main']['App']['DeleteNativeSkill'](arg1);
 }
@@ -194,6 +198,10 @@ export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
 
+export function ListCursorModels() {
+  return window['go']['main']['App']['ListCursorModels']();
+}
+
 export function ListDirectory(arg1, arg2) {
   return window['go']['main']['App']['ListDirectory'](arg1, arg2);
 }
@@ -216,6 +224,10 @@ export function ListJiraProjects() {
 
 export function ListJiraProjectsForWorkspace(arg1) {
   return window['go']['main']['App']['ListJiraProjectsForWorkspace'](arg1);
+}
+
+export function ListMCPServers(arg1) {
+  return window['go']['main']['App']['ListMCPServers'](arg1);
 }
 
 export function ListModels() {
@@ -272,6 +284,34 @@ export function ReadFile(arg1, arg2) {
 
 export function ReadNativeSkill(arg1) {
   return window['go']['main']['App']['ReadNativeSkill'](arg1);
+}
+
+export function RelayClaimLinkCode(arg1) {
+  return window['go']['main']['App']['RelayClaimLinkCode'](arg1);
+}
+
+export function RelayCreateLinkCode() {
+  return window['go']['main']['App']['RelayCreateLinkCode']();
+}
+
+export function RelayLogin(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RelayLogin'](arg1, arg2, arg3);
+}
+
+export function RelayLogout() {
+  return window['go']['main']['App']['RelayLogout']();
+}
+
+export function RelaySetEnabled(arg1) {
+  return window['go']['main']['App']['RelaySetEnabled'](arg1);
+}
+
+export function RelayStatus() {
+  return window['go']['main']['App']['RelayStatus']();
+}
+
+export function RelayUnlink() {
+  return window['go']['main']['App']['RelayUnlink']();
 }
 
 export function RemoveProjectSkill(arg1, arg2) {
@@ -362,8 +402,16 @@ export function SetAutoReviewConfig(arg1, arg2) {
   return window['go']['main']['App']['SetAutoReviewConfig'](arg1, arg2);
 }
 
+export function SetMCPServerEnabled(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2, arg3, arg4);
+}
+
 export function SetMobileBridgeEnabled(arg1) {
   return window['go']['main']['App']['SetMobileBridgeEnabled'](arg1);
+}
+
+export function SetNativeSkillEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetNativeSkillEnabled'](arg1, arg2);
 }
 
 export function StageFile(arg1, arg2, arg3) {

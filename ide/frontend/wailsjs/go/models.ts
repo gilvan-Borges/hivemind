@@ -756,6 +756,7 @@ export namespace idecore {
 	    path: string;
 	    updatedAt: string;
 	    sizeBytes: number;
+	    enabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SkillInfo(source);
@@ -769,6 +770,7 @@ export namespace idecore {
 	        this.path = source["path"];
 	        this.updatedAt = source["updatedAt"];
 	        this.sizeBytes = source["sizeBytes"];
+	        this.enabled = source["enabled"];
 	    }
 	}
 	export class TextSearchMatch {
@@ -1097,6 +1099,37 @@ export namespace main {
 
 }
 
+export namespace mcpx {
+	
+	export class ServerView {
+	    name: string;
+	    description: string;
+	    transport: string;
+	    enabled: boolean;
+	    builtin: boolean;
+	    status: string;
+	    detail?: string;
+	    tools?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.transport = source["transport"];
+	        this.enabled = source["enabled"];
+	        this.builtin = source["builtin"];
+	        this.status = source["status"];
+	        this.detail = source["detail"];
+	        this.tools = source["tools"];
+	    }
+	}
+
+}
+
 export namespace modelx {
 	
 	export class ProviderLimits {
@@ -1392,6 +1425,24 @@ export namespace modelx {
 	        this.Detail = source["Detail"];
 	    }
 	}
+	export class CursorStatus {
+	    found: boolean;
+	    path: string;
+	    hasKey: boolean;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CursorStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.path = source["path"];
+	        this.hasKey = source["hasKey"];
+	        this.detail = source["detail"];
+	    }
+	}
 	
 	export class OpenCodeStatus {
 	    configured: boolean;
@@ -1491,6 +1542,59 @@ export namespace orchestrator {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace relayclient {
+	
+	export class LinkCode {
+	    code: string;
+	    expiresAt: string;
+	    uri: string;
+	    qrDataUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LinkCode(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.expiresAt = source["expiresAt"];
+	        this.uri = source["uri"];
+	        this.qrDataUrl = source["qrDataUrl"];
+	    }
+	}
+	export class Status {
+	    enabled: boolean;
+	    loggedIn: boolean;
+	    email: string;
+	    baseUrl: string;
+	    deviceId: string;
+	    deviceName: string;
+	    linked: boolean;
+	    online: boolean;
+	    lastError: string;
+	    e2e: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.loggedIn = source["loggedIn"];
+	        this.email = source["email"];
+	        this.baseUrl = source["baseUrl"];
+	        this.deviceId = source["deviceId"];
+	        this.deviceName = source["deviceName"];
+	        this.linked = source["linked"];
+	        this.online = source["online"];
+	        this.lastError = source["lastError"];
+	        this.e2e = source["e2e"];
+	    }
 	}
 
 }

@@ -60,10 +60,10 @@ export function renderRightPane() {
 
   right.innerHTML = `
     <div class="sidebar-header">
-      <span class="eyebrow">${icons.sparkle}<span>Orquestrador · AI</span></span>
+      <span class="eyebrow">${icons.sparkle}<span>Equipe IA</span></span>
       <div class="spacer"></div>
-      <button class="mini" id="btn-new-session">Nova Sessão</button>
-      <button class="mini" id="btn-add-lane">${icons.plus}<span>Equipe Paralela</span></button>
+      <button class="mini ghost" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
+      <button class="mini" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
     </div>
     <div class="lane-bar" id="lane-bar"></div>
     <div class="pipeline-bar" id="pipeline-bar"></div>
@@ -77,7 +77,7 @@ export function renderRightPane() {
       <div class="composer-box">
         <div class="composer-mode-bar" id="composer-mode-bar"></div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
-        <textarea id="chat-input" rows="3" placeholder="Descreva a tarefa para a equipe… (Ctrl+V cola print, Ctrl+L envia seleção, @arquivo, /ajuda)"></textarea>
+        <textarea id="chat-input" rows="3" placeholder="O que vamos construir ou resolver agora? (@arquivo · Ctrl+V print · Ctrl+L seleção)"></textarea>
         <div class="composer-footer">
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
           <button class="mini" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)">${icons.image}<span>Foto</span></button>
@@ -685,7 +685,31 @@ export function rebuildChatMessagesFull() {
   if (lane.messages.length === 0) {
     const empty = document.createElement("div");
     empty.className = "chat-empty-state";
-    empty.innerHTML = `${icons.brandHero}<span>Descreva o que deseja construir ou corrigir.</span>`;
+    const starters = [
+      { label: "Explicar a arquitetura do projeto", prompt: "Faça um resumo prático da arquitetura deste projeto e dos arquivos principais." },
+      { label: "Revisar alterações e achar bugs", prompt: "Revise as alterações atuais do Git e aponte possíveis bugs ou melhorias." },
+      { label: "Planejar uma nova funcionalidade", prompt: "Quero planejar uma nova funcionalidade antes de codar: " },
+    ];
+    empty.innerHTML = `
+      <div class="chat-empty-icon">${icons.brandHero}</div>
+      <div class="chat-empty-title">Como a equipe pode ajudar?</div>
+      <div class="chat-empty-sub">Descreva o objetivo, cole um print ou escolha um ponto de partida:</div>
+      <div class="chat-starters">
+        ${starters.map((s) => `<button type="button" class="chat-starter-btn" data-starter-prompt="${escapeHtml(s.prompt)}">${icons.sparkle}<span>${escapeHtml(s.label)}</span></button>`).join("")}
+      </div>
+    `;
+    empty.querySelectorAll<HTMLButtonElement>("[data-starter-prompt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const prompt = btn.dataset.starterPrompt || "";
+        state.draftObjective = prompt;
+        const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+        if (input) {
+          input.value = prompt;
+          input.focus();
+          input.selectionStart = input.selectionEnd = prompt.length;
+        }
+      });
+    });
     box.appendChild(empty);
     return;
   }

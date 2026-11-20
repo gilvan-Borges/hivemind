@@ -577,29 +577,53 @@ export function renderEditorBody() {
 
   if (!activeTab) {
     const proj = state.project;
+    const branchTag = proj?.branch ? `<span class="welcome-meta-pill">${icons.gitSmall}<span>${escapeHtml(proj.branch)}</span></span>` : "";
+    const stackTag = proj?.stack?.summary ? `<span class="welcome-meta-pill">${escapeHtml(proj.stack.summary)}</span>` : "";
     body.innerHTML = `
       <div class="empty-welcome">
-        <div class="welcome-hero-logo">${icons.brandHero}</div>
-        <div class="welcome-hero-badge"><span>Multi-Agent Dark Islands IDE</span></div>
-        <div class="welcome-title">HiveMind IDE</div>
-        <div class="dim">${proj ? `${escapeHtml(proj.name)} · ${escapeHtml(proj.stack.summary)}` : "Abra uma pasta para iniciar"}</div>
-        <div class="welcome-actions">
-          <button class="primary" id="welcome-mission">${icons.swarm}<span>Quadro Multiagente</span></button>
-          <button id="welcome-team-config">${icons.settings}<span>Configurar Equipe & Skills</span></button>
-          <button id="welcome-quick-open">${icons.search}<span>Buscar Arquivo (Ctrl+P)</span></button>
-          <button id="welcome-cmd-palette">${icons.command}<span>Comandos (Ctrl+K)</span></button>
-          <button id="welcome-memory">${icons.memory}<span>Memória do Time</span></button>
+        <div class="welcome-hero">
+          <div class="welcome-hero-logo">${icons.brandHero}</div>
+          <h1 class="welcome-title">${proj ? escapeHtml(proj.name) : "HiveMind IDE"}</h1>
+          <p class="welcome-subtitle">${proj ? "Abra um arquivo, acompanhe sua equipe em tempo real ou descreva o próximo passo no painel ao lado." : "Abra uma pasta do seu computador para começar a programar com sua equipe de IA."}</p>
+          ${(branchTag || stackTag) ? `<div class="welcome-meta-row">${branchTag}${stackTag}</div>` : ""}
         </div>
-        <div class="shortcut-grid">
-          <span class="dim">Editar código inline (IA)</span><span class="kbd">Ctrl + K</span>
-          <span class="dim">Aceitar Ghost Text</span><span class="kbd">Tab / Ctrl + →</span>
-          <span class="dim">Paleta de comandos</span><span class="kbd">Ctrl + Shift + P</span>
-          <span class="dim">Quadro Multiagente</span><span class="kbd">Ctrl + Shift + A</span>
-          <span class="dim">Busca rápida de arquivo</span><span class="kbd">Ctrl + P</span>
-          <span class="dim">Busca global no código</span><span class="kbd">Ctrl + Shift + F</span>
-          <span class="dim">Localizar / Substituir</span><span class="kbd">Ctrl + F / Ctrl + H</span>
-          <span class="dim">Enviar seleção ao Chefe</span><span class="kbd">Ctrl + L</span>
-          <span class="dim">Terminal integrado</span><span class="kbd">Ctrl + J</span>
+
+        <div class="welcome-cards">
+          <button type="button" class="welcome-card is-primary" id="welcome-quick-open">
+            <span class="welcome-card-icon">${icons.search}</span>
+            <span class="welcome-card-body">
+              <span class="welcome-card-title">Abrir arquivo rápido <span class="kbd">Ctrl+P</span></span>
+              <span class="welcome-card-desc">Vá direto para qualquer arquivo do projeto sem navegar pastas.</span>
+            </span>
+          </button>
+          <button type="button" class="welcome-card" id="welcome-mission">
+            <span class="welcome-card-icon">${icons.swarm}</span>
+            <span class="welcome-card-body">
+              <span class="welcome-card-title">Quadro da Equipe <span class="kbd">Ctrl+Shift+A</span></span>
+              <span class="welcome-card-desc">Veja agentes trabalhando ao vivo, modelos e uso de tokens.</span>
+            </span>
+          </button>
+          <button type="button" class="welcome-card" id="welcome-team-config">
+            <span class="welcome-card-icon">${icons.settings}</span>
+            <span class="welcome-card-body">
+              <span class="welcome-card-title">Configurar Equipe & Skills</span>
+              <span class="welcome-card-desc">Escolha modelos, nível de autonomia, Jira e skills do projeto.</span>
+            </span>
+          </button>
+          <button type="button" class="welcome-card" id="welcome-memory">
+            <span class="welcome-card-icon">${icons.memory}</span>
+            <span class="welcome-card-body">
+              <span class="welcome-card-title">Memória do Projeto</span>
+              <span class="welcome-card-desc">Regras, padrões e contexto que toda a equipe lembra sempre.</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="welcome-shortcuts-strip">
+          <button type="button" class="welcome-shortcut-pill" id="welcome-cmd-palette"><span>Comandos</span><span class="kbd">Ctrl+K</span></button>
+          <span class="welcome-shortcut-pill"><span>Busca no código</span><span class="kbd">Ctrl+Shift+F</span></span>
+          <span class="welcome-shortcut-pill"><span>Enviar seleção à IA</span><span class="kbd">Ctrl+L</span></span>
+          <span class="welcome-shortcut-pill"><span>Terminal</span><span class="kbd">Ctrl+J</span></span>
         </div>
       </div>
     `;
