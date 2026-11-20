@@ -24,6 +24,8 @@ export function BootstrapAgy(arg1:boolean):Promise<main.AgyBootstrap>;
 
 export function BootstrapOpenCode(arg1:boolean):Promise<main.OpenCodeBootstrap>;
 
+export function CancelAgyOAuthLogin(arg1:string):Promise<modelx.ProfilesOverview>;
+
 export function CancelCommand(arg1:string):Promise<boolean>;
 
 export function CancelInlineAI():Promise<void>;
@@ -281,6 +283,8 @@ export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:stri
 export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
 
 export function StopActiveAutoReview(arg1:string):Promise<boolean>;
+
+export function SubmitAgyOAuthCode(arg1:string,arg2:string):Promise<modelx.ProfilesOverview>;
 
 export function TriggerAutoReviewPoll(arg1:string):Promise<idecore.AutoReviewStatus>;
 

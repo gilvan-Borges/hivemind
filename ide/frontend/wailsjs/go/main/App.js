@@ -26,6 +26,10 @@ export function BootstrapOpenCode(arg1) {
   return window['go']['main']['App']['BootstrapOpenCode'](arg1);
 }
 
+export function CancelAgyOAuthLogin(arg1) {
+  return window['go']['main']['App']['CancelAgyOAuthLogin'](arg1);
+}
+
 export function CancelCommand(arg1) {
   return window['go']['main']['App']['CancelCommand'](arg1);
 }
@@ -540,6 +544,10 @@ export function StartRunWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, ar
 
 export function StopActiveAutoReview(arg1) {
   return window['go']['main']['App']['StopActiveAutoReview'](arg1);
+}
+
+export function SubmitAgyOAuthCode(arg1, arg2) {
+  return window['go']['main']['App']['SubmitAgyOAuthCode'](arg1, arg2);
 }
 
 export function TriggerAutoReviewPoll(arg1) {

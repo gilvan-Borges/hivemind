@@ -104,6 +104,7 @@ export const state = {
   apiKeysTab: "profiles" as "profiles" | "global",
   agyOAuthWaitingCode: false,
   agyOAuthSubmitting: false,
+  agyOAuthCodeInput: "",
   jiraEditingProfileId: null as string | null,
   profilesOverview: null as ProfilesOverview | null,
   profileEditor: {
