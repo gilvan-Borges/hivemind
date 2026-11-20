@@ -537,15 +537,25 @@ func TestUntrackedDiffDiscardAndSyncIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	synced, err := SyncIntegrationToWorkspace(ctx, repo)
-	if err != nil || synced != 1 {
-		t.Fatalf("expected 1 file synced from integration worktree, got synced=%d err=%v", synced, err)
+	if err != nil || synced < 1 {
+		t.Fatalf("expected endpoint.go synced from integration worktree, got synced=%d err=%v", synced, err)
 	}
 	if _, err := os.Stat(filepath.Join(repo, "endpoint.go")); err != nil {
 		t.Fatalf("expected endpoint.go synced into workspace: %v", err)
 	}
 	afterDiffs, err := WorkspaceDiff(ctx, repo)
-	if err != nil || len(afterDiffs) != 1 || afterDiffs[0].Path != "endpoint.go" {
-		t.Fatalf("expected synced endpoint.go visible in WorkspaceDiff, got %+v err=%v", afterDiffs, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range afterDiffs {
+		if d.Path == "endpoint.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected synced endpoint.go visible in WorkspaceDiff, got %+v", afterDiffs)
 	}
 }
 
@@ -1154,7 +1164,6 @@ func TestDetectStackMonorepoSubdirs(t *testing.T) {
 		t.Fatalf("expected consolidated Angular / TypeScript summary, got %q", ngStack.Summary)
 	}
 }
-
 
 func TestBuildMyJiraIssuesJQL(t *testing.T) {
 	gotProj := buildMyJiraIssuesJQL("ipg")

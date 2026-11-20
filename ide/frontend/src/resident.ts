@@ -422,6 +422,15 @@ function renderResidentSecurityHtml(): string {
       <div class="resident-security-grid">
         <div class="resident-row-card">
           <div class="resident-row-head">
+            <strong>Browser e desktop isolados</strong>
+            <span class="resident-badge risk-destructive">Desligados</span>
+          </div>
+          <div class="dim">${escapeHtml(st?.isolatedBrowserReason || "Browser isolado recusado: não há espaço com egress filtrado.")}</div>
+          <div class="dim">${escapeHtml(st?.isolatedDesktopReason || "Desktop isolado recusado: a sessão real não é alvo.")}</div>
+        </div>
+
+        <div class="resident-row-card">
+          <div class="resident-row-head">
             <strong>Sandbox do Sistema Operacional</strong>
             <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}">${sbOk ? "Ativa" : "Indisponível"}</span>
           </div>

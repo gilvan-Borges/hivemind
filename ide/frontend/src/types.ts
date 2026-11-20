@@ -911,6 +911,10 @@ export interface ResidentStatus {
   allowedBinaries?: string[];
   allowedHosts?: string[];
   vaultSecrets?: string[];
+  isolatedBrowser?: boolean;
+  isolatedBrowserReason?: string;
+  isolatedDesktop?: boolean;
+  isolatedDesktopReason?: string;
 }
 
 export interface ResidentTurnResult {
