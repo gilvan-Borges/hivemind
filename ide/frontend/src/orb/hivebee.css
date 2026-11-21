@@ -3,8 +3,9 @@
   position: relative;
   width: 82px;
   height: 90px;
-  cursor: pointer;
+  cursor: grab;
   --wails-draggable: no-drag;
+  -webkit-user-drag: none;
   /* Mel Vivo */
   --hood-hi: #ffe07d; --hood-mid: #f59c1a; --hood-deep: #c45608; --hood-rim: #ffba49;
   --suit-hi: #ffca57; --suit-mid: #ec8a12; --suit-deep: #ae4806; --suit-rim: #f7aa38;

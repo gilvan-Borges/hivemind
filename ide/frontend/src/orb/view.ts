@@ -207,10 +207,16 @@ export function mountOrbWindow(): void {
     items: [],
   };
 
+  let dragCleanup: (() => void) | null = null;
+
   const cleanupLife = () => {
     if (life) {
       life.destroy();
       life = null;
+    }
+    if (dragCleanup) {
+      dragCleanup();
+      dragCleanup = null;
     }
   };
 
@@ -227,48 +233,75 @@ export function mountOrbWindow(): void {
           ${renderMascotMarkup(cfg, mood, count, "full", badge)}
         </div>
       `;
+      const collapsedEl = host.querySelector<HTMLElement>(".orb-collapsed");
       const mascotEl = host.querySelector<HTMLElement>("#hivemind-mascot");
       if (mascotEl) {
         life = attachMascotLife(mascotEl, cfg.mascot);
+      }
+      if (collapsedEl && mascotEl) {
         let clickTimer = 0;
         let pointerDown = false;
-        let startX = 0;
-        let startY = 0;
-        let justDragged = false;
+        let dragStarted = false;
+        let startClientX = 0;
+        let startClientY = 0;
+        let downScreenX = 0;
+        let downScreenY = 0;
+        let justDraggedUntil = 0;
 
-        mascotEl.addEventListener("pointerdown", (ev) => {
+        collapsedEl.addEventListener("dragstart", (ev) => ev.preventDefault());
+
+        collapsedEl.addEventListener("pointerdown", (ev) => {
           if (ev.button !== 0) return;
           pointerDown = true;
-          justDragged = false;
-          startX = ev.clientX;
-          startY = ev.clientY;
+          dragStarted = false;
+          startClientX = ev.clientX;
+          startClientY = ev.clientY;
+          downScreenX = ev.screenX;
+          downScreenY = ev.screenY;
         });
 
-        mascotEl.addEventListener("pointermove", (ev) => {
-          if (!pointerDown || (ev.buttons & 1) === 0) return;
-          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) >= 5) {
+        const maybeBeginDrag = (ev: PointerEvent | MouseEvent) => {
+          if (!pointerDown || dragStarted || (ev.buttons & 1) === 0) return;
+          const clientDist = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
+          const screenDist = Math.hypot(ev.screenX - downScreenX, ev.screenY - downScreenY);
+          if (clientDist >= 4 || screenDist >= 4) {
+            dragStarted = true;
             pointerDown = false;
-            justDragged = true;
+            justDraggedUntil = Date.now() + 450;
+            collapsedEl.classList.add("is-dragging");
             if (clickTimer) {
               window.clearTimeout(clickTimer);
               clickTimer = 0;
             }
             void orbApi()?.StartOrbDrag?.();
-            window.setTimeout(() => {
-              justDragged = false;
-            }, 350);
           }
-        });
-
-        const resetPointer = () => {
-          pointerDown = false;
         };
-        mascotEl.addEventListener("pointerup", resetPointer);
-        mascotEl.addEventListener("pointercancel", resetPointer);
 
-        mascotEl.addEventListener("click", () => {
-          if (justDragged) {
-            justDragged = false;
+        window.addEventListener("pointermove", maybeBeginDrag);
+
+        const endPointer = () => {
+          pointerDown = false;
+          if (dragStarted) {
+            justDraggedUntil = Date.now() + 450;
+            dragStarted = false;
+            collapsedEl.classList.remove("is-dragging");
+          }
+        };
+        window.addEventListener("pointerup", endPointer);
+        window.addEventListener("pointercancel", endPointer);
+        dragCleanup = () => {
+          if (clickTimer) {
+            window.clearTimeout(clickTimer);
+            clickTimer = 0;
+          }
+          window.removeEventListener("pointermove", maybeBeginDrag);
+          window.removeEventListener("pointerup", endPointer);
+          window.removeEventListener("pointercancel", endPointer);
+        };
+
+        mascotEl.addEventListener("click", (ev) => {
+          const movedScreen = Math.hypot(ev.screenX - downScreenX, ev.screenY - downScreenY) >= 5;
+          if (dragStarted || movedScreen || Date.now() < justDraggedUntil) {
             return;
           }
           if (clickTimer) {

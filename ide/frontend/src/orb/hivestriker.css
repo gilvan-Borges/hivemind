@@ -3,8 +3,9 @@
   position: relative;
   width: 96px;
   height: 106px;
-  cursor: pointer;
+  cursor: grab;
   --wails-draggable: no-drag;
+  -webkit-user-drag: none;
   /* Obsidian Gold (padrão) */
   --armor-hi: #444a5c; --armor-mid: #1f232e; --armor-deep: #0b0d13; --armor-rim: #706035;
   --suit-hi: #303545; --suit-mid: #161922; --suit-deep: #08090e;

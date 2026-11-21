@@ -3,29 +3,42 @@
 package main
 
 import (
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
 const (
-	gwlExStyle              = -20
-	wsExToolWindow          = 0x00000080
-	wsExAppWindow           = 0x00040000
-	swHide                  = 0
-	swShowNoActivate        = 4
-	swpNoSize               = 0x0001
-	swpNoMove               = 0x0002
-	swpNoZOrder             = 0x0004
-	swpNoActivate           = 0x0010
-	swpFrameChanged         = 0x0020
-	dwmwaWindowCornerPref   = 33
-	dwmwaBorderColor        = 34
-	dwmwcpDoNotRound        = 1
-	dwmwaColorNone          = 0xFFFFFFFE
-	wmSysCommand            = 0x0112
-	scMoveDrag              = 0xF012
+	gwlExStyle            = -20
+	wsExToolWindow        = 0x00000080
+	wsExAppWindow         = 0x00040000
+	swHide                = 0
+	swShowNoActivate      = 4
+	swpNoSize             = 0x0001
+	swpNoZOrder           = 0x0004
+	swpNoActivate         = 0x0010
+	swpFrameChanged       = 0x0020
+	swpAsyncWindowPos     = 0x4000
+	swpNoMove             = 0x0002
+	vkLButton             = 0x01
+	dwmwaWindowCornerPref = 33
+	dwmwaBorderColor      = 34
+	dwmwcpDoNotRound      = 1
+	dwmwaColorNone        = 0xFFFFFFFE
 )
+
+type winPoint struct {
+	x int32
+	y int32
+}
+
+type winRect struct {
+	left   int32
+	top    int32
+	right  int32
+	bottom int32
+}
 
 var (
 	orbUser32                = syscall.NewLazyDLL("user32.dll")
@@ -35,9 +48,13 @@ var (
 	orbProcSetWindowLongPtrW = orbUser32.NewProc("SetWindowLongPtrW")
 	orbProcShowWindow        = orbUser32.NewProc("ShowWindow")
 	orbProcSetWindowPos      = orbUser32.NewProc("SetWindowPos")
-	orbProcReleaseCapture    = orbUser32.NewProc("ReleaseCapture")
-	orbProcPostMessageW      = orbUser32.NewProc("PostMessageW")
+	orbProcGetCursorPos      = orbUser32.NewProc("GetCursorPos")
+	orbProcGetWindowRect     = orbUser32.NewProc("GetWindowRect")
+	orbProcGetAsyncKeyState  = orbUser32.NewProc("GetAsyncKeyState")
 	orbProcDwmSetWindowAttr  = orbDwmapi.NewProc("DwmSetWindowAttribute")
+
+	orbDragMu     sync.Mutex
+	orbDragActive bool
 )
 
 func findOrbHWND(windowTitle string) uintptr {
@@ -49,15 +66,73 @@ func findOrbHWND(windowTitle string) uintptr {
 	return h
 }
 
-// startOrbNativeDrag hands mouse dragging directly to Windows (SC_MOVE) for smooth,
-// native 60/120fps movement when the user clicks and drags the mascot itself.
+func isLeftMouseDown() bool {
+	state, _, _ := orbProcGetAsyncKeyState.Call(uintptr(vkLButton))
+	return (uint16(state) & 0x8000) != 0
+}
+
+// startOrbNativeDrag tracks the global Win32 cursor and moves the floating Orb
+// window in physical screen coordinates while the primary mouse button is held.
+// This avoids WebView2 capture/thread-queue restrictions on transparent tool windows.
 func startOrbNativeDrag(windowTitle string) bool {
 	hwnd := findOrbHWND(windowTitle)
-	if hwnd == 0 {
+	if hwnd == 0 || !isLeftMouseDown() {
 		return false
 	}
-	_, _, _ = orbProcReleaseCapture.Call()
-	_, _, _ = orbProcPostMessageW.Call(hwnd, wmSysCommand, scMoveDrag, 0)
+
+	var startPt winPoint
+	okPt, _, _ := orbProcGetCursorPos.Call(uintptr(unsafe.Pointer(&startPt)))
+	var startRect winRect
+	okRect, _, _ := orbProcGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&startRect)))
+	if okPt == 0 || okRect == 0 {
+		return false
+	}
+
+	orbDragMu.Lock()
+	if orbDragActive {
+		orbDragMu.Unlock()
+		return true
+	}
+	orbDragActive = true
+	orbDragMu.Unlock()
+
+	go func(h uintptr, sPt winPoint, baseX, baseY int32) {
+		defer func() {
+			orbDragMu.Lock()
+			orbDragActive = false
+			orbDragMu.Unlock()
+		}()
+
+		lastX, lastY := baseX, baseY
+		ticker := time.NewTicker(8 * time.Millisecond)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if !isLeftMouseDown() {
+				return
+			}
+			var cur winPoint
+			ok, _, _ := orbProcGetCursorPos.Call(uintptr(unsafe.Pointer(&cur)))
+			if ok == 0 {
+				return
+			}
+			nx := baseX + (cur.x - sPt.x)
+			ny := baseY + (cur.y - sPt.y)
+			if nx != lastX || ny != lastY {
+				lastX, lastY = nx, ny
+				_, _, _ = orbProcSetWindowPos.Call(
+					h,
+					0,
+					uintptr(nx),
+					uintptr(ny),
+					0,
+					0,
+					swpNoSize|swpNoZOrder|swpNoActivate|swpAsyncWindowPos,
+				)
+			}
+		}
+	}(hwnd, startPt, startRect.left, startRect.top)
+
 	return true
 }
 

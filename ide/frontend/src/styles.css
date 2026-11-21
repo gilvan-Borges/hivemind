@@ -6211,12 +6211,18 @@ body.is-orb-mode #app {
   height: 100%;
   display: grid;
   place-items: center;
+  cursor: grab;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.orb-collapsed.is-dragging,
+.orb-collapsed.is-dragging .mascot-shell {
+  cursor: grabbing;
 }
 .orb-drag-ring {
   position: absolute;
   inset: 4px;
   border-radius: 26px;
-  --wails-draggable: drag;
 }
 .orb-fab {
   position: relative;
