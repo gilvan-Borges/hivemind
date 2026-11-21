@@ -444,6 +444,7 @@ func (m *ResidentManager) runTurn(
 						InputTokens:  ev.InputTokens,
 						OutputTokens: ev.OutputTokens,
 						Tokens:       ev.Tokens,
+						Origin:       string(origin),
 					},
 				})
 			}

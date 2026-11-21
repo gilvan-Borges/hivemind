@@ -842,6 +842,16 @@ func (m *SessionManager) RunTurnWithOptions(
 		}
 		return m.RequestApproval(ctx, laneID, selected.Name, prompt)
 	}
+	confirmShell := func(command string) bool {
+		if cfg.Settings.IsFullAccess() {
+			return true
+		}
+		return m.RequestApprovalWithMeta(ctx, laneID, selected.Name, command, ApprovalMetadata{
+			Label:    "Confirmar shell",
+			ToolName: "run_shell",
+			Detail:   command,
+		})
+	}
 
 	nativeRoot := NativeSkillsDir()
 	_, _ = skillx.SeedProductSkills(nativeRoot)
@@ -888,7 +898,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		GitHub:             gh,
 		Jira:               jira,
 		Sessions:           store,
-		Confirm:            askApproval,
+		Confirm:            confirmShell,
 		Approve:            askApproval,
 		MCP:                mcpHost,
 		Out:                io.Discard,

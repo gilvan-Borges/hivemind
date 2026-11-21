@@ -71,6 +71,7 @@ type Event struct {
 	Health            []jev.ProviderHealthView `json:"health,omitempty"`
 	FromRole          string                   `json:"fromRole,omitempty"`
 	ToRole            string                   `json:"toRole,omitempty"`
+	Origin            string                   `json:"origin,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.
