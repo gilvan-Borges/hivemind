@@ -1,0 +1,189 @@
+/* HiveStriker — Mascote Abelha Atlética para a janela flutuante HiveMind Orb */
+.mascot-shell.mascot-striker {
+  position: relative;
+  width: 96px;
+  height: 106px;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+  /* Obsidian Gold (padrão) */
+  --armor-hi: #444a5c; --armor-mid: #1f232e; --armor-deep: #0b0d13; --armor-rim: #706035;
+  --suit-hi: #303545; --suit-mid: #161922; --suit-deep: #08090e;
+  --gold-hi: #fff2b2; --gold-mid: #f2be35; --gold-deep: #9c6b0c;
+  --energy: #ffd659; --energy-core: #fff9d6;
+  --wing-a: rgba(255, 224, 115, 0.62); --wing-b: rgba(196, 132, 16, 0.24); --wing-stroke: #f5c842;
+  --skin-hi: #f2d1b3; --skin-mid: #d7aa84; --skin-deep: #a57756;
+  --eye-glow: #ffd147; --eye-core: #fff8cf;
+  --visor-tint: rgba(10, 13, 20, 0.84); --visor-rim: #f5c842; --badge-bg: #111218;
+}
+.mascot-shell.mascot-striker.is-mini {
+  width: 34px;
+  height: 37px;
+}
+.mascot-shell.mascot-striker.is-preview {
+  width: 58px;
+  height: 64px;
+}
+.mascot-shell.mascot-striker[data-palette="stealth"] {
+  --armor-hi: #373f4f; --armor-mid: #171c26; --armor-deep: #07090e; --armor-rim: #5d6a82;
+  --suit-hi: #252b38; --suit-mid: #11151d; --suit-deep: #06070b;
+  --gold-hi: #f7eab9; --gold-mid: #d4ad4a; --gold-deep: #785d1c;
+  --energy: #e8c668; --energy-core: #fff7dc;
+  --wing-a: rgba(232, 198, 104, 0.48); --wing-b: rgba(92, 108, 138, 0.22); --wing-stroke: #d4ad4a;
+  --skin-hi: #ebd0b7; --skin-mid: #cfa584; --skin-deep: #997154;
+  --eye-glow: #f0c954; --eye-core: #fff8db; --visor-tint: rgba(8, 11, 17, 0.88); --visor-rim: #d4ad4a; --badge-bg: #0c0f16;
+}
+.mascot-shell.mascot-striker[data-palette="amber"] {
+  --armor-hi: #4b3c32; --armor-mid: #231b17; --armor-deep: #0d0907; --armor-rim: #8f561a;
+  --suit-hi: #332721; --suit-mid: #19120f; --suit-deep: #0a0705;
+  --gold-hi: #ffe394; --gold-mid: #ff9f1c; --gold-deep: #9e4b04;
+  --energy: #ffb02e; --energy-core: #fff3c4;
+  --wing-a: rgba(255, 176, 46, 0.64); --wing-b: rgba(180, 74, 6, 0.26); --wing-stroke: #ff9f1c;
+  --skin-hi: #efc9a6; --skin-mid: #cf9c74; --skin-deep: #996846;
+  --eye-glow: #ffaa24; --eye-core: #fff4c2; --visor-tint: rgba(18, 12, 8, 0.84); --visor-rim: #ff9f1c; --badge-bg: #16100b;
+}
+.mascot-shell.mascot-striker .mascot-physics-wrap {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 48%;
+}
+.mascot-shell.mascot-striker .mascot-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.55));
+}
+.mascot-shell.mascot-striker.is-mini .mascot-svg,
+.mascot-shell.mascot-striker.is-preview .mascot-svg {
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
+}
+.mascot-shell.mascot-striker[data-state="notify"] .mascot-svg {
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.6)) drop-shadow(0 0 16px rgba(255, 208, 66, 0.38));
+}
+.mascot-shell.mascot-striker[data-state="error"] .mascot-svg {
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 16px rgba(239, 68, 68, 0.42));
+}
+.mascot-striker .hm-character { transform-origin: 120px 236px; }
+.mascot-striker .hm-ground-shadow { transform-origin: 120px 244px; }
+.mascot-striker .hm-upper-body { transform-origin: 120px 176px; }
+.mascot-striker .hm-head-group { transform-origin: 120px 108px; }
+.mascot-striker .hm-arm-l { transform-origin: 73px 124px; transition: transform 0.24s ease; }
+.mascot-striker .hm-arm-r { transform-origin: 167px 124px; transition: transform 0.24s ease; }
+.mascot-striker .hm-leg-l { transform-origin: 100px 182px; }
+.mascot-striker .hm-leg-r { transform-origin: 140px 182px; }
+.mascot-striker .hm-wing-l { transform-origin: 90px 128px; }
+.mascot-striker .hm-wing-r { transform-origin: 150px 128px; }
+.mascot-striker .hm-eyes-group { transform-origin: 120px 80px; transition: transform 0.1s ease-out; }
+.mascot-striker .hm-chest-core { transform-origin: 120px 132px; }
+.mascot-striker .hm-visor-layer {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+  transform-origin: 120px 80px;
+  transition: opacity 0.25s ease, transform 0.28s ease;
+  pointer-events: none;
+}
+.mascot-shell.mascot-striker[data-visor="true"] .hm-visor-layer {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.mascot-shell.mascot-striker.is-blinking .hm-eyes-group { transform: scaleY(0.1); }
+.mascot-striker .expr-brows-error,
+.mascot-striker .fx-fist-energy,
+.mascot-striker .fx-radar-waves,
+.mascot-striker .fx-notify-badge,
+.mascot-striker .fx-error-badge,
+.mascot-striker .fx-working-orbit,
+.mascot-striker .fx-flex-burst {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.mascot-shell.mascot-striker.is-fist-action .hm-arm-r { animation: hmFistRaiseAction 0.85s cubic-bezier(0.22, 1, 0.36, 1) !important; }
+.mascot-shell.mascot-striker.is-fist-action .hm-chest-core { animation: hmCoreSurge 0.85s ease-out !important; }
+.mascot-shell.mascot-striker.is-fist-action .fx-fist-energy { opacity: 1 !important; }
+.mascot-shell.mascot-striker.is-flexing .hm-character { animation: hmPowerFlexBody 0.92s cubic-bezier(0.22, 1, 0.36, 1) !important; }
+.mascot-shell.mascot-striker.is-flexing .hm-arm-l { animation: hmFlexArmL 0.92s cubic-bezier(0.22, 1, 0.36, 1) !important; }
+.mascot-shell.mascot-striker.is-flexing .hm-arm-r { animation: hmFlexArmR 0.92s cubic-bezier(0.22, 1, 0.36, 1) !important; }
+.mascot-shell.mascot-striker.is-flexing .fx-flex-burst { opacity: 1 !important; animation: hmFlexRingExpand 0.88s cubic-bezier(0.15, 0.85, 0.3, 1) forwards !important; }
+.mascot-shell.mascot-striker.is-flexing .fx-fist-energy { opacity: 1 !important; }
+.mascot-shell.mascot-striker[data-state="idle"] .hm-character { animation: hmIdleHover 3.4s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="idle"] .hm-upper-body { animation: hmAthleticBreathe 3.4s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="idle"] .hm-ground-shadow { animation: hmShadowIdle 3.4s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="idle"] .hm-wing-l { animation: hmWingHumL 0.42s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="idle"] .hm-wing-r { animation: hmWingHumR 0.42s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-character { animation: hmNotifyPowerHover 1.4s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-arm-r { animation: hmNotifyFistPump 1.4s cubic-bezier(0.22, 1, 0.36, 1) infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-arm-l { transform: rotate(12deg); }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-wing-l { animation: hmWingFlareL 0.22s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-wing-r { animation: hmWingFlareR 0.22s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .hm-chest-core { animation: hmCorePulseFast 0.9s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-fist-energy { opacity: 1; animation: hmFistAuraPulse 0.9s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-radar-waves { opacity: 1; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-radar-1 { transform-origin: 120px 132px; animation: hmRadarExpand 1.6s cubic-bezier(0.15, 0.8, 0.3, 1) infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-radar-2 { transform-origin: 120px 132px; animation: hmRadarExpand 1.6s cubic-bezier(0.15, 0.8, 0.3, 1) 0.8s infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-notify-badge { opacity: 1; animation: hmBadgeHover 1.2s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="notify"] .fx-notify-ping { transform-origin: 194px 44px; animation: hmBadgePing 1.3s cubic-bezier(0.15, 0.8, 0.3, 1) infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .hm-character { animation: hmWorkingHover 1.9s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .hm-ground-shadow { animation: hmShadowWorking 1.9s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .hm-wing-l { animation: hmWingBuzzL 0.13s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .hm-wing-r { animation: hmWingBuzzR 0.13s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .hm-chest-core { animation: hmCorePulseFast 0.65s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="working"] .fx-working-orbit { opacity: 1; }
+.mascot-shell.mascot-striker[data-state="standby"] .hm-character { animation: hmStandbyHover 4.8s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="standby"] .hm-chest-core { opacity: 0.42; }
+.mascot-shell.mascot-striker[data-state="standby"] .hm-eyes-group { opacity: 0.58; }
+.mascot-shell.mascot-striker[data-state="error"] .hm-character { animation: hmErrorTenseShake 0.42s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="error"] .expr-brows-normal { opacity: 0; }
+.mascot-shell.mascot-striker[data-state="error"] .expr-brows-error { opacity: 1; }
+.mascot-shell.mascot-striker[data-state="error"] .fx-error-badge { opacity: 1; animation: hmBadgeHover 0.85s ease-in-out infinite; }
+.mascot-shell.mascot-striker[data-state="error"] .fx-error-ping { transform-origin: 194px 44px; animation: hmBadgePing 0.95s cubic-bezier(0.15, 0.8, 0.3, 1) infinite; }
+.mascot-striker .fx-orbit-cw { transform-origin: 120px 128px; animation: hmOrbitCW 2.8s linear infinite; }
+.mascot-striker .fx-orbit-ccw { transform-origin: 120px 128px; animation: hmOrbitCCW 3.9s linear infinite; }
+.mascot-striker .surge-particle {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  pointer-events: none;
+  z-index: 70;
+  animation: hmSurgeFly 0.82s cubic-bezier(0.15, 0.85, 0.3, 1) forwards;
+}
+
+@keyframes hmSurgeFly {
+  0% { transform: translate(-50%, -50%) scale(0.45) rotate(0); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1.08) rotate(var(--rot)); opacity: 0; }
+}
+@keyframes hmFistRaiseAction { 0%, 100% { transform: rotate(0); } 28%, 68% { transform: rotate(-42deg) translate(2px, -6px); } }
+@keyframes hmCoreSurge { 0%, 100% { transform: scale(1); } 35% { transform: scale(1.24); } }
+@keyframes hmPowerFlexBody { 0%, 100% { transform: translateY(0) scale(1); } 20% { transform: translateY(4px) scale(1.06, 0.94); } 48% { transform: translateY(-10px) scale(1.09, 1.04); } }
+@keyframes hmFlexArmL { 0%, 100% { transform: rotate(0); } 30%, 68% { transform: rotate(34deg) translate(-2px, -6px); } }
+@keyframes hmFlexArmR { 0%, 100% { transform: rotate(0); } 30%, 68% { transform: rotate(-34deg) translate(2px, -6px); } }
+@keyframes hmFlexRingExpand { 0% { transform: scale(0.45); opacity: 0.95; } 100% { transform: scale(1.75); opacity: 0; } }
+@keyframes hmIdleHover { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes hmAthleticBreathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.032, 1.018); } }
+@keyframes hmShadowIdle { 0%, 100% { transform: scale(1); opacity: 0.56; } 50% { transform: scale(0.86); opacity: 0.38; } }
+@keyframes hmWingHumL { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-6deg) scaleX(0.96); } }
+@keyframes hmWingHumR { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(6deg) scaleX(0.96); } }
+@keyframes hmWingFlareL { 0%, 100% { transform: rotate(10deg) scale(1.05); } 50% { transform: rotate(-8deg); } }
+@keyframes hmWingFlareR { 0%, 100% { transform: rotate(-10deg) scale(1.05); } 50% { transform: rotate(8deg); } }
+@keyframes hmWingBuzzL { 0%, 100% { transform: rotate(4deg); } 50% { transform: rotate(-14deg) scaleX(0.9); } }
+@keyframes hmWingBuzzR { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(14deg) scaleX(0.9); } }
+@keyframes hmNotifyPowerHover { 0%, 100% { transform: translateY(-4px) scale(1.01); } 50% { transform: translateY(-12px) scale(1.035); } }
+@keyframes hmNotifyFistPump { 0%, 100% { transform: rotate(-34deg) translate(2px, -4px); } 45% { transform: rotate(-46deg) translate(3px, -8px); } }
+@keyframes hmCorePulseFast { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.18); opacity: 1; } }
+@keyframes hmFistAuraPulse { 0%, 100% { transform: scale(0.92); opacity: 0.72; } 50% { transform: scale(1.16); opacity: 1; } }
+@keyframes hmRadarExpand { 0% { transform: scale(0.4); opacity: 0.85; } 100% { transform: scale(2.05); opacity: 0; } }
+@keyframes hmBadgeHover { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.07); } }
+@keyframes hmBadgePing { 0% { transform: scale(0.95); opacity: 0.9; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes hmWorkingHover { 0%, 100% { transform: translateY(-8px) rotate(-1deg); } 50% { transform: translateY(-16px) rotate(1deg); } }
+@keyframes hmShadowWorking { 0%, 100% { transform: scale(0.76); opacity: 0.36; } 50% { transform: scale(0.62); opacity: 0.22; } }
+@keyframes hmStandbyHover { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes hmErrorTenseShake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2.6px); } 75% { transform: translateX(2.6px); } }
+@keyframes hmOrbitCW { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes hmOrbitCCW { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-shell.mascot-striker,
+  .mascot-shell.mascot-striker * {
+    animation: none !important;
+  }
+}

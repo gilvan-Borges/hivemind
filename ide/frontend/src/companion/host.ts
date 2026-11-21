@@ -71,6 +71,15 @@ export function mountCompanion(): void {
     onOpen: (id) => openStored(id),
     onSettings: () => view?.applySettings(loadSettings()),
   });
+  // When the independent desktop Orb window is running outside the IDE, hide the
+  // legacy in-IDE hexagon widget so only the real floating mascot appears.
+  const syncOrbCompanionVisibility = () => {
+    void api()?.OrbRunning?.().then((running) => {
+      if (view) view.root.hidden = Boolean(running);
+    });
+  };
+  syncOrbCompanionVisibility();
+  window.setTimeout(syncOrbCompanionVisibility, 1200);
   subscribeSettings(() => view?.applySettings(loadSettings()));
   window.addEventListener("focus", () => {
     focused = true;

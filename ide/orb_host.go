@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/orb"
-	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -52,8 +51,9 @@ func (a *App) launchOrbWindow() error {
 	if err != nil || strings.TrimSpace(exe) == "" {
 		return err
 	}
+	// Do NOT apply procx.HideWindow here: on Windows HideWindow=true sets SW_HIDE
+	// in STARTUPINFO and hides the floating Orb GUI window itself.
 	cmd := exec.Command(exe, "--orb", "--orb-addr", addr, "--orb-token", token)
-	procx.ConfigureContext(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

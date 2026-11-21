@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	orbCollapsedW = 112
-	orbCollapsedH = 118
+	orbCollapsedW = 122
+	orbCollapsedH = 128
 	orbExpandedW  = 356
 	orbExpandedH  = 430
 )
@@ -55,6 +55,8 @@ func newOrbApp(addr, token string) *OrbApp {
 func (o *OrbApp) startup(ctx context.Context) {
 	o.ctx = ctx
 	o.positionBottomRight(orbCollapsedW, orbCollapsedH)
+	wailsrt.WindowSetAlwaysOnTop(o.ctx, true)
+	wailsrt.WindowShow(o.ctx)
 	streamCtx, cancel := context.WithCancel(ctx)
 	o.mu.Lock()
 	o.cancel = cancel

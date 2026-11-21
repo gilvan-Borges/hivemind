@@ -1,7 +1,13 @@
 import type { Mood } from "../companion/logic";
 import { icons } from "../icons";
 import { escapeHtml } from "../utils";
-import { attachBeeLife, hiveBeeSVG, mapMoodToBeeState, type BeeLifeController, type HiveBeeTheme } from "./hivebee";
+import { attachBeeLife, hiveBeeSVG, mapMoodToBeeState, type HiveBeeTheme } from "./hivebee";
+import {
+  attachStrikerLife,
+  hiveStrikerSVG,
+  mapMoodToStrikerState,
+  type HiveStrikerPalette,
+} from "./hivestriker";
 
 export interface OrbNoticeItem {
   id: string;
@@ -36,7 +42,23 @@ export interface WailsOrbApp {
   CloseOrbOnly?(): Promise<void>;
 }
 
-const BEE_THEME_KEY = "hivemind:orb-bee-theme";
+export type OrbMascotId = "hivebee" | "hivestriker";
+
+export interface OrbAgentConfig {
+  mascot: OrbMascotId;
+  beeTheme: HiveBeeTheme;
+  strikerPalette: HiveStrikerPalette;
+  strikerVisor: boolean;
+}
+
+interface MascotLifeController {
+  tapNow(): void;
+  celebrateNow(): void;
+  destroy(): void;
+}
+
+const LEGACY_BEE_THEME_KEY = "hivemind:orb-bee-theme";
+const AGENT_CONFIG_KEY = "hivemind:orb-agent-config";
 
 const MOOD_STATUS: Record<string, string> = {
   idle: "Ocioso",
@@ -61,17 +83,40 @@ export function isOrbRuntime(): boolean {
   }
 }
 
-function loadBeeTheme(): HiveBeeTheme {
+function loadAgentConfig(): OrbAgentConfig {
+  const fallback: OrbAgentConfig = {
+    mascot: "hivebee",
+    beeTheme: "honey",
+    strikerPalette: "obsidian",
+    strikerVisor: false,
+  };
   try {
-    return localStorage.getItem(BEE_THEME_KEY) === "gold" ? "gold" : "honey";
+    const raw = localStorage.getItem(AGENT_CONFIG_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<OrbAgentConfig>;
+      return {
+        mascot: parsed.mascot === "hivestriker" ? "hivestriker" : "hivebee",
+        beeTheme: parsed.beeTheme === "gold" ? "gold" : "honey",
+        strikerPalette:
+          parsed.strikerPalette === "stealth" || parsed.strikerPalette === "amber"
+            ? parsed.strikerPalette
+            : "obsidian",
+        strikerVisor: Boolean(parsed.strikerVisor),
+      };
+    }
+    const legacy = localStorage.getItem(LEGACY_BEE_THEME_KEY);
+    if (legacy === "gold") {
+      fallback.beeTheme = "gold";
+    }
   } catch {
-    return "honey";
+    /* ignore */
   }
+  return fallback;
 }
 
-function saveBeeTheme(theme: HiveBeeTheme): void {
+function saveAgentConfig(cfg: OrbAgentConfig): void {
   try {
-    localStorage.setItem(BEE_THEME_KEY, theme);
+    localStorage.setItem(AGENT_CONFIG_KEY, JSON.stringify(cfg));
   } catch {
     /* ignore */
   }
@@ -90,14 +135,70 @@ function formatTime(iso?: string): string {
   return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function renderMascotMarkup(
+  cfg: OrbAgentConfig,
+  mood: string,
+  count: number,
+  variant: "full" | "mini",
+  badgeHtml = "",
+): string {
+  const isMini = variant === "mini";
+  const interactiveAttrs = isMini
+    ? ""
+    : `id="hivemind-mascot" role="button" tabindex="0" aria-label="Abrir painel do HiveMind Orb"`;
+
+  if (cfg.mascot === "hivestriker") {
+    const state = mapMoodToStrikerState(mood, count);
+    return `
+      <div ${interactiveAttrs}
+           class="mascot-shell mascot-striker${isMini ? " is-mini" : ""}"
+           data-state="${escapeHtml(state)}"
+           data-palette="${escapeHtml(cfg.strikerPalette)}"
+           data-visor="${cfg.strikerVisor ? "true" : "false"}">
+        ${hiveStrikerSVG()}
+        ${badgeHtml}
+      </div>
+    `;
+  }
+
+  const state = mapMoodToBeeState(mood, count);
+  return `
+    <div ${interactiveAttrs}
+         class="mascot-shell mascot-bee${isMini ? " is-mini" : ""}"
+         data-state="${escapeHtml(state)}"
+         data-theme="${escapeHtml(cfg.beeTheme)}">
+      ${hiveBeeSVG()}
+      ${badgeHtml}
+    </div>
+  `;
+}
+
+function attachMascotLife(el: HTMLElement, mascot: OrbMascotId): MascotLifeController {
+  if (mascot === "hivestriker") {
+    const ctrl = attachStrikerLife(el);
+    return {
+      tapNow: () => ctrl.fistNow(),
+      celebrateNow: () => ctrl.flexNow(),
+      destroy: () => ctrl.destroy(),
+    };
+  }
+  const ctrl = attachBeeLife(el);
+  return {
+    tapNow: () => ctrl.waveNow(),
+    celebrateNow: () => ctrl.celebrateNow(),
+    destroy: () => ctrl.destroy(),
+  };
+}
+
 export function mountOrbWindow(): void {
   document.documentElement.classList.add("is-orb-mode");
   document.body.classList.add("is-orb-mode");
 
   const host = document.getElementById("app") || document.body;
   let expanded = false;
-  let beeTheme: HiveBeeTheme = loadBeeTheme();
-  let beeLife: BeeLifeController | null = null;
+  let showAgentConfig = false;
+  let cfg: OrbAgentConfig = loadAgentConfig();
+  let life: MascotLifeController | null = null;
   let snap: OrbSnapshot = {
     mood: "idle",
     ideVisible: true,
@@ -106,9 +207,9 @@ export function mountOrbWindow(): void {
   };
 
   const cleanupLife = () => {
-    if (beeLife) {
-      beeLife.destroy();
-      beeLife = null;
+    if (life) {
+      life.destroy();
+      life = null;
     }
   };
 
@@ -116,32 +217,28 @@ export function mountOrbWindow(): void {
     cleanupLife();
     const mood = (snap.mood || "idle") as Mood;
     const count = snap.pendingCount || snap.items.length || 0;
-    const beeState = mapMoodToBeeState(mood, count);
     const badge = count > 0 ? `<span class="orb-badge">${count > 9 ? "9+" : count}</span>` : "";
 
     if (!expanded) {
       host.innerHTML = `
         <div class="orb-collapsed" data-mood="${escapeHtml(mood)}" title="HiveMind Orb — clique para abrir painel · duplo clique para abrir IDE">
-          <div class="orb-drag-ring" title="Arraste pela borda para mover a abelha"></div>
-          <div id="hivemind-mascot" class="mascot-shell" data-state="${escapeHtml(beeState)}" data-theme="${escapeHtml(beeTheme)}" role="button" tabindex="0" aria-label="Abrir painel do HiveMind Orb">
-            ${hiveBeeSVG()}
-            ${badge}
-          </div>
+          <div class="orb-drag-ring" title="Arraste pela borda para mover o agente"></div>
+          ${renderMascotMarkup(cfg, mood, count, "full", badge)}
         </div>
       `;
       const mascotEl = host.querySelector<HTMLElement>("#hivemind-mascot");
       if (mascotEl) {
-        beeLife = attachBeeLife(mascotEl);
+        life = attachMascotLife(mascotEl, cfg.mascot);
         let clickTimer = 0;
         mascotEl.addEventListener("click", () => {
           if (clickTimer) {
             window.clearTimeout(clickTimer);
             clickTimer = 0;
-            beeLife?.celebrateNow();
+            life?.celebrateNow();
             window.setTimeout(() => void orbApi()?.ShowIDE?.(), 180);
             return;
           }
-          beeLife?.waveNow();
+          life?.tapNow();
           clickTimer = window.setTimeout(() => {
             clickTimer = 0;
             expanded = true;
@@ -163,13 +260,87 @@ export function mountOrbWindow(): void {
 
     const statusLine = `${MOOD_STATUS[mood] || "Ativo"} · ${snap.ideVisible ? "IDE aberta" : "IDE em 2º plano"}`;
     const items = snap.items || [];
+    const beeState = mapMoodToBeeState(mood, count);
+    const strikerState = mapMoodToStrikerState(mood, count);
+
+    const bodyContent = showAgentConfig
+      ? `
+        <div class="orb-agent-config">
+          <div class="orb-config-title">Agente flutuante</div>
+          <div class="orb-agent-grid">
+            <button type="button" class="orb-agent-card${cfg.mascot === "hivebee" ? " is-active" : ""}" data-select-mascot="hivebee">
+              <div class="mascot-shell mascot-bee is-preview" data-state="${escapeHtml(beeState)}" data-theme="${escapeHtml(cfg.beeTheme)}">
+                ${hiveBeeSVG()}
+              </div>
+              <span class="orb-agent-name">HiveBee</span>
+              <span class="orb-agent-desc">Abelha Chibi 3D</span>
+            </button>
+            <button type="button" class="orb-agent-card${cfg.mascot === "hivestriker" ? " is-active" : ""}" data-select-mascot="hivestriker">
+              <div class="mascot-shell mascot-striker is-preview" data-state="${escapeHtml(strikerState)}" data-palette="${escapeHtml(cfg.strikerPalette)}" data-visor="${cfg.strikerVisor ? "true" : "false"}">
+                ${hiveStrikerSVG()}
+              </div>
+              <span class="orb-agent-name">HiveStriker</span>
+              <span class="orb-agent-desc">Abelha Atlética</span>
+            </button>
+          </div>
+
+          ${cfg.mascot === "hivebee"
+            ? `
+              <div class="orb-config-group">
+                <span class="orb-config-label">Tema</span>
+                <div class="orb-pill-row">
+                  <button type="button" class="orb-pill${cfg.beeTheme === "honey" ? " is-active" : ""}" data-bee-theme="honey">Mel Vivo</button>
+                  <button type="button" class="orb-pill${cfg.beeTheme === "gold" ? " is-active" : ""}" data-bee-theme="gold">Obsidian Gold</button>
+                </div>
+              </div>
+            `
+            : `
+              <div class="orb-config-group">
+                <span class="orb-config-label">Paleta</span>
+                <div class="orb-pill-row">
+                  <button type="button" class="orb-pill${cfg.strikerPalette === "obsidian" ? " is-active" : ""}" data-striker-palette="obsidian">Obsidian</button>
+                  <button type="button" class="orb-pill${cfg.strikerPalette === "stealth" ? " is-active" : ""}" data-striker-palette="stealth">Stealth</button>
+                  <button type="button" class="orb-pill${cfg.strikerPalette === "amber" ? " is-active" : ""}" data-striker-palette="amber">Amber</button>
+                </div>
+              </div>
+              <label class="orb-toggle-row">
+                <input type="checkbox" id="orb-striker-visor"${cfg.strikerVisor ? " checked" : ""} />
+                <span>Visor tático</span>
+              </label>
+            `
+          }
+        </div>
+      `
+      : items.length === 0
+        ? `
+          <div class="orb-empty">
+            <p>Tudo tranquilo por aqui.</p>
+            <p class="orb-empty-sub">O HiveMind continua vigiando seus PRs, menções do GitHub, Equipe IA e Residente em segundo plano.</p>
+          </div>
+        `
+        : items
+            .map(
+              (it) => `
+                <div class="orb-item" data-mood="${escapeHtml(String(it.mood || "attention"))}">
+                  <button type="button" class="orb-item-main" data-orb-open="${escapeHtml(it.id)}">
+                    <div class="orb-item-top">
+                      <span class="orb-item-tag">${escapeHtml(surfaceLabel(it.surface))}</span>
+                      ${it.createdAt ? `<span class="orb-item-time">${escapeHtml(formatTime(it.createdAt))}</span>` : ""}
+                    </div>
+                    <div class="orb-item-title">${escapeHtml(it.title)}</div>
+                    ${it.body ? `<div class="orb-item-body">${escapeHtml(it.body)}</div>` : ""}
+                  </button>
+                  <button type="button" class="orb-icon-btn orb-item-x" data-orb-dismiss="${escapeHtml(it.id)}" aria-label="Dispensar">${icons.closeSmall}</button>
+                </div>
+              `,
+            )
+            .join("");
+
     host.innerHTML = `
       <section class="orb-panel" data-mood="${escapeHtml(mood)}" aria-label="HiveMind Orb">
         <header class="orb-head">
           <div class="orb-head-brand">
-            <div class="mascot-shell is-mini" data-state="${escapeHtml(beeState)}" data-theme="${escapeHtml(beeTheme)}">
-              ${hiveBeeSVG()}
-            </div>
+            ${renderMascotMarkup(cfg, mood, count, "mini")}
             <div class="orb-head-meta">
               <div class="orb-head-title">HiveMind${snap.projectName ? ` · ${escapeHtml(snap.projectName)}` : ""}</div>
               <div class="orb-head-sub">${escapeHtml(statusLine)}</div>
@@ -181,32 +352,14 @@ export function mountOrbWindow(): void {
           </div>
         </header>
 
-        <div class="orb-list">
-          ${items.length === 0
-            ? `<div class="orb-empty">
-                <p>Tudo tranquilo por aqui.</p>
-                <p class="orb-empty-sub">O HiveMind continua vigiando seus PRs, menções do GitHub, Equipe IA e Residente em segundo plano.</p>
-              </div>`
-            : items.map((it) => `
-              <div class="orb-item" data-mood="${escapeHtml(String(it.mood || "attention"))}">
-                <button type="button" class="orb-item-main" data-orb-open="${escapeHtml(it.id)}">
-                  <div class="orb-item-top">
-                    <span class="orb-item-tag">${escapeHtml(surfaceLabel(it.surface))}</span>
-                    ${it.createdAt ? `<span class="orb-item-time">${escapeHtml(formatTime(it.createdAt))}</span>` : ""}
-                  </div>
-                  <div class="orb-item-title">${escapeHtml(it.title)}</div>
-                  ${it.body ? `<div class="orb-item-body">${escapeHtml(it.body)}</div>` : ""}
-                </button>
-                <button type="button" class="orb-icon-btn orb-item-x" data-orb-dismiss="${escapeHtml(it.id)}" aria-label="Dispensar">${icons.closeSmall}</button>
-              </div>
-            `).join("")
-          }
-        </div>
+        <div class="orb-list">${bodyContent}</div>
 
         <footer class="orb-foot">
-          <div style="display:flex;align-items:center;gap:6px">
-            <button type="button" class="orb-foot-btn" id="orb-theme-toggle" title="Alternar visual da abelha (Mel Vivo / Obsidian Gold)">${beeTheme === "honey" ? "Mel Vivo" : "Gold"}</button>
-            ${items.length > 0 ? `<button type="button" class="orb-foot-btn" id="orb-clear">Limpar</button>` : ""}
+          <div class="orb-foot-left">
+            <button type="button" class="orb-foot-btn${showAgentConfig ? " is-active" : ""}" id="orb-agent-toggle" title="Escolher o agente flutuante e aparência">
+              ${showAgentConfig ? "Avisos" : "Agente"}
+            </button>
+            ${!showAgentConfig && items.length > 0 ? `<button type="button" class="orb-foot-btn" id="orb-clear">Limpar</button>` : ""}
           </div>
           <button type="button" class="orb-foot-btn danger" id="orb-quit-all" title="Encerrar a HiveMind IDE e o Orb completamente">Sair de vez</button>
         </footer>
@@ -215,15 +368,15 @@ export function mountOrbWindow(): void {
 
     host.querySelector("#orb-collapse")?.addEventListener("click", () => {
       expanded = false;
+      showAgentConfig = false;
       void orbApi()?.SetOrbExpanded?.(false);
       render();
     });
     host.querySelector("#orb-open-ide")?.addEventListener("click", () => {
       void orbApi()?.ShowIDE?.();
     });
-    host.querySelector("#orb-theme-toggle")?.addEventListener("click", () => {
-      beeTheme = beeTheme === "honey" ? "gold" : "honey";
-      saveBeeTheme(beeTheme);
+    host.querySelector("#orb-agent-toggle")?.addEventListener("click", () => {
+      showAgentConfig = !showAgentConfig;
       render();
     });
     host.querySelector("#orb-clear")?.addEventListener("click", () => {
@@ -231,6 +384,40 @@ export function mountOrbWindow(): void {
     });
     host.querySelector("#orb-quit-all")?.addEventListener("click", () => {
       void orbApi()?.QuitAll?.();
+    });
+    host.querySelectorAll<HTMLElement>("[data-select-mascot]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const next = btn.dataset.selectMascot === "hivestriker" ? "hivestriker" : "hivebee";
+        if (cfg.mascot !== next) {
+          cfg = { ...cfg, mascot: next };
+          saveAgentConfig(cfg);
+          render();
+        }
+      });
+    });
+    host.querySelectorAll<HTMLElement>("[data-bee-theme]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const next: HiveBeeTheme = btn.dataset.beeTheme === "gold" ? "gold" : "honey";
+        cfg = { ...cfg, beeTheme: next };
+        saveAgentConfig(cfg);
+        render();
+      });
+    });
+    host.querySelectorAll<HTMLElement>("[data-striker-palette]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const raw = btn.dataset.strikerPalette;
+        const next: HiveStrikerPalette =
+          raw === "stealth" || raw === "amber" ? raw : "obsidian";
+        cfg = { ...cfg, strikerPalette: next };
+        saveAgentConfig(cfg);
+        render();
+      });
+    });
+    host.querySelector<HTMLInputElement>("#orb-striker-visor")?.addEventListener("change", (ev) => {
+      const checked = (ev.target as HTMLInputElement).checked;
+      cfg = { ...cfg, strikerVisor: checked };
+      saveAgentConfig(cfg);
+      render();
     });
     host.querySelectorAll<HTMLElement>("[data-orb-open]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -262,7 +449,7 @@ export function mountOrbWindow(): void {
     snap = next;
     render();
     if (!expanded && next.mood === "success" && prevMood !== "success") {
-      beeLife?.celebrateNow();
+      life?.celebrateNow();
     }
   });
 }
