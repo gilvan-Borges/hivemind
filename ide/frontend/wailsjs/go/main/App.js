@@ -342,6 +342,14 @@ export function RelayClaimLinkCode(arg1) {
   return window['go']['main']['App']['RelayClaimLinkCode'](arg1);
 }
 
+export function RelayChangePassword(arg1, arg2) {
+  return window['go']['main']['App']['RelayChangePassword'](arg1, arg2);
+}
+
+export function RelayCreateAccount(arg1, arg2) {
+  return window['go']['main']['App']['RelayCreateAccount'](arg1, arg2);
+}
+
 export function RelayCreateLinkCode() {
   return window['go']['main']['App']['RelayCreateLinkCode']();
 }

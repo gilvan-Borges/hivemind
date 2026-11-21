@@ -37,6 +37,7 @@ type Status struct {
 	Enabled    bool   `json:"enabled"`
 	LoggedIn   bool   `json:"loggedIn"`
 	Email      string `json:"email"`
+	Role       string `json:"role"`
 	BaseURL    string `json:"baseUrl"`
 	DeviceID   string `json:"deviceId"`
 	DeviceName string `json:"deviceName"`
@@ -133,6 +134,7 @@ func (c *Client) statusLocked() Status {
 		Enabled:    c.cfg.Enabled,
 		LoggedIn:   c.cfg.RefreshToken != "",
 		Email:      c.cfg.Email,
+		Role:       c.cfg.Role,
 		BaseURL:    c.cfg.BaseURL,
 		DeviceID:   c.cfg.DeviceID,
 		DeviceName: c.cfg.DeviceName,
@@ -162,6 +164,7 @@ func (c *Client) Login(ctx context.Context, baseURL, email, password string) (St
 	c.mu.Lock()
 	c.cfg.BaseURL = base
 	c.cfg.Email = out.Account.Email
+	c.cfg.Role = out.Account.Role
 	c.cfg.RefreshToken = out.RefreshToken
 	c.access = out.AccessToken
 	c.accessAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
@@ -174,12 +177,49 @@ func (c *Client) Login(ctx context.Context, baseURL, email, password string) (St
 	return c.Status(), nil
 }
 
+// ChangePassword updates the signed-in account password and adopts the new session tokens.
+func (c *Client) ChangePassword(ctx context.Context, current, next string) (Status, error) {
+	var out tokenResponse
+	if err := c.authPost(ctx, "/api/v1/auth/password", map[string]string{
+		"currentPassword": current,
+		"newPassword":     next,
+	}, &out); err != nil {
+		return c.Status(), err
+	}
+	c.mu.Lock()
+	c.cfg.RefreshToken = out.RefreshToken
+	if out.Account.Email != "" {
+		c.cfg.Email = out.Account.Email
+	}
+	if out.Account.Role != "" {
+		c.cfg.Role = out.Account.Role
+	}
+	c.access = out.AccessToken
+	c.accessAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
+	c.lastErr = ""
+	err := save(c.opt.ConfigPath, c.cfg)
+	c.mu.Unlock()
+	if err != nil {
+		return c.Status(), err
+	}
+	return c.Status(), nil
+}
+
+// CreateAccount creates a new member account on the relay (requires owner role).
+func (c *Client) CreateAccount(ctx context.Context, email, password string) error {
+	return c.authPost(ctx, "/api/v1/accounts", map[string]string{
+		"email":    strings.TrimSpace(email),
+		"password": password,
+	}, nil)
+}
+
 // Logout revokes the user session and disables the socket. The device
 // credential is kept so the same PC can be enabled again without re-pairing.
 func (c *Client) Logout(ctx context.Context) (Status, error) {
 	c.mu.Lock()
 	base, refresh := c.cfg.BaseURL, c.cfg.RefreshToken
 	c.cfg.RefreshToken = ""
+	c.cfg.Role = ""
 	c.cfg.Enabled = false
 	c.access = ""
 	c.online = false
@@ -868,6 +908,7 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expiresIn"`
 	Account      struct {
 		Email string `json:"email"`
+		Role  string `json:"role"`
 	} `json:"account"`
 }
 

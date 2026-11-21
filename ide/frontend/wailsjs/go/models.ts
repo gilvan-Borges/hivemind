@@ -2202,6 +2202,7 @@ export namespace relayclient {
 	    enabled: boolean;
 	    loggedIn: boolean;
 	    email: string;
+	    role?: string;
 	    baseUrl: string;
 	    deviceId: string;
 	    deviceName: string;
@@ -2219,6 +2220,7 @@ export namespace relayclient {
 	        this.enabled = source["enabled"];
 	        this.loggedIn = source["loggedIn"];
 	        this.email = source["email"];
+	        this.role = source["role"];
 	        this.baseUrl = source["baseUrl"];
 	        this.deviceId = source["deviceId"];
 	        this.deviceName = source["deviceName"];

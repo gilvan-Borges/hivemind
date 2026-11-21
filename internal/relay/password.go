@@ -27,7 +27,7 @@ func DefaultArgon() Argon {
 }
 
 const (
-	minPasswordLen = 10
+	minPasswordLen = 8
 	maxPasswordLen = 200
 )
 

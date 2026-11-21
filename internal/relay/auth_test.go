@@ -313,6 +313,40 @@ func TestPasswordRoundTripAndLimiter(t *testing.T) {
 	}
 }
 
+func TestUsernameIdentifierAndUpsertAccount(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	acct, created, err := st.UpsertAccount("Usuario.Teste", "Senha@123", "owner", testArgon())
+	if err != nil {
+		t.Fatalf("UpsertAccount create: %v", err)
+	}
+	if !created || acct.Email != "usuario.teste" || acct.Role != "owner" {
+		t.Fatalf("unexpected upsert result: created=%v acct=%+v", created, acct)
+	}
+
+	authed, err := st.Authenticate("usuario.teste", "Senha@123", "dummy")
+	if err != nil || authed.ID != acct.ID {
+		t.Fatalf("Authenticate username failed: err=%v authed=%+v", err, authed)
+	}
+
+	updated, created, err := st.UpsertAccount("usuario.teste", "NovaSenha9", "member", testArgon())
+	if err != nil {
+		t.Fatalf("UpsertAccount update: %v", err)
+	}
+	if created || updated.ID != acct.ID || updated.Role != "member" {
+		t.Fatalf("unexpected update result: created=%v acct=%+v", created, updated)
+	}
+
+	list, err := st.ListAccounts()
+	if err != nil || len(list) != 1 || list[0].Email != "usuario.teste" {
+		t.Fatalf("ListAccounts: err=%v list=%+v", err, list)
+	}
+}
+
 func TestSeedOnce(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "relay.db"))

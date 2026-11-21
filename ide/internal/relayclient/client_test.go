@@ -371,3 +371,69 @@ func TestConcurrentRefreshRotatesOnce(t *testing.T) {
 		t.Fatalf("refresh rodou %d vezes", refreshes)
 	}
 }
+
+func TestChangePasswordAndCreateAccount(t *testing.T) {
+	var createdEmail string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"accessToken":  "hmr_at_1",
+				"refreshToken": "hmr_rt_1",
+				"expiresIn":    900,
+				"account":      map[string]string{"email": "gilvan.b", "role": "owner"},
+			})
+		case "/api/v1/auth/password":
+			if got := r.Header.Get("Authorization"); got != "Bearer hmr_at_1" {
+				t.Fatalf("unexpected auth header: %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"accessToken":  "hmr_at_2",
+				"refreshToken": "hmr_rt_2",
+				"expiresIn":    900,
+				"account":      map[string]string{"email": "gilvan.b", "role": "owner"},
+			})
+		case "/api/v1/accounts":
+			if got := r.Header.Get("Authorization"); got != "Bearer hmr_at_2" {
+				t.Fatalf("unexpected auth header after password change: %q", got)
+			}
+			var body struct {
+				Email    string `json:"email"`
+				Password string `json:"password"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			createdEmail = body.Email
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "acct_2", "email": body.Email, "role": "member"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	c, err := Load(Options{ConfigPath: filepath.Join(t.TempDir(), "relay.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.Login(context.Background(), ts.URL, "gilvan.b", "Senha@123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.LoggedIn || st.Email != "gilvan.b" || st.Role != "owner" {
+		t.Fatalf("unexpected login status: %+v", st)
+	}
+	st, err = c.ChangePassword(context.Background(), "Senha@123", "NovaSenha9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Role != "owner" || c.cfg.RefreshToken != "hmr_rt_2" {
+		t.Fatalf("unexpected status after password change: %+v rt=%q", st, c.cfg.RefreshToken)
+	}
+	if err := c.CreateAccount(context.Background(), "dev.user", "Senha@999"); err != nil {
+		t.Fatal(err)
+	}
+	if createdEmail != "dev.user" {
+		t.Fatalf("expected created email dev.user, got %q", createdEmail)
+	}
+}

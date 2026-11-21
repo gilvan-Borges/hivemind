@@ -219,8 +219,16 @@ func tokenHash(tok string) string {
 
 func normalizeEmail(email string) (string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	if len(email) < 3 || len(email) > 254 || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n") {
-		return "", &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "e-mail inválido"}
+	if len(email) < 3 || len(email) > 254 || strings.ContainsAny(email, " \t\r\n") {
+		return "", &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "e-mail ou usuário inválido"}
+	}
+	if strings.Contains(email, "@") && (strings.HasPrefix(email, "@") || strings.HasSuffix(email, "@")) {
+		return "", &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "e-mail ou usuário inválido"}
+	}
+	for _, r := range email {
+		if r < 0x20 || r == 0x7f {
+			return "", &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "e-mail ou usuário inválido"}
+		}
 	}
 	return email, nil
 }
@@ -253,11 +261,67 @@ func (s *Store) CreateAccount(email, password, role string, params Argon) (Accou
 		id, email, hash, role, time.Now().UTC().UnixMilli())
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return Account{}, &httpError{Status: 409, Code: relaywire.CodeConflict, Msg: "já existe uma conta com esse e-mail"}
+			return Account{}, &httpError{Status: 409, Code: relaywire.CodeConflict, Msg: "já existe uma conta com esse e-mail ou usuário"}
 		}
 		return Account{}, err
 	}
 	return Account{ID: id, Email: email, Role: role}, nil
+}
+
+// UpsertAccount creates or updates an account (password and role) for CLI admin provisioning.
+func (s *Store) UpsertAccount(email, password, role string, params Argon) (Account, bool, error) {
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return Account{}, false, err
+	}
+	if role != "owner" && role != "member" {
+		return Account{}, false, &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "papel inválido"}
+	}
+	hash, err := HashPassword(password, params)
+	if err != nil {
+		return Account{}, false, &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: err.Error()}
+	}
+	var existingID string
+	err = s.db.QueryRow(`SELECT id FROM accounts WHERE email=?`, email).Scan(&existingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		id, idErr := newID("acct_")
+		if idErr != nil {
+			return Account{}, false, idErr
+		}
+		if _, insErr := s.db.Exec(`INSERT INTO accounts(id, email, password_hash, role, created_at) VALUES(?,?,?,?,?)`,
+			id, email, hash, role, time.Now().UTC().UnixMilli()); insErr != nil {
+			return Account{}, false, insErr
+		}
+		return Account{ID: id, Email: email, Role: role}, true, nil
+	}
+	if err != nil {
+		return Account{}, false, err
+	}
+	if _, err := s.db.Exec(`UPDATE accounts SET password_hash=?, role=? WHERE id=?`, hash, role, existingID); err != nil {
+		return Account{}, false, err
+	}
+	if err := s.RevokeAllSessions(existingID); err != nil {
+		return Account{}, false, err
+	}
+	return Account{ID: existingID, Email: email, Role: role}, false, nil
+}
+
+// ListAccounts returns all registered relay accounts ordered by creation time.
+func (s *Store) ListAccounts() ([]Account, error) {
+	rows, err := s.db.Query(`SELECT id, email, role FROM accounts ORDER BY created_at ASC, email ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Account
+	for rows.Next() {
+		var a Account
+		if err := rows.Scan(&a.ID, &a.Email, &a.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // Authenticate verifies email and password. Missing accounts still run argon2id
