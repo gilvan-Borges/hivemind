@@ -78,6 +78,7 @@ export const state = {
   sidebarView: "explorer" as SidebarView,
   showLeftSidebar: true,
   showRightAI: true,
+  chatExpandedPref: false,
   leftWidth: 268,
   rightWidth: 435,
   expandedDirs: new Set<string>(),

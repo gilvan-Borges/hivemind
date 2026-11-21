@@ -222,6 +222,9 @@ export interface ChatMessage {
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
+  modelLabel?: string;
+  modelProvider?: string;
+  modelFullId?: string;
   toolName?: string;
   toolDetail?: string;
   toolOutput?: string;
@@ -235,6 +238,8 @@ export interface AgentRuntime {
   role: string;
   model: string;
   routeModel?: string;
+  routeProvider?: string;
+  routeFriendly?: string;
   routeTier?: string;
   routeReasons?: string[];
   status: "idle" | "running" | "done" | "error";

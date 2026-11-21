@@ -33,10 +33,10 @@ func TestParseCursorStreamSkipsDuplicateFlushes(t *testing.T) {
 		t.Fatal("flush final não pode repetir o texto")
 	}
 	toolNotice, ok := parseCursorStreamLine(tool)
-	if !ok || !strings.Contains(toolNotice.Text, "read") || !strings.Contains(toolNotice.Text, "README.md") {
+	if !ok || toolNotice.ToolName != "read" || toolNotice.ToolPath != "README.md" {
 		t.Fatalf("ferramenta: %+v", toolNotice)
 	}
-	if strings.Contains(toolNotice.Text, "segredo") {
+	if strings.Contains(toolNotice.Text, "segredo") || strings.Contains(toolNotice.ToolPath, "segredo") {
 		t.Fatal("aviso de ferramenta não pode incluir o corpo do arquivo")
 	}
 	if _, ok := parseCursorStreamLine(doneTool); ok {
@@ -306,11 +306,15 @@ func TestGenerateContentReadsStreamJSON(t *testing.T) {
 		}
 		final = text
 	}
-	if final != "feito" {
+	if !strings.Contains(final, "olá") || !strings.Contains(final, "[[hmtool:write:a.go]]") || !strings.Contains(final, "feito") {
 		t.Fatalf("final %q parciais %v", final, partials)
 	}
 	if len(partials) < 2 {
 		t.Fatalf("parciais: %v", partials)
+	}
+	joined := strings.Join(partials, "")
+	if !strings.Contains(joined, "olá") || !strings.Contains(joined, "[[hmtool:write:a.go]]") {
+		t.Fatalf("parciais sem texto e ferramenta separados: %v", partials)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".hivemind", "cursor-task.md")); !os.IsNotExist(err) {
 		t.Fatal("o prompt temporário deveria ser apagado")

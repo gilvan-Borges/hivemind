@@ -1,6 +1,6 @@
 import { fileBadge, icons } from "./icons";
 import type { AgentRuntime, ChatMessage, FileNode, PermissionMode, ProjectWorkspaceContext } from "./types";
-import { escapeHtml, exactTokens, formatTokens, matchAgentRuntime, permissionModeLabel, reasonPhrase, roleLabelPt } from "./utils";
+import { chipForAgent, escapeHtml, exactTokens, formatTokens, matchAgentRuntime, modelChipHtml, permissionModeLabel, reasonPhrase, roleLabelPt } from "./utils";
 import { refreshSessions } from "./boot";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
@@ -697,7 +697,7 @@ export function renderAgentCardsHtml(agents: AgentRuntime[]): string {
   return agents.map((a) => `
     <div class="agent-card" data-agent-card="${escapeHtml(a.name)}">
       <div class="agent-card-top">
-        <div class="agent-name">${escapeHtml(a.name)} · <span class="dim">${escapeHtml(roleLabelPt(a.role))}</span></div>
+        <div class="agent-name">${escapeHtml(roleLabelPt(a.role))} ${modelChipHtml(chipForAgent(a))}</div>
         <span class="status-pill ${a.status}">${a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro"}</span>
       </div>
       ${renderModelPickerPairHtml({

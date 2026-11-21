@@ -38,6 +38,7 @@ export const icons = {
   spinner: svg(`<path d="M21 12a9 9 0 1 1-6.219-8.56"/>`, 13, `class="spin"`),
   sidebarLeft: ms("left_panel_close", 15),
   sidebarRight: ms("right_panel_close", 15),
+  expand: ms("open_in_full", 15),
   commit: ms("commit", 13),
   pr: ms("merge_type", 13),
   closeSmall: ms("close", 12),
