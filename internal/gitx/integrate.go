@@ -358,8 +358,11 @@ func CleanupMergedWorktrees(ctx context.Context, g Git, repo, baseBranch string)
 			_ = os.RemoveAll(wtPath)
 			continue
 		}
-		// Never delete a worktree that still has uncommitted changes.
+		// Never delete a worktree that still has uncommitted changes or active nested repo work.
 		if st, sErr := g.Run(ctx, wtPath, "status", "--porcelain"); sErr != nil || strings.TrimSpace(st) != "" {
+			continue
+		}
+		if hasActiveNestedWorktree(ctx, g, repo, wtPath) {
 			continue
 		}
 		br, bErr := g.CurrentBranch(ctx, wtPath)

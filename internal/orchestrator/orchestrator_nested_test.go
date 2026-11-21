@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,12 +94,7 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 				case 2:
 					for _, c := range req.Contents {
 						for _, p := range c.Parts {
-							if p.FunctionResponse != nil && strings.Contains(strings.TrimSpace(p.FunctionResponse.Name), "read_file") && strings.Contains(strings.TrimSpace(strings.ReplaceAll(strings.Join([]string{func() string {
-								if v, ok := p.FunctionResponse.Response["content"].(string); ok {
-									return v
-								}
-								return ""
-							}()}, ""), "\r\n", "\n")), "ExecutionPage") {
+							if p.FunctionResponse != nil && strings.Contains(strings.TrimSpace(p.FunctionResponse.Name), "read_file") && strings.Contains(fmt.Sprint(p.FunctionResponse.Response), "ExecutionPage") {
 								devSawMobile = true
 							}
 						}
@@ -130,9 +126,15 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 	if len(res.NestedDeliveries) != 1 || res.NestedDeliveries[0].RelPath != "ipg-mobile" {
 		t.Fatalf("NestedDeliveries unexpected: %+v", res.NestedDeliveries)
 	}
+	if res.PendingQA {
+		t.Fatalf("expected QA to approve delivery, got PendingQA=true (summary=%q)", res.Summary)
+	}
 	g := gitx.Local{}
+	wtSt, _ := g.Run(context.Background(), res.NestedDeliveries[0].WorktreeDir, "status")
+	wtFile, _ := os.ReadFile(filepath.Join(res.NestedDeliveries[0].WorktreeDir, "lib", "engineer_order_execution_page.dart"))
 	if !gitx.HasCommitsAhead(context.Background(), g, mobileDir, res.NestedDeliveries[0].Branch, "main") {
-		t.Fatalf("expected commit inside nested ipg-mobile branch %q", res.NestedDeliveries[0].Branch)
+		branches, _ := g.Run(context.Background(), mobileDir, "branch", "-a")
+		t.Fatalf("expected commit inside nested ipg-mobile branch %q (wtDir=%s wtSt=%q wtFile=%q mobileBranches=%q)", res.NestedDeliveries[0].Branch, res.NestedDeliveries[0].WorktreeDir, wtSt, string(wtFile), branches)
 	}
 	if gitx.HasCommitsAhead(context.Background(), g, root, res.DeliveryBranch, "main") {
 		t.Fatalf("root branch %q should remain clean without ipg-mobile files", res.DeliveryBranch)

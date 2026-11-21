@@ -93,8 +93,10 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(parentStatus) != "" {
-		t.Fatalf("parent worktree status polluted by nested repo edits: %q", parentStatus)
+	for _, line := range strings.Split(strings.TrimSpace(parentStatus), "\n") {
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "## ") {
+			t.Fatalf("parent worktree status polluted by nested repo edits: %q", parentStatus)
+		}
 	}
 
 	// Re-running PrepareDeliveryWorktreeForSlot + PrepareNestedWorktrees for the same slot preserves WIP!

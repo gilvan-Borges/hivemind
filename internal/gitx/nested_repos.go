@@ -395,6 +395,27 @@ func HasCommitsAhead(ctx context.Context, g Git, repoDir, branch, baseBranch str
 	return n > 0
 }
 
+// hasActiveNestedWorktree reports whether wtPath contains any nested repository
+// worktree that still has uncommitted edits or commits ahead of its base branch.
+func hasActiveNestedWorktree(ctx context.Context, g Git, parentRepo, wtPath string) bool {
+	nested := DiscoverNestedRepos(ctx, g, parentRepo)
+	for _, nr := range nested {
+		subWT := filepath.Join(wtPath, filepath.FromSlash(nr.RelPath))
+		if _, err := os.Stat(subWT); err != nil || !g.IsRepo(ctx, subWT) {
+			continue
+		}
+		if st, err := g.Run(ctx, subWT, "status", "--porcelain"); err != nil || strings.TrimSpace(st) != "" {
+			return true
+		}
+		if br, err := g.CurrentBranch(ctx, subWT); err == nil && br != "" && br != "HEAD" {
+			if HasCommitsAhead(ctx, g, nr.RepoDir, br, nr.BaseBranch) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // removeNestedWorktreesInside tears down any nested repository worktrees inside
 // wtPath in deepest-first order before the parent worktree is removed.
 func removeNestedWorktreesInside(ctx context.Context, g Git, parentRepo, wtPath, deleteBranch string) {
@@ -410,10 +431,12 @@ func removeNestedWorktreesInside(ctx context.Context, g Git, parentRepo, wtPath,
 			continue
 		}
 		subBranch := strings.TrimSpace(deleteBranch)
-		if subBranch == "" {
-			if cur, err := g.CurrentBranch(ctx, subWT); err == nil {
-				subBranch = cur
-			}
+		if cur, err := g.CurrentBranch(ctx, subWT); err == nil && cur != "" && cur != "HEAD" {
+			subBranch = cur
+		}
+		// Never force-delete a nested branch that holds unmerged commits.
+		if subBranch != "" && HasCommitsAhead(ctx, g, nr.RepoDir, subBranch, nr.BaseBranch) {
+			subBranch = ""
 		}
 		removeSingleWorktree(ctx, g, nr.RepoDir, subWT, subBranch)
 	}
