@@ -64,6 +64,9 @@ func TestJevOpenRouterCatalogFetchAndPreserveOnHTTP500(t *testing.T) {
 	if entry.ContextLength != 128000 || !entry.Capabilities.Tools || entry.PromptMicroUSD <= 0 {
 		t.Fatalf("unexpected entry fields: %+v", entry)
 	}
+	if _, ok := snap.Lookup("openrouter", "deepseek/deepseek-v4.1-flash"); ok {
+		t.Fatal("id que /models não devolveu não pode ser candidato")
+	}
 
 	// Simulate TTL expiry and HTTP 500 from OpenRouter: previous snapshot must remain intact.
 	status = http.StatusInternalServerError

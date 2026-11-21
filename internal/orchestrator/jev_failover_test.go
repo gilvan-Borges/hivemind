@@ -2,18 +2,25 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/openai/openai-go/v3/option"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/model/openaimodel"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
@@ -214,6 +221,140 @@ func TestJevFailoverInvalidAuthKeyAtBuildAndGenerate(t *testing.T) {
 		if strings.Contains(ev.Text, "sk-invalid999999") {
 			t.Fatalf("secret leaked in event: %+v", ev)
 		}
+	}
+}
+
+func TestJevInvalidModelIDNormalizesFailsOverAndSkipsOnRetry(t *testing.T) {
+	const badSlug = "deepseek/deepseek-v4.1-flash"
+	const nextSlug = "tencent/hy4-flash"
+	const exactBody = "openrouter:deepseek/deepseek-v4.1-flash is not a valid model ID"
+
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		mu.Lock()
+		seen = append(seen, payload.Model)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if payload.Model == badSlug || strings.Contains(payload.Model, "openrouter:") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"`+exactBody+`","type":"invalid_request_error","code":400}}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"`+payload.Model+`","choices":[{"index":0,"message":{"role":"assistant","content":"ok de `+payload.Model+`"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+
+	pol := jev.DefaultPolicy()
+	pol.Enabled = true
+	pol.ClassifyEnabled = false
+	pol.AutoEscalateUSD = 0.02
+	cat := jev.NewCatalogStore(filepath.Join(t.TempDir(), "catalog.json"), nil)
+	cat.MergeSource("openrouter", []jev.ModelEntry{
+		{
+			Provider:      "openrouter",
+			Model:         badSlug,
+			DisplayName:   "DeepSeek V4.1 Flash",
+			ContextLength: 128_000,
+			Quality:       0.99,
+			DiscountPct:   83,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassHTTPAPI,
+			Tier:          jev.TierCheap,
+		},
+		{
+			Provider:      "openrouter",
+			Model:         nextSlug,
+			DisplayName:   "Tencent Hy4 Flash",
+			ContextLength: 128_000,
+			Quality:       0.40,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassHTTPAPI,
+			Tier:          jev.TierCheap,
+		},
+	})
+	hs := jev.NewHealthStore(filepath.Join(t.TempDir(), "health.json"), pol.Cooldown)
+	build := func(_ context.Context, prov, mod string) (model.LLM, error) {
+		return openaimodel.NewModel(context.Background(), modelx.WireModelID(prov, mod), &openaimodel.ClientConfig{
+			APIKey:     "test-key",
+			BaseURL:    srv.URL + "/v1",
+			API:        openaimodel.APIChatCompletions,
+			HTTPClient: &http.Client{},
+			Options:    []option.RequestOption{option.WithMaxRetries(0)},
+		})
+	}
+	opts := JevFactoryOptions{
+		Policy:      &pol,
+		Catalog:     cat,
+		HealthStore: hs,
+		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true} },
+		BuildModel:  build,
+	}
+	run := func() (string, error) {
+		llm, err := NewJevModelFactory(opts)(context.Background(), team.Agent{
+			Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto",
+		})
+		if err != nil {
+			return "", err
+		}
+		// O ADK grava LLM.Name() ("openrouter:deepseek/...") em req.Model e o
+		// cliente OpenAI-compatível envia esse campo no lugar do slug.
+		var text string
+		var callErr error
+		for resp, gErr := range llm.GenerateContent(context.Background(), &model.LLMRequest{
+			Model:    llm.Name(),
+			Contents: []*genai.Content{genai.NewContentFromText("oi", genai.RoleUser)},
+		}, false) {
+			if gErr != nil {
+				callErr = gErr
+			}
+			if resp != nil && resp.Content != nil && len(resp.Content.Parts) > 0 {
+				text = resp.Content.Parts[0].Text
+			}
+		}
+		return text, callErr
+	}
+
+	text, err := run()
+	if err != nil {
+		t.Fatalf("failover na mesma execução: %v", err)
+	}
+	if text != "ok de "+nextSlug {
+		t.Fatalf("texto = %q", text)
+	}
+	mu.Lock()
+	first := append([]string(nil), seen...)
+	seen = nil
+	mu.Unlock()
+	if len(first) != 2 || first[0] != badSlug || first[1] != nextSlug {
+		t.Fatalf("ids enviados = %v, want [%s %s]", first, badSlug, nextSlug)
+	}
+	snap := hs.Snapshot(nil, nil)
+	if snap.Circuits["openrouter"].Circuit == jev.CircuitOpen {
+		t.Fatal("400 de um modelo não abre o provedor inteiro")
+	}
+	if snap.ModelCircuits[jevKey("openrouter", badSlug)].Circuit != jev.CircuitOpen {
+		t.Fatalf("circuito do modelo inválido: %+v", snap.ModelCircuits)
+	}
+
+	text, err = run()
+	if err != nil {
+		t.Fatalf("tente de novo: %v", err)
+	}
+	if text != "ok de "+nextSlug {
+		t.Fatalf("retry texto = %q", text)
+	}
+	mu.Lock()
+	retrySeen := append([]string(nil), seen...)
+	mu.Unlock()
+	if len(retrySeen) != 1 || retrySeen[0] != nextSlug {
+		t.Fatalf("tente de novo reenviou %v; o id inválido não pode voltar", retrySeen)
 	}
 }
 
