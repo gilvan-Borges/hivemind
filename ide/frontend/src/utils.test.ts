@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime, RunMode } from "./types";
-import { escapeHtml, exactTokens, formatElapsedDuration, formatTokens, reasonPhrase, runModeLabel, updateAgentRuntimeStatus } from "./utils";
+import { chipForAgent, cursorToolPhrase, describeModelRoute, escapeHtml, exactTokens, formatElapsedDuration, formatTokens, reasonPhrase, runModeLabel, shouldExpandChat, splitAssistantBlocks, updateAgentRuntimeStatus } from "./utils";
 
 describe("reasonPhrase", () => {
   it("traduz os códigos de motivo do Jev", () => {
@@ -97,5 +97,63 @@ describe("tempo de atividade dos agentes", () => {
     updateAgentRuntimeStatus(agent, "done", "", 3_000);
     updateAgentRuntimeStatus(agent, "running", undefined, 4_000);
     expect(agent.runningSince).toBe(4_000);
+  });
+});
+
+describe("describeModelRoute", () => {
+  it("traduz a rota real do Cursor e o pin", () => {
+    const fromRoute = describeModelRoute("cursor", "cursor:auto");
+    expect(fromRoute.label).toBe("Cursor Auto");
+    expect(fromRoute.providerLabel).toBe("Cursor");
+    expect(fromRoute.fullId).toBe("cursor/cursor:auto");
+
+    const fromSlash = describeModelRoute("", "cursor/cursor:auto");
+    expect(fromSlash.label).toBe("Cursor Auto");
+    expect(fromSlash.fullId).toBe("cursor/cursor:auto");
+  });
+
+  it("humaniza GPT e Grok", () => {
+    expect(describeModelRoute("openai", "gpt-5.2")).toMatchObject({
+      label: "GPT-5.2",
+      providerLabel: "OpenAI",
+      fullId: "openai/gpt-5.2",
+    });
+    expect(describeModelRoute("", "grok-4.7").label).toBe("Grok 4.7");
+    expect(describeModelRoute("anthropic", "claude-sonnet-4-5").label).toBe("Claude Sonnet 4.5");
+  });
+
+  it("prefere a rota já carimbada no agente", () => {
+    const chip = chipForAgent({
+      model: "cursor:auto",
+      routeModel: "openai/gpt-5.2",
+      routeProvider: "openai",
+      routeFriendly: "GPT-5.2",
+    });
+    expect(chip.label).toBe("GPT-5.2");
+    expect(chip.fullId).toBe("openai/gpt-5.2");
+  });
+});
+
+describe("splitAssistantBlocks", () => {
+  it("preserva espaços e agrupa ferramentas sem campos internos", () => {
+    const raw = "Vou ler o arquivo.\n[[hmtool:read:.hivemind/cursor-task.md]]\nAgora busco.\n[[hmtool:grep:ide/frontend]]\n[[hmtool:getMcpTools:]]\n[[hmtool:startedAtMs:]]\n";
+    const blocks = splitAssistantBlocks(raw);
+    expect(blocks.map((b) => b.kind)).toEqual(["md", "tools", "md", "tools"]);
+    expect(blocks[0]).toMatchObject({ kind: "md", text: "Vou ler o arquivo.\n" });
+    expect(blocks[1]).toMatchObject({ kind: "tools", tools: [{ name: "read", target: ".hivemind/cursor-task.md" }] });
+    const tools = blocks[3];
+    if (tools.kind !== "tools") throw new Error("grupo");
+    expect(tools.tools.map((t) => t.name)).toEqual(["grep", "getMcpTools"]);
+    expect(cursorToolPhrase("read", ".hivemind/cursor-task.md")).toEqual({ verb: "Leu", target: "cursor-task.md" });
+    expect(cursorToolPhrase("grep", "ide/frontend")).toEqual({ verb: "Buscou em", target: "ide/frontend" });
+    expect(splitAssistantBlocks("Vou  ler")[0]).toMatchObject({ text: "Vou  ler" });
+  });
+});
+
+describe("shouldExpandChat", () => {
+  it("só expande com a preferência ligada e o centro vazio", () => {
+    expect(shouldExpandChat(true, 0)).toBe(true);
+    expect(shouldExpandChat(true, 1)).toBe(false);
+    expect(shouldExpandChat(false, 0)).toBe(false);
   });
 });

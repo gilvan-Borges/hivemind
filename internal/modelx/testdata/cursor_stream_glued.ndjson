@@ -1,0 +1,11 @@
+{"type":"assistant","timestamp_ms":1,"message":{"role":"assistant","content":[{"type":"text","text":"Vou "}]}}
+{"type":"assistant","timestamp_ms":2,"message":{"role":"assistant","content":[{"type":"text","text":"ler "}]}}
+{"type":"assistant","timestamp_ms":3,"message":{"role":"assistant","content":[{"type":"text","text":"o arquivo.\n"}]}}
+{"type":"tool_call","subtype":"started","tool_call":{"startedAtMs":10,"toolCallId":"tc_1","hookAdditionalContexts":[],"readToolCall":{"args":{"path":"C:\\hivemind\\.hivemind\\cursor-task.md","fileText":"segredo que não deve aparecer"}}}}
+{"type":"tool_call","subtype":"completed","tool_call":{"readToolCall":{"result":{"success":{"content":"segredo do arquivo"}}}}}
+{"type":"assistant","timestamp_ms":4,"message":{"role":"assistant","content":[{"type":"text","text":"Agora "}]}}
+{"type":"assistant","timestamp_ms":5,"message":{"role":"assistant","content":[{"type":"text","text":"busco.\n"}]}}
+{"type":"tool_call","subtype":"started","tool_call":{"getMcpToolsToolCall":{"args":{}},"toolCallId":"tc_2","startedAtMs":11,"hookAdditionalContexts":{}}}
+{"type":"tool_call","subtype":"started","tool_call":{"grepToolCall":{"args":{"path":"C:\\hivemind\\ide\\frontend","pattern":"ponytail"}},"startedAtMs":12,"toolCallId":"tc_3","hookAdditionalContexts":[]}}
+{"type":"assistant","timestamp_ms":6,"model_call_id":"flush-1","message":{"role":"assistant","content":[{"type":"text","text":"Vou ler o arquivo.\nAgora busco.\n"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Li o arquivo e busquei no frontend."}

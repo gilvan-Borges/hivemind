@@ -199,10 +199,10 @@ func TestGitPullPushFetchLocalRemote(t *testing.T) {
 	gitLocal(t, seed, "push", "-u", "origin", "main")
 
 	local := t.TempDir()
-	gitLocal(t, local, "clone", bare, ".")
+	gitLocal(t, local, "clone", "-c", "core.autocrlf=false", bare, ".")
 	prepRepo(t, local)
 	other := t.TempDir()
-	gitLocal(t, other, "clone", bare, ".")
+	gitLocal(t, other, "clone", "-c", "core.autocrlf=false", bare, ".")
 	prepRepo(t, other)
 
 	if err := os.WriteFile(filepath.Join(other, "a.txt"), []byte("v2\n"), 0o644); err != nil {

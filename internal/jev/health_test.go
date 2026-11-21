@@ -41,6 +41,7 @@ func TestClassifyError(t *testing.T) {
 		{"orphaned tool", errors.New("OpenAI API error: 400 Bad Request: missing tool_call_id"), ErrClassPolicy},
 		{"cursor foreign model", errors.New("cursor/openrouter/particle-ai/particle-1:free: modelo incompatível com o provedor Cursor: OpenAI API error: 400 Bad Request: model is not a Cursor model"), ErrClassModel},
 		{"stripped openai 400", errors.New("OpenAI API error: 400 Bad Request"), ErrClassPolicy},
+		{"invalid model id", errors.New("OpenAI API error: 400 Bad Request: openrouter:deepseek/deepseek-v4.1-flash is not a valid model ID"), ErrClassModel},
 		{"cursor stripped 400", errors.New("cursor/auto: o Cursor CLI terminou com erro: OpenAI API error: 400 Bad Request"), ErrClassModel},
 		{"jail refusal", errors.New("caminho recusado fora do workspace"), ErrClassPolicy},
 		{"402 quota", errors.New("OpenRouter respondeu 402: créditos insuficientes"), ErrClassQuota},

@@ -78,6 +78,7 @@ export const state = {
   sidebarView: "explorer" as SidebarView,
   showLeftSidebar: true,
   showRightAI: true,
+  chatExpandedPref: false,
   leftWidth: 268,
   rightWidth: 435,
   expandedDirs: new Set<string>(),
@@ -183,6 +184,8 @@ export const state = {
   showFlowResponded: false,
   autoReview: null as AutoReviewStatus | null,
   autoReviewConfigOpen: false,
+  githubUnreadCount: 0,
+  githubLastSyncAt: "",
   gitTab: "changes" as GitSubTab,
   skills: [] as SkillInfo[],
   mcpServers: [] as MCPServerInfo[],
@@ -292,6 +295,8 @@ export function saveActiveToProjectContext() {
   ctx.gitGraph = state.gitGraph;
   ctx.gitTab = state.gitTab;
   ctx.autoReview = state.autoReview;
+  ctx.githubUnreadCount = state.githubUnreadCount;
+  ctx.githubLastSyncAt = state.githubLastSyncAt;
   ctx.draftObjective = state.draftObjective;
   ctx.draftImages = state.draftImages;
   ctx.jiraKeyInput = state.jiraKeyInput;
@@ -324,6 +329,8 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.gitGraph = ctx.gitGraph;
   state.gitTab = ctx.gitTab;
   state.autoReview = ctx.autoReview ?? null;
+  state.githubUnreadCount = ctx.githubUnreadCount ?? 0;
+  state.githubLastSyncAt = ctx.githubLastSyncAt ?? "";
   state.draftObjective = ctx.draftObjective;
   state.draftImages = ctx.draftImages;
   state.jiraKeyInput = ctx.jiraKeyInput;

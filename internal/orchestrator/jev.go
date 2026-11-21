@@ -426,7 +426,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 
 			built, err := buildModel(ctx, choice.Provider, choice.Model)
 			if err != nil {
-				buildClass := jev.ClassifyError(err)
+				buildClass := classifyUpstream(err)
 				if buildClass == jev.ErrClassPolicy || ctx.Err() != nil {
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}

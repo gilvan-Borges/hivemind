@@ -434,6 +434,10 @@ export function ResidentSetEventTriggers(arg1) {
   return window['go']['main']['App']['ResidentSetEventTriggers'](arg1);
 }
 
+export function ResidentSetExperimentalUnisolated(arg1) {
+  return window['go']['main']['App']['ResidentSetExperimentalUnisolated'](arg1);
+}
+
 export function ResidentSetRoutineEnabled(arg1, arg2) {
   return window['go']['main']['App']['ResidentSetRoutineEnabled'](arg1, arg2);
 }

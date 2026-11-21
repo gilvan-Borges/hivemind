@@ -62,6 +62,38 @@ export function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<st
   return { files, dirs };
 }
 
+export function updateGitActivityBadge() {
+  const diffBadge = document.getElementById("git-badge");
+  if (diffBadge) {
+    diffBadge.textContent = String(state.diffs.length);
+    diffBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
+  }
+  const ghBadge = document.getElementById("git-gh-badge");
+  if (ghBadge) {
+    const totalUnread = state.projectTabs.reduce(
+      (sum, ctx) => sum + (ctx.id === state.activeProjectId ? state.githubUnreadCount : (ctx.githubUnreadCount || 0)),
+      state.projectTabs.length === 0 ? state.githubUnreadCount : 0
+    );
+    ghBadge.textContent = totalUnread > 9 ? "9+" : String(totalUnread);
+    ghBadge.style.display = totalUnread > 0 ? "inline-block" : "none";
+  }
+}
+
+export function clearGitHubUnread() {
+  if (state.githubUnreadCount === 0) return;
+  state.githubUnreadCount = 0;
+  const activeCtx = state.projectTabs.find((p) => p.id === state.activeProjectId);
+  if (activeCtx) activeCtx.githubUnreadCount = 0;
+  updateGitActivityBadge();
+}
+
+function formatSyncTime(iso?: string): string {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return "";
+  return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export async function refreshDiffs() {
   const backend = api();
   if (!backend || !state.project) return;
@@ -75,11 +107,7 @@ export async function refreshDiffs() {
       return;
     }
     state.diffs = diffs;
-    const badge = document.getElementById("git-badge");
-    if (badge) {
-      badge.textContent = String(state.diffs.length);
-      badge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
-    }
+    updateGitActivityBadge();
     // Sync any open diff tabs with updated diff objects
     let activeDiffChanged = false;
     for (const tab of [...state.editorTabs]) {
@@ -359,7 +387,9 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
     ? "approved"
     : pr.attentionReason === "Ajustes"
       ? "changes"
-      : "pending";
+      : (pr.mentionedMe || pr.attentionReason === "Você foi marcado")
+        ? "mention"
+        : "pending";
   const attentionPill = pr.needsAttention
     ? `<span class="flow-pill ${attentionCls}">${escapeHtml(pr.attentionReason || "Sua revisão")}</span>`
     : pr.reviewRequested && !pr.isMine && !pr.myResponse
@@ -389,6 +419,7 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
       </div>
       <div class="pr-card-title">${escapeHtml(pr.title)}</div>
       ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
+      ${pr.needsAttention && pr.lastActivitySnippet ? `<div class="pr-activity-snippet" title="${escapeHtml(pr.lastActivitySnippet)}">${pr.lastActivityAuthor ? `<strong>@${escapeHtml(pr.lastActivityAuthor)}:</strong> ` : ""}${escapeHtml(pr.lastActivitySnippet)}</div>` : ""}
       <div class="pr-card-actions">
         <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${pr.isMine ? "Trabalhar c/ Equipe" : "Revisar c/ Equipe"}</span></button>
         <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">${icons.openInNew}</button>
@@ -753,10 +784,13 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <div class="git-section" style="padding:10px">
         <div class="git-section-head">
           <span>Para revisar (${pendingReviews.length})</span>
-          <button class="mini" id="btn-load-flow" ${state.prs.loading ? "disabled" : ""}>
-            ${state.prs.loading ? icons.spinner : icons.refresh}
-            <span>${state.prs.loadedOnce ? "Atualizar" : "Carregar"}</span>
-          </button>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${state.githubLastSyncAt ? `<span class="gh-autosync-meta" title="Atualização automática do GitHub ativa (a cada 60s)">Auto · ${escapeHtml(formatSyncTime(state.githubLastSyncAt))}</span>` : ""}
+            <button class="mini" id="btn-load-flow" ${state.prs.loading ? "disabled" : ""}>
+              ${state.prs.loading ? icons.spinner : icons.refresh}
+              <span>${state.prs.loadedOnce ? "Atualizar" : "Carregar"}</span>
+            </button>
+          </div>
         </div>
         <div>
           ${state.prs.loading && !state.prs.loadedOnce
@@ -1131,8 +1165,11 @@ export function bindGitSidebarEvents() {
         if (!state.prs.loadedOnce && !state.prs.loading && state.project?.branch) void loadGitHubPRs();
         if (!state.issues.loadedOnce && !state.issues.loading) void loadProjectIssues();
       }
-      if (tab === "flow" && !state.prs.loadedOnce && !state.prs.loading) {
-        void loadGitHubPRs();
+      if (tab === "flow") {
+        clearGitHubUnread();
+        if (!state.prs.loadedOnce && !state.prs.loading) {
+          void loadGitHubPRs();
+        }
       }
     });
   });
@@ -1507,6 +1544,8 @@ export function bindGitSidebarEvents() {
       const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body.slice(0, 1200)}` : "";
       if (pr.isMine) {
         state.draftObjective = `Atender feedback do nosso PR #${pr.number}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
+      } else if (pr.mentionedMe) {
+        state.draftObjective = `Responder menção no PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Fui marcado por ${pr.lastActivityAuthor ? "@" + pr.lastActivityAuthor : "um colega"}; leia o PR e os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else if (pr.needsAttention && pr.myResponse) {
         state.draftObjective = `Reavaliar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Houve ${pr.attentionReason ? pr.attentionReason.toLowerCase() : "nova atualização"} após minha última revisão; leia os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else {

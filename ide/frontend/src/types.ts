@@ -222,6 +222,9 @@ export interface ChatMessage {
   images?: string[];
   diffItems?: DiffSummaryItem[];
   tokens?: number;
+  modelLabel?: string;
+  modelProvider?: string;
+  modelFullId?: string;
   toolName?: string;
   toolDetail?: string;
   toolOutput?: string;
@@ -235,6 +238,8 @@ export interface AgentRuntime {
   role: string;
   model: string;
   routeModel?: string;
+  routeProvider?: string;
+  routeFriendly?: string;
   routeTier?: string;
   routeReasons?: string[];
   status: "idle" | "running" | "done" | "error";
@@ -526,6 +531,29 @@ export interface ProjectPullRequest {
   myResponse?: "" | "approved" | "changes_requested" | "commented";
   needsAttention?: boolean;
   attentionReason?: string;
+  mentionedMe?: boolean;
+  lastActivityAt?: string;
+  lastActivityAuthor?: string;
+  lastActivityKind?: string;
+  lastActivitySnippet?: string;
+}
+
+export interface GitHubNotificationEvent {
+  kind: "mention" | "my_pr_comment" | "my_pr_changes" | "my_pr_approved" | "review_requested" | "pr_reply" | "pr_commit" | string;
+  prNumber: number;
+  title: string;
+  author?: string;
+  reason?: string;
+  snippet?: string;
+  url?: string;
+  isMine?: boolean;
+}
+
+export interface GitHubSyncEvent {
+  workspace: string;
+  prs: ProjectPullRequest[];
+  events?: GitHubNotificationEvent[];
+  syncedAt: string;
 }
 
 export type GitSubTab = "changes" | "prs_issues" | "flow";
@@ -636,6 +664,8 @@ export interface ProjectWorkspaceContext {
   };
   gitTab: GitSubTab;
   autoReview?: AutoReviewStatus | null;
+  githubUnreadCount?: number;
+  githubLastSyncAt?: string;
   draftObjective: string;
   draftImages: ImageAttachment[];
   jiraKeyInput: string;
