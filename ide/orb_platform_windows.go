@@ -23,6 +23,8 @@ const (
 	dwmwaBorderColor        = 34
 	dwmwcpDoNotRound        = 1
 	dwmwaColorNone          = 0xFFFFFFFE
+	wmSysCommand            = 0x0112
+	scMoveDrag              = 0xF012
 )
 
 var (
@@ -33,8 +35,31 @@ var (
 	orbProcSetWindowLongPtrW = orbUser32.NewProc("SetWindowLongPtrW")
 	orbProcShowWindow        = orbUser32.NewProc("ShowWindow")
 	orbProcSetWindowPos      = orbUser32.NewProc("SetWindowPos")
+	orbProcReleaseCapture    = orbUser32.NewProc("ReleaseCapture")
+	orbProcPostMessageW      = orbUser32.NewProc("PostMessageW")
 	orbProcDwmSetWindowAttr  = orbDwmapi.NewProc("DwmSetWindowAttribute")
 )
+
+func findOrbHWND(windowTitle string) uintptr {
+	titlePtr, err := syscall.UTF16PtrFromString(windowTitle)
+	if err != nil {
+		return 0
+	}
+	h, _, _ := orbProcFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+	return h
+}
+
+// startOrbNativeDrag hands mouse dragging directly to Windows (SC_MOVE) for smooth,
+// native 60/120fps movement when the user clicks and drags the mascot itself.
+func startOrbNativeDrag(windowTitle string) bool {
+	hwnd := findOrbHWND(windowTitle)
+	if hwnd == 0 {
+		return false
+	}
+	_, _, _ = orbProcReleaseCapture.Call()
+	_, _, _ = orbProcPostMessageW.Call(hwnd, wmSysCommand, scMoveDrag, 0)
+	return true
+}
 
 // configureOrbNativeWindow removes the floating Orb window from the Windows Taskbar
 // and Alt+Tab switcher (WS_EX_TOOLWINDOW) and strips Windows 11 corner rounding/borders

@@ -34,6 +34,7 @@ export interface WailsOrbApp {
   IsOrbMode?(): Promise<boolean>;
   GetOrbState?(): Promise<OrbSnapshot>;
   SetOrbExpanded?(expanded: boolean): Promise<void>;
+  StartOrbDrag?(): Promise<boolean>;
   ShowIDE?(): Promise<void>;
   OpenNotice?(id: string): Promise<void>;
   DismissNotice?(id: string): Promise<void>;
@@ -230,7 +231,46 @@ export function mountOrbWindow(): void {
       if (mascotEl) {
         life = attachMascotLife(mascotEl, cfg.mascot);
         let clickTimer = 0;
+        let pointerDown = false;
+        let startX = 0;
+        let startY = 0;
+        let justDragged = false;
+
+        mascotEl.addEventListener("pointerdown", (ev) => {
+          if (ev.button !== 0) return;
+          pointerDown = true;
+          justDragged = false;
+          startX = ev.clientX;
+          startY = ev.clientY;
+        });
+
+        mascotEl.addEventListener("pointermove", (ev) => {
+          if (!pointerDown || (ev.buttons & 1) === 0) return;
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) >= 5) {
+            pointerDown = false;
+            justDragged = true;
+            if (clickTimer) {
+              window.clearTimeout(clickTimer);
+              clickTimer = 0;
+            }
+            void orbApi()?.StartOrbDrag?.();
+            window.setTimeout(() => {
+              justDragged = false;
+            }, 350);
+          }
+        });
+
+        const resetPointer = () => {
+          pointerDown = false;
+        };
+        mascotEl.addEventListener("pointerup", resetPointer);
+        mascotEl.addEventListener("pointercancel", resetPointer);
+
         mascotEl.addEventListener("click", () => {
+          if (justDragged) {
+            justDragged = false;
+            return;
+          }
           if (clickTimer) {
             window.clearTimeout(clickTimer);
             clickTimer = 0;

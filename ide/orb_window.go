@@ -239,6 +239,11 @@ func (o *OrbApp) SetOrbExpanded(expanded bool) {
 	wailsrt.WindowSetPosition(o.ctx, nextX, nextY)
 }
 
+// StartOrbDrag initiates a native OS drag move on the floating Orb window.
+func (o *OrbApp) StartOrbDrag() bool {
+	return startOrbNativeDrag("HiveMind Orb")
+}
+
 // ShowIDE restores and focuses the main HiveMind IDE window.
 func (o *OrbApp) ShowIDE() error {
 	return o.postAction(orb.OrbAction{Action: "show_ide"})
