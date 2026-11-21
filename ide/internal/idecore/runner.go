@@ -18,6 +18,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
@@ -248,11 +249,9 @@ func UpdateProjectPermissionMode(workspace, permissionMode string) (team.File, e
 }
 
 // LaneEvent wraps an orchestrator.Event with the IDE lane ID and team name.
-type LaneEvent struct {
-	LaneID string             `json:"laneId"`
-	Team   string             `json:"team"`
-	Event  orchestrator.Event `json:"event"`
-}
+// The type lives in the root module (internal/remote) so the headless serve
+// host shares the exact same contract.
+type LaneEvent = remote.LaneEvent
 
 type pendingApproval struct {
 	laneID string
@@ -413,11 +412,9 @@ func (m *SessionManager) denyLaneApprovalsLocked(laneID string) []chan bool {
 }
 
 // ImageInput carries a base64 or data-URL encoded image from the IDE chat.
-type ImageInput struct {
-	Name       string `json:"name"`
-	MIMEType   string `json:"mimeType"`
-	DataBase64 string `json:"dataBase64"`
-}
+// The type lives in the root module (internal/remote) so both runtimes share
+// the mobile-bridge contract.
+type ImageInput = remote.ImageInput
 
 // DecodeImageInputs converts frontend ImageInput items into orchestrator.Attachment blobs.
 func DecodeImageInputs(inputs []ImageInput) ([]orchestrator.Attachment, error) {
@@ -817,7 +814,7 @@ func (m *SessionManager) RunTurnWithOptions(
 	var gh githubx.Client = githubx.Disabled{Reason: "sem remote origin"}
 	g := gitx.Local{}
 	if url, err := g.RemoteURL(ctx, workspaceDir); err == nil {
-		if owner, repo, ok := githubx.ParseRemote(url); ok {
+		if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(url); ok {
 			gh = githubx.Detect(owner, repo)
 		}
 	}
@@ -1071,7 +1068,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 	var gh githubx.Client = githubx.Disabled{Reason: "sem remote origin"}
 	g := gitx.Local{}
 	if url, err := g.RemoteURL(ctx, workspaceDir); err == nil {
-		if owner, repo, ok := githubx.ParseRemote(url); ok {
+		if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(url); ok {
 			gh = githubx.Detect(owner, repo)
 		}
 	}

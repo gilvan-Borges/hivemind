@@ -14,6 +14,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -24,36 +25,10 @@ import (
 const AutoReviewLaneID = "lane-autoreview"
 
 // AutoReviewEntry records one completed or failed automatic PR review in history.
-type AutoReviewEntry struct {
-	PRNumber   int    `json:"prNumber"`
-	Title      string `json:"title"`
-	Author     string `json:"author,omitempty"`
-	HeadRef    string `json:"headRef,omitempty"`
-	BaseRef    string `json:"baseRef,omitempty"`
-	Status     string `json:"status"` // "reviewed" | "error" | "canceled"
-	Summary    string `json:"summary,omitempty"`
-	Tokens     int64  `json:"tokens,omitempty"`
-	DurationMs int64  `json:"durationMs,omitempty"`
-	SessionID  string `json:"sessionId,omitempty"`
-	ReviewedAt string `json:"reviewedAt"`
-	Error      string `json:"error,omitempty"`
-}
+type AutoReviewEntry = remote.AutoReviewEntry
 
 // AutoReviewStatus is the live snapshot emitted to the IDE Flow tab and status bar.
-type AutoReviewStatus struct {
-	Workspace        string                  `json:"workspace"`
-	Enabled          bool                    `json:"enabled"`
-	State            string                  `json:"state"` // "idle" | "polling" | "reviewing" | "paused_limit" | "error"
-	Config           team.AutoReviewSettings `json:"config"`
-	ActivePR         int                     `json:"activePr,omitempty"`
-	ActivePRTitle    string                  `json:"activePrTitle,omitempty"`
-	QueueCount       int                     `json:"queueCount"`
-	ReviewedLastHour int                     `json:"reviewedLastHour"`
-	LastPollAt       string                  `json:"lastPollAt,omitempty"`
-	NextPollAt       string                  `json:"nextPollAt,omitempty"`
-	LastError        string                  `json:"lastError,omitempty"`
-	History          []AutoReviewEntry       `json:"history,omitempty"`
-}
+type AutoReviewStatus = remote.AutoReviewStatus
 
 type autoReviewRecord struct {
 	Fingerprint string    `json:"fingerprint"`

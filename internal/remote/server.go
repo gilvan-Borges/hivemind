@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 	"github.com/gilvan-Borges/HiveMind/relaywire"
 )
@@ -274,14 +273,14 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 // runStartRequest is the POST /api/v1/runs/start and /runs/redirect payload.
 type runStartRequest struct {
-	LaneID    string               `json:"laneId"`
-	Workspace string               `json:"workspace"`
-	Team      string               `json:"team,omitempty"`
-	Objective string               `json:"objective,omitempty"`
-	JiraKey   string               `json:"jiraKey,omitempty"`
-	SessionID string               `json:"sessionId,omitempty"`
-	RunMode   string               `json:"runMode,omitempty"`
-	Images    []idecore.ImageInput `json:"images,omitempty"`
+	LaneID    string       `json:"laneId"`
+	Workspace string       `json:"workspace"`
+	Team      string       `json:"team,omitempty"`
+	Objective string       `json:"objective,omitempty"`
+	JiraKey   string       `json:"jiraKey,omitempty"`
+	SessionID string       `json:"sessionId,omitempty"`
+	RunMode   string       `json:"runMode,omitempty"`
+	Images    []ImageInput `json:"images,omitempty"`
 }
 
 func isAllowedRunMode(raw string) bool {

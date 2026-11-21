@@ -204,7 +204,7 @@ func isGitHubWorkspace(ctx context.Context, workspace string) bool {
 	if err != nil {
 		return false
 	}
-	_, _, ok := githubx.ParseRemote(remoteURL)
+	_, _, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
 	return ok
 }
 

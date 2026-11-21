@@ -18,11 +18,40 @@ settings:
   max_dev_input_tokens: 1500000 # orçamento de tokens de entrada por dev por rodada
   base_branch: main
   confirm_shell: true
+  # Fonte única: internal/team (DefaultAllowlist). O teste
+  # TestExamplesTeamYAMLAllowlistInSync garante que esta lista nunca
+  # divergir do código — edite DefaultAllowlist e copie aqui.
   shell_allowlist:
     - git
+    - gh
     - go
+    - gofmt
     - python
+    - python3
     - pytest
+    - pip
+    - node
+    - npm
+    - npx
+    - pnpm
+    - yarn
+    - bun
+    - cargo
+    - rustc
+    - mvn
+    - gradle
+    - dotnet
+    - make
+    - cmake
+    - echo
+    - printf
+    - ls
+    - dir
+    - cat
+    - type
+    - pwd
+    - rg
+    - find
 teams:
   - name: padrao
     description: Time de exemplo com um desenvolvedor

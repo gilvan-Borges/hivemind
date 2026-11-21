@@ -2,13 +2,9 @@ package resident
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,9 +12,13 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
-	"github.com/gilvan-Borges/HiveMind/internal/strx"
-	"github.com/gilvan-Borges/HiveMind/internal/tools"
 )
+
+// Broker core: transversal middleware (tier authorization, human approval,
+// durable pre-effect audit, secret redaction, untrusted-data fencing). The
+// concrete per-domain handlers live in handlers_fs.go, handlers_memory.go,
+// handlers_net.go, handlers_surface.go, handlers_cron.go and
+// handlers_subagent.go.
 
 const defaultApprovalTimeout = 5 * time.Minute
 
@@ -409,6 +409,7 @@ func (b *Broker) emit(ev Event) {
 	b.cfg.OnToolEvent(ev)
 }
 
+// resolveHandler maps a tool name to its per-domain handler (see handlers_*.go).
 func (b *Broker) resolveHandler(name string) (ToolHandler, bool) {
 	if b.cfg.CustomHandlers != nil {
 		if h, ok := b.cfg.CustomHandlers[name]; ok {
@@ -483,351 +484,6 @@ func (b *Broker) refuseIfSurfaceOff() error {
 		return nil
 	}
 	return fmt.Errorf("recusado: experimental_unisolated desligado")
-}
-
-func (b *Broker) handleBrowserOpen(ctx context.Context, args map[string]any) (string, error) {
-	if err := b.refuseIfSurfaceOff(); err != nil {
-		return "", err
-	}
-	log.Printf("residente: browser_open SEM isolamento (experimentalUnisolated); o cofre não é consultado")
-	target, err := validatePublicURL(strArg(args, "url"))
-	if err != nil {
-		return "", err
-	}
-	if err := b.surface().OpenURL(ctx, target); err != nil {
-		return "", err
-	}
-	return "aberto SEM isolamento", nil
-}
-
-func (b *Broker) handleDesktopClick(ctx context.Context, args map[string]any) (string, error) {
-	if err := b.refuseIfSurfaceOff(); err != nil {
-		return "", err
-	}
-	log.Printf("residente: desktop_click SEM isolamento (experimentalUnisolated); o cofre não é consultado")
-	x, y := intArg(args, "x"), intArg(args, "y")
-	if err := b.surface().Click(ctx, x, y); err != nil {
-		return "", err
-	}
-	return "clique SEM isolamento", nil
-}
-
-func (b *Broker) handleDesktopType(ctx context.Context, args map[string]any) (string, error) {
-	if err := b.refuseIfSurfaceOff(); err != nil {
-		return "", err
-	}
-	log.Printf("residente: desktop_type SEM isolamento (experimentalUnisolated); o cofre não é consultado")
-	text := strArg(args, "text")
-	if err := b.surface().TypeText(ctx, text); err != nil {
-		return "", err
-	}
-	return "digitação SEM isolamento", nil
-}
-
-func (b *Broker) requireWorkspace() (string, error) {
-	ws := strings.TrimSpace(b.cfg.Workspace)
-	if ws == "" {
-		return "", fmt.Errorf("nenhum workspace aberto")
-	}
-	return ws, nil
-}
-
-func (b *Broker) handleReadFile(_ context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	rel := strArg(args, "path")
-	if rel == "" {
-		return "", fmt.Errorf("parâmetro path é obrigatório")
-	}
-	if IsSensitivePath(rel) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(rel))
-	}
-	return tools.ReadFileReadOnly(ws, rel, intArg(args, "start_line"), intArg(args, "end_line"))
-}
-
-func (b *Broker) handleListDir(_ context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	rel := strArg(args, "path")
-	if IsSensitivePath(rel) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(rel))
-	}
-	entries, err := tools.ListDirReadOnly(ws, rel)
-	if err != nil {
-		return "", err
-	}
-	filtered := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if IsSensitivePath(e) {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	if len(filtered) == 0 {
-		return "(diretório vazio)", nil
-	}
-	return strings.Join(filtered, "\n"), nil
-}
-
-func (b *Broker) handleSearchText(ctx context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	sub := strArg(args, "path")
-	if IsSensitivePath(sub) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(sub))
-	}
-	return tools.SearchTextReadOnly(
-		ctx,
-		ws,
-		strArg(args, "query"),
-		sub,
-		strArg(args, "glob"),
-		boolArg(args, "regex"),
-		boolArg(args, "case_sensitive"),
-		intArg(args, "max_results"),
-	)
-}
-
-func (b *Broker) handleFindFiles(ctx context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	sub := strArg(args, "path")
-	if IsSensitivePath(sub) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(sub))
-	}
-	return tools.FindFilesReadOnly(ctx, ws, strArg(args, "pattern"), sub, intArg(args, "max_results"))
-}
-
-func (b *Broker) handleListProjects(_ context.Context, _ map[string]any) (string, error) {
-	if b.cfg.ListProjects == nil {
-		return "[]", nil
-	}
-	refs := b.cfg.ListProjects()
-	raw, err := json.MarshalIndent(refs, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func (b *Broker) handleMemorySearch(_ context.Context, args map[string]any) (string, error) {
-	if b.cfg.Memory == nil {
-		return "Memória pessoal indisponível.", nil
-	}
-	ws := strArg(args, "workstream")
-	if ws == "" {
-		ws = b.cfg.Workstream
-	}
-	query := strArg(args, "query")
-	res, err := b.cfg.Memory.Retrieve(ws, query)
-	if err != nil {
-		return "", err
-	}
-	if len(res.Pinned) == 0 && len(res.Matches) == 0 {
-		return "Nenhum fato encontrado na memória pessoal desta conta.", nil
-	}
-	var sb strings.Builder
-	if len(res.Pinned) > 0 {
-		sb.WriteString("# Fatos fixados\n")
-		for _, f := range res.Pinned {
-			fmt.Fprintf(&sb, "- [%s · id=%s] %s\n", f.Workstream, f.ID, f.Text)
-		}
-	}
-	if len(res.Matches) > 0 {
-		sb.WriteString("# Fatos relevantes\n")
-		for _, f := range res.Matches {
-			fmt.Fprintf(&sb, "- [%s · id=%s] %s\n", f.Workstream, f.ID, f.Text)
-		}
-	}
-	return strings.TrimSpace(sb.String()), nil
-}
-
-func (b *Broker) handleWriteFile(_ context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	rel := strArg(args, "path")
-	if rel == "" {
-		return "", errors.New("parâmetro path é obrigatório")
-	}
-	if IsSensitivePath(rel) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(rel))
-	}
-	content, _ := args["content"].(string)
-	return tools.WriteFileWorkspace(ws, rel, content)
-}
-
-func (b *Broker) handleEditFile(_ context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	rel := strArg(args, "path")
-	if rel == "" {
-		return "", errors.New("parâmetro path é obrigatório")
-	}
-	if IsSensitivePath(rel) {
-		return "", fmt.Errorf("caminho sensível recusado: %s", RedactTarget(rel))
-	}
-	oldText, _ := args["old_text"].(string)
-	newText, _ := args["new_text"].(string)
-	return tools.EditFileWorkspace(ws, rel, oldText, newText, boolArg(args, "replace_all"))
-}
-
-func (b *Broker) handleDeleteFile(_ context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	rel := strArg(args, "path")
-	if rel == "" {
-		return "", errors.New("parâmetro path é obrigatório")
-	}
-	if IsSensitivePath(rel) {
-		return "", fmt.Errorf("remoção de caminho sensível recusada: %s", RedactTarget(rel))
-	}
-	return tools.DeleteFileWorkspace(ws, rel)
-}
-
-func (b *Broker) handleMemoryWrite(_ context.Context, args map[string]any) (string, error) {
-	if b.cfg.Memory == nil {
-		return "", errors.New("memória pessoal indisponível")
-	}
-	ws := strArg(args, "workstream")
-	if ws == "" {
-		ws = b.cfg.Workstream
-	}
-	text := strArg(args, "text")
-	if text == "" {
-		return "", errors.New("parâmetro text é obrigatório")
-	}
-	fact, err := b.cfg.Memory.AddFact(ws, text, boolArg(args, "pin"))
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("fato salvo na memória pessoal (id=%s · workstream=%s)", fact.ID, fact.Workstream), nil
-}
-
-func (b *Broker) handleMemoryForget(_ context.Context, args map[string]any) (string, error) {
-	if b.cfg.Memory == nil {
-		return "", errors.New("memória pessoal indisponível")
-	}
-	id := firstNonEmptyStr(strArg(args, "id"), strArg(args, "key"))
-	if id == "" {
-		return "", errors.New("parâmetro key/id é obrigatório")
-	}
-	removed, err := b.cfg.Memory.DeleteFact(id)
-	if err != nil {
-		return "", err
-	}
-	if !removed {
-		return fmt.Sprintf("nenhum fato encontrado com id=%s", id), nil
-	}
-	return fmt.Sprintf("fato %s removido da memória pessoal", id), nil
-}
-
-func (b *Broker) handleExecCommand(ctx context.Context, args map[string]any) (string, error) {
-	ws, err := b.requireWorkspace()
-	if err != nil {
-		return "", err
-	}
-	if info, statErr := os.Stat(ws); statErr != nil || !info.IsDir() {
-		return "", fmt.Errorf("workspace inválido para sandbox: %w", statErr)
-	}
-	argv := strSliceArg(args, "argv")
-	if err := ValidateExecCommand(argv, b.cfg.Policy.AllowedBinaries); err != nil {
-		return "", err
-	}
-	timeout := sandboxx.DefaultTimeout
-	if sec := intArg(args, "timeout_sec"); sec > 0 {
-		if sec > 120 {
-			sec = 120
-		}
-		timeout = time.Duration(sec) * time.Second
-	}
-
-	res, err := b.cfg.Sandbox.Run(ctx, sandboxx.Options{
-		Argv:         argv,
-		WorkDir:      ws,
-		ReadRoots:    []string{ws},
-		WriteRoots:   []string{ws},
-		AllowNetwork: false,
-		Timeout:      timeout,
-	})
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "sandbox=%s exit=%d duration=%dms\n", res.Mechanism, res.ExitCode, res.Duration.Milliseconds())
-	if strings.TrimSpace(res.Stdout) != "" {
-		fmt.Fprintf(&sb, "[stdout]\n%s\n", res.Stdout)
-	}
-	if strings.TrimSpace(res.Stderr) != "" {
-		fmt.Fprintf(&sb, "[stderr]\n%s\n", res.Stderr)
-	}
-	if err != nil {
-		out := strings.TrimSpace(sb.String())
-		if out != "" {
-			return out, fmt.Errorf("%v\n%s", err, strx.TruncateBytes(out, 2048, "…"))
-		}
-		return "", err
-	}
-	return strings.TrimSpace(sb.String()), nil
-}
-
-func (b *Broker) handleNetFetch(ctx context.Context, args map[string]any) (string, error) {
-	rawURL := strArg(args, "url")
-	u, err := ValidateOutboundURL(rawURL, b.cfg.Policy.AllowedHosts)
-	if err != nil {
-		return "", err
-	}
-	method := strings.ToUpper(strArg(args, "method"))
-	if method == "" {
-		method = http.MethodGet
-	}
-	if method != http.MethodGet && method != http.MethodHead {
-		return "", fmt.Errorf("método HTTP %q não permitido (apenas GET/HEAD)", method)
-	}
-
-	client := b.cfg.HTTPClient
-	if client == nil {
-		client = NewGuardedHTTPClient(b.cfg.Policy.AllowedHosts, 15*time.Second)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	if bearer, ok := args["_resolved_bearer"].(string); ok && bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	req.Header.Set("User-Agent", "HiveMind-Resident/2.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	const maxBodyBytes = 64 * 1024
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
-	if err != nil {
-		return "", err
-	}
-	truncated := len(body) > maxBodyBytes
-	if truncated {
-		body = body[:maxBodyBytes]
-	}
-	out := fmt.Sprintf("HTTP %d\n%s", resp.StatusCode, string(body))
-	if truncated {
-		out += "\n… [resposta truncada]"
-	}
-	return out, nil
 }
 
 func extractTarget(toolName string, args map[string]any) string {
@@ -950,66 +606,6 @@ func intArg(args map[string]any, key string) int {
 	default:
 		return 0
 	}
-}
-
-func (b *Broker) handleCronAdd(_ context.Context, args map[string]any) (string, error) {
-	base := strings.TrimSpace(b.cfg.BaseDir)
-	if base == "" {
-		return "", fmt.Errorf("diretório do residente ausente")
-	}
-	rt, err := SaveRoutine(base, Routine{
-		Expr:       strArg(args, "expr"),
-		Timezone:   strArg(args, "timezone"),
-		Text:       strArg(args, "text"),
-		Workstream: firstNonEmptyStr(strArg(args, "workstream"), b.cfg.Workstream),
-		Classes:    strSliceArg(args, "classes"),
-		Enabled:    true,
-	})
-	if err != nil {
-		return "", err
-	}
-	if b.cfg.OnRoutineSaved != nil {
-		b.cfg.OnRoutineSaved()
-	}
-	return "rotina gravada: " + rt.ID, nil
-}
-
-func (b *Broker) handleSpawn(ctx context.Context, args map[string]any) (string, error) {
-	if b.cfg.Spawn == nil {
-		return "", fmt.Errorf("subagente indisponível")
-	}
-	out, err := b.cfg.Spawn(ctx, strArg(args, "objective"), strSliceArg(args, "roots"), strSliceArg(args, "classes"))
-	if err != nil {
-		return "", err
-	}
-	return out, nil
-}
-
-func (b *Broker) handleHandoff(ctx context.Context, args map[string]any) (string, error) {
-	if b.cfg.SquadHandoff == nil {
-		return "", fmt.Errorf("handoff para o time indisponível")
-	}
-	mode := ""
-	if b.cfg.PermissionMode != nil {
-		mode = b.cfg.PermissionMode(b.cfg.Workspace)
-	}
-	facts := strSliceArg(args, "facts")
-	if len(facts) == 0 {
-		if s, ok := args["facts"].(string); ok && strings.TrimSpace(s) != "" {
-			facts = []string{strings.TrimSpace(s)}
-		}
-	}
-	hash, err := b.cfg.SquadHandoff(ctx, SquadHandoff{
-		Workspace:      b.cfg.Workspace,
-		Team:           strArg(args, "team"),
-		Objective:      strArg(args, "objective"),
-		Facts:          facts,
-		PermissionMode: mode,
-	})
-	if err != nil {
-		return "", err
-	}
-	return "handoff aceito: " + hash, nil
 }
 
 func boolArg(args map[string]any, key string) bool {

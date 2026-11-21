@@ -13,7 +13,6 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/notify"
-	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/extsess"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
@@ -21,6 +20,8 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/relayclient"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -112,21 +113,21 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		gitCalls:    make(map[string]gitCall),
 		watchers:    make(map[string]*idecore.FileWatcher),
 	}
+	// The mobile bridge hub is created up-front so session and auto-review
+	// events fan out to it from the very first turn (the bridge server itself
+	// is only assembled later by newMobileBridge).
+	bridgeHub := remote.NewHub()
 	app.sessions = idecore.NewSessionManager(func(ev idecore.LaneEvent) {
 		if app.ctx != nil {
 			wailsrt.EventsEmit(app.ctx, "hivemind:lane-event", ev)
 		}
-		if app.mobile != nil {
-			app.mobile.hub.HandleLaneEvent(ev)
-		}
+		bridgeHub.HandleLaneEvent(ev)
 	})
 	app.autoReview = idecore.NewAutoReviewManager(app.sessions, func(st idecore.AutoReviewStatus) {
 		if app.ctx != nil && !app.smokeCheck {
 			wailsrt.EventsEmit(app.ctx, "hivemind:autoreview-status", st)
 		}
-		if app.mobile != nil {
-			app.mobile.hub.HandleAutoReviewStatus(st)
-		}
+		bridgeHub.HandleAutoReviewStatus(st)
 	})
 	app.githubMonitor = idecore.NewGitHubMonitor(func(ev idecore.GitHubSyncEvent) {
 		if app.ctx != nil && !app.smokeCheck {
@@ -158,21 +159,19 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		ProjectsFn: func() []resident.ProjectRef {
 			var out []resident.ProjectRef
 			seen := map[string]bool{}
-			if app.mobile != nil && app.mobile.hub != nil {
-				for _, p := range app.mobile.hub.Projects() {
-					key := strings.ToLower(filepath.Clean(p.Workspace))
-					if key == "" || seen[key] {
-						continue
-					}
-					seen[key] = true
-					out = append(out, resident.ProjectRef{
-						Name:   p.Name,
-						Root:   p.Workspace,
-						Branch: p.Branch,
-						Stack:  p.Stack,
-						Active: true,
-					})
+			for _, p := range bridgeHub.Projects() {
+				key := strings.ToLower(filepath.Clean(p.Workspace))
+				if key == "" || seen[key] {
+					continue
 				}
+				seen[key] = true
+				out = append(out, resident.ProjectRef{
+					Name:   p.Name,
+					Root:   p.Workspace,
+					Branch: p.Branch,
+					Stack:  p.Stack,
+					Active: true,
+				})
 			}
 			for _, dir := range idecore.LoadRecentProjects("") {
 				key := strings.ToLower(filepath.Clean(dir))
@@ -188,7 +187,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			return out
 		},
 	})
-	app.mobile = newMobileBridge(app.sessions, app.resident, app.autoReview)
+	app.mobile = newMobileBridge(app.sessions, app.resident, app.autoReview, bridgeHub)
 	app.relay = newRelayClient(app)
 	return app
 }

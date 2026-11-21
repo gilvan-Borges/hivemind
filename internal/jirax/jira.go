@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/names"
@@ -97,11 +98,26 @@ func (h *HTTP) Enabled() bool {
 	return h.BaseURL != "" && h.Email != "" && h.Token != ""
 }
 
+var (
+	jiraSharedOnce sync.Once
+	jiraSharedCLT  *http.Client
+)
+
+// SharedHTTPClient returns the pooled Jira HTTP client. One shared transport
+// keeps connection reuse across calls instead of allocating a new client per
+// request when HTTP is nil (Spec 08).
+func SharedHTTPClient() *http.Client {
+	jiraSharedOnce.Do(func() {
+		jiraSharedCLT = &http.Client{Timeout: 30 * time.Second}
+	})
+	return jiraSharedCLT
+}
+
 func (h *HTTP) client() *http.Client {
 	if h.HTTP != nil {
 		return h.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return SharedHTTPClient()
 }
 
 func (h *HTTP) base() string { return strings.TrimRight(h.BaseURL, "/") }

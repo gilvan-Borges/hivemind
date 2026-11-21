@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
@@ -166,8 +165,8 @@ func (d Disabled) ClosePullRequest(context.Context, int) error                  
 func (d Disabled) GetIssue(context.Context, int) (IssueDetail, error) {
 	return IssueDetail{}, d.err()
 }
-func (d Disabled) CloseIssue(context.Context, int) error              { return d.err() }
-func (d Disabled) CommentOnIssue(context.Context, int, string) error  { return d.err() }
+func (d Disabled) CloseIssue(context.Context, int) error             { return d.err() }
+func (d Disabled) CommentOnIssue(context.Context, int, string) error { return d.err() }
 func (d Disabled) ListIssueComments(context.Context, int) ([]Comment, error) {
 	return nil, d.err()
 }
@@ -197,7 +196,7 @@ func (r *REST) client() *http.Client {
 	if r.HTTP != nil {
 		return r.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return SharedHTTPClient()
 }
 
 func (r *REST) base() string {
@@ -471,6 +470,35 @@ func mapRawIssueComments(rawComments []rawRESTIssueComment) []Comment {
 	return out
 }
 
+// fetchPage performs one authenticated GET and returns the raw payload plus
+// the next page path (empty when there is no Link rel="next").
+func (r *REST) fetchPage(ctx context.Context, path string) (payload []byte, nextPath string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.base()+path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+r.Token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "HiveMind-IDE")
+	res, err := r.client().Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	if res.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("GitHub GET %s: %s: %s", path, res.Status, truncate(string(body), 500))
+	}
+	if next, ok := ParseLinkNext(res.Header.Get("Link")); ok {
+		nextPath, _ = nextPagePath(next, r.base())
+	}
+	return body, nextPath, nil
+}
+
 func (r *REST) GetPullRequest(ctx context.Context, number int) (PullRequestDetail, error) {
 	if number <= 0 {
 		return PullRequestDetail{}, fmt.Errorf("número de PR inválido: %d", number)
@@ -484,11 +512,25 @@ func (r *REST) GetPullRequest(ctx context.Context, number int) (PullRequestDetai
 	detail := mapRawPull(raw)
 
 	var rawReviews []rawRESTReview
-	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", ownerEsc, repoEsc, number), nil, &rawReviews); err == nil {
-		detail.Reviews = mapRawReviews(rawReviews)
-	} else {
-		detail.CommentFetchErrors = append(detail.CommentFetchErrors, fmt.Sprintf("revisões: %v", err))
+	reviewsPath := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=%d", ownerEsc, repoEsc, number, defaultPageSize)
+	for page := 0; page < maxPages; page++ {
+		payload, next, rvErr := r.fetchPage(ctx, reviewsPath)
+		if rvErr != nil {
+			detail.CommentFetchErrors = append(detail.CommentFetchErrors, fmt.Sprintf("revisões: %v", rvErr))
+			break
+		}
+		var chunk []rawRESTReview
+		if jsonErr := json.Unmarshal(payload, &chunk); jsonErr != nil {
+			detail.CommentFetchErrors = append(detail.CommentFetchErrors, fmt.Sprintf("revisões: %v", jsonErr))
+			break
+		}
+		rawReviews = append(rawReviews, chunk...)
+		if next == "" || len(chunk) == 0 {
+			break
+		}
+		reviewsPath = next
 	}
+	detail.Reviews = mapRawReviews(rawReviews)
 
 	if revComments, err := r.ListPullRequestComments(ctx, number); err == nil {
 		detail.ReviewComments = revComments
@@ -515,34 +557,49 @@ func (r *REST) ListPullRequests(ctx context.Context, state string, limit int) ([
 	default:
 		return nil, fmt.Errorf("estado de PR inválido %q (use open, closed ou all)", state)
 	}
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 {
 		limit = 30
 	}
-	var raw []rawRESTPull
-	path := fmt.Sprintf("/repos/%s/%s/pulls?state=%s&per_page=%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), st, limit)
-	if err := r.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		return nil, err
-	}
-	out := make([]PullRequestSummary, 0, len(raw))
-	for _, item := range raw {
-		var reqs []string
-		for _, rr := range item.RequestedReviewers {
-			if strings.TrimSpace(rr.Login) != "" {
-				reqs = append(reqs, rr.Login)
-			}
+	// Paginated by the Link header so a request above 100 items (or a repo
+	// with more open PRs than one page) is no longer silently truncated.
+	var out []PullRequestSummary
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=%s&per_page=%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), st, defaultPageSize)
+	for page := 0; page < maxPages && len(out) < limit; page++ {
+		payload, next, err := r.fetchPage(ctx, path)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, PullRequestSummary{
-			Number:             item.Number,
-			Title:              item.Title,
-			URL:                item.HTMLURL,
-			State:              strings.ToLower(item.State),
-			Draft:              item.Draft,
-			Author:             item.User.Login,
-			HeadRef:            item.Head.Ref,
-			BaseRef:            item.Base.Ref,
-			RequestedReviewers: reqs,
-			UpdatedAt:          item.UpdatedAt,
-		})
+		var raw []rawRESTPull
+		if err := json.Unmarshal(payload, &raw); err != nil {
+			return nil, fmt.Errorf("decodificar lista de PRs: %w", err)
+		}
+		for _, item := range raw {
+			if len(out) >= limit {
+				break
+			}
+			var reqs []string
+			for _, rr := range item.RequestedReviewers {
+				if strings.TrimSpace(rr.Login) != "" {
+					reqs = append(reqs, rr.Login)
+				}
+			}
+			out = append(out, PullRequestSummary{
+				Number:             item.Number,
+				Title:              item.Title,
+				URL:                item.HTMLURL,
+				State:              strings.ToLower(item.State),
+				Draft:              item.Draft,
+				Author:             item.User.Login,
+				HeadRef:            item.Head.Ref,
+				BaseRef:            item.Base.Ref,
+				RequestedReviewers: reqs,
+				UpdatedAt:          item.UpdatedAt,
+			})
+		}
+		if next == "" || len(raw) == 0 {
+			break
+		}
+		path = next
 	}
 	return out, nil
 }
@@ -551,20 +608,31 @@ func (r *REST) ListPullRequestFiles(ctx context.Context, number int) ([]PRFile, 
 	if number <= 0 {
 		return nil, fmt.Errorf("número de PR inválido: %d", number)
 	}
-	var raw []rawRESTPRFile
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files?per_page=100", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number)
-	if err := r.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		return nil, err
-	}
-	out := make([]PRFile, 0, len(raw))
-	for _, f := range raw {
-		out = append(out, PRFile{
-			Filename:  f.Filename,
-			Status:    f.Status,
-			Additions: f.Additions,
-			Deletions: f.Deletions,
-			Patch:     f.Patch,
-		})
+	// Large PRs exceed one page: follow Link rel="next" (capped at maxPages).
+	var out []PRFile
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files?per_page=%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number, defaultPageSize)
+	for page := 0; page < maxPages; page++ {
+		payload, next, err := r.fetchPage(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		var raw []rawRESTPRFile
+		if err := json.Unmarshal(payload, &raw); err != nil {
+			return nil, err
+		}
+		for _, f := range raw {
+			out = append(out, PRFile{
+				Filename:  f.Filename,
+				Status:    f.Status,
+				Additions: f.Additions,
+				Deletions: f.Deletions,
+				Patch:     f.Patch,
+			})
+		}
+		if next == "" || len(raw) == 0 {
+			break
+		}
+		path = next
 	}
 	return out, nil
 }
@@ -573,12 +641,24 @@ func (r *REST) ListPullRequestComments(ctx context.Context, number int) ([]Comme
 	if number <= 0 {
 		return nil, fmt.Errorf("número de PR inválido: %d", number)
 	}
-	var raw []rawRESTReviewComment
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=100", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number)
-	if err := r.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		return nil, err
+	var all []rawRESTReviewComment
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number, defaultPageSize)
+	for page := 0; page < maxPages; page++ {
+		payload, next, err := r.fetchPage(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		var raw []rawRESTReviewComment
+		if err := json.Unmarshal(payload, &raw); err != nil {
+			return nil, err
+		}
+		all = append(all, raw...)
+		if next == "" || len(raw) == 0 {
+			break
+		}
+		path = next
 	}
-	return mapRawReviewComments(raw), nil
+	return mapRawReviewComments(all), nil
 }
 
 func (r *REST) ReplyToReviewComment(ctx context.Context, number int, commentID int64, body string) error {
@@ -700,11 +780,24 @@ func (r *REST) ListIssueComments(ctx context.Context, number int) ([]Comment, er
 	if number <= 0 {
 		return nil, fmt.Errorf("número de issue inválido: %d", number)
 	}
-	var raw []rawRESTIssueComment
-	if err := r.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number), nil, &raw); err != nil {
-		return nil, err
+	var all []rawRESTIssueComment
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number, defaultPageSize)
+	for page := 0; page < maxPages; page++ {
+		payload, next, err := r.fetchPage(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		var raw []rawRESTIssueComment
+		if err := json.Unmarshal(payload, &raw); err != nil {
+			return nil, err
+		}
+		all = append(all, raw...)
+		if next == "" || len(raw) == 0 {
+			break
+		}
+		path = next
 	}
-	return mapRawIssueComments(raw), nil
+	return mapRawIssueComments(all), nil
 }
 
 func sanitizeGitRef(ref string) (string, error) {
@@ -1165,29 +1258,8 @@ func Detect(owner, repo string) Client {
 	return Disabled{Reason: "GitHub não está configurado. Configure o Conector GitHub na IDE, defina GITHUB_TOKEN ou autentique o gh"}
 }
 
-// ParseRemote extracts owner and repo from a GitHub remote URL.
-func ParseRemote(raw string) (owner, repo string, ok bool) {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimSuffix(raw, ".git")
-	if strings.HasPrefix(raw, "git@github.com:") {
-		rest := strings.TrimPrefix(raw, "git@github.com:")
-		parts := strings.Split(rest, "/")
-		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
-			return parts[0], parts[1], true
-		}
-	}
-	idx := strings.Index(raw, "github.com")
-	if idx < 0 {
-		return "", "", false
-	}
-	rest := raw[idx+len("github.com"):]
-	rest = strings.TrimLeft(rest, "/:")
-	parts := strings.Split(rest, "/")
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
-}
+// ParseRemote extracts owner and repo from a GitHub remote URL. The GHES-aware
+// variant lives in remote.go as ParseRemoteForHost / ParseRemoteForConfiguredHosts.
 
 // IsExplicitReviewObjective reports whether the user's prompt explicitly asks to review a PR.
 func IsExplicitReviewObjective(objective string) bool {

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 )
 
@@ -21,9 +20,9 @@ func TestHubRunLifecycle(t *testing.T) {
 		t.Fatalf("snapshot inicial errado: %+v", s)
 	}
 
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "stage", Stage: "developing"}})
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "usage", InputTokens: 100, OutputTokens: 20}})
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "approval_required", ApprovalID: "l1:appr:1", Text: "posso commitar?", Label: "Permissão Necessária"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "stage", Stage: "developing"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "usage", InputTokens: 100, OutputTokens: 20}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "approval_required", ApprovalID: "l1:appr:1", Text: "posso commitar?", Label: "Permissão Necessária"}})
 
 	snaps = hub.Snapshots("C:/w")
 	s = snaps[0]
@@ -43,7 +42,7 @@ func TestHubRunLifecycle(t *testing.T) {
 		t.Fatalf("aprovação deveria sumir após resolução: %+v", snaps[0].PendingApprovals)
 	}
 
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "finish", Text: "pronto"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "finish", Text: "pronto"}})
 	snaps = hub.Snapshots("C:/w")
 	if snaps[0].Running || snaps[0].Stage != "done" {
 		t.Fatalf("estado após finish errado: %+v", snaps[0])
@@ -56,7 +55,7 @@ func TestHubWorkspaceAttribution(t *testing.T) {
 	hub.RegisterRun("lane-x", "C:/repo1", "t1", "obj1", "", "auto")
 	hub.RegisterRun("lane-x", "C:/repo2", "t2", "obj2", "", "auto")
 
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "lane-x", Team: "t2", Event: orchestrator.Event{Kind: "error", Text: "falhou"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "lane-x", Team: "t2", Event: orchestrator.Event{Kind: "error", Text: "falhou"}})
 
 	snaps := hub.Snapshots("C:/repo2")
 	if len(snaps) != 1 {
@@ -93,13 +92,13 @@ func TestHubRunErrorAndCancel(t *testing.T) {
 
 func TestHubAutoReviewRegistration(t *testing.T) {
 	hub := NewHub()
-	hub.HandleAutoReviewStatus(idecore.AutoReviewStatus{Workspace: "C:/w", Enabled: true, State: "polling"})
+	hub.HandleAutoReviewStatus(AutoReviewStatus{Workspace: "C:/w", Enabled: true, State: "polling"})
 	st, ok := hub.AutoReviewSnapshot("C:/w")
 	if !ok || !st.Enabled || st.State != "polling" {
 		t.Fatalf("autoreview snapshot errado: %+v (ok=%v)", st, ok)
 	}
 	// lane-autoreview events must be attributed to the workspace.
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "lane-autoreview", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "reviewing"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "lane-autoreview", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "reviewing"}})
 	snaps := hub.Snapshots("C:/w")
 	found := false
 	for _, s := range snaps {
@@ -117,13 +116,13 @@ func TestHubSubscribeAndBroadcast(t *testing.T) {
 	ch, unsub := hub.Subscribe()
 
 	hub.RegisterRun("l1", "C:/w", "t", "obj", "", "auto")
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "chief"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "chief"}})
 
 	ev := <-ch
 	if ev.Type != "lane_event" {
 		t.Fatalf("evento errado: %+v", ev)
 	}
-	hub.HandleLaneEvent(idecore.LaneEvent{
+	hub.HandleLaneEvent(LaneEvent{
 		LaneID: "l1",
 		Team:   "t",
 		Event: orchestrator.Event{

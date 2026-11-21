@@ -1178,20 +1178,24 @@ func TestBuildMyJiraIssuesJQL(t *testing.T) {
 	}
 }
 
-func TestMatchJiraProjectFromNamesVibetexRepos(t *testing.T) {
+func TestMatchJiraProjectFromNamesSyntheticRepos(t *testing.T) {
+	// AGENTS.md: synthetic identities only. This suite mirrors every matching
+	// category the inference must handle (key, containment, camel token,
+	// ambiguous org-common token, unknown product) without any real org data.
 	projs := []jirax.Project{
-		{Key: "CED", Name: "Cedae"},
+		{Key: "ACME", Name: "Acme Principal"},
+		{Key: "AW", Name: "Alpha Web"},
+		{Key: "AM", Name: "Alpha Mobile"},
+		{Key: "CHT", Name: "ChatApp"},
 		{Key: "GERAL", Name: "Geral"},
-		{Key: "IPG", Name: "VibeGas (IPG)"},
-		{Key: "MDT", Name: "Mural de Troca"},
-		{Key: "RKSAM", Name: "VibeTime"},
-		{Key: "SB", Name: "Sol Brilhante"},
-		{Key: "VB", Name: "VibeSmart"},
-		{Key: "VBWHTS", Name: "VibeWhats"},
-		{Key: "VC", Name: "Vibe Control"},
-		{Key: "VOF", Name: "VibeOffice"},
-		{Key: "VPD", Name: "VibePromotor (DROPS)"},
-		{Key: "VS", Name: "Vibe Suporte"},
+		{Key: "HLP", Name: "Helpdesk Central"},
+		{Key: "OFX", Name: "OfficeX"},
+		{Key: "PLAT", Name: "OrgAlpha (PLAT)"},
+		{Key: "QDI", Name: "Quadro de Ideias"},
+		{Key: "SIG", Name: "Sigma"},
+		{Key: "SMART", Name: "SmartHub"},
+		{Key: "SUP", Name: "Suporte"},
+		{Key: "TIME", Name: "TimeTracker"},
 	}
 
 	cases := []struct {
@@ -1199,40 +1203,38 @@ func TestMatchJiraProjectFromNamesVibetexRepos(t *testing.T) {
 		want string
 	}{
 		// Projects in Jira
-		{repo: "ipg", want: "IPG"},
-		{repo: "ipg-mobile", want: "IPG"},
-		{repo: "vibePromotor", want: "VPD"},
-		{repo: "vibepromotor-drops", want: "VPD"},
-		{repo: "appVibePromotor-drops", want: "VPD"},
-		{repo: "solbrilhante", want: "SB"},
-		{repo: "AppSolBrilhante", want: "SB"},
-		{repo: "VIBETIME", want: "RKSAM"},
-		{repo: "VibeOffice", want: "VOF"},
-		{repo: "vibeoffice-ios", want: "VOF"},
-		{repo: "VibeSmart", want: "VB"},
-		{repo: "HubVibesmart", want: "VB"},
-		{repo: "AuditoriaVibeSmart", want: "VB"},
-		{repo: "PraticoMural", want: "MDT"},
-		{repo: "PraticoMuralWeb", want: "MDT"},
-		{repo: "VibeWhats", want: "VBWHTS"},
-		{repo: "cedaeApp", want: "CED"},
-		{repo: "vibetexCedae", want: "CED"},
-		{repo: "vibeTexCedaeAPP", want: "CED"},
-		{repo: "vibeControl", want: "VC"},
-		{repo: "ControlAppApiAtualizado", want: "VC"},
-		{repo: "suporte", want: "VS"},
+		{repo: "acme", want: "ACME"},
+		{repo: "acme-mobile", want: "ACME"},
+		{repo: "orgAlpha", want: "PLAT"},
+		{repo: "orgalpha-plat", want: "PLAT"},
+		{repo: "AppOrgAlpha", want: "PLAT"},
+		{repo: "sigmaCore", want: "SIG"},
+		{repo: "SigmaAppApiAtualizado", want: "SIG"},
+		{repo: "QuadroIdeias", want: "QDI"},
+		{repo: "QuadroIdeiasWeb", want: "QDI"},
+		{repo: "helpdesk", want: "HLP"},
+		{repo: "TimeTracker", want: "TIME"},
+		{repo: "timetracker-ios", want: "TIME"},
+		{repo: "SmartHub", want: "SMART"},
+		{repo: "HubSmartApp", want: "SMART"},
+		{repo: "AuditSmartHub", want: "SMART"},
+		{repo: "ChatApp", want: "CHT"},
+		{repo: "officexApp", want: "OFX"},
+		{repo: "suporte", want: "SUP"},
+		{repo: "geral", want: "GERAL"},
 
 		// Repos not in Jira yet -> must return "" so no unrelated Jira tasks are mixed in
-		{repo: "vibe-saude", want: ""},
+		{repo: "alpha", want: ""}, // org-common token shared by AW/AM/PLAT
+		{repo: "alpha-data", want: ""},
+		{repo: "alpha-web", want: "AW"},
 		{repo: "trace-pharma", want: ""},
 		{repo: "trace-pharma-demo", want: ""},
-		{repo: "vibeservice-ponto", want: ""},
-		{repo: "vibeservice-ponto-mobile", want: ""},
-		{repo: "vibeservice", want: ""},
-		{repo: "hubVibeTex", want: ""},
-		{repo: "vibetex-bi", want: ""},
-		{repo: "vibesyncApp", want: ""},
-		{repo: "RustAgent", want: ""},
+		{repo: "service-ponto", want: ""},
+		{repo: "service-ponto-mobile", want: ""},
+		{repo: "service", want: ""},
+		{repo: "toolkit-bi", want: ""},
+		{repo: "syncApp", want: ""},
+		{repo: "AgentCLI", want: ""},
 	}
 
 	for _, tc := range cases {

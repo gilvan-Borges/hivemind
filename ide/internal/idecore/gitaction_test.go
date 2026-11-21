@@ -91,7 +91,11 @@ func TestNonInteractiveGitEnvDisablesPrompts(t *testing.T) {
 				t.Fatalf("GCM interativo: %s", entry)
 			}
 		case "GIT_ASKPASS", "SSH_ASKPASS":
-			t.Fatalf("askpass herdado: %s", entry)
+			// The canonical non-interactive form is an EMPTY value: the inherited
+			// askpass helper must be neutralized, not merely dropped.
+			if strings.TrimSpace(val) != "" {
+				t.Fatalf("askpass herdado: %s", entry)
+			}
 		}
 	}
 	if foundPrompt != 1 || foundGCM != 1 {

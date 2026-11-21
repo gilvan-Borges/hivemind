@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
+	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 )
 
 // fakeDeps records calls and returns canned values.
@@ -28,17 +28,17 @@ type fakeDeps struct {
 	startErr     error
 	cancelResult bool
 	resolveOK    bool
-	sessions     idecore.WorkspaceSessionsSummary
-	session      idecore.SessionDetail
-	files        []idecore.FileDiff
-	prs          []idecore.ProjectPullRequest
-	issues       []idecore.ProjectIssue
-	arStatus     idecore.AutoReviewStatus
+	sessions     sessionx.WorkspaceSessionsSummary
+	session      sessionx.SessionDetail
+	files        []FileDiff
+	prs          []ProjectPullRequest
+	issues       []ProjectIssue
+	arStatus     AutoReviewStatus
 }
 
 type startCall struct {
 	LaneID, Workspace, Team, Objective, JiraKey, SessionID, RunMode string
-	Images                                                          []idecore.ImageInput
+	Images                                                          []ImageInput
 }
 
 type resolveCall struct {
@@ -46,7 +46,7 @@ type resolveCall struct {
 	Approved bool
 }
 
-func (f *fakeDeps) RunStart(_ context.Context, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string, images []idecore.ImageInput) error {
+func (f *fakeDeps) RunStart(_ context.Context, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string, images []ImageInput) error {
 	f.started = append(f.started, startCall{laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images})
 	return f.startErr
 }
@@ -61,31 +61,31 @@ func (f *fakeDeps) ApprovalResolve(id string, approved bool) bool {
 	return f.resolveOK
 }
 
-func (f *fakeDeps) ListSessions(_ context.Context, _ string) (idecore.WorkspaceSessionsSummary, error) {
+func (f *fakeDeps) ListSessions(_ context.Context, _ string) (sessionx.WorkspaceSessionsSummary, error) {
 	return f.sessions, nil
 }
 
-func (f *fakeDeps) LoadSession(_ context.Context, _, _ string) (idecore.SessionDetail, error) {
+func (f *fakeDeps) LoadSession(_ context.Context, _, _ string) (sessionx.SessionDetail, error) {
 	return f.session, nil
 }
 
-func (f *fakeDeps) Diff(_ context.Context, _ string) ([]idecore.FileDiff, error) {
+func (f *fakeDeps) Diff(_ context.Context, _ string) ([]FileDiff, error) {
 	return f.files, nil
 }
 
-func (f *fakeDeps) ListPRs(_ context.Context, _ string) ([]idecore.ProjectPullRequest, error) {
+func (f *fakeDeps) ListPRs(_ context.Context, _ string) ([]ProjectPullRequest, error) {
 	return f.prs, nil
 }
 
-func (f *fakeDeps) ListIssues(_ context.Context, _ string) ([]idecore.ProjectIssue, error) {
+func (f *fakeDeps) ListIssues(_ context.Context, _ string) ([]ProjectIssue, error) {
 	return f.issues, nil
 }
 
-func (f *fakeDeps) AutoReviewStatus(workspace string) idecore.AutoReviewStatus {
+func (f *fakeDeps) AutoReviewStatus(workspace string) AutoReviewStatus {
 	return f.arStatus
 }
 
-func (f *fakeDeps) AutoReviewPoll(workspace string) idecore.AutoReviewStatus {
+func (f *fakeDeps) AutoReviewPoll(workspace string) AutoReviewStatus {
 	f.polled = append(f.polled, workspace)
 	return f.arStatus
 }
@@ -279,7 +279,7 @@ func TestProjectsAndLanesIsolation(t *testing.T) {
 	hub.RegisterRun("l1", "C:/a", "squad-a", "obj", "s1", "auto")
 	hub.RegisterRun("l2", "C:/b", "squad-b", "obj", "s2", "auto")
 
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "squad-a", Event: orchestrator.Event{Kind: "stage", Stage: "developing"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "squad-a", Event: orchestrator.Event{Kind: "stage", Stage: "developing"}})
 
 	rec := doJSON(t, srv, http.MethodGet, "/api/v1/projects", sess, nil)
 	var projs struct {
@@ -379,7 +379,7 @@ func TestSSEStreaming(t *testing.T) {
 	}
 
 	hub.RegisterRun("l1", "C:/w", "t", "obj", "", "auto")
-	hub.HandleLaneEvent(idecore.LaneEvent{LaneID: "l1", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "chief"}})
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "t", Event: orchestrator.Event{Kind: "stage", Stage: "chief"}})
 
 	if ev := nextEvent(3 * time.Second); ev.Type != "lane_event" {
 		t.Fatalf("tipo SSE errado: %+v", ev)

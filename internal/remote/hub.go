@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
@@ -48,23 +47,23 @@ type ApprovalInfo struct {
 
 // LaneEventItem is a capped transcript entry of a lane's active turn.
 type LaneEventItem struct {
-	Kind              string                 `json:"kind"`
-	Stage             string                 `json:"stage,omitempty"`
-	Author            string                 `json:"author,omitempty"`
-	Label             string                 `json:"label,omitempty"`
-	Text              string                 `json:"text,omitempty"`
-	ToolName          string                 `json:"toolName,omitempty"`
-	Tokens            int64                  `json:"tokens,omitempty"`
-	Provider          string                 `json:"provider,omitempty"`
-	Model             string                 `json:"model,omitempty"`
-	FromProvider      string                 `json:"fromProvider,omitempty"`
-	FromModel         string                 `json:"fromModel,omitempty"`
-	Tier              string                 `json:"tier,omitempty"`
-	Reasons           []string               `json:"reasons,omitempty"`
-	EstimatedMicroUSD int64                  `json:"estimatedMicroUsd,omitempty"`
-	DecisionMicros    int64                  `json:"decisionMicros,omitempty"`
+	Kind              string                   `json:"kind"`
+	Stage             string                   `json:"stage,omitempty"`
+	Author            string                   `json:"author,omitempty"`
+	Label             string                   `json:"label,omitempty"`
+	Text              string                   `json:"text,omitempty"`
+	ToolName          string                   `json:"toolName,omitempty"`
+	Tokens            int64                    `json:"tokens,omitempty"`
+	Provider          string                   `json:"provider,omitempty"`
+	Model             string                   `json:"model,omitempty"`
+	FromProvider      string                   `json:"fromProvider,omitempty"`
+	FromModel         string                   `json:"fromModel,omitempty"`
+	Tier              string                   `json:"tier,omitempty"`
+	Reasons           []string                 `json:"reasons,omitempty"`
+	EstimatedMicroUSD int64                    `json:"estimatedMicroUsd,omitempty"`
+	DecisionMicros    int64                    `json:"decisionMicros,omitempty"`
 	Health            []jev.ProviderHealthView `json:"health,omitempty"`
-	At                string                 `json:"at,omitempty"`
+	At                string                   `json:"at,omitempty"`
 }
 
 // LaneSnapshot is the live state of one (workspace, laneId) pair.
@@ -96,7 +95,7 @@ type ProjectSummary struct {
 }
 
 const (
-	maxRecentEvents    = 60
+	maxRecentEvents     = 60
 	maxApprovalsPerLane = 16
 )
 
@@ -112,14 +111,14 @@ func keyFor(workspace, laneID string) string {
 // Hub keeps the live (workspace, laneId) buffer consumed by the HTTP API and
 // fans events out to SSE subscribers.
 type Hub struct {
-	mu                 sync.Mutex
-	lanes              map[string]*laneState
-	laneWks            map[string]string // laneID -> workspace (events carry no workspace)
-	autoreview         map[string]idecore.AutoReviewStatus
-	projects           map[string]ProjectSummary
-	providerHealth     []ProviderHealthItem
-	lastHealthEmitAt   time.Time
-	subscribers        map[chan StreamEvent]struct{}
+	mu               sync.Mutex
+	lanes            map[string]*laneState
+	laneWks          map[string]string // laneID -> workspace (events carry no workspace)
+	autoreview       map[string]AutoReviewStatus
+	projects         map[string]ProjectSummary
+	providerHealth   []ProviderHealthItem
+	lastHealthEmitAt time.Time
+	subscribers      map[chan StreamEvent]struct{}
 }
 
 // NewHub creates an empty Hub.
@@ -127,7 +126,7 @@ func NewHub() *Hub {
 	return &Hub{
 		lanes:       make(map[string]*laneState),
 		laneWks:     make(map[string]string),
-		autoreview:  make(map[string]idecore.AutoReviewStatus),
+		autoreview:  make(map[string]AutoReviewStatus),
 		projects:    make(map[string]ProjectSummary),
 		subscribers: make(map[chan StreamEvent]struct{}),
 	}
@@ -168,9 +167,9 @@ func (h *Hub) RegisterRun(laneID, workspace, teamName, objective, sessionID, run
 	h.mu.Unlock()
 }
 
-// HandleLaneEvent consumes every idecore.LaneEvent emitted by the
+// HandleLaneEvent consumes every LaneEvent emitted by the
 // SessionManager, updating the live snapshot and broadcasting to SSE clients.
-func (h *Hub) HandleLaneEvent(ev idecore.LaneEvent) {
+func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 	e := ev.Event
 	at := time.Now().UTC().Format(time.RFC3339)
 
@@ -262,7 +261,7 @@ func (h *Hub) HandleRunError(laneID, workspace string, err error) {
 	st.snapshot.PendingApprovals = approvalsSlice(st.approvals)
 	h.mu.Unlock()
 
-	ev := idecore.LaneEvent{
+	ev := LaneEvent{
 		LaneID: laneID,
 		Event:  newErrorEvent(err.Error()),
 	}
@@ -306,7 +305,7 @@ func (h *Hub) MarkApprovalResolved(approvalID string, approved bool) {
 	// The resolved approval must disappear on the other device too: re-emit an
 	// approval_resolved lane event so open chats (IDE and mobile) refresh.
 	if found != nil {
-		ev := idecore.LaneEvent{
+		ev := LaneEvent{
 			LaneID: found.LaneID,
 			Team:   "",
 			Event:  approvalResolvedEvent(approvalID, approved),
@@ -318,7 +317,7 @@ func (h *Hub) MarkApprovalResolved(approvalID string, approved bool) {
 
 // HandleAutoReviewStatus records the auto-review snapshot for a workspace and
 // keeps the dedicated lane-attribution for lane-autoreview events.
-func (h *Hub) HandleAutoReviewStatus(st idecore.AutoReviewStatus) {
+func (h *Hub) HandleAutoReviewStatus(st AutoReviewStatus) {
 	h.mu.Lock()
 	h.autoreview[st.Workspace] = st
 	if st.Workspace != "" {
@@ -439,7 +438,7 @@ func (h *Hub) Snapshots(workspace string) []LaneSnapshot {
 }
 
 // AutoReviewSnapshot returns the last known auto-review status for a workspace.
-func (h *Hub) AutoReviewSnapshot(workspace string) (idecore.AutoReviewStatus, bool) {
+func (h *Hub) AutoReviewSnapshot(workspace string) (AutoReviewStatus, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	st, ok := h.autoreview[workspace]

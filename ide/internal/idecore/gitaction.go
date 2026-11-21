@@ -344,22 +344,11 @@ func emitGit(on func(GitProgress), phase, label, line string) {
 	on(GitProgress{Phase: phase, Label: label, Line: line})
 }
 
+// nonInteractiveGitEnv delegates to gitx.NonInteractiveEnv so the CLI, the
+// orchestrator and the IDE share ONE non-interactive git environment
+// (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=Never, GIT_ASKPASS=, SSH_ASKPASS=).
 func nonInteractiveGitEnv() []string {
-	drop := map[string]bool{
-		"GIT_TERMINAL_PROMPT": true,
-		"GCM_INTERACTIVE":     true,
-		"GIT_ASKPASS":         true,
-		"SSH_ASKPASS":         true,
-	}
-	out := make([]string, 0, len(os.Environ())+2)
-	for _, entry := range os.Environ() {
-		name, _, ok := strings.Cut(entry, "=")
-		if ok && drop[strings.ToUpper(name)] {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return append(out, "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	return gitx.NonInteractiveEnv()
 }
 
 func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {

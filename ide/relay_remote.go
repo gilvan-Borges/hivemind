@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
-	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/internal/relayclient"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 )
 
 func newRelayClient(a *App) *relayclient.Client {

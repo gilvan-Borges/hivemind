@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
-	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 )
 
 // mobileBridge bundles the Remote Bridge pieces owned by the App
@@ -13,19 +13,18 @@ import (
 // persisted pairing config.
 type mobileBridge struct {
 	hub     *remote.Hub
-	adapter *remote.Adapter
+	adapter *idecore.Adapter
 	server  *remote.Server
 	cfg     remote.Config
 }
 
-func newMobileBridge(sessions *idecore.SessionManager, residentMgr *idecore.ResidentManager, autoReview *idecore.AutoReviewManager) *mobileBridge {
+func newMobileBridge(sessions *idecore.SessionManager, residentMgr *idecore.ResidentManager, autoReview *idecore.AutoReviewManager, hub *remote.Hub) *mobileBridge {
 	cfg, err := remote.LoadConfig()
 	if err != nil {
 		log.Printf("aviso: remote bridge: %v", err)
 		cfg = remote.Config{Port: remote.DefaultPort}
 	}
-	hub := remote.NewHub()
-	adapter := &remote.Adapter{Sessions: sessions, Resident: residentMgr, AutoReview: autoReview, Hub: hub}
+	adapter := &idecore.Adapter{Sessions: sessions, Resident: residentMgr, AutoReview: autoReview, Hub: hub}
 	server := remote.NewServer(hub, adapter, cfg)
 	return &mobileBridge{hub: hub, adapter: adapter, server: server, cfg: cfg}
 }

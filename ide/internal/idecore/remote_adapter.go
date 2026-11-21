@@ -1,56 +1,42 @@
-package remote
+package idecore
 
 import (
 	"context"
 	"fmt"
 	"strings"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
 )
 
-// Deps abstracts the IDE services the HTTP API drives. It is implemented by
-// the Adapter below and used by both the IDE (Wails) and the headless
-// `hivemind serve` host.
-type Deps interface {
-	RunStart(ctx context.Context, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string, images []idecore.ImageInput) error
-	RunCancel(laneID string) bool
-	ApprovalResolve(id string, approved bool) bool
-	ListSessions(ctx context.Context, workspace string) (idecore.WorkspaceSessionsSummary, error)
-	LoadSession(ctx context.Context, workspace, id string) (idecore.SessionDetail, error)
-	Diff(ctx context.Context, workspace string) ([]idecore.FileDiff, error)
-	ListPRs(ctx context.Context, workspace string) ([]idecore.ProjectPullRequest, error)
-	ListIssues(ctx context.Context, workspace string) ([]idecore.ProjectIssue, error)
-	AutoReviewStatus(workspace string) idecore.AutoReviewStatus
-	AutoReviewPoll(workspace string) idecore.AutoReviewStatus
-}
-
-// Adapter is the production Deps implementation wired to a SessionManager,
-// ResidentManager, and AutoReviewManager.
+// Adapter is the IDE implementation of remote.Deps: it wires the bridge HTTP
+// API to the SessionManager, ResidentManager and AutoReviewManager services.
+// It lives in the IDE module (not in internal/remote) because the managers are
+// IDE-built; the headless CLI serve host provides its own remote.Deps.
 type Adapter struct {
-	Sessions   *idecore.SessionManager
-	Resident   *idecore.ResidentManager
-	AutoReview *idecore.AutoReviewManager
-	Hub        *Hub
+	Sessions   *SessionManager
+	Resident   *ResidentManager
+	AutoReview *AutoReviewManager
+	Hub        *remote.Hub
 }
 
-var _ Deps = (*Adapter)(nil)
+var _ remote.Deps = (*Adapter)(nil)
 
 // RunStart registers the run in the Hub, echoes the mobile message into the
 // IDE chat (bidirectional sync) and starts the turn asynchronously. Errors
 // surface through SSE as lane error events.
 //
 // When runMode == "resident", the turn routes exclusively to ResidentManager on
-// fixed lane "resident" with OriginRemote — it never touches the squad runner
-// or inherits permission_mode (§1.10, §10).
+// fixed lane "resident" with OriginRemote â€” it never touches the squad runner
+// or inherits permission_mode (Â§1.10, Â§10).
 func (a *Adapter) RunStart(
 	ctx context.Context,
 	laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string,
-	images []idecore.ImageInput,
+	images []remote.ImageInput,
 ) error {
 	if strings.EqualFold(strings.TrimSpace(runMode), resident.RunMode) {
 		if a.Resident == nil {
-			return fmt.Errorf("agente residente indisponível neste host")
+			return fmt.Errorf("agente residente indisponÃ­vel neste host")
 		}
 		laneID = resident.LaneID
 		teamName = "hive-resident"
@@ -58,10 +44,10 @@ func (a *Adapter) RunStart(
 		if a.Sessions != nil && a.Sessions.Emit != nil {
 			text := strings.TrimSpace(objective)
 			if text != "" {
-				a.Sessions.Emit(idecore.LaneEvent{
+				a.Sessions.Emit(remote.LaneEvent{
 					LaneID: laneID,
 					Team:   teamName,
-					Event:  userMessageEvent(text),
+					Event:  remote.UserMessageEvent(text),
 				})
 			}
 		}
@@ -78,10 +64,10 @@ func (a *Adapter) RunStart(
 	if a.Sessions != nil && a.Sessions.Emit != nil {
 		text := strings.TrimSpace(objective)
 		if text != "" {
-			a.Sessions.Emit(idecore.LaneEvent{
+			a.Sessions.Emit(remote.LaneEvent{
 				LaneID: laneID,
 				Team:   teamName,
-				Event:  userMessageEvent(text),
+				Event:  remote.UserMessageEvent(text),
 			})
 		}
 	}
@@ -125,42 +111,42 @@ func (a *Adapter) ApprovalResolve(id string, approved bool) bool {
 }
 
 // ListSessions lists saved sessions and total token consumption.
-func (a *Adapter) ListSessions(ctx context.Context, workspace string) (idecore.WorkspaceSessionsSummary, error) {
-	return idecore.ListWorkspaceSessions(ctx, workspace)
+func (a *Adapter) ListSessions(ctx context.Context, workspace string) (WorkspaceSessionsSummary, error) {
+	return ListWorkspaceSessions(ctx, workspace)
 }
 
 // LoadSession loads one saved session's messages to continue it.
-func (a *Adapter) LoadSession(ctx context.Context, workspace, id string) (idecore.SessionDetail, error) {
-	return idecore.LoadSessionDetail(ctx, workspace, id)
+func (a *Adapter) LoadSession(ctx context.Context, workspace, id string) (SessionDetail, error) {
+	return LoadSessionDetail(ctx, workspace, id)
 }
 
 // Diff lists modified files and hunks for a workspace.
-func (a *Adapter) Diff(ctx context.Context, workspace string) ([]idecore.FileDiff, error) {
-	return idecore.WorkspaceDiff(ctx, workspace)
+func (a *Adapter) Diff(ctx context.Context, workspace string) ([]FileDiff, error) {
+	return WorkspaceDiff(ctx, workspace)
 }
 
 // ListPRs lists open pull requests with review state (Fluxo).
-func (a *Adapter) ListPRs(ctx context.Context, workspace string) ([]idecore.ProjectPullRequest, error) {
-	return idecore.ListProjectPullRequests(ctx, workspace)
+func (a *Adapter) ListPRs(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
+	return ListProjectPullRequests(ctx, workspace)
 }
 
 // ListIssues lists the user's Jira tasks (assignee = currentUser()) + GitHub issues.
-func (a *Adapter) ListIssues(ctx context.Context, workspace string) ([]idecore.ProjectIssue, error) {
-	return idecore.ListProjectIssues(ctx, workspace)
+func (a *Adapter) ListIssues(ctx context.Context, workspace string) ([]ProjectIssue, error) {
+	return ListProjectIssues(ctx, workspace)
 }
 
 // AutoReviewStatus returns the Auto-Review snapshot for a workspace.
-func (a *Adapter) AutoReviewStatus(workspace string) idecore.AutoReviewStatus {
+func (a *Adapter) AutoReviewStatus(workspace string) AutoReviewStatus {
 	if a.AutoReview == nil {
-		return idecore.AutoReviewStatus{Workspace: workspace, State: "idle"}
+		return AutoReviewStatus{Workspace: workspace, State: "idle"}
 	}
 	return a.AutoReview.GetStatus(workspace)
 }
 
 // AutoReviewPoll triggers an immediate Auto-Review poll.
-func (a *Adapter) AutoReviewPoll(workspace string) idecore.AutoReviewStatus {
+func (a *Adapter) AutoReviewPoll(workspace string) AutoReviewStatus {
 	if a.AutoReview == nil {
-		return idecore.AutoReviewStatus{Workspace: workspace, State: "idle"}
+		return AutoReviewStatus{Workspace: workspace, State: "idle"}
 	}
 	return a.AutoReview.TriggerPoll(workspace)
 }

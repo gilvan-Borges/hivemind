@@ -21,36 +21,27 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 // DiffLineKind classifies a line inside a unified diff.
-type DiffLineKind string
+type DiffLineKind = remote.DiffLineKind
 
 const (
-	DiffHeader  DiffLineKind = "header"
-	DiffHunk    DiffLineKind = "hunk"
-	DiffAdded   DiffLineKind = "added"
-	DiffRemoved DiffLineKind = "removed"
-	DiffContext DiffLineKind = "context"
+	DiffHeader  = remote.DiffHeader
+	DiffHunk    = remote.DiffHunk
+	DiffAdded   = remote.DiffAdded
+	DiffRemoved = remote.DiffRemoved
+	DiffContext = remote.DiffContext
 )
 
 // DiffLine is one colored line in the diff viewer.
-type DiffLine struct {
-	Kind DiffLineKind `json:"kind"`
-	Text string       `json:"text"`
-}
+type DiffLine = remote.DiffLine
 
 // FileDiff holds the parsed patch and line stats for one modified file.
-type FileDiff struct {
-	Path    string     `json:"path"`
-	Status  string     `json:"status,omitempty"` // "M", "U", "A", "D", "R"
-	Staged  bool       `json:"staged,omitempty"`
-	Added   int        `json:"added"`
-	Removed int        `json:"removed"`
-	Lines   []DiffLine `json:"lines"`
-}
+type FileDiff = remote.FileDiff
 
 // ParseUnifiedDiff splits git unified diff output into per-file FileDiff entries.
 func ParseUnifiedDiff(raw string) []FileDiff {
@@ -687,7 +678,7 @@ func OpenPullRequest(ctx context.Context, workspace, title, body, baseBranch str
 	if err != nil {
 		return githubx.PullRequest{}, err
 	}
-	owner, repo, ok := githubx.ParseRemote(url)
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(url)
 	if !ok {
 		return githubx.PullRequest{}, fmt.Errorf("remote origin não é GitHub: %s", url)
 	}
@@ -754,11 +745,13 @@ func DiscardFileChanges(ctx context.Context, workspaceDir, relPath string) error
 	if !g.IsRepo(ctx, workspaceDir) {
 		return fmt.Errorf("o diretório não é um repositório Git")
 	}
-	// Check if file is tracked in HEAD
+	// Check if file is tracked in HEAD (literal pathspec so file names with
+	// metacharacters ("-", ":", ":(top)", globs) are never reinterpreted by git).
 	if g.HasCommit(ctx, workspaceDir) {
-		if _, err := runGit(ctx, workspaceDir, "ls-files", "--error-unmatch", "--", relClean); err == nil {
-			_, _ = runGit(ctx, workspaceDir, "reset", "HEAD", "--", relClean)
-			_, err := runGit(ctx, workspaceDir, "checkout", "--", relClean)
+		lit := gitx.LiteralPathspec(relClean)
+		if _, err := runGit(ctx, workspaceDir, "ls-files", "--error-unmatch", "--", lit); err == nil {
+			_, _ = runGit(ctx, workspaceDir, "reset", "HEAD", "--", lit)
+			_, err := runGit(ctx, workspaceDir, "checkout", "--", lit)
 			return err
 		}
 	}
@@ -1032,34 +1025,10 @@ func CheckoutGitBranch(ctx context.Context, workspace, branch string, create boo
 }
 
 // ProjectSubtask represents a Jira subtask or child issue summarized inside a parent issue card.
-type ProjectSubtask struct {
-	Key     string `json:"key"`
-	Summary string `json:"summary"`
-	Status  string `json:"status,omitempty"`
-	Done    bool   `json:"done"`
-	URL     string `json:"url,omitempty"`
-}
+type ProjectSubtask = remote.ProjectSubtask
 
 // ProjectIssue represents a Jira or GitHub issue listed in the IDE sidebar.
-type ProjectIssue struct {
-	Source         string           `json:"source"` // "jira" or "github"
-	Key            string           `json:"key"`    // e.g. "PROJ-12" or "#42"
-	Title          string           `json:"title"`
-	Body           string           `json:"body,omitempty"`
-	Status         string           `json:"status,omitempty"`
-	IssueType      string           `json:"issueType,omitempty"`
-	IsSubtask      bool             `json:"isSubtask,omitempty"`
-	ParentKey      string           `json:"parentKey,omitempty"`
-	ParentTitle    string           `json:"parentTitle,omitempty"`
-	ParentURL      string           `json:"parentUrl,omitempty"`
-	SubtaskTotal   int              `json:"subtaskTotal,omitempty"`
-	SubtaskDone    int              `json:"subtaskDone,omitempty"`
-	SubtaskPending int              `json:"subtaskPending,omitempty"`
-	Subtasks       []ProjectSubtask `json:"subtasks,omitempty"`
-	Author         string           `json:"author,omitempty"`
-	URL            string           `json:"url,omitempty"`
-	IsMine         bool             `json:"isMine,omitempty"`
-}
+type ProjectIssue = remote.ProjectIssue
 
 func buildMyJiraIssuesJQL(projectKey string) string {
 	projKey := strings.ToUpper(sanitizeJiraProjectKey(projectKey))
@@ -1069,6 +1038,11 @@ func buildMyJiraIssuesJQL(projectKey string) string {
 	return "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
 }
 
+// matchJiraProjectFromNames infers which Jira project corresponds to a
+// repository using ONLY generic signals: exact key equality, containment of
+// the normalized project title, and discriminative token matching between the
+// repo/remote/branch names and the project names. No customer-specific terms
+// are hardcoded (Spec 08: proprietary heuristics removed).
 func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string {
 	if len(projs) == 0 {
 		return ""
@@ -1083,16 +1057,59 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 		return b.String()
 	}
 
-	// stripAffixes removes common mobile/web/org prefixes and suffixes to extract the core product name.
-	stripAffixes := func(raw string) []string {
-		s := strings.ToLower(strings.TrimSpace(raw))
+	// genericTechSuffixes are engineering-generic words stripped from repo
+	// names before matching; nothing client-specific lives here. Tokens that
+	// ARE purely technical (mobile, web, api, ...) are never used as
+	// matching candidates: they identify no project by themselves.
+	genericTechSuffixes := []string{
+		"-mobile", "_mobile", "mobile",
+		"-ios", "_ios", "-android", "_android",
+		"-app", "_app", "app",
+		"-web", "_web", "web",
+		"-front", "_front", "-frontend", "_frontend",
+		"-back", "_back", "-backend", "_backend",
+		"-api", "_api", "api",
+		"-core", "_core", "-service", "_service", "-srv", "_srv",
+		"-demo", "_demo",
+	}
+	genericTechSet := map[string]bool{}
+	for _, suf := range genericTechSuffixes {
+		genericTechSet[normAlpha(suf)] = true
+	}
+
+	// splitNameTokens breaks a raw name into normalized tokens:
+	// separator tokens ( -, _ . space / ) AND camelCase humps, with
+	// engineering-generic suffixes stripped. Input case is preserved here so
+	// humps are detected; normalization happens per token.
+	splitNameTokens := func(raw string) []string {
+		s := strings.TrimSpace(raw)
 		if s == "" {
 			return nil
 		}
+		var rawTokens []string
+		for _, pt := range strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' || r == '/' }) {
+			if pt != "" {
+				rawTokens = append(rawTokens, pt)
+			}
+		}
+		// camelCase humps (consecutive capitals stay together: "VIBETIME" is one token)
+		for _, pt := range rawTokens {
+			var cur []rune
+			for i, r := range pt {
+				if i > 0 && r >= 'A' && r <= 'Z' && !(cur[len(cur)-1] >= 'A' && cur[len(cur)-1] <= 'Z') {
+					rawTokens = append(rawTokens, string(cur))
+					cur = cur[:0]
+				}
+				cur = append(cur, r)
+			}
+			if len(cur) > 0 {
+				rawTokens = append(rawTokens, string(cur))
+			}
+		}
 		var out []string
 		add := func(v string) {
-			v = strings.Trim(v, "-_. ")
-			if v == "" {
+			v = normAlpha(v)
+			if len(v) < 3 || genericTechSet[v] {
 				return
 			}
 			for _, existing := range out {
@@ -1102,131 +1119,145 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 			}
 			out = append(out, v)
 		}
-		add(s)
-		cur := s
-		for changed := true; changed; {
-			changed = false
-			for _, pref := range []string{"app-", "app_", "hub-", "hub_", "auditoria-", "auditoria_", "vibetex-", "vibetex_", "projeto-", "projeto_"} {
-				if strings.HasPrefix(cur, pref) && len(cur) > len(pref)+1 {
-					cur = strings.TrimPrefix(cur, pref)
-					add(cur)
-					changed = true
-				}
-			}
-			for _, camelPref := range []string{"auditoriavibe", "appvibe", "hubvibe", "vibetex"} {
-				if strings.HasPrefix(cur, camelPref) && len(cur) > len(camelPref)+1 {
-					rest := strings.TrimPrefix(cur, camelPref)
-					if strings.HasPrefix(camelPref, "auditoriavibe") || strings.HasPrefix(camelPref, "appvibe") || strings.HasPrefix(camelPref, "hubvibe") {
-						rest = "vibe" + rest
+		for _, tok := range rawTokens {
+			t := strings.ToLower(tok)
+			cur := t
+			for changed := true; changed; {
+				changed = false
+				for _, suf := range genericTechSuffixes {
+					if strings.HasSuffix(cur, suf) && len(cur) > len(suf)+1 {
+						cur = strings.TrimSuffix(cur, suf)
+						changed = true
 					}
-					cur = rest
-					add(cur)
-					changed = true
 				}
 			}
-			for _, camelPref := range []string{"app", "hub", "auditoria"} {
-				if strings.HasPrefix(cur, camelPref) && len(cur) > len(camelPref)+2 && cur != "apple" {
-					cur = strings.TrimPrefix(cur, camelPref)
-					add(cur)
-					changed = true
-				}
-			}
-			for _, suf := range []string{
-				"-mobile", "_mobile", "mobile",
-				"-ios", "_ios", "-android", "_android",
-				"-app", "_app", "app",
-				"-web", "_web", "web",
-				"-front", "_front", "-frontend", "_frontend",
-				"-back", "_back", "-backend", "_backend",
-				"-api", "_api", "api",
-				"-core", "_core", "-service", "_service", "-srv", "_srv",
-				"-demo", "_demo", "atualizado",
-			} {
-				if strings.HasSuffix(cur, suf) && len(cur) > len(suf)+1 {
-					cur = strings.TrimSuffix(cur, suf)
-					add(cur)
-					changed = true
-				}
-			}
-		}
-		if parts := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' }); len(parts) > 1 {
-			for _, pt := range parts {
-				if len(pt) >= 3 && pt != "app" && pt != "web" && pt != "mobile" && pt != "ios" && pt != "api" && pt != "vibe" && pt != "vibetex" {
-					add(pt)
-				}
-			}
+			add(cur)
+			add(t)
 		}
 		return out
 	}
 
 	var candidates []string
 	addSource := func(raw string) {
-		for _, v := range stripAffixes(raw) {
-			seen := false
-			for _, c := range candidates {
-				if c == v {
-					seen = true
-					break
-				}
-			}
-			if !seen {
-				candidates = append(candidates, v)
-			}
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			return
+		}
+		if nc := normAlpha(s); len(nc) >= 3 {
+			candidates = appendIfMissing(candidates, nc)
+		}
+		for _, tok := range splitNameTokens(s) {
+			candidates = appendIfMissing(candidates, tok)
 		}
 	}
 	for _, raw := range rawNames {
 		addSource(raw)
 	}
 
-	// 1. Exact key match (e.g., "ipg" / "ipg-mobile" -> "IPG").
+	// Project-side index: original key, main title (case preserved for hump
+	// detection) and alias title, plus token frequency across the org.
+	type projTokens struct {
+		origKey string
+		main    string
+		toks    []string
+	}
+	projects := make([]projTokens, 0, len(projs))
+	titleTokenFreq := map[string]int{}
+	for _, p := range projs {
+		rawName := strings.TrimSpace(p.Name)
+		mainTitle := rawName
+		aliasTitle := ""
+		if openIdx := strings.IndexByte(rawName, '('); openIdx >= 0 {
+			mainTitle = rawName[:openIdx]
+			if closeIdx := strings.IndexByte(rawName[openIdx:], ')'); closeIdx > 1 {
+				aliasTitle = rawName[openIdx+1 : openIdx+closeIdx]
+			}
+		}
+		pt := projTokens{origKey: p.Key, main: normAlpha(mainTitle)}
+		for _, tok := range splitNameTokens(mainTitle) {
+			pt.toks = appendIfMissing(pt.toks, tok)
+		}
+		for _, tok := range splitNameTokens(aliasTitle) {
+			pt.toks = appendIfMissing(pt.toks, tok)
+		}
+		for _, tok := range pt.toks {
+			titleTokenFreq[tok]++
+		}
+		projects = append(projects, pt)
+	}
+
+	// 1. Exact key match (repo "acme" or "acme-mobile" -> project key "ACME").
 	for _, cand := range candidates {
-		for _, p := range projs {
-			if strings.EqualFold(p.Key, cand) {
-				return sanitizeJiraProjectKey(p.Key)
+		for _, pt := range projects {
+			if cand == normAlpha(pt.origKey) {
+				return sanitizeJiraProjectKey(pt.origKey)
 			}
 		}
 	}
 
-	// 2. Normalized project Name match (e.g., "vibePromotor" / "vibepromotor-drops" -> "VibePromotor (DROPS)" [VPD],
-	// "AppSolBrilhante" -> "Sol Brilhante" [SB], "vibetexCedae" -> "Cedae" [CED], "suporte" -> "Vibe Suporte" [VS],
-	// "PraticoMuralWeb" -> "Mural de Troca" [MDT]).
+	// 2. Containment match on the normalized (org-unique) project title or an
+	// exact org-unique title token. Titles shared by more than one project
+	// never match by containment alone.
 	for _, cand := range candidates {
-		nc := normAlpha(cand)
-		if len(nc) < 3 || nc == "vibe" || nc == "vibetex" || nc == "geral" {
-			continue
-		}
-		for _, p := range projs {
-			// Split Jira project name into main title and parenthetical alias, e.g. "VibePromotor (DROPS)" -> ["vibepromotor", "drops"]
-			rawName := strings.ToLower(p.Name)
-			mainTitle := rawName
-			aliasTitle := ""
-			if openIdx := strings.IndexByte(rawName, '('); openIdx >= 0 {
-				mainTitle = rawName[:openIdx]
-				if closeIdx := strings.IndexByte(rawName[openIdx:], ')'); closeIdx > 1 {
-					aliasTitle = rawName[openIdx+1 : openIdx+closeIdx]
+		for _, pt := range projects {
+			if len(pt.main) >= 4 && titleTokenFreq[pt.main] <= 1 {
+				if cand == pt.main || strings.Contains(cand, pt.main) {
+					return sanitizeJiraProjectKey(pt.origKey)
 				}
 			}
-			nm := normAlpha(mainTitle)
-			na := normAlpha(aliasTitle)
-			// Strip generic "vibe" prefix from Jira project name for matching (e.g. "Vibe Suporte" -> "suporte")
-			nmNoVibe := strings.TrimPrefix(nm, "vibe")
-
-			if (nm != "" && (nc == nm || strings.Contains(nc, nm))) ||
-				(na != "" && len(na) >= 3 && (nc == na || strings.Contains(nc, na))) ||
-				(len(nmNoVibe) >= 4 && (nc == nmNoVibe || strings.HasSuffix(nc, nmNoVibe))) ||
-				(strings.Contains(nc, "mural") && strings.Contains(nm, "mural")) {
-				return sanitizeJiraProjectKey(p.Key)
+			for _, tok := range pt.toks {
+				if len(tok) >= 4 && titleTokenFreq[tok] <= 1 && cand == tok {
+					return sanitizeJiraProjectKey(pt.origKey)
+				}
 			}
+		}
+	}
+
+	// 3. Discriminative token match: a repo token that appears in exactly ONE
+	// project of the org pins that project. Tokens shared by several projects
+	// are ambiguous and never match.
+	for _, cand := range candidates {
+		matches := 0
+		matchKey := ""
+		for _, pt := range projects {
+			if cand == normAlpha(pt.origKey) {
+				matches++
+				matchKey = pt.origKey
+				continue
+			}
+			for _, tok := range pt.toks {
+				if tok == cand {
+					matches++
+					matchKey = pt.origKey
+					break
+				}
+			}
+		}
+		if matches == 1 && matchKey != "" {
+			return sanitizeJiraProjectKey(matchKey)
 		}
 	}
 	return ""
 }
 
-// inferJiraProjectKeyForWorkspace matches the current workspace/repository name
-// (e.g. "ipg", "ipg-mobile", "appVibePromotor-drops", "vibetexCedae", "PraticoMuralWeb", "suporte")
-// against the organization's Jira projects (e.g. IPG, VPD, CED, MDT, VS, VB, VBWHTS, VC, VOF, SB, RKSAM).
-// If the repository has no corresponding project in Jira yet (e.g. "vibe-saude", "trace-pharma", "vibeservice-ponto"),
-// it returns ("", true) when multiple Jira projects exist in the org so tasks from unrelated Jira projects are NEVER mixed in.
+func appendIfMissing(list []string, v string) []string {
+	if v == "" {
+		return list
+	}
+	for _, existing := range list {
+		if existing == v {
+			return list
+		}
+	}
+	return append(list, v)
+}
+
+// inferJiraProjectKeyForWorkspace matches the current workspace/repository
+// name against the organization's Jira projects using the generic heuristics
+// of matchJiraProjectFromNames (exact key, unique-title containment and
+// discriminative tokens). If the repository has no corresponding project in
+// Jira yet, it returns ("", true) when multiple Jira projects exist in the org
+// so tasks from unrelated Jira projects are NEVER mixed in.
 func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (matchedKey string, hasMultipleOrgProjects bool) {
 	if strings.TrimSpace(workspaceDir) == "" {
 		return "", false
@@ -1243,7 +1274,7 @@ func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (
 	g := gitx.Local{}
 	if g.IsRepo(ctx, workspaceDir) {
 		if remoteURL, rErr := g.RemoteURL(ctx, workspaceDir); rErr == nil {
-			if _, repo, ok := githubx.ParseRemote(remoteURL); ok {
+			if _, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL); ok {
 				rawNames = append(rawNames, repo)
 			}
 		}
@@ -1310,11 +1341,11 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 				}
 				hasMultiOrgProjs := false
 				if projKey == "" && !strings.EqualFold(cfgProj, "*") {
+					// READ-ONLY inference (Spec 08): ListProjectIssues must never
+					// mutate .hivemind/team.yaml during a listing call. The inferred
+					// key only scopes THIS query; persisting a binding stays an
+					// explicit user action (EnableProjectJira via quick selector).
 					projKey, hasMultiOrgProjs = inferJiraProjectKeyForWorkspace(ctx, workspace)
-					if projKey != "" {
-						// Persist the inferred project key in team.yaml so subsequent runs & tools know it immediately.
-						EnableProjectJira(workspace, projKey)
-					}
 				}
 				if projKey == "" && !hasMultiOrgProjs {
 					projKey = sanitizeJiraProjectKey(res.DefaultProject)
@@ -1436,7 +1467,7 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 	g := gitx.Local{}
 	if g.IsRepo(ctx, workspace) {
 		if remoteURL, err := g.RemoteURL(ctx, workspace); err == nil {
-			if owner, repo, ok := githubx.ParseRemote(remoteURL); ok {
+			if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL); ok {
 				currentUser, _ := githubx.Detect(owner, repo).CurrentUser(ctx)
 				token, baseURL, _ := githubx.LoadCredentials()
 				if token != "" {
@@ -1490,87 +1521,82 @@ func listIssuesREST(ctx context.Context, baseURL, owner, repo, token, currentUse
 	if base == "" {
 		base = githubx.DefaultAPIBaseURL
 	}
-	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues?state=open&per_page=30", base, url.PathEscape(owner), url.PathEscape(repo))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "HiveMind-IDE")
-
-	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var raw []struct {
-		Number      int             `json:"number"`
-		Title       string          `json:"title"`
-		Body        string          `json:"body"`
-		State       string          `json:"state"`
-		HTMLURL     string          `json:"html_url"`
-		PullRequest json.RawMessage `json:"pull_request"`
-		User        struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, err
-	}
+	// Paginated by the Link header (up to githubx page cap) so repos with more
+	// open issues than one page are no longer silently truncated.
 	var out []ProjectIssue
-	for _, it := range raw {
-		if len(bytes.TrimSpace(it.PullRequest)) > 0 && string(bytes.TrimSpace(it.PullRequest)) != "null" {
-			continue // GitHub's /issues endpoint also returns PRs; skip them here.
+	path := fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100", url.PathEscape(owner), url.PathEscape(repo))
+	for page := 0; page < 10; page++ {
+		endpoint := base + path
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
 		}
-		author := strings.TrimSpace(it.User.Login)
-		out = append(out, ProjectIssue{
-			Source: "github",
-			Key:    fmt.Sprintf("#%d", it.Number),
-			Title:  it.Title,
-			Body:   it.Body,
-			Status: strings.ToUpper(it.State),
-			Author: author,
-			URL:    it.HTMLURL,
-			IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
-		})
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		req.Header.Set("User-Agent", "HiveMind-IDE")
+
+		resp, err := githubx.SharedHTTPClient().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		linkHeader := resp.Header.Get("Link")
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var raw []struct {
+			Number      int             `json:"number"`
+			Title       string          `json:"title"`
+			Body        string          `json:"body"`
+			State       string          `json:"state"`
+			HTMLURL     string          `json:"html_url"`
+			PullRequest json.RawMessage `json:"pull_request"`
+			User        struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		for _, it := range raw {
+			if len(bytes.TrimSpace(it.PullRequest)) > 0 && string(bytes.TrimSpace(it.PullRequest)) != "null" {
+				continue // GitHub's /issues endpoint also returns PRs; skip them here.
+			}
+			author := strings.TrimSpace(it.User.Login)
+			out = append(out, ProjectIssue{
+				Source: "github",
+				Key:    fmt.Sprintf("#%d", it.Number),
+				Title:  it.Title,
+				Body:   it.Body,
+				Status: strings.ToUpper(it.State),
+				Author: author,
+				URL:    it.HTMLURL,
+				IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
+			})
+		}
+		next, ok := githubx.ParseLinkNext(linkHeader)
+		if !ok || len(raw) == 0 {
+			break
+		}
+		if u, err := url.Parse(next); err == nil && u.Path != "" {
+			path = u.Path
+			if u.RawQuery != "" {
+				path += "?" + u.RawQuery
+			}
+		} else {
+			break
+		}
 	}
 	return out, nil
 }
 
 // ProjectPullRequest represents an open GitHub pull request listed in the IDE sidebar.
-type ProjectPullRequest struct {
-	Number              int      `json:"number"`
-	Title               string   `json:"title"`
-	Body                string   `json:"body,omitempty"`
-	URL                 string   `json:"url"`
-	State               string   `json:"state"`
-	IsDraft             bool     `json:"isDraft"`
-	Author              string   `json:"author,omitempty"`
-	HeadRef             string   `json:"headRef,omitempty"`
-	BaseRef             string   `json:"baseRef,omitempty"`
-	UpdatedAt           string   `json:"updatedAt,omitempty"`
-	ReviewDecision      string   `json:"reviewDecision,omitempty"`
-	RequestedReviewers  []string `json:"requestedReviewers,omitempty"`
-	IsMine              bool     `json:"isMine,omitempty"`
-	ReviewRequested     bool     `json:"reviewRequested,omitempty"`
-	MyResponse          string   `json:"myResponse,omitempty"`          // "", "approved", "changes_requested", "commented"
-	NeedsAttention      bool     `json:"needsAttention,omitempty"`      // true when the PR needs currentUser's attention now
-	AttentionReason     string   `json:"attentionReason,omitempty"`     // "Sua revisão", "Re-revisão", "Nova resposta", "Novo commit", "Você foi marcado", "Ajustes", "Pronto p/ merge"
-	MentionedMe         bool     `json:"mentionedMe,omitempty"`         // true when another human mentioned @me after my last interaction
-	LastActivityAt      string   `json:"lastActivityAt,omitempty"`      // RFC3339 timestamp of the latest relevant external activity
-	LastActivityAuthor  string   `json:"lastActivityAuthor,omitempty"`  // login of the user behind LastActivityAt
-	LastActivityKind    string   `json:"lastActivityKind,omitempty"`    // "mention", "comment", "review_approved", "review_changes", "review_requested", "commit"
-	LastActivitySnippet string   `json:"lastActivitySnippet,omitempty"` // short excerpt of the latest comment/review
-}
+type ProjectPullRequest = remote.ProjectPullRequest
 
 type prActivityReview struct {
 	Author      string
@@ -2043,7 +2069,7 @@ func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPu
 	if err != nil {
 		return nil, nil
 	}
-	owner, repo, ok := githubx.ParseRemote(remoteURL)
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
 	if !ok {
 		return nil, nil
 	}
@@ -2103,7 +2129,7 @@ func CloseOwnGitHubItem(ctx context.Context, workspace, kind string, number int)
 	if err != nil {
 		return err
 	}
-	owner, repo, ok := githubx.ParseRemote(remoteURL)
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
 	if !ok {
 		return fmt.Errorf("remote origin não é GitHub")
 	}
@@ -2147,19 +2173,77 @@ func CloseOwnGitHubItem(ctx context.Context, workspace, kind string, number int)
 	return nil
 }
 
-func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectPullRequest, error) {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if base == "" {
-		base = githubx.DefaultAPIBaseURL
-	}
-	endpoint := base + "/graphql"
-	if strings.HasSuffix(base, "/api/v3") {
-		endpoint = strings.TrimSuffix(base, "/v3") + "/graphql"
-	}
+const graphqlPRPageSize = 50
+const graphqlPRMaxPages = 4
 
-	const query = `query($owner:String!,$repo:String!){
+// graphqlPRNode mirrors one pullRequests GraphQL node.
+type graphqlPRNode struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	URL            string `json:"url"`
+	State          string `json:"state"`
+	IsDraft        bool   `json:"isDraft"`
+	HeadRefName    string `json:"headRefName"`
+	BaseRefName    string `json:"baseRefName"`
+	UpdatedAt      string `json:"updatedAt"`
+	ReviewDecision string `json:"reviewDecision"`
+	Author         *struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	ReviewRequests struct {
+		Nodes []struct {
+			RequestedReviewer struct {
+				Login string `json:"login"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
+	Reviews struct {
+		Nodes []struct {
+			State       string `json:"state"`
+			Body        string `json:"body"`
+			SubmittedAt string `json:"submittedAt"`
+			Author      *struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"reviews"`
+	Comments struct {
+		Nodes []struct {
+			Body      string `json:"body"`
+			CreatedAt string `json:"createdAt"`
+			Author    *struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"comments"`
+	ReviewThreads struct {
+		Nodes []struct {
+			Comments struct {
+				Nodes []struct {
+					Body      string `json:"body"`
+					CreatedAt string `json:"createdAt"`
+					Author    *struct {
+						Login string `json:"login"`
+					} `json:"author"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				CommittedDate string `json:"committedDate"`
+				PushedDate    string `json:"pushedDate"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+const prsGraphQLQuery = `query($owner:String!,$repo:String!,$after:String){
   repository(owner:$owner,name:$repo){
-    pullRequests(states:OPEN,first:30,orderBy:{field:UPDATED_AT,direction:DESC}){
+    pullRequests(states:OPEN,first:` + "%d" + `,after:$after,orderBy:{field:UPDATED_AT,direction:DESC}){
+      pageInfo{ hasNextPage endCursor }
       nodes{
         number
         title
@@ -2217,103 +2301,81 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
     }
   }
 }`
+
+// listPullRequestsGraphQL fetches open pull requests through the GraphQL API,
+// following pageInfo.endCursor so repos with more open PRs than a single page
+// are no longer silently truncated (Spec 08 pagination).
+func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectPullRequest, error) {
+	var out []ProjectPullRequest
+	me := strings.TrimSpace(currentUser)
+	after := ""
+	for page := 0; page < graphqlPRMaxPages; page++ {
+		nodes, hasNext, endCursor, err := fetchPRsGraphQLPage(ctx, baseURL, owner, repo, token, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mapGraphQLPRNodes(nodes, me)...)
+		if !hasNext || endCursor == "" || len(nodes) == 0 {
+			break
+		}
+		after = endCursor
+	}
+	return out, nil
+}
+
+// fetchPRsGraphQLPage performs ONE GraphQL page request using the shared
+// githubx HTTP client and returns the raw nodes plus the cursor state.
+func fetchPRsGraphQLPage(ctx context.Context, baseURL, owner, repo, token, after string) (nodes []graphqlPRNode, hasNext bool, endCursor string, err error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = githubx.DefaultAPIBaseURL
+	}
+	endpoint := base + "/graphql"
+	if strings.HasSuffix(base, "/api/v3") {
+		endpoint = strings.TrimSuffix(base, "/v3") + "/graphql"
+	}
+	query := fmt.Sprintf(prsGraphQLQuery, graphqlPRPageSize)
 	payloadBytes, err := json.Marshal(map[string]any{
 		"query": query,
 		"variables": map[string]string{
 			"owner": owner,
 			"repo":  repo,
+			"after": after,
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "HiveMind-IDE")
 
-	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(req)
+	resp, err := githubx.SharedHTTPClient().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, false, "", readErr
 	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("github graphql %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, false, "", fmt.Errorf("github graphql %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var env struct {
 		Data struct {
 			Repository struct {
 				PullRequests struct {
-					Nodes []struct {
-						Number         int    `json:"number"`
-						Title          string `json:"title"`
-						Body           string `json:"body"`
-						URL            string `json:"url"`
-						State          string `json:"state"`
-						IsDraft        bool   `json:"isDraft"`
-						HeadRefName    string `json:"headRefName"`
-						BaseRefName    string `json:"baseRefName"`
-						UpdatedAt      string `json:"updatedAt"`
-						ReviewDecision string `json:"reviewDecision"`
-						Author         *struct {
-							Login string `json:"login"`
-						} `json:"author"`
-						ReviewRequests struct {
-							Nodes []struct {
-								RequestedReviewer struct {
-									Login string `json:"login"`
-								} `json:"requestedReviewer"`
-							} `json:"nodes"`
-						} `json:"reviewRequests"`
-						Reviews struct {
-							Nodes []struct {
-								State       string `json:"state"`
-								Body        string `json:"body"`
-								SubmittedAt string `json:"submittedAt"`
-								Author      *struct {
-									Login string `json:"login"`
-								} `json:"author"`
-							} `json:"nodes"`
-						} `json:"reviews"`
-						Comments struct {
-							Nodes []struct {
-								Body      string `json:"body"`
-								CreatedAt string `json:"createdAt"`
-								Author    *struct {
-									Login string `json:"login"`
-								} `json:"author"`
-							} `json:"nodes"`
-						} `json:"comments"`
-						ReviewThreads struct {
-							Nodes []struct {
-								Comments struct {
-									Nodes []struct {
-										Body      string `json:"body"`
-										CreatedAt string `json:"createdAt"`
-										Author    *struct {
-											Login string `json:"login"`
-										} `json:"author"`
-									} `json:"nodes"`
-								} `json:"comments"`
-							} `json:"nodes"`
-						} `json:"reviewThreads"`
-						Commits struct {
-							Nodes []struct {
-								Commit struct {
-									CommittedDate string `json:"committedDate"`
-									PushedDate    string `json:"pushedDate"`
-								} `json:"commit"`
-							} `json:"nodes"`
-						} `json:"commits"`
-					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []graphqlPRNode `json:"nodes"`
 				} `json:"pullRequests"`
 			} `json:"repository"`
 		} `json:"data"`
@@ -2322,15 +2384,21 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	if len(env.Errors) > 0 && len(env.Data.Repository.PullRequests.Nodes) == 0 {
-		return nil, fmt.Errorf("github graphql: %s", env.Errors[0].Message)
+		return nil, false, "", fmt.Errorf("github graphql: %s", env.Errors[0].Message)
 	}
+	return env.Data.Repository.PullRequests.Nodes,
+		env.Data.Repository.PullRequests.PageInfo.HasNextPage,
+		env.Data.Repository.PullRequests.PageInfo.EndCursor,
+		nil
+}
 
-	me := strings.TrimSpace(currentUser)
-	out := make([]ProjectPullRequest, 0, len(env.Data.Repository.PullRequests.Nodes))
-	for _, n := range env.Data.Repository.PullRequests.Nodes {
+// mapGraphQLPRNodes converts raw GraphQL nodes into ProjectPullRequest entries.
+func mapGraphQLPRNodes(nodes []graphqlPRNode, me string) []ProjectPullRequest {
+	var out []ProjectPullRequest
+	for _, n := range nodes {
 		author := ""
 		if n.Author != nil {
 			author = strings.TrimSpace(n.Author.Login)
@@ -2425,93 +2493,107 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 			LastActivitySnippet: flow.LastActivitySnippet,
 		})
 	}
-	return out, nil
+	return out
 }
-
 func listPullRequestsREST(ctx context.Context, baseURL, owner, repo, token, currentUser string) ([]ProjectPullRequest, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		base = githubx.DefaultAPIBaseURL
 	}
-	endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&per_page=30",
-		base, url.PathEscape(owner), url.PathEscape(repo))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "HiveMind-IDE")
-
-	client := &http.Client{Timeout: 12 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var raw []struct {
-		Number    int    `json:"number"`
-		Title     string `json:"title"`
-		Body      string `json:"body"`
-		HTMLURL   string `json:"html_url"`
-		State     string `json:"state"`
-		Draft     bool   `json:"draft"`
-		UpdatedAt string `json:"updated_at"`
-		User      struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		Head struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-		Base struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-		RequestedReviewers []struct {
-			Login string `json:"login"`
-		} `json:"requested_reviewers"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, err
-	}
 	me := strings.TrimSpace(currentUser)
-	prs := make([]ProjectPullRequest, 0, len(raw))
-	for _, item := range raw {
-		author := strings.TrimSpace(item.User.Login)
-		var reqs []string
-		reviewReq := false
-		for _, rr := range item.RequestedReviewers {
-			login := strings.TrimSpace(rr.Login)
-			if login == "" {
-				continue
-			}
-			reqs = append(reqs, login)
-			if me != "" && strings.EqualFold(login, me) {
-				reviewReq = true
-			}
+	var prs []ProjectPullRequest
+	// Paginated by the Link header (up to 10 pages of 100) via the shared
+	// githubx HTTP client.
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&per_page=100", url.PathEscape(owner), url.PathEscape(repo))
+	for page := 0; page < 10; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+		if err != nil {
+			return nil, err
 		}
-		prs = append(prs, ProjectPullRequest{
-			Number:             item.Number,
-			Title:              item.Title,
-			Body:               item.Body,
-			URL:                item.HTMLURL,
-			State:              strings.ToUpper(item.State),
-			IsDraft:            item.Draft,
-			Author:             author,
-			HeadRef:            item.Head.Ref,
-			BaseRef:            item.Base.Ref,
-			UpdatedAt:          item.UpdatedAt,
-			RequestedReviewers: reqs,
-			IsMine:             me != "" && strings.EqualFold(author, me),
-			ReviewRequested:    reviewReq,
-		})
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		req.Header.Set("User-Agent", "HiveMind-IDE")
+
+		resp, err := githubx.SharedHTTPClient().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		linkHeader := resp.Header.Get("Link")
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("github API %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var raw []struct {
+			Number    int    `json:"number"`
+			Title     string `json:"title"`
+			Body      string `json:"body"`
+			HTMLURL   string `json:"html_url"`
+			State     string `json:"state"`
+			Draft     bool   `json:"draft"`
+			UpdatedAt string `json:"updated_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Head struct {
+				Ref string `json:"ref"`
+			} `json:"head"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+			RequestedReviewers []struct {
+				Login string `json:"login"`
+			} `json:"requested_reviewers"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		for _, item := range raw {
+			author := strings.TrimSpace(item.User.Login)
+			var reqs []string
+			reviewReq := false
+			for _, rr := range item.RequestedReviewers {
+				login := strings.TrimSpace(rr.Login)
+				if login == "" {
+					continue
+				}
+				reqs = append(reqs, login)
+				if me != "" && strings.EqualFold(login, me) {
+					reviewReq = true
+				}
+			}
+			prs = append(prs, ProjectPullRequest{
+				Number:             item.Number,
+				Title:              item.Title,
+				Body:               item.Body,
+				URL:                item.HTMLURL,
+				State:              strings.ToUpper(item.State),
+				IsDraft:            item.Draft,
+				Author:             author,
+				HeadRef:            item.Head.Ref,
+				BaseRef:            item.Base.Ref,
+				UpdatedAt:          item.UpdatedAt,
+				RequestedReviewers: reqs,
+				IsMine:             me != "" && strings.EqualFold(author, me),
+				ReviewRequested:    reviewReq,
+			})
+		}
+		next, ok := githubx.ParseLinkNext(linkHeader)
+		if !ok || len(raw) == 0 {
+			break
+		}
+		if u, err := url.Parse(next); err == nil && u.Path != "" {
+			path = u.Path
+			if u.RawQuery != "" {
+				path += "?" + u.RawQuery
+			}
+		} else {
+			break
+		}
 	}
 	return prs, nil
 }
