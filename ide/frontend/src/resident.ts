@@ -424,9 +424,38 @@ function renderResidentChatHtml(): string {
         `;
       }).join("");
 
+  const pendingApprovals = residentState.messages.filter((m) => m.kind === "approval" && !m.resolved);
+  const approvalDockHtml =
+    pendingApprovals.length === 0
+      ? ""
+      : `
+        <div class="chat-approval-dock">
+          ${pendingApprovals
+            .map((m) => {
+              const risk = formatRiskBadge(m.riskTier);
+              const detail = m.toolDetail ? `${m.toolName || "ação"} · ${m.toolDetail}` : (m.text || m.toolName || "");
+              return `
+                <div class="chat-approval-dock-row">
+                  <div class="chat-approval-dock-info">
+                    <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
+                    <span class="chat-approval-dock-title">${escapeHtml(m.label || "Aprovação do Agent Hive")}</span>
+                    ${detail ? `<span class="chat-approval-dock-detail">${escapeHtml(detail)}</span>` : ""}
+                  </div>
+                  <div class="chat-approval-dock-actions">
+                    <button type="button" class="mini primary" data-res-appr-ok="${escapeHtml(m.approvalId || "")}">${icons.check}<span>Aprovar ação</span></button>
+                    <button type="button" class="mini danger" data-res-appr-no="${escapeHtml(m.approvalId || "")}"><span>Negar</span></button>
+                  </div>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `;
+
   return `
     <div class="resident-chat-body" id="res-chat-scroll">${msgsHtml}</div>
     <div class="resident-composer">
+      ${approvalDockHtml}
       <textarea id="res-chat-input" rows="2" placeholder="Peça ao Hive Residente para inspecionar, editar arquivos ou rodar um binário autorizado na sandbox… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
       <div class="resident-composer-actions">
         <span class="dim">Auditoria fsync antes de cada efeito · escrita/execução exigem aprovação + sandbox do SO · saída cercada contra prompt injection</span>
@@ -758,13 +787,25 @@ export function bindResidentViewEvents(): void {
   document.querySelectorAll<HTMLElement>("[data-res-appr-ok]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.resApprOk || "";
-      if (id) await api()?.RespondApproval(id, true);
+      if (!id) return;
+      const target = residentState.messages.find((m) => m.kind === "approval" && m.approvalId === id && !m.resolved);
+      if (target) {
+        target.resolved = "approved";
+        rerenderResidentIfOpen();
+      }
+      await api()?.RespondApproval(id, true);
     });
   });
   document.querySelectorAll<HTMLElement>("[data-res-appr-no]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.resApprNo || "";
-      if (id) await api()?.RespondApproval(id, false);
+      if (!id) return;
+      const target = residentState.messages.find((m) => m.kind === "approval" && m.approvalId === id && !m.resolved);
+      if (target) {
+        target.resolved = "denied";
+        rerenderResidentIfOpen();
+      }
+      await api()?.RespondApproval(id, false);
     });
   });
 

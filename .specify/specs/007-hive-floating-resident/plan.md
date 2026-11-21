@@ -86,6 +86,7 @@ Métodos Wails no `OrbApp` (`ide/orb_window.go`):
    - Timeline rolável com:
      - Estado vazio: ícone `icons.sparkle` + `"Agent Hive pronto"` + workspace/sandbox badge + 3 sugestões clicáveis (`"Resumo do workspace"`, `"Git status e branch"`, `"Revisar alterações"`).
      - Mensagens (`user`, `chief` com `renderMarkdownLite`, `tool` com badge de risco, `approval` com botões **Aprovar** / **Recusar**, `error`).
+   - **Barra fixa de aprovação perto do chat**: sempre que existir aprovação pendente (`!resolved`), renderizar dock compacto imediatamente acima do `<textarea>` do composer com selo de risco, ação e botões **Aprovar / Negar**.
    - Composer fixo no rodapé do chat:
      - `<textarea>` auto-ajustável (`--surface-input`, placeholder `"Fale com o Agent Hive... (Enter envia)"`).
      - Botão primário `Enviar` (`--action-primary`) ou `Parar` (`--color-danger`) quando `resident.running === true`.

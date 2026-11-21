@@ -74,6 +74,7 @@ export function renderRightPane() {
       <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
     </div>
     <div class="composer-wrap">
+      <div class="chat-approval-dock" id="chat-approval-dock" hidden></div>
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
         <div class="composer-images" id="composer-images" style="display:none"></div>
@@ -101,6 +102,7 @@ export function renderRightPane() {
   renderTokenBar();
   renderComposerImages();
   rebuildChatMessagesFull();
+  renderChatApprovalDock();
   bindRightStaticEvents();
   syncChatExpandLayout();
 }
@@ -857,6 +859,7 @@ export function rebuildChatMessagesFull() {
     frag.appendChild(createMessageElement(m));
   }
   box.appendChild(frag);
+  renderChatApprovalDock();
   scrollChatIfAuto();
 }
 
@@ -888,6 +891,7 @@ export function flushChatUpdates() {
   renderPipelineBar();
   renderTokenBar();
   syncComposerButtons();
+  renderChatApprovalDock();
   scrollChatIfAuto();
 }
 
@@ -915,6 +919,123 @@ export function syncComposerButtons() {
       ? "Equipe trabalhando… digite para interromper e redirecionar, ou clique em Parar"
       : "Descreva a tarefa para a equipe… (Ctrl+V cola print, Ctrl+L envia seleção, @arquivo, /ajuda)";
   }
+  renderChatApprovalDock();
+}
+
+export function renderChatApprovalDock() {
+  const dock = document.getElementById("chat-approval-dock");
+  const lane = activeLane();
+  if (!dock || !lane) return;
+
+  const pendingApprovals = lane.messages.filter((m) => m.kind === "approval" && !m.resolved);
+  const pendingPlans = lane.messages.filter((m) => m.kind === "plan" && !m.approved);
+
+  if (pendingApprovals.length === 0 && pendingPlans.length === 0) {
+    dock.hidden = true;
+    dock.innerHTML = "";
+    return;
+  }
+
+  const parts: string[] = [];
+
+  for (const m of pendingApprovals) {
+    const targetId = m.approvalId || lane.id || "";
+    const detail = (m.text || m.toolName || "Confirmação solicitada antes de continuar.").trim();
+    parts.push(`
+      <div class="chat-approval-dock-row" data-dock-msg="${escapeHtml(m.id)}">
+        <div class="chat-approval-dock-info">
+          <span class="chat-approval-dock-pill">${icons.bolt}<span>Aprovação pendente</span></span>
+          <span class="chat-approval-dock-title">${escapeHtml(m.label || "Permissão Solicitada")}</span>
+          <span class="chat-approval-dock-detail">${escapeHtml(detail)}</span>
+        </div>
+        <div class="chat-approval-dock-actions">
+          <button type="button" class="mini primary" data-dock-approve="${escapeHtml(m.id)}" data-dock-target="${escapeHtml(targetId)}">
+            ${icons.check}<span>Autorizar</span>
+          </button>
+          <button type="button" class="mini danger" data-dock-deny="${escapeHtml(m.id)}" data-dock-target="${escapeHtml(targetId)}">
+            <span>Negar</span>
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  for (const m of pendingPlans) {
+    const actionLabel =
+      m.gate === "docs"
+        ? "Aprovar Docs & Criar Tasks no Jira"
+        : m.gate === "jira"
+          ? "Aprovar Backlog & Disparar Squad"
+          : "Aprovar & Executar Squad";
+    parts.push(`
+      <div class="chat-approval-dock-row" data-dock-msg="${escapeHtml(m.id)}">
+        <div class="chat-approval-dock-info">
+          <span class="chat-approval-dock-pill">${icons.plan}<span>Aprovação de etapa</span></span>
+          <span class="chat-approval-dock-title">${escapeHtml(m.label || "Plano pronto para aprovação")}</span>
+        </div>
+        <div class="chat-approval-dock-actions">
+          <button type="button" class="mini primary" data-dock-plan="${escapeHtml(m.id)}">
+            ${icons.play}<span>${escapeHtml(actionLabel)}</span>
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  dock.innerHTML = parts.join("");
+  dock.hidden = false;
+
+  const syncInlineCard = (msgId: string) => {
+    const msg = lane.messages.find((x) => x.id === msgId);
+    if (!msg) return;
+    const card = document.querySelector<HTMLElement>(`#chat-messages [data-msg-id="${CSS.escape(msgId)}"]`);
+    if (card) updateMessageElement(card, msg);
+  };
+
+  dock.querySelectorAll<HTMLElement>("[data-dock-approve]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const msgId = btn.dataset.dockApprove || "";
+      const targetId = btn.dataset.dockTarget || "";
+      const msg = lane.messages.find((x) => x.id === msgId);
+      if (!msg || msg.resolved || !targetId) return;
+      msg.resolved = "approved";
+      syncInlineCard(msgId);
+      renderChatApprovalDock();
+      await api()?.RespondApproval(targetId, true);
+    });
+  });
+
+  dock.querySelectorAll<HTMLElement>("[data-dock-deny]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const msgId = btn.dataset.dockDeny || "";
+      const targetId = btn.dataset.dockTarget || "";
+      const msg = lane.messages.find((x) => x.id === msgId);
+      if (!msg || msg.resolved || !targetId) return;
+      msg.resolved = "denied";
+      syncInlineCard(msgId);
+      renderChatApprovalDock();
+      await api()?.RespondApproval(targetId, false);
+    });
+  });
+
+  dock.querySelectorAll<HTMLElement>("[data-dock-plan]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const msgId = btn.dataset.dockPlan || "";
+      const msg = lane.messages.find((x) => x.id === msgId);
+      if (!msg || msg.approved) return;
+      msg.approved = true;
+      syncInlineCard(msgId);
+      renderChatApprovalDock();
+      if (msg.gate === "docs") {
+        void sendToChief(
+          "Gate 1 aprovado: Docs & Arquitetura SDD aprovados. Crie agora o backlog no Jira (Epics, Tasks e Subtasks) espelhando specs/05-tarefas.md, grave as chaves de volta na spec e registre as ondas com delegate_to_squad. Pare no Gate 2.",
+          "plan:sdd-jira",
+        );
+      } else {
+        executeApprovedPlan();
+      }
+    });
+  });
 }
 
 export function syncScrollBottomBtn() {

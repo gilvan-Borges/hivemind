@@ -25,7 +25,8 @@ Hoje existem duas experiências separadas para o mesmo conceito:
 ### Inclui
 - **Identidade unificada:** Nomear o agente e o título/cabeçalho tanto do painel flutuante quanto da aba residente como **Agent Hive** (ex.: `Agent Hive · <workspace>` + modelo/rota ativa e chip de estado `ocioso` / `pensando` / `aguardando você`).
 - **Chat bidirecional direto no Orb flutuante (aba padrão ao clicar no mascote):**
-  - Timeline compacta da conversa do **Agent Hive** (mensagens do usuário, respostas em markdown/texto do Agent Hive, chips de ferramentas executadas com nível de risco e cartões inline de **Aprovar / Recusar** quando `approval_required` disparar).
+  - Timeline compacta da conversa do **Agent Hive** (mensagens do usuário, respostas em markdown/texto do Agent Hive e chips de ferramentas executadas com nível de risco).
+  - **Barra fixa de aprovação pendente logo acima do campo de chat (`composer`)**: sempre que houver uma solicitação de aprovação (`approval_required`), os botões **Aprovar / Recusar** + resumo e selo de risco ficam ancorados imediatamente acima da caixa de texto, sem depender de rolagem do histórico.
   - Composer no rodapé para digitar um comando/pergunta (`Enter` envia, `Shift+Enter` quebra linha, botão `Enviar` e botão `Parar` quando `running === true`).
   - Seletor rápido de **workstream** (`geral` ou ativo) no cabeçalho/sublinha ou leitura sincronizada com `ResidentStatus()`.
 - **Alternância limpa com Avisos e Configuração do Mascote:**

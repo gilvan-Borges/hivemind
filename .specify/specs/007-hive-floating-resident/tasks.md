@@ -14,7 +14,7 @@
 ### Fase 2 — Interface Unificada do Agent Hive Flutuante (`ide/frontend/`)
 - [ ] **D001 [D1/D2/D3]** Criar estilos `.orb-tabs`, `.orb-chat-list`, `.orb-msg`, `.orb-approval`, `.orb-composer`, `.orb-suggestions` em `ide/frontend/src/styles.css` usando apenas tokens semânticos (`--surface-*`, `--text-*`, `--accent*`, `--action-primary*`, `--color-*`).
 - [ ] **D002 [D6]** Validar zero emojis estruturais (usar `icons.ts`: `icons.sparkle`, `icons.closeSmall`, `icons.chevronDown`, etc.).
-- [ ] **H006 [D5]** Atualizar `ide/frontend/src/orb/view.ts` nomeando o agente flutuante como **Agent Hive**, colocando a aba **Conversa** como tela inicial ao clicar no mascote, com os 4 estados obrigatórios (carregando, erro, vazio com atalhos, dados com streaming + cartões de aprovação inline).
+- [ ] **H006 [D5]** Atualizar `ide/frontend/src/orb/view.ts` nomeando o agente flutuante como **Agent Hive**, colocando a aba **Conversa** como tela inicial ao clicar no mascote, com os 4 estados obrigatórios (carregando, erro, vazio com atalhos, dados com streaming) e barra fixa de aprovação pendente ancorada logo acima do composer.
 - [ ] **H007** Preservar histórico/rascunho do input no Orb durante updates SSE parciais (`hivemind:orb-state`) sem perder foco ou apagar o que o usuário está digitando no `<textarea>`.
 - [ ] **H008** Adicionar listener `hivemind:open-resident` em `ide/frontend/src/boot.ts` / `ide/frontend/src/resident.ts` para abrir a aba **Agent Hive** (`hive:resident`) ao clicar em **Abrir IDE** no flutuante e manter `residentState.messages` em sincronia quando mensagens nascerem pelo Orb.
 
