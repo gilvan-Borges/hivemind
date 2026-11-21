@@ -321,9 +321,9 @@ export function renderGitGraphSectionHtml(): string {
           ${icons.gitSmall}
           <span>${g.allBranches ? "Auto" : "Branch"}</span>
         </button>
-        <button type="button" class="icon-btn" data-git-action="fetch" title="Fetch (buscar atualizações)">${icons.arrowDown}</button>
-        <button type="button" class="icon-btn" data-git-action="pull" title="Pull (baixar commits)">${icons.download}</button>
-        <button type="button" class="icon-btn" data-git-action="push" title="Push (enviar commits)">${icons.arrowUp}</button>
+        <button type="button" class="icon-btn" data-git-action="fetch" title="Fetch (buscar atualizações)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "fetch" ? icons.spinner : icons.arrowDown}</button>
+        <button type="button" class="icon-btn" data-git-action="pull" title="Pull (baixar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "pull" ? icons.spinner : icons.download}</button>
+        <button type="button" class="icon-btn" data-git-action="push" title="Push (enviar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "push" ? icons.spinner : icons.arrowUp}</button>
         <button type="button" class="icon-btn" id="btn-refresh-graph" title="Atualizar Graph">${icons.refresh}</button>
       </div>
       ${g.collapsed ? "" : `
@@ -813,8 +813,8 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         <button type="button" class="icon-btn" id="btn-header-commit" title="Commitar alterações" ${hasDiffs ? "" : "disabled"}>${icons.check}</button>
         <button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>
         <div class="scm-more-wrap">
-          <button type="button" class="icon-btn" id="btn-scm-more" title="Mais ações Git…">${icons.moreHoriz}</button>
-          ${state.gitMoreMenuOpen ? `
+          <button type="button" class="icon-btn" id="btn-scm-more" title="Mais ações Git…" ${state.gitOp.running ? "disabled" : ""}>${icons.moreHoriz}</button>
+          ${state.gitMoreMenuOpen && !state.gitOp.running ? `
             <div class="scm-dropdown scm-more-menu" id="scm-more-dropdown">
               <button type="button" class="dropdown-item" data-git-action="pull">Pull</button>
               <button type="button" class="dropdown-item" data-git-action="push">Push</button>
@@ -838,11 +838,12 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
     <div class="sidebar-body scm-body">
       <div class="scm-repo-strip">
         <span class="gh-dot ${hasGit ? "ok" : "off"}"></span>
-        <span class="scm-branch-label">${hasGit ? escapeHtml(proj!.branch) : "Sem repositório Git"}</span>
+        <span class="scm-branch-label">${state.gitOp.running ? icons.spinner : ""}<span id="scm-branch-git-label">${escapeHtml(state.gitOp.running ? (state.gitOp.label || (hasGit ? proj!.branch : "")) : (hasGit ? proj!.branch : "Sem repositório Git"))}</span></span>
         <button type="button" class="scm-gh-pill ${gh?.loggedIn ? "ok" : "off"}" id="btn-github-connector" title="${escapeHtml([gh?.detail || "Configurar Conector GitHub Nativo", gh?.remote].filter(Boolean).join(" — "))}">
           ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : "Conectar GitHub"}
         </button>
       </div>
+      ${gitOpPanelHtml()}
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
 
       <div class="git-subtabs scm-tabs-pad">
@@ -908,18 +909,118 @@ export async function openCommitInEditor(hash: string) {
   }
 }
 
+const GIT_OP_LABEL: Record<string, string> = {
+  pull: "Puxando",
+  push: "Enviando",
+  fetch: "Buscando",
+  sync: "Sincronizando",
+  stash: "Guardando alterações",
+  "stash-pop": "Restaurando stash",
+};
+
+export function gitTimeoutSec(): number {
+  try {
+    const n = Number(localStorage.getItem("hivemind.gitTimeoutSec") || "");
+    if (Number.isFinite(n) && n >= 15 && n <= 3600) return Math.floor(n);
+  } catch {
+    // preview sem storage
+  }
+  return 120;
+}
+
+function gitTargetLabel(action: string): string {
+  const branch = state.project?.branch ? `origin/${state.project.branch}` : "origin";
+  const verb = GIT_OP_LABEL[action] || `Executando git ${action}`;
+  if (action === "stash" || action === "stash-pop") return `${verb}…`;
+  return `${verb} de ${branch}…`.replace("Enviando de ", "Enviando para ").replace("Sincronizando de ", "Sincronizando com ");
+}
+
+function gitOpPanelHtml(): string {
+  const op = state.gitOp;
+  if (!op.running && !op.result && !op.error) return "";
+  const headline = op.running ? op.label : op.error || op.result;
+  return `
+    <div class="scm-git-op ${op.error ? "is-error" : ""}" role="status" aria-live="polite">
+      <div class="scm-git-op-head">
+        ${op.running ? icons.spinner : ""}
+        <span id="scm-git-label">${escapeHtml(headline)}</span>
+        ${op.running ? `<button type="button" class="mini" id="btn-cancel-git" aria-label="Cancelar operação Git">Cancelar</button>` : ""}
+      </div>
+      <details class="scm-git-log-wrap" ${op.running ? "open" : ""}>
+        <summary>Saída do git</summary>
+        <pre id="scm-git-log" class="scm-git-log" title="Limite ${gitTimeoutSec()}s. Ajuste hivemind.gitTimeoutSec ou HIVEMIND_GIT_TIMEOUT.">${escapeHtml(op.log)}</pre>
+      </details>
+    </div>`;
+}
+
+export function appendGitProgress(label: string, line: string) {
+  if (label) state.gitOp.label = label;
+  if (line) {
+    state.gitOp.log = state.gitOp.log ? `${state.gitOp.log}\n${line}` : line;
+    if (state.gitOp.log.length > 12000) state.gitOp.log = state.gitOp.log.slice(-12000);
+  }
+  const lab = document.getElementById("scm-git-label");
+  const branch = document.getElementById("scm-branch-git-label");
+  if (lab && label) lab.textContent = label;
+  if (branch && label && state.gitOp.running) branch.textContent = label;
+  const pre = document.getElementById("scm-git-log");
+  if (pre) {
+    pre.textContent = state.gitOp.log;
+    pre.scrollTop = pre.scrollHeight;
+    return;
+  }
+  if (state.sidebarView === "git") renderLeftSidebar();
+}
+
+export async function cancelGitAction() {
+  const backend = api();
+  if (!backend?.CancelGitAction || !state.project) return;
+  try {
+    await backend.CancelGitAction(state.project.root);
+  } catch (err: any) {
+    toastError("cancelar o git", err);
+  }
+}
+
 export async function runGitScmAction(action: string) {
   const backend = api();
-  if (!backend || !state.project || !backend.RunGitAction) return;
-  setStatus(`Executando git ${action}…`);
+  if (!backend || !state.project || state.gitOp.running) return;
+  const label = gitTargetLabel(action);
+  state.gitMoreMenuOpen = false;
+  state.gitOp = { running: true, action, label, log: "", result: "", error: "" };
+  setStatus(label);
+  if (state.sidebarView === "git") renderLeftSidebar();
   try {
-    const out = await backend.RunGitAction(state.project.root, action);
-    setStatus(out || `Git ${action} concluído.`);
-    toast(out || `Git ${action} concluído.`, "success");
+    const out = backend.RunGitActionTimeout
+      ? await backend.RunGitActionTimeout(state.project.root, action, gitTimeoutSec())
+      : await backend.RunGitAction(state.project.root, action);
+    const summary = out || `Git ${action} concluído.`;
+    state.gitOp.running = false;
+    state.gitOp.result = summary;
+    state.gitOp.error = "";
+    state.gitOp.label = summary;
+    setStatus(summary);
+    toast(summary, "success");
     await refreshDiffs();
     await loadGitGraph();
   } catch (err: any) {
-    toastError(`executar git ${action}`, err);
+    const reason = err instanceof Error ? err.message : typeof err === "string" ? err : err?.message || "";
+    const clean = String(reason || "").trim();
+    state.gitOp.running = false;
+    if (/cancelad/i.test(clean)) {
+      state.gitOp.result = "Operação cancelada.";
+      state.gitOp.error = "";
+      state.gitOp.label = "Operação cancelada.";
+      setStatus("Operação de git cancelada.");
+      toast("Operação de git cancelada.", "info");
+    } else {
+      state.gitOp.error = clean || `Não foi possível executar git ${action}.`;
+      state.gitOp.result = "";
+      state.gitOp.label = state.gitOp.error;
+      toastError(`executar git ${action}`, err);
+    }
+  } finally {
+    if (state.sidebarView === "git") renderLeftSidebar();
   }
 }
 
@@ -977,10 +1078,10 @@ export function bindGitSidebarEvents() {
     try {
       const msg = await backend.CommitChanges(state.project.root, state.commitMsgInput, mode === "push");
       state.commitMsgInput = "";
-      if (mode === "sync" && backend.RunGitAction) {
-        const syncMsg = await backend.RunGitAction(state.project.root, "sync");
-        setStatus(`${msg} ${syncMsg}`);
-        toast(`${msg} ${syncMsg}`, "success");
+      if (mode === "sync") {
+        setStatus(msg);
+        toast(msg, "success");
+        await runGitScmAction("sync");
       } else {
         setStatus(msg);
         toast(msg, "success");
@@ -1058,10 +1159,14 @@ export function bindGitSidebarEvents() {
 
   document.querySelectorAll("[data-git-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (state.gitOp.running) return;
       state.gitMoreMenuOpen = false;
       const action = (btn as HTMLElement).dataset.gitAction!;
       void runGitScmAction(action);
     });
+  });
+  document.getElementById("btn-cancel-git")?.addEventListener("click", () => {
+    void cancelGitAction();
   });
 
   document.getElementById("menu-github-connector")?.addEventListener("click", () => {

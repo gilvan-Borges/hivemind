@@ -1015,6 +1015,8 @@ export interface WailsBackendApp {
   DiscardFile(workspace: string, relPath: string): Promise<void>;
   StageFile(workspace: string, relPath: string, stage: boolean): Promise<void>;
   RunGitAction(workspace: string, action: string): Promise<string>;
+  RunGitActionTimeout?(workspace: string, action: string, timeoutSec: number): Promise<string>;
+  CancelGitAction?(workspace: string): Promise<boolean>;
   ListGitGraph(workspace: string, limit: number, allBranches: boolean): Promise<GitGraphCommit[]>;
   GetCommitDetail(workspace: string, hash: string): Promise<CommitDetail>;
   RevertHunk(workspace: string, relPath: string, hunkHeader: string, hunkLines: string[]): Promise<void>;

@@ -2400,56 +2400,11 @@ func GetCommitDetail(ctx context.Context, workspaceDir, hash string) (CommitDeta
 
 // RunGitAction executes safe, allowlisted Source Control actions (pull, push, fetch, sync, stash, stash-pop).
 func RunGitAction(ctx context.Context, workspaceDir, action string) (string, error) {
-	g := gitx.Local{}
-	if !g.IsRepo(ctx, workspaceDir) {
-		return "", fmt.Errorf("esta pasta não é um repositório Git")
+	res, err := RunGitActionProgress(ctx, workspaceDir, action, nil)
+	if err != nil {
+		return "", err
 	}
-	switch strings.ToLower(strings.TrimSpace(action)) {
-	case "fetch":
-		if _, err := runGit(ctx, workspaceDir, "fetch", "--all", "--prune"); err != nil {
-			return "", err
-		}
-		return "Fetch concluído (remotes atualizados).", nil
-	case "pull":
-		if _, err := runGit(ctx, workspaceDir, "pull", "--rebase"); err != nil {
-			return "", err
-		}
-		return "Pull concluído.", nil
-	case "push":
-		branch, err := g.CurrentBranch(ctx, workspaceDir)
-		if err != nil || branch == "" {
-			return "", fmt.Errorf("branch atual não identificada")
-		}
-		if err := g.Push(ctx, workspaceDir, "origin", branch); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Push concluído na branch %s.", branch), nil
-	case "sync":
-		if _, err := runGit(ctx, workspaceDir, "pull", "--rebase"); err != nil {
-			return "", err
-		}
-		branch, _ := g.CurrentBranch(ctx, workspaceDir)
-		if branch != "" {
-			if err := g.Push(ctx, workspaceDir, "origin", branch); err != nil {
-				return "", err
-			}
-		}
-		return "Sync (Pull + Push) concluído.", nil
-	case "stash":
-		out, err := runGit(ctx, workspaceDir, "stash", "push", "-u", "-m", "HiveMind IDE stash")
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(out), nil
-	case "stash-pop":
-		out, err := runGit(ctx, workspaceDir, "stash", "pop")
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(out), nil
-	default:
-		return "", fmt.Errorf("ação Git não suportada: %s", action)
-	}
+	return res.Summary, nil
 }
 
 func sanitizeJiraProjectKey(raw string) string {
