@@ -1,6 +1,6 @@
 # Spec — Jev, orquestrador de modelo e de saúde dos provedores
 
-**Status:** fases 1 a 5 implementadas. O classificador nasce ligado; arquivo sem a chave fica ligado e `classifyEnabled: false` explícito continua desligado.
+**Status:** Fases 1 a 5 + provedor oficial **TypeSafe AI (`typesafe`)** implementadas. O classificador nasce ligado; arquivo sem a chave fica ligado e `classifyEnabled: false` explícito continua desligado. Pendências remanescentes (expor Vertex AI na UI e failover opcional no Residente) e melhorias de arquitetura/resiliência estão consolidadas em [`docs/specs/06-jev-router-resilience-and-telemetry.md`](specs/06-jev-router-resilience-and-telemetry.md) e [`docs/specs/PLANO_IMPLEMENTACAO.md`](specs/PLANO_IMPLEMENTACAO.md).
 **Data:** 2026-11-20
 **Escopo:** o lado Hive deste repositório (`hivemind-go`): CLI, HiveMind IDE (Go + Wails) e o processo que `hivemind serve` já sobe. O app Android (`HiveMind-App`, outro repositório) só entra como cliente do contrato que já consome. Esta spec não desenha tela nativa do app. Desenha o que o host passa a emitir e o que o app precisa reconhecer.
 

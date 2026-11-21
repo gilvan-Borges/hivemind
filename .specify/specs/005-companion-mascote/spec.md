@@ -1,6 +1,6 @@
 # Spec 005 — Companion com mascote
 
-> Status: Aprovado
+> Status: Implementado
 > Alvos: [x] HiveMind IDE (`ide/frontend`) · [ ] HiveMind-App (`HiveMind-App`)
 > Regras aplicáveis: D1, D2, D3, D4, D6, D7 (`.specify/memory/constitution.md`)
 
@@ -39,8 +39,8 @@ Nenhum hex novo fora de `:root`. O mascote usa `currentColor`.
 O estado não depende só da cor: o balão traz texto e o botão do mascote atualiza o `aria-label`.
 
 ## 6. Critérios de Aceite
-- [ ] Zero cores literais novas fora de `:root`.
-- [ ] `node ide/frontend/scripts/check-design-tokens.mjs` sem falhas.
-- [ ] `npm test` e `npm run build` em `ide/frontend` passando.
-- [ ] `prefers-reduced-motion` desliga as animações. Animações só com `transform` e `opacity`.
-- [ ] Paridade com `HiveMind-App`: sem token novo, nada a espelhar em `Theme.kt`.
+- [x] Zero cores literais novas fora de `:root`.
+- [x] `node ide/frontend/scripts/check-design-tokens.mjs` sem falhas.
+- [x] `npm test` e `npm run build` em `ide/frontend` passando.
+- [x] `prefers-reduced-motion` desliga as animações. Animações só com `transform` e `opacity`.
+- [x] Paridade com `HiveMind-App`: sem token novo, nada a espelhar em `Theme.kt`.

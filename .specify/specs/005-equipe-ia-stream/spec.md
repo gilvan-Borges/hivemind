@@ -1,6 +1,6 @@
 # Spec de Design — 005-equipe-ia-stream
 
-> Status: Aprovado
+> Status: Implementado
 > Alvos: [x] HiveMind IDE (`ide/frontend`) · [ ] HiveMind-App (`HiveMind-App`)
 > Regras aplicáveis: D1–D8 (`.specify/memory/constitution.md`)
 
@@ -31,7 +31,7 @@ O card da Equipe IA mostra o slug do agente (`chefe`) em vez do modelo que está
 | `--text-secondary` | `--surface-card` | >= 4.5:1 |
 
 ## 6. Critérios de Aceite
-- [ ] Zero cores literais fora de `:root` / `Theme.kt`.
-- [ ] `node ide/frontend/scripts/check-design-tokens.mjs` sem falhas.
-- [ ] `npm test` e `npm run build` em `ide/frontend` passando.
-- [ ] Parser com fixture real do stream do Cursor.
+- [x] Zero cores literais fora de `:root` / `Theme.kt`.
+- [x] `node ide/frontend/scripts/check-design-tokens.mjs` sem falhas.
+- [x] `npm test` e `npm run build` em `ide/frontend` passando.
+- [x] Parser com fixture real do stream do Cursor.

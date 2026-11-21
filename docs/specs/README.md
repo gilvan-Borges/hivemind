@@ -1,6 +1,8 @@
 # Auditoria Arquitetural & Specs de Refatoração — HiveMind
 
 > Revisão técnica completa do repositório `c:\hivemind` (Orquestrador, Jev/ModelX/Vault, IDE Go + Frontend TS, Git/GitHub/Jira, Relaywire, MCP, CLI/TUI, `HiveMind-App` e CI/Deploy), comparando a implementação atual com padrões de engenharia do **Google (SRE, ADK, IAM, Desktop/Mobile)** e da **Anthropic (Agent Harness, KV-Cache, Context Engineering, Sandboxing)**.
+>
+> **Documento vivo de execução (todas as pendências + o que já foi feito):** [**`PLANO_IMPLEMENTACAO.md`**](PLANO_IMPLEMENTACAO.md)
 
 ---
 

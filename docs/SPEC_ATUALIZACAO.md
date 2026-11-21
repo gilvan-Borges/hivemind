@@ -1,6 +1,6 @@
 # Spec — Atualização HiveMind (pareamento seguro, residente fora da IDE, revisão)
 
-**Status:** proposta. Este arquivo não altera código. O que está descrito como comportamento atual foi lido no repositório; o que é desenho novo está marcado como proposta. O que não foi verificado está marcado como **desconhecido**.
+**Status:** Fases **1 a 7 implementadas**; Fases **8 e 9 pendentes** (consolidadas em [`docs/specs/PLANO_IMPLEMENTACAO.md`](specs/PLANO_IMPLEMENTACAO.md)). O que está descrito como comportamento base foi lido no repositório; Fases 8 e 9 seguem como plano de execução. O que não foi verificado está marcado como **desconhecido**.
 **Data:** 2026-11-20
 **Idioma:** português (Brasil)
 
@@ -59,17 +59,17 @@ A cota do Jev é um caso à parte e **não é um buraco total**. A seção 11 re
 
 A ordem é a do risco, não a da lista original. Cada fase fecha sozinha. Não se antecipa a fase seguinte.
 
-| Ordem | Fase | Motivo de estar aqui |
-| --- | --- | --- |
-| 1 | Pareamento LAN cifrado | O token de longo prazo e o plano de dados saem em claro na rede local hoje. |
-| 2 | Auditoria sem comando/caminho em claro, e os dois documentos de política | O log durável ainda guarda o alvo (`internal/resident/fence.go`, `RedactTarget`). |
-| 3 | Aviso de cota do Jev | O failover entre provedores já existe no caminho do squad. Falta o aviso e o percentual onde a sonda não mede. |
-| 4 | Handoff sanitizado e recusa de ciclo | O loop Dev→QA já tem teto. Falta o pacote e a recusa explícita fora dele. |
-| 5 | Review Center | Depende do pacote da fase 4 para não reinventar a mensagem ao agente. |
-| 6 | Monitor de sessões externas, só leitura | Não há adaptador real de ação ainda. Ligar botão agora mentiria. |
-| 7 | Manifesto JSON de detector | Subfase opcional da 6. Sem a 6, o manifesto não tem hospedeiro. |
-| 8 | Hive Residente (nome provisório) fora da IDE | O núcleo já funciona na gaveta. A casca é processo novo e IPC. |
-| 9 | Releases | Adiada. Não executar. |
+| Ordem | Fase | Status | Motivo de estar aqui |
+| --- | --- | --- | --- |
+| 1 | Pareamento LAN cifrado | **Implementada** | Token 256 bits migrado para `tokenHash` + `naclbox` v2 (`ide/internal/remote/lan.go`). |
+| 2 | Auditoria sem comando/caminho em claro, e os dois documentos de política | **Implementada** | `audit.jsonl` grava `TargetClass`/`TargetHash`; criados `docs/PRIVACIDADE.md` e `docs/MODELO_AMEACAS.md`. |
+| 3 | Aviso de cota do Jev | **Implementada** | Avisos aos 20% e 10% restantes e texto `cota não medida` na UI/chip. |
+| 4 | Handoff sanitizado e recusa de ciclo | **Implementada** | `HandoffPackage` + `handoff_rejected` em `internal/orchestrator/handoff.go`. |
+| 5 | Review Center | **Implementada** | `LineNote` em `internal/reviewx/review.go` e UI de comentários por hunk/linha. |
+| 6 | Monitor de sessões externas, só leitura | **Implementada** | Descoberta em `internal/extsess/` (Toolhelp / processo). |
+| 7 | Manifesto JSON de detector | **Implementada** | Suporte a `%LOCALAPPDATA%\HiveMind\detectors\*.json` em `internal/extsess/`. |
+| 8 | Hive Residente (nome provisório) fora da IDE | **Pendente (Ondas 1 e 4)** | Kernel Mutex `Local\HiveMind.Residente` e chat unificado no Orb (`.specify/specs/007-hive-floating-resident`). |
+| 9 | Releases | **Pendente (Onda 5)** | Versão única, checksums SHA-256, assinatura e auto-updater (`docs/specs/10-mobile-companion-supply-chain-and-ci.md`). |
 
 ### Regras fechadas do executor
 

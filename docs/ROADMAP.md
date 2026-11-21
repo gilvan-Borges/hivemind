@@ -1,6 +1,9 @@
 # Roadmap de Fases — HiveMind CLI & IDE
 
-Estado: **Wed Nov 18 2026** · Baseado em análise completa do repositório (~13.450 LOC de `internal/`, IDE inteira em `ide/`).
+> **Atualização (2026-11-21):** Fases **0 a 4 concluídas**, além de **Jev + TypeSafe AI**, **Agente Residente (Fases 1–3 e 5)**, **Relay E2EE + LAN v2**, **Auto-Review sem Merge**, **Descoberta & Worktree Composta Multi-Repo**, e **Design System Havrus Obsidian & Brand Gold**.
+> Todas as pendências restantes (Fase 5, débitos transversais, Spec 007 e Specs arquiteturais 01–10) estão consolidadas no documento vivo [**`docs/specs/PLANO_IMPLEMENTACAO.md`**](specs/PLANO_IMPLEMENTACAO.md).
+
+Estado base original: **Wed Nov 18 2026** · ~13.450 LOC iniciais em `internal/`, IDE em `ide/`.
 
 ## Decisões de direção (ADRs curtos)
 

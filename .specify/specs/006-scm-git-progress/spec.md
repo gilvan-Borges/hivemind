@@ -1,6 +1,6 @@
 # Spec de Design — 006-scm-git-progress
 
-> Status: Aprovado
+> Status: Implementado
 > Alvos: [x] HiveMind IDE (`ide/frontend`) · [ ] HiveMind-App
 > Regras aplicáveis: D1–D8
 
@@ -30,6 +30,6 @@ Pull, Push, Sync e Fetch só escreviam "Executando git pull…" na status bar. A
 | `--color-danger-text` | `--surface-card` | >= 4.5:1 |
 
 ## 6. Aceite
-- [ ] Sem cor literal nova fora de `:root`.
-- [ ] `check-design-tokens` ok.
-- [ ] Testes Go cobrem progresso, cancelamento, resultado e auth.
+- [x] Sem cor literal nova fora de `:root`.
+- [x] `check-design-tokens` ok.
+- [x] Testes Go cobrem progresso, cancelamento, resultado e auth.

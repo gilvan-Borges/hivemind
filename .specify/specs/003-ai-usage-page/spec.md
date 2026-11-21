@@ -1,6 +1,6 @@
 # Spec de Design — 003-ai-usage-page
 
-> Status: Aprovado
+> Status: Implementado
 > Alvos: [x] HiveMind IDE (`ide/frontend`) · [ ] HiveMind-App
 > Regras aplicáveis: D1–D8
 
@@ -25,6 +25,6 @@ Uso & Limites das IAs abre em modal (camada elevada). Deve abrir como página no
 - **Dados:** N cartões agy (um por perfil) + demais provedores.
 
 ## 5. Critérios de Aceite
-- [ ] Clique em Uso & Limites abre aba no centro (não modal).
-- [ ] Com 3 contas agy no pool, aparecem 3 cartões de cota.
-- [ ] `check-design-tokens`, `npm test`, `npm run build` OK.
+- [x] Clique em Uso & Limites abre aba no centro (não modal).
+- [x] Com 3 contas agy no pool, aparecem 3 cartões de cota.
+- [x] `check-design-tokens`, `npm test`, `npm run build` OK.

@@ -1,6 +1,6 @@
 # Spec 004 — Destaque dourado e logo HiveMind
 
-> Status: Aprovado
+> Status: Implementado
 > Alvos: [x] HiveMind IDE (`ide/frontend`) · [ ] HiveMind-App (`HiveMind-App`)
 > Regras aplicáveis: D1, D3, D4, D6 (`.specify/memory/constitution.md`)
 
@@ -36,8 +36,8 @@ Os tokens `--accent*` já são o dourado Havrus (`#C6A15B` / `#E8C881`), mas des
 Texto que era violeta claro passa a `--accent-strong`. `--accent-muted` não entra em texto.
 
 ## 6. Critérios de Aceite
-- [ ] Zero cores literais violeta nos destaques da IDE; hex novo só em `:root`.
-- [ ] `npm run check:design` sem falhas.
-- [ ] `npm test` e `npm run build` em `ide/frontend`.
-- [ ] `go build ./...` e `go test ./...` em `ide/`.
-- [ ] `.ico` com 16, 24, 32, 48, 64, 128 e 256. Logo antiga removida.
+- [x] Zero cores literais violeta nos destaques da IDE; hex novo só em `:root`.
+- [x] `npm run check:design` sem falhas.
+- [x] `npm test` e `npm run build` em `ide/frontend`.
+- [x] `go build ./...` e `go test ./...` em `ide/`.
+- [x] `.ico` com 16, 24, 32, 48, 64, 128 e 256. Logo antiga removida.

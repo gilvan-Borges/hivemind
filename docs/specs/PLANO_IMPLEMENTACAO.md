@@ -1,0 +1,141 @@
+# Plano Vivo de Implementação — HiveMind
+
+> **REGRA DE MANUTENÇÃO CONTÍNUA:** Este documento é a fonte única da verdade sobre o que **já foi entregue** e o que **falta implementar** no HiveMind (`c:\hivemind`) e no `HiveMind-App`.
+> Sempre que qualquer tarefa abaixo for concluída:
+> 1. Marque o checkbox como `[x]` com a data e o comando/teste de verificação.
+> 2. Atualize a coluna **Status** na tabela de Inventário de Specs abaixo e no cabeçalho da spec correspondente.
+
+Última revisão geral: **2026-11-21**
+
+---
+
+## 1. Inventário Geral de Todas as Specs e Entregas
+
+### 1.1 Specs 100% Concluídas
+
+| ID / Documento | Escopo | Status Atual | Evidência Principal no Código |
+|---|---|---|---|
+| [D-001 (.specify)](../../.specify/specs/001-havrus-design-system/spec.md) | Sistema Visual & Paleta Havrus Obsidian & Brand Gold | **Implementado** | `ide/frontend/src/styles.css` (`:root`), `check-design-tokens.mjs`, `docs/design/01-paleta-e-tokens-havrus.md` |
+| [D-002 (.specify)](../../.specify/specs/002-icons-dedupe/spec.md) | Deduplicação de ícones Material Symbols | **Implementado** | `ide/frontend/src/icons.ts` |
+| [D-002M (.specify)](../../.specify/specs/002-mobile-claude-code-ui/spec.md) | UI Chat-first estilo Claude Code no `HiveMind-App` | **Implementado** | `HiveMind-App` (`MainActivity.kt`, `ChatScreen.kt`) |
+| [D-003 (.specify)](../../.specify/specs/003-ai-usage-page/spec.md) | Página central de Uso & Limites + cartões por conta `agy` | **Implementado** | `ide/frontend/src/modals.ts`, `internal/modelx/usage.go` |
+| [D-004 (.specify)](../../.specify/specs/004-brand-gold-logo/spec.md) | Destaque Dourado Havrus & Logo/`.ico` HiveMind | **Implementado** | `assets/brand/hivemind-icon.png`, `ide/build/windows/icon.ico`, `styles.css` |
+| [D-005A (.specify)](../../.specify/specs/005-companion-mascote/spec.md) | Mascote flutuante & toasts nativos Windows/OS | **Implementado** | `ide/frontend/src/companion/`, `ide/internal/notify/` |
+| [D-005B (.specify)](../../.specify/specs/005-equipe-ia-stream/spec.md) | Chip do modelo, stream Cursor corrigido e chat expandido | **Implementado** | `ide/frontend/src/models.ts`, `ide/frontend/src/chat.ts`, `internal/modelx/cursor_stream.go` |
+| [D-006 (.specify)](../../.specify/specs/006-scm-git-progress/spec.md) | Progresso Git ao vivo (`--progress`), timeout e cancelamento | **Implementado** | `ide/internal/idecore/gitaction.go`, `ide/frontend/src/git.ts` |
+| [D-008 (.specify)](../../.specify/specs/008-equipe-sidebar-layout/spec.md) | Redesign Havrus Dark Islands da barra lateral **Equipe** | **Implementado** | `ide/frontend/src/explorer.ts`, `ide/frontend/src/styles.css` |
+| [`SPEC_REVISAO_CONTEXTO.md`](../SPEC_REVISAO_CONTEXTO.md) | Ferramentas line-range e compactação in-turn v1 | **Implementado** | `internal/tools/tools.go`, `internal/orchestrator/context_guard.go` |
+| [`SPEC_AUTO_REVIEW_FLUXO.md`](../SPEC_AUTO_REVIEW_FLUXO.md) | Revisão automática de PRs sem merge em worktree efêmera | **Implementado** | `ide/internal/idecore/autoreview.go`, `internal/orchestrator/orchestrator.go` |
+| [`SPEC_RELAY.md`](../SPEC_RELAY.md) | Relay E2EE `hivemind-relay` + `relaywire` | **Base Implementada** | `cmd/hivemind-relay/`, `internal/relay/`, `relaywire/` *(hardening no Spec 09)* |
+| *Entrega 2026-11-21* | Provedor Oficial **TypeSafe AI** para decisão Jev (`/v1/systemone`) | **Implementado** | `internal/modelx/typesafe.go`, `internal/jev/score.go`, `ide/frontend/src/modals.ts` |
+| *Entrega 2026-11-21* | **Worktree Composta Multi-Repo** (`ipg` + `ipg-mobile`, `hivemind` + `HiveMind-App`) | **Implementado** | `internal/gitx/nested_repos.go`, `internal/orchestrator/orchestrator.go`, `ide/internal/idecore/runner.go` |
+| *Entrega 2026-11-21* | Descoberta Multi-Repo no Source Control & Vault Lease Isolado | **Implementado** | `ide/internal/idecore/git_repos.go`, `internal/modelx/agy_vault_windows.go` |
+
+### 1.2 Specs Parcialmente Concluídas
+
+| Documento | O que já foi feito | O que continua pendente | Onda Alvo |
+|---|---|---|---|
+| [`SPEC_ATUALIZACAO.md`](../SPEC_ATUALIZACAO.md) | Fases **1 a 7** concluídas (`lan.go` v2 `naclbox`, `audit.jsonl` classe/hash, `PRIVACIDADE.md`, `MODELO_AMEACAS.md`, aviso 20%/10% cota, `HandoffPackage`, `reviewx`, `extsess`) | **Fase 8** (Kernel Mutex `Local\HiveMind.Residente` e dono único do núcleo IDE/serve/orb) · **Fase 9** (Releases, assinatura, manifest SHA-256, APK release) | Ondas 1, 4 e 5 |
+| [`SPEC_HIVE_AGENT.md`](../SPEC_HIVE_AGENT.md) | Fases **1, 2, 3 e 5** concluídas (Broker, sandbox `AppContainer`/`bwrap`, `secretx`, memória, `cron_add`, subagentes, hash de skill, workstream) | **Fase 4** (Browser e Desktop isolados em Windows Sandbox `.wsb` / container com gVisor, hoje desligados por padrão) | Onda 4 |
+| [`SPEC_JEV_ORQUESTRADOR.md`](../SPEC_JEV_ORQUESTRADOR.md) | Fases **1 a 5** + TypeSafe AI concluídas | 1) Expor **Vertex AI** em `models.ts` (`getProviderList`) · 2) Failover Jev opcional em `internal/resident/config.go` (`BuildLLM`) | Onda 2 |
+| [`SPEC_APP_MOBILE_NATIVO.md`](../SPEC_APP_MOBILE_NATIVO.md) | App nativo refeito em Kotlin/Compose (`HiveMind-App`) com LAN v2 e Relay E2EE | Modos `plan:sdd`/`plan:sdd-jira`/`resident`, eventos `provider_health`/`relay_gap`/Jev, cache offline Room, tokens `Theme.kt` (`SurfacePanel`, fontes) | Onda 5 |
+| [`ROADMAP.md`](../ROADMAP.md) | Fases **0 a 4** concluídas (CLI, Shell IDE, CM6, Ghost Text, Ctrl+K, Inline Diff, `gopls`, ConPTY, Problemas) | **Fase 5 & Débitos:** streaming real do `agy`, QA com execução obrigatória de testes, `git blame`/merge conflicts, remoção de `ignore_io.go`, single-source allowlist, versão dinâmica | Ondas 2, 3 e 5 |
+
+### 1.3 Specs 100% Pendentes (Backlog Consolidado)
+
+- [D-007 (`.specify/specs/007-hive-floating-resident`)](../../.specify/specs/007-hive-floating-resident/spec.md) — **Agent Hive Flutuante** (14 tasks `H001`–`H011`, `D001`–`D003` -> **Onda 4**)
+- [Spec 01](01-orchestrator-modular-harness.md) — Modularização `orchestrator`, `tools`, `resident/broker` (**Onda 3**)
+- [Spec 02](02-prompt-cache-and-context-compaction.md) — Prefixo estático KV-cache e compactação token-aware (**Onda 2**)
+- [Spec 03](03-concurrency-races-and-persistence.md) — Concorrência `-race` clean e persistência atômica (**Onda 1**)
+- [Spec 04](04-tools-sandbox-and-pathsec.md) — Blindagem de paths sensíveis e sandbox OS (**Onda 1**)
+- [Spec 05](05-secrets-vault-and-multi-tenant-isolation.md) — Migração total ao cofre `secretx` e isolamento multi-tenant (**Onda 1**)
+- [Spec 06](06-jev-router-resilience-and-telemetry.md) — Hot-path zero-latência, lease `half_open` e telemetria real (**Onda 2**)
+- [Spec 07](07-ide-architecture-services-and-reactive-ui.md) — Serviços `idecore`, `CloseProject` e UI reativa sem perda de foco (**Onda 4**)
+- [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) — Git não-interativo, GHES, paginação e cross-link de PRs (**Onda 3**)
+- [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — Anti-replay Relay, Trust Gate MCP e Bootstrap único CLI/TUI/IDE (**Ondas 1 e 3**)
+- [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, auto-updater e CI/CD completo (**Onda 5**)
+
+---
+
+## 2. Plano de Execução por Onda (Checklists Acionáveis)
+
+### Onda 1 — Segurança Crítica, Cofre `secretx`, Concorrência & Sandbox
+*Objetivo: eliminar risco de exposição de segredos, data races, bypass de arquivos sensíveis e replay de RPCs.*
+
+- [ ] **W1-01** `[Spec 03]` Criar `internal/atomicx` (`WriteFile` via temp + `Sync` + `Rename`) e migrar escritas em `reviewx/review.go`, `gitx/integrate.go`, `modelx/openrouter_models.go`, `ide/internal/remote/config.go` e `resident/routine.go`.
+- [ ] **W1-02** `[Spec 03]` Tornar `sessionx.fileSession.Events()` seguro contra races (clonagem/imutabilidade), evitar mutação in-place em `CompactOldToolOutputs` e tirar I/O de disco de dentro de `Store.mu`.
+- [ ] **W1-03** `[Spec 03]` Adicionar mutex + file-lock em `resident/routine.go` (`ClaimDue`, `SaveRoutine`, `DeleteRoutine`), `sync.Once` em `workspace/storage.go`, lock no closure `delegate_to_squad` e remover estado compartilhado `LastBroker` em `resident.go`.
+- [ ] **W1-04** `[Spec 03 / SPEC_ATUALIZACAO F8]` Substituir PID file em `internal/resident/lock_windows.go` por Named Kernel Mutex (`CreateMutexW` `Local\HiveMind.Residente`) compartilhado entre IDE e `hivemind serve`.
+- [ ] **W1-05** `[Spec 04]` Expandir `pathsec.IsSensitivePath` (`.crt`, `.der`, `.kube/config`, `.docker/config.json`, `terraform.tfstate`, `.htpasswd`, `*secret*`) e aplicá-lo dentro de `workspace.Resolve` para bloquear `write_file`, `edit_file`, `list_dir` e `find_files` do Squad.
+- [ ] **W1-06** `[Spec 04]` Corrigir `sandbox_windows.go` (`internetClient`/`privateNetworkClientServer` quando `AllowNetwork=true`; não falhar `SetNamedSecurityInfoW` em `Program Files`) e `sandbox_linux.go` (`--tmpfs $HOME` ocultando `~/.ssh`, `~/.aws`, etc.).
+- [ ] **W1-07** `[Spec 04]` Alterar `runShellSandboxed` e `shellx.Local.Run` para truncamento **Head + Tail** (`4 KiB + 12 KiB`) com arquivo de log completo, numerar linhas em `read_file` sem range, validar mtime/leitura prévia em `edit_file` e respeitar `.gitignore` + cap por arquivo em `search.go`.
+- [ ] **W1-08** `[Spec 05]` Migrar segredos de `modelx` (`api-keys.json`, `provider-profiles.json`, `credentials.json`, `oauth-session.json`) e `relayclient` (`relay.json`) para `internal/secretx`, removendo P/Invoke duplicado em `agy_vault_windows.go`.
+- [ ] **W1-09** `[Spec 05]` Proteger `WithAgyVaultLease` com mutex nomeado cross-process + recovery pós-crash; isolar execução `agy` por diretório/env sempre que suportado; propagar `ctx` do workspace em `JevCredentialPresence` e `LoadOpenCodeCredentials`.
+- [ ] **W1-10** `[Spec 05]` Restringir `ListAccountPoolForProvider` para nunca fazer failover cross-tenant entre contas de organizações distintas quando `orgx` identificar o workspace.
+- [ ] **W1-11** `[Spec 09]` Adicionar `Seq` + `IssuedAtUnix` + `Nonce` dentro do payload cifrado `RPCRequest` (`relaywire/protocol.go`) com cache LRU anti-replay em `relayclient.Client.handleRPC`.
+- [ ] **W1-12** `[Spec 09]` Trocar wipe global `len > 4096` por eviction LRU nos limiters (`internal/relay/limiter.go`, `remote/lan.go`), persistir `qrTickets` no SQLite com `LoginBlocked`, emitir `TypePeerPresence` no `Hub`, e adotar janela deslizante de 64 seqs + debounce de config na LAN bridge.
+- [ ] **W1-13** `[Spec 09]` Implementar **Workspace Trust Gate** (SHA-256 de `.hivemind/mcp-servers.json`) no `internal/mcpx`, filtrar `cmd.Env` para nunca vazar env vars do host, remover `cmd.exe /c`, fixar versões no `defaults.go`, adicionar timeouts por chamada (`Tools: 15s`, `Call: 60s`) e capturar `stderr`.
+- [ ] **W1-14** `[Verificação Onda 1]` Validar `go test -race -count=1 ./internal/... ./ide/internal/...` com 0 races e confirmar ausência de tokens em claro nos JSONs locais.
+
+---
+
+### Onda 2 — KV-Cache, Compactação Token-Aware e Roteador Jev
+*Objetivo: maximizar hits de cache de prompt, reduzir custo/latência e impedir circuitos presos ou gastos silenciosos.*
+
+- [ ] **W2-01** `[Spec 02]` Tornar `SystemInstruction` e `req.Config.Tools` imutáveis durante todo o turno em `orchestrator.go`; mover `sharedBoard.SummaryFor` e deltas dinâmicos para `<system-reminder>` na última mensagem `user`/`tool`.
+- [ ] **W2-02** `[Spec 02]` Remover tool stripping dinâmico de `pr_dossier.go`, remover duplicação de `team_memory`, limpar campos `Unused` em `tools.go` e trocar `mcp_<server>__<name>` por schemas estruturados sob demanda.
+- [ ] **W2-03** `[Spec 02]` Unificar `context_guard.go` e `resident/prompt.go` em `internal/contextx` usando % da `ContextWindow` (55% micro / 75% resumo estruturado), sem sobrescrever histórico bruto em `sessionx`, e substituir `s[:N]` por `strx.TruncateBytes` seguro em UTF-8 em `handoff.go` e `fence.go`.
+- [ ] **W2-04** `[Spec 06]` Criar `sharedHTTPTransport()` único em `modelx`, incluir `OPENCODE_BASE_URL` em `ocRouteCache`, aplicar `promptCacheTransport` no OpenCode e `retryHTTPClient` no Anthropic Vertex.
+- [ ] **W2-05** `[Spec 06]` Tirar chamadas síncronas de `GetOpenRouterBalanceUSD`, `openRouterCheckAuth`, `enrichOpenRouterDailyDiscounts`, `fetchOpenCodeCatalog` e `LookAgy`/`LookCursor` do hot-path de roteamento via cache stale-while-revalidate + cache negativo + `singleflight`.
+- [ ] **W2-06** `[Spec 06]` Adicionar `HalfOpenLeaseUntil` + `defer ReleaseHalfOpen` em `jev/health.go` (evitando trava em `ErrClassPolicy`/cancelamento), unificar saúde `(provider, accountID, model)` com file lock e debounce em `RecordSpend`.
+- [ ] **W2-07** `[Spec 06]` Criar `modelx.ProviderError` tipado (desempacotando OpenAI/Anthropic/Gemini/AGY/TypeSafe/Cursor) e unificar redação (`ya29.`, `oc_`, `ts_`) em `jev.RedactSecrets`.
+- [ ] **W2-08** `[Spec 06]` Unificar Pass 1/Pass 2 em `jev/score.go`, remover bypass silencioso `ignoreDailyBudget: true`, recarregar `policy.json`/`.hivemind/jev.yaml` por `mtime` e contabilizar `CachedContentTokenCount` + `DiscountPct` + uso CLI/Cursor em `usage.go` (JSONL append-only) + `OutcomeLog.NoteQA` por `(repo, laneID)`.
+- [ ] **W2-09** `[ROADMAP F5 / Spec 06]` Unificar spawn `.cmd`/`.bat` + leitor NDJSON em `internal/modelx/cli_exec.go` e habilitar streaming real em `Agy.GenerateContent(..., stream=true)`.
+- [ ] **W2-10** `[SPEC_JEV_ORQUESTRADOR]` Expor **Vertex AI** em `ide/frontend/src/models.ts` e plugar failover Jev opcional no `internal/resident/config.go` (`BuildLLM`).
+- [ ] **W2-11** `[Verificação Onda 2]` Rodar `go test -p 1 -count=1 ./internal/jev/... ./internal/modelx/... ./internal/orchestrator/...` verificando p99 < 5ms e teste de invariância de prefixo KV-cache em 10 turnos.
+
+---
+
+### Onda 3 — Modularização Go, Runtime Único CLI/TUI/IDE e Endurecimento VCS
+*Objetivo: fatiar monólitos Go, equalizar CLI/TUI com IDE e completar suporte enterprise em Git/GitHub/Jira.*
+
+- [ ] **W3-01** `[Spec 01]` Quebrar `internal/orchestrator/orchestrator.go` (`3.114L`) em `runner.go`, `triage.go`, `pipeline.go` e `delivery.go`; parar criação implícita de `MEMORY.md` em `teamMemorySnippet()`, usar `ctx` do turno em `recordQAStall(ctx)` e checar erros de `State().Set` e `Audit.RecordOutcome`.
+- [ ] **W3-02** `[Spec 01]` Fatiar `internal/tools/tools.go` (`1.695L`) em `policy.go`, `fs.go`, `shell.go`, `git.go`, `github.go`, `jira.go`, `qa.go` e dividir `internal/resident/broker.go` (`1.028L`) em middleware + handlers por domínio.
+- [ ] **W3-03** `[ROADMAP F5]` Endurecer `qa_approve` em `internal/tools/qa.go` para exigir evidência estruturada de comando/teste executado (ou justificativa em tarefas pure-docs) quando aplicável.
+- [ ] **W3-04** `[Spec 09]` Extrair `internal/runtime/bootstrap.go` unificando construção de `Runner`, `GitHub`, `Jira`, `Sessions`, `mcpx` (com pool persistente na IDE) e `NewJevModelFactory` entre CLI, TUI e IDE.
+- [ ] **W3-05** `[Spec 09]` Mover `ide/internal/remote` e `ide/internal/relayclient` para `internal/` permitindo `hivemind serve` headless sem depender de `hivemind-ide.exe`.
+- [ ] **W3-06** `[Spec 08 / ROADMAP]` Unificar env Git não-interativo (`GCM_INTERACTIVE=Never`, `GIT_ASKPASS=""`) em `gitx.Local.Run`, proteger `EnsureWorktree` contra remoção em falha transitória, usar `LiteralPathspec` em `DiscardFileChanges` e remover `internal/gitx/ignore_io.go`.
+- [ ] **W3-07** `[Spec 08]` Atualizar `githubx.ParseRemote` para suportar hosts **GitHub Enterprise Server (GHES)**, adicionar paginação (`Link` header + cursor GraphQL) e eliminar duplicação REST/GraphQL de `idecore/diff.go`.
+- [ ] **W3-08** `[Spec 08]` Remover termos específicos de cliente de `matchJiraProjectFromNames`, impedir mutação de `.hivemind/team.yaml` durante `ListProjectIssues` e implementar cross-linking automático entre múltiplos PRs abertos em entregas multi-repo.
+- [ ] **W3-09** `[ROADMAP]` Unificar fonte única para allowlist de shell (`internal/team` vs `examples/team.yaml`).
+- [ ] **W3-10** `[Verificação Onda 3]` Validar `go test -race ./...` na raiz do módulo, nenhum arquivo Go > 600 linhas em `orchestrator`/`tools`/`resident` e testes de paginação + GHES verdes.
+
+---
+
+### Onda 4 — IDE Reativa, Lifecycle de Projetos & Agent Hive Flutuante
+*Objetivo: zerar leaks na IDE, eliminar sobrescrita de foco/input e entregar o Agent Hive flutuante unificado.*
+
+- [ ] **W4-01** `[Spec 07]` Quebrar `ide/app.go` (`1.834L`) em serviços coesos e fatiar `ide/internal/idecore/diff.go` (`2.668L`) em `git_diff.go`, `worktree_sync.go`, `git_ops.go`, `jira_discovery.go`, `github_prs.go`.
+- [ ] **W4-02** `[Spec 07]` Implementar `CloseProject(workspace)` em `ide/app.go` chamado por `closeProjectTab()`, encerrando `FileWatcher`, `GitHubMonitor`, `AutoReviewManager` e `LSPManager`; unificar poller de PRs (60s/120s) e observar `.git/HEAD` + `.git/index` (incluindo sub-repos) no watcher.
+- [ ] **W4-03** `[Spec 007 — H001..H005]` Estender `ide/internal/orb/hub.go` e `ide/orb_host.go` / `orb_window.go` com `OrbResidentState`, streaming ao vivo do `ResidentManager`, ações `resident_*` e janela `396×540` com clamp no monitor.
+- [ ] **W4-04** `[Spec 007 — D001..D003, H006..H011]` Atualizar `ide/frontend/src/orb/view.ts`, `styles.css`, `boot.ts` e `resident.ts` com aba **Conversa** padrão, aprovação fixa acima do composer, preservação do rascunho no `<textarea>`, sincronia **Abrir IDE** e testes Vitest.
+- [ ] **W4-05** `[Spec 07]` Adotar diretamente bindings tipados `wailsjs/go/main/App` em `ide/frontend/src/`, removendo duplicações manuais de `types.ts`.
+- [ ] **W4-06** `[Spec 07]` Bloquear re-renders totais de `renderLeftSidebar()` / `renderModalLayer()` sob eventos assíncronos enquanto houver input focado/sujo (preservando mensagens de commit e tokens sendo digitados).
+- [ ] **W4-07** `[Spec 07]` Implementar parser **incremental por blocos** em `markdown.ts` (fim do `O(N²)` no streaming do chat), aplicar `safeImageSrc` em `modals.ts:1162`, adicionar CSP em `index.html`, foco/teclado ARIA + focus trap nos modais e modularizar `styles.css` em `@layer`.
+- [ ] **W4-08** `[ROADMAP F5]` Adicionar `git blame`, histórico por arquivo e resolução guiada de conflitos no painel Git da IDE.
+- [ ] **W4-09** `[SPEC_HIVE_AGENT F4]` Implementar provisão isolada real em Windows Sandbox (`.wsb` com `ProtectedClient`, rede filtrada e workspace read-only) para `browser_open` / `desktop_*`.
+- [ ] **W4-10** `[Verificação Onda 4]` Validar `check-design-tokens.mjs`, `npm test`, `npm run build`, `go test ./ide/...` e teste manual de abrir/fechar 10 abas + uso completo do Agent Hive flutuante com a IDE fechada na bandeja.
+
+---
+
+### Onda 5 — `HiveMind-App` Offline-First, Auto-Update Assinado & CI/CD
+*Objetivo: fechar paridade do app Android, eliminar drift entre código e binário instalado e blindar pipeline de release.*
+
+- [ ] **W5-01** `[Spec 10 / SPEC_APP_MOBILE]` Adicionar `plan:sdd`, `plan:sdd-jira` e `resident` em `ChatScreen.kt`; desserializar `provider_health`, `relay_gap` e metadados Jev (`provider`, `model`, `tier`, `cost`, `gate`) em `Models.kt`/`HubState.kt`.
+- [ ] **W5-02** `[Spec 10]` Implementar cache offline **Room/SQLite** em `HiveMind-App` (projetos, lanes, mensagens e diffs) + presença instantânea via evento `peer_presence`.
+- [ ] **W5-03** `[Spec 10]` Substituir `usesCleartextTraffic="true"` por `network_security_config.xml` (restrito a LAN/Tailscale), exigir confirmação na rotação de chave TOFU, habilitar R8 (`isMinifyEnabled = true`) + signing externo de release e corrigir `Theme.kt` (`SurfacePanel #0C0C0C`, remover alias `SteelBlue`, fontes `Inter`/`JetBrains Mono`).
+- [ ] **W5-04** `[Spec 10 / SPEC_ATUALIZACAO F9]` Criar fonte única de versão (`VERSION` + SHA commit via `-ldflags` em `hivemind`, `hivemind-ide`, `hivemind-relay`) e remover cópia redundante de binário em `ide/build/`.
+- [ ] **W5-05** `[Spec 10 / SPEC_ATUALIZACAO F9]` Atualizar `scripts/build-installer.ps1` (remover fallback `npm install`, gerar `checksums.txt` SHA-256, suportar `signtool.exe`) e implementar verificador/auto-updater in-app via GitHub Releases (resolvendo drift vs `AppData\Local\Programs\HiveMind`).
+- [ ] **W5-06** `[Spec 10]` Endurecer `.github/workflows/ci.yml`: incluir `go test -race ./internal/remote/...`, job Android (`./gradlew testDebugUnitTest lintDebug`) e `govulncheck ./...`.
+- [ ] **W5-07** `[Spec 10]` Endurecer `deploy/relay/`: fixar digest `@sha256` em `Dockerfile` + `HEALTHCHECK`, alinhar usuário `relay` entre Dockerfile e `hivemind-relay.service`, limites cgroup/seccomp e HSTS/CSP no `Caddyfile`.
+- [ ] **W5-08** `[Verificação Onda 5]` Validar CI verde ponta-a-ponta, `assembleRelease` do `HiveMind-App` com R8 ativo e upgrade simulado do instalador Windows com conferência SHA-256.
