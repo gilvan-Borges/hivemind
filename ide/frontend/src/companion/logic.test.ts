@@ -7,6 +7,7 @@ import {
   dropNotice,
   latestNotice,
   moodFromSignal,
+  noticeFromGitHubEvents,
   noticeFromSignal,
   pushNotice,
   turnTitle,
@@ -140,5 +141,25 @@ describe("normalizeSettings", () => {
 
   it("valor inválido volta ao padrão", () => {
     expect(normalizeSettings(null).enabled).toBe(true);
+  });
+});
+
+describe("noticeFromGitHubEvents", () => {
+  it("formata menção em PR com snippet", () => {
+    const out = noticeFromGitHubEvents(
+      [{ kind: "mention", prNumber: 42, title: "fix: token", author: "marcus", snippet: "@gilvan olha isso?" }],
+      "hivemind"
+    );
+    expect(out?.title).toBe("[hivemind] @marcus marcou você no PR #42");
+    expect(out?.body).toContain("fix: token");
+    expect(out?.mood).toBe("attention");
+  });
+
+  it("formata PR pronto para merge como success", () => {
+    const out = noticeFromGitHubEvents([
+      { kind: "my_pr_approved", prNumber: 99, title: "feat: login", author: "joao", isMine: true },
+    ]);
+    expect(out?.title).toBe("PR #99 pronto para merge");
+    expect(out?.mood).toBe("success");
   });
 });

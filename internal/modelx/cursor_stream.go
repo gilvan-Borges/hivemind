@@ -3,6 +3,7 @@ package modelx
 import (
 	"encoding/json"
 	"strings"
+	"unicode"
 )
 
 // cursorLine is one NDJSON event from `agent -p --output-format stream-json`.
@@ -26,13 +27,17 @@ type cursorMessage struct {
 }
 
 // cursorNotice is what the HiveMind UI should show for one stream event.
-// Duplicate assistant flushes are skipped. Tool results are not copied: they
-// can contain file bodies.
+// Text keeps the delta whitespace: the CLI often sends the space between
+// words as its own delta, and TrimSpace would glue "Vou" + " " + "ler".
+// Tool calls are separate from that text. Duplicate assistant flushes are
+// skipped. Tool results are not copied: they can contain file bodies.
 type cursorNotice struct {
-	Text    string
-	Partial bool
-	Final   bool
-	Failed  bool
+	Text     string
+	ToolName string
+	ToolPath string
+	Partial  bool
+	Final    bool
+	Failed   bool
 }
 
 func parseCursorStreamLine(line string) (cursorNotice, bool) {
@@ -52,7 +57,7 @@ func parseCursorStreamLine(line string) (cursorNotice, bool) {
 		if ev.ModelCallID != "" || ev.TimestampMS == nil {
 			return cursorNotice{}, false
 		}
-		text := strings.TrimSpace(ev.Message.text())
+		text := ev.Message.text()
 		if text == "" {
 			return cursorNotice{}, false
 		}
@@ -62,14 +67,10 @@ func parseCursorStreamLine(line string) (cursorNotice, bool) {
 			return cursorNotice{}, false
 		}
 		name, path := toolCallNotice(ev.ToolCall)
-		if name == "" {
+		if name == "" || cursorToolMetaKey(name) {
 			return cursorNotice{}, false
 		}
-		text := "Cursor · " + name
-		if path != "" {
-			text += " · " + path
-		}
-		return cursorNotice{Text: text, Partial: true}, true
+		return cursorNotice{ToolName: name, ToolPath: path, Partial: true}, true
 	case "result":
 		return cursorNotice{Text: ev.Result, Final: true, Failed: ev.IsError}, true
 	default:
@@ -88,6 +89,18 @@ func (m cursorMessage) text() string {
 	return b.String()
 }
 
+// cursorToolMetaKey reports JSON fields the CLI mixes into tool_call that are
+// not a tool. Map iteration is random, so these must be skipped by name.
+func cursorToolMetaKey(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "startedatms", "completedatms", "toolcallid", "hookadditionalcontexts",
+		"result", "description", "sessionid", "modelcallid", "timestampms":
+		return true
+	default:
+		return false
+	}
+}
+
 func toolCallNotice(raw json.RawMessage) (name, path string) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "", ""
@@ -98,23 +111,171 @@ func toolCallNotice(raw json.RawMessage) (name, path string) {
 	}
 	if fn, ok := obj["function"]; ok {
 		var meta struct {
-			Name string `json:"name"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
 		}
-		if json.Unmarshal(fn, &meta) == nil && meta.Name != "" {
-			return meta.Name, ""
+		if json.Unmarshal(fn, &meta) == nil && meta.Name != "" && !cursorToolMetaKey(meta.Name) {
+			return meta.Name, toolTargetFromRaw(meta.Arguments)
 		}
 	}
-	for key, body := range obj {
-		name = strings.TrimSuffix(key, "ToolCall")
-		var args struct {
-			Args struct {
-				Path string `json:"path"`
-			} `json:"args"`
+	var toolKey string
+	for key := range obj {
+		if cursorToolMetaKey(key) {
+			continue
 		}
-		_ = json.Unmarshal(body, &args)
-		return name, args.Args.Path
+		if strings.HasSuffix(strings.ToLower(key), "toolcall") {
+			toolKey = key
+			break
+		}
+		if toolKey == "" {
+			toolKey = key
+		}
 	}
-	return "", ""
+	if toolKey == "" {
+		return "", ""
+	}
+	name = toolKey
+	if i := strings.LastIndex(strings.ToLower(name), "toolcall"); i > 0 {
+		name = name[:i]
+	}
+	return name, toolTargetFromRaw(obj[toolKey])
+}
+
+func toolTargetFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return toolTargetFromMap(map[string]any{"command": s})
+		}
+	}
+	var asMap map[string]any
+	if json.Unmarshal(raw, &asMap) != nil {
+		return ""
+	}
+	if args, ok := asMap["args"]; ok {
+		if nested, ok := args.(map[string]any); ok {
+			return toolTargetFromMap(nested)
+		}
+	}
+	if args, ok := asMap["arguments"]; ok {
+		switch v := args.(type) {
+		case map[string]any:
+			return toolTargetFromMap(v)
+		case string:
+			var nested map[string]any
+			if json.Unmarshal([]byte(v), &nested) == nil {
+				return toolTargetFromMap(nested)
+			}
+		}
+	}
+	return toolTargetFromMap(asMap)
+}
+
+func toolTargetFromMap(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	for _, key := range []string{"path", "file_path", "filePath", "file", "target_file", "targetFile", "directory", "glob", "pattern", "query", "command"} {
+		v, ok := args[key]
+		if !ok || v == nil {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// formatCursorToolMarker is the line the UI splits back into a tool row.
+// The name is a single token so a path may contain colons (Windows).
+func formatCursorToolMarker(name, path string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	safeName := b.String()
+	if safeName == "" {
+		safeName = "tool"
+	}
+	path = strings.ReplaceAll(path, "\r", " ")
+	path = strings.ReplaceAll(path, "\n", " ")
+	path = strings.ReplaceAll(path, "]", "")
+	return "[[hmtool:" + safeName + ":" + path + "]]"
+}
+
+func relativizeToolPath(workspace, p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	ws := strings.TrimRight(strings.ReplaceAll(strings.TrimSpace(workspace), "\\", "/"), "/")
+	if ws != "" && len(p) >= len(ws) && strings.EqualFold(p[:len(ws)], ws) {
+		rest := strings.TrimPrefix(p[len(ws):], "/")
+		if rest != "" {
+			return rest
+		}
+	}
+	return p
+}
+
+// cursorTranscript accumulates assistant deltas and tool markers in order.
+type cursorTranscript struct {
+	b  strings.Builder
+	nl bool
+}
+
+func (t *cursorTranscript) absorb(n cursorNotice, workspace string) string {
+	if n.ToolName != "" {
+		marker := formatCursorToolMarker(n.ToolName, relativizeToolPath(workspace, n.ToolPath))
+		var chunk strings.Builder
+		if t.b.Len() > 0 && !t.nl {
+			chunk.WriteByte('\n')
+		}
+		chunk.WriteString(marker)
+		chunk.WriteByte('\n')
+		s := chunk.String()
+		t.b.WriteString(s)
+		t.nl = true
+		return s
+	}
+	if n.Text == "" {
+		return ""
+	}
+	t.b.WriteString(n.Text)
+	t.nl = strings.HasSuffix(n.Text, "\n")
+	return n.Text
+}
+
+func (t *cursorTranscript) finish(result string) string {
+	body := t.b.String()
+	summary := strings.TrimSpace(result)
+	if summary != "" && !strings.Contains(body, summary) {
+		if body != "" && !strings.HasSuffix(body, "\n") {
+			body += "\n\n"
+		} else if body != "" && !strings.HasSuffix(body, "\n\n") {
+			body += "\n"
+		}
+		body += summary
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+	}
+	if strings.TrimSpace(body) == "" {
+		return "O agente Cursor terminou sem texto. As alterações, se houver, estão no workspace deste agente."
+	}
+	return body
 }
 
 func redactSecret(text, secret string) string {

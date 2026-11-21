@@ -6,7 +6,7 @@ import { highlightActiveTreeRow, refreshExplorerTree } from "./explorer";
 import { refreshDiffs } from "./git";
 import { openCommandPalette, openQuickOpen } from "./quickopen";
 import { bindResidentViewEvents, renderResidentViewHtml } from "./resident";
-import { renderProjectTabsBar, syncLayoutVisibility } from "./shell";
+import { renderProjectTabsBar, syncChatExpandLayout, syncLayoutVisibility } from "./shell";
 import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
@@ -248,6 +248,7 @@ export function renderEditorTabs() {
       doClose();
     });
   });
+  syncChatExpandLayout();
 }
 
 export function syncActiveTabDirtyUI(tab: EditorTab) {

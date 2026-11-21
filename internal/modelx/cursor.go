@@ -292,6 +292,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	var final string
 	var sawResult bool
 	var failed bool
+	var transcript cursorTranscript
 	// Lê até o EOF, inclusive linhas maiores que o limite: um tool_call com o
 	// corpo do arquivo pode passar de 4 MiB. Parar o scanner sem drenar enche
 	// o pipe e o CLI trava até o timeout.
@@ -301,13 +302,15 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 			return true
 		}
 		notice.Text = redactSecret(notice.Text, c.Key)
+		notice.ToolPath = redactSecret(notice.ToolPath, c.Key)
 		if notice.Final {
 			final = notice.Text
 			sawResult = true
 			failed = notice.Failed
 			return true
 		}
-		if notice.Text != "" && !emit(notice.Text) {
+		chunk := transcript.absorb(notice, dir)
+		if chunk != "" && !emit(chunk) {
 			return false
 		}
 		return true
@@ -341,11 +344,9 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	if !sawResult {
 		final = redactSecret(strings.TrimSpace(stderr.String()), c.Key)
 	}
-	if strings.TrimSpace(final) == "" {
-		final = "O agente Cursor terminou sem texto. As alterações, se houver, estão no workspace deste agente."
-	}
+	body := transcript.finish(final)
 	return &model.LLMResponse{
-		Content:      genai.NewContentFromText(final, genai.RoleModel),
+		Content:      genai.NewContentFromText(body, genai.RoleModel),
 		TurnComplete: true,
 	}, nil
 }

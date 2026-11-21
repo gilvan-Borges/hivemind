@@ -236,7 +236,6 @@ func (m *ResidentManager) Status() resident.Status {
 	}
 	return resident.Status{
 		State:                  st,
-		Phase:                  3,
 		ReadOnly:               false,
 		AccountID:              acct,
 		Workstream:             resident.SanitizeWorkstream(cfg.Workstream),
@@ -641,6 +640,6 @@ func (m *ResidentManager) FormatHeadlessStatus() string {
 	if !st.SandboxAvailable {
 		sb = "indisponível (falha fechada)"
 	}
-	return fmt.Sprintf("Hive Residente (Fase %d · sandbox=%s): %s · conta=%s · modelo=%s/%s",
-		st.Phase, sb, st.State, st.AccountID, st.Provider, st.Model)
+	return fmt.Sprintf("Hive Residente (sandbox=%s): %s · conta=%s · modelo=%s/%s",
+		sb, st.State, st.AccountID, st.Provider, st.Model)
 }

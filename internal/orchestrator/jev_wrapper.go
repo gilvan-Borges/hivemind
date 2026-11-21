@@ -75,7 +75,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		started := time.Now()
-		respErr, deliveredToolCall, lastResp := w.invokeOnce(ctx, curLLM, req, stream, yield)
+		respErr, deliveredToolCall, lastResp := w.invokeOnce(ctx, curLLM, curChoice, req, stream, yield)
 		if respErr == nil {
 			w.recordSuccessAndSpend(curChoice, lastResp)
 			w.recordCall(curChoice, true, "", time.Since(started), lastResp, false)
@@ -83,7 +83,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 			return
 		}
 
-		errClass := jev.ClassifyError(respErr)
+		errClass := classifyUpstream(respErr)
 		w.recordCall(curChoice, false, errClass, time.Since(started), nil, false)
 		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
 			yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
@@ -128,14 +128,14 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 
 		// Retry the same LLMRequest ONCE on the failover model (Spec §9).
 		retryStart := time.Now()
-		retryErr, _, retryResp := w.invokeOnce(ctx, nextLLM, req, stream, yield)
+		retryErr, _, retryResp := w.invokeOnce(ctx, nextLLM, nextChoice, req, stream, yield)
 		if retryErr == nil {
 			w.recordSuccessAndSpend(nextChoice, retryResp)
 			w.recordCall(nextChoice, true, "", time.Since(retryStart), retryResp, true)
 			w.noteQA(retryResp)
 			return
 		}
-		retryClass := jev.ClassifyError(retryErr)
+		retryClass := classifyUpstream(retryErr)
 		w.recordCall(nextChoice, false, retryClass, time.Since(retryStart), nil, true)
 		if retryClass != jev.ErrClassPolicy && ctx.Err() == nil && w.health != nil {
 			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, retryClass, time.Time{})
@@ -148,9 +148,37 @@ func (w *jevModelWrapper) explain(ch jev.Choice, err error) string {
 	return modelx.FormatUpstreamError(ch.Provider, ch.Model, err, w.extraSecrets...)
 }
 
+// classifyUpstream reads the provider body. openai-go's Error() keeps only
+// "OpenAI API error: 400 Bad Request" and drops "is not a valid model ID",
+// which ClassifyError would treat as a request-shape failure and not fail over.
+func classifyUpstream(err error) jev.ErrorClass {
+	if err == nil {
+		return jev.ErrClassNone
+	}
+	rich := modelx.FormatUpstreamError("", "", err)
+	if rich == "" || rich == err.Error() {
+		return jev.ClassifyError(err)
+	}
+	return jev.ClassifyError(fmt.Errorf("%s: %w", rich, err))
+}
+
+func bindWireModel(req *model.LLMRequest, provider, catalogModel string) *model.LLMRequest {
+	if req == nil {
+		return nil
+	}
+	wire := modelx.WireModelID(provider, catalogModel)
+	if wire == "" || req.Model == wire {
+		return req
+	}
+	cp := *req
+	cp.Model = wire
+	return &cp
+}
+
 func (w *jevModelWrapper) invokeOnce(
 	ctx context.Context,
 	llm model.LLM,
+	ch jev.Choice,
 	req *model.LLMRequest,
 	stream bool,
 	yield func(*model.LLMResponse, error) bool,
@@ -158,6 +186,7 @@ func (w *jevModelWrapper) invokeOnce(
 	if llm == nil {
 		return fmt.Errorf("modelo nulo no wrapper Jev"), false, nil
 	}
+	req = bindWireModel(req, ch.Provider, ch.Model)
 	for resp, err := range llm.GenerateContent(ctx, req, stream) {
 		if err != nil {
 			return err, deliveredToolCall, lastResp
@@ -244,7 +273,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 
 		llm, err := w.buildModel(ctx, choice.Provider, choice.Model)
 		if err != nil {
-			buildClass := jev.ClassifyError(err)
+			buildClass := classifyUpstream(err)
 			if buildClass != jev.ErrClassPolicy && w.health != nil {
 				w.health.RecordFailure(choice.Provider, choice.Model, buildClass, time.Time{})
 			}

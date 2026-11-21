@@ -190,8 +190,8 @@ export function updateResidentStatusChip(): void {
     ? `Sandbox: ${st.sandboxMechanism || "ativa"}`
     : "Sandbox: indisponível (falha fechada)";
   chip.title = st
-    ? `Hive Residente (Fase ${st.phase || 2}) · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
-    : "Hive Residente (Fase 2 · Sandbox e Cofre) — clique para abrir";
+    ? `Hive Residente · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
+    : "Hive Residente — clique para abrir";
 }
 
 function rerenderResidentIfOpen(): void {
@@ -331,7 +331,7 @@ export function renderResidentViewHtml(): string {
           <div class="resident-title-row">
             ${icons.sparkle}
             <h2>Hive Residente</h2>
-            <span class="resident-badge readonly">Fase 2 · Sandbox Obrigatória</span>
+            <span class="resident-badge ${st?.experimentalUnisolated ? "risk-destructive" : "readonly"}">${st?.experimentalUnisolated ? "Sem isolamento (teste)" : "Sandbox obrigatória"}</span>
             <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}" title="${escapeHtml(st?.sandboxReason || sbText)}">${escapeHtml(sbText)}</span>
             <span class="resident-badge ${vaultOk ? "risk-read" : "risk-write"}" title="${escapeHtml(st?.vaultReason || "Cofre do SO")}">${vaultOk ? "Cofre SO: ativo" : "Cofre SO: indisponível"}</span>
             <span class="resident-badge state-${stateLabel === "pensando" ? "running" : stateLabel === "aguardando você" ? "ask" : "idle"}">${escapeHtml(stateLabel)}</span>
@@ -374,7 +374,7 @@ function renderResidentChatHtml(): string {
     ? `
       <div class="chat-empty-state">
         <div class="chat-empty-icon">${icons.brandHero}</div>
-        <div class="chat-empty-title">Hive Residente pronto (Fase 2 · Sandbox do SO)</div>
+        <div class="chat-empty-title">Hive Residente pronto</div>
         <div class="chat-empty-sub">Leitura local no workspace é direta e auditada. Escrita de arquivos, execução de binários na allowlist (sempre em sandbox com argv explícito, sem sh -c) e rede na allowlist exigem sua aprovação no cartão abaixo.</div>
       </div>
     `
@@ -788,7 +788,7 @@ export function bindResidentViewEvents(): void {
       residentState.status = st;
       residentState.policyDirty = false;
       syncPolicyDraftsFromStatus(st);
-      toast("Política de segurança da Fase 2 salva.", "success");
+      toast("Política de segurança salva.", "success");
       rerenderResidentIfOpen();
     } catch (err: any) {
       toastError("salvar política do residente", err);

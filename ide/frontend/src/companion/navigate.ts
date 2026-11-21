@@ -1,7 +1,8 @@
 import { rebuildChatMessagesFull, renderTokenBar, syncComposerButtons } from "../chat";
+import { clearGitHubUnread } from "../git";
 import { renderLaneBarOnly, renderPipelineBar } from "../lanes";
 import { openResidentTab, residentState } from "../resident";
-import { syncLayoutVisibility, switchProjectTab, updateStatusBar } from "../shell";
+import { openSidebarView, syncLayoutVisibility, switchProjectTab, updateStatusBar } from "../shell";
 import { state } from "../state";
 import { updateMissionBoardIfOpen } from "../teamconfig";
 import type { NoticeTarget } from "./logic";
@@ -12,6 +13,15 @@ export function openNoticeTarget(target: NoticeTarget): void {
     residentState.subTab = "chat";
     openResidentTab();
     pulse(target.messageId);
+    return;
+  }
+  if (target.surface === "github") {
+    if (target.projectId && target.projectId !== state.activeProjectId) {
+      switchProjectTab(target.projectId);
+    }
+    state.gitTab = "flow";
+    clearGitHubUnread();
+    openSidebarView("git");
     return;
   }
   if (target.projectId && target.projectId !== state.activeProjectId) {

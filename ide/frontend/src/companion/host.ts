@@ -1,5 +1,6 @@
 import { api } from "../state";
-import { channelFor, moodFromSignal, noticeFromSignal, type LaneSignal, type Mood, type NoticeTarget } from "./logic";
+import type { GitHubNotificationEvent } from "../types";
+import { channelFor, moodFromSignal, noticeFromGitHubEvents, noticeFromSignal, type LaneSignal, type Mood, type NoticeDraft, type NoticeTarget } from "./logic";
 import { openNoticeTarget } from "./navigate";
 import { loadSettings, subscribeSettings } from "./settings";
 import { mountCompanionView, type BubbleNotice } from "./view";
@@ -112,14 +113,9 @@ export function noteActivity(signal: LaneSignal): void {
   if (!view.current()) view.setMood(mood, mood === "success" || mood === "error" || mood === "attention");
 }
 
-export function publishNotice(signal: LaneSignal, target: NoticeTarget): void {
-  if (!view) return;
+function deliverDraft(draft: NoticeDraft, target: NoticeTarget): void {
   const settings = loadSettings();
-  const draft = noticeFromSignal(signal);
-  if (!draft || settings.doNotDisturb) {
-    noteActivity(signal);
-    return;
-  }
+  if (settings.doNotDisturb) return;
   const notice: Stored = {
     id: newId(),
     title: draft.title,
@@ -151,6 +147,24 @@ export function publishNotice(signal: LaneSignal, target: NoticeTarget): void {
     waitingFocus.delete(notice.id);
     if (loadSettings().enabled) showBubble(notice);
   });
+}
+
+export function publishNotice(signal: LaneSignal, target: NoticeTarget): void {
+  if (!view) return;
+  const settings = loadSettings();
+  const draft = noticeFromSignal(signal);
+  if (!draft || settings.doNotDisturb) {
+    noteActivity(signal);
+    return;
+  }
+  deliverDraft(draft, target);
+}
+
+export function publishGitHubNotice(events: GitHubNotificationEvent[], projectId: string, projectName?: string): void {
+  if (!view) return;
+  const draft = noticeFromGitHubEvents(events, projectName);
+  if (!draft) return;
+  deliverDraft(draft, { surface: "github", projectId, laneId: "", messageId: "" });
 }
 
 export function dismissMessage(messageId: string): void {

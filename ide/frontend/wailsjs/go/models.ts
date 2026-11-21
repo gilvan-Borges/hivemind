@@ -884,6 +884,7 @@ export namespace idecore {
 	    defaultModel: string;
 	    agentModels?: Record<string, string>;
 	    permissionMode?: string;
+	    shellUnsandboxed?: boolean;
 	    worktrees: boolean;
 	    autoCommit: boolean;
 	    autoPR: boolean;
@@ -907,6 +908,7 @@ export namespace idecore {
 	        this.defaultModel = source["defaultModel"];
 	        this.agentModels = source["agentModels"];
 	        this.permissionMode = source["permissionMode"];
+	        this.shellUnsandboxed = source["shellUnsandboxed"];
 	        this.worktrees = source["worktrees"];
 	        this.autoCommit = source["autoCommit"];
 	        this.autoPR = source["autoPR"];
@@ -1040,7 +1042,7 @@ export namespace jev {
 	export class Policy {
 	    version: number;
 	    enabled: boolean;
-	    classifyEnabled?: boolean;
+	    classifyEnabled: boolean;
 	    weights: Weights;
 	    autoEscalateUsd: number;
 	    maxEscalateRatio: number;
@@ -2449,7 +2451,6 @@ export namespace resident {
 	}
 	export class Status {
 	    state: string;
-	    phase: number;
 	    readOnly: boolean;
 	    accountId: string;
 	    workstream: string;
@@ -2467,6 +2468,8 @@ export namespace resident {
 	    allowedHosts: string[];
 	    vaultSecrets: string[];
 	    eventTriggers: boolean;
+	    experimentalUnisolated: boolean;
+	    experimentalWarning?: string;
 	    isolatedBrowser: boolean;
 	    isolatedBrowserReason?: string;
 	    isolatedDesktop: boolean;
@@ -2479,7 +2482,6 @@ export namespace resident {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
-	        this.phase = source["phase"];
 	        this.readOnly = source["readOnly"];
 	        this.accountId = source["accountId"];
 	        this.workstream = source["workstream"];
@@ -2497,6 +2499,8 @@ export namespace resident {
 	        this.allowedHosts = source["allowedHosts"];
 	        this.vaultSecrets = source["vaultSecrets"];
 	        this.eventTriggers = source["eventTriggers"];
+	        this.experimentalUnisolated = source["experimentalUnisolated"];
+	        this.experimentalWarning = source["experimentalWarning"];
 	        this.isolatedBrowser = source["isolatedBrowser"];
 	        this.isolatedBrowserReason = source["isolatedBrowserReason"];
 	        this.isolatedDesktop = source["isolatedDesktop"];
@@ -2658,6 +2662,7 @@ export namespace team {
 	    base_branch: string;
 	    shell_allowlist?: string[];
 	    confirm_shell?: boolean;
+	    shell_unsandboxed?: boolean;
 	    skill_assignments?: SkillAssignment[];
 	
 	    static createFrom(source: any = {}) {
@@ -2689,6 +2694,7 @@ export namespace team {
 	        this.base_branch = source["base_branch"];
 	        this.shell_allowlist = source["shell_allowlist"];
 	        this.confirm_shell = source["confirm_shell"];
+	        this.shell_unsandboxed = source["shell_unsandboxed"];
 	        this.skill_assignments = this.convertValues(source["skill_assignments"], SkillAssignment);
 	    }
 	

@@ -1,12 +1,12 @@
 import { icons } from "./icons";
 import { refreshMCP } from "./mcp";
 import type { SidebarView } from "./types";
-import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel } from "./utils";
+import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel, shouldExpandChat } from "./utils";
 import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
 import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
-import { loadGitGraph, refreshDiffs } from "./git";
+import { clearGitHubUnread, loadGitGraph, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
 import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
@@ -35,11 +35,7 @@ export function switchProjectTab(projectId: string) {
   renderEditorBody();
   renderTerminalDrawer();
   renderRightPane();
-  const gitBadge = document.getElementById("git-badge");
-  if (gitBadge) {
-    gitBadge.textContent = String(state.diffs.length);
-    gitBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
-  }
+  updateGitActivityBadge();
   setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
   void refreshJiraStatusAndProjects();
   void refreshProviderProfiles();
@@ -145,6 +141,11 @@ export function renderProjectTabsBar() {
 }
 
 export function mountShell() {
+  try {
+    state.chatExpandedPref = localStorage.getItem("hivemind.chatExpanded") === "1";
+  } catch {
+    state.chatExpandedPref = false;
+  }
   const rootEl = document.getElementById("app");
   if (!rootEl) return;
   rootEl.innerHTML = `
@@ -195,12 +196,13 @@ export function mountShell() {
           <button class="act-btn" data-act="git" title="Git / Diffs / PR / Issues">
             ${icons.gitBranch}
             <span class="act-badge" id="git-badge" style="display:none">0</span>
+            <span class="act-badge act-badge-gh" id="git-gh-badge" style="display:none" title="Novidades no GitHub">0</span>
           </button>
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
           <button class="act-btn" data-act="mcp" title="Servidores MCP">${icons.mcp}</button>
           <div class="spacer"></div>
-          <button class="act-btn" id="act-resident" title="Hive Residente (Fase 1 · Somente Leitura)">${icons.sparkle}</button>
+          <button class="act-btn" id="act-resident" title="Hive Residente">${icons.sparkle}</button>
           <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
           <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
@@ -230,7 +232,7 @@ export function mountShell() {
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
         <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
-        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente (Fase 2 · Sandbox e Cofre)">hive: ocioso</button>
+        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente — clique para abrir">hive: ocioso</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
@@ -244,11 +246,15 @@ export function mountShell() {
   `;
 
   bindStaticShellEvents();
+  syncChatExpandLayout();
 }
 
 export function openSidebarView(view: SidebarView) {
   state.sidebarView = view;
   state.showLeftSidebar = true;
+  if (view === "git" && state.gitTab === "flow") {
+    clearGitHubUnread();
+  }
   syncActivityButtons();
   syncLayoutVisibility();
   renderLeftSidebar();
@@ -436,6 +442,11 @@ export function bindStaticShellEvents() {
   });
 
   document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      toggleChatExpanded();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       openSidebarView("search");
@@ -699,6 +710,45 @@ export function setupResizer(id: string, onMove: (dx: number) => void) {
   });
 }
 
+export function chatLayoutExpanded(): boolean {
+  return shouldExpandChat(state.chatExpandedPref, state.editorTabs.length);
+}
+
+export function syncChatExpandLayout() {
+  const on = chatLayoutExpanded();
+  document.querySelector(".workbench")?.classList.toggle("chat-expanded", on);
+  const right = document.getElementById("right-pane");
+  right?.classList.toggle("chat-reading", on);
+  if (right && !right.classList.contains("hidden")) {
+    right.style.width = on ? "" : `${state.rightWidth}px`;
+  }
+  const resR = document.getElementById("resizer-right");
+  if (resR) resR.style.display = on || !state.showRightAI ? "none" : "";
+  const btn = document.getElementById("btn-expand-chat");
+  if (btn) {
+    const label = state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA";
+    btn.setAttribute("aria-pressed", state.chatExpandedPref ? "true" : "false");
+    btn.setAttribute("aria-label", label);
+    btn.classList.toggle("is-on", state.chatExpandedPref);
+    btn.title = state.editorTabs.length > 0
+      ? "A preferência fica salva. O chat ocupa o centro quando não houver abas (Ctrl+Shift+E)."
+      : `${label} (Ctrl+Shift+E)`;
+  }
+}
+
+export function toggleChatExpanded() {
+  state.chatExpandedPref = !state.chatExpandedPref;
+  try {
+    localStorage.setItem("hivemind.chatExpanded", state.chatExpandedPref ? "1" : "0");
+  } catch {
+    // preview sem storage
+  }
+  syncChatExpandLayout();
+  if (state.chatExpandedPref && state.editorTabs.length > 0) {
+    setStatus("Equipe IA ocupa o centro quando o editor estiver sem abas.");
+  }
+}
+
 export function syncLayoutVisibility() {
   const left = document.getElementById("left-sidebar");
   const resL = document.getElementById("resizer-left");
@@ -708,6 +758,7 @@ export function syncLayoutVisibility() {
   if (resL) resL.style.display = state.showLeftSidebar ? "" : "none";
   right?.classList.toggle("hidden", !state.showRightAI);
   if (resR) resR.style.display = state.showRightAI ? "" : "none";
+  syncChatExpandLayout();
 }
 
 export function syncActivityButtons() {

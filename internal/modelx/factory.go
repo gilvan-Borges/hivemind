@@ -106,15 +106,16 @@ func newSingleAccountModel(ctx context.Context, provider, modelName string) (mod
 	case "agy", "antigravity":
 		return NewAgyForContext(ctx, "", modelName)
 	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
+		// O prefixo opencode-go:/opencode: escolhe o tier; NewOpenCode tira o prefixo do id enviado.
 		return NewOpenCode(ctx, modelName)
 	case "gemini", "vertex":
-		return newGemini(ctx, provider, modelName)
+		return newGemini(ctx, provider, WireModelID(provider, modelName))
 	case "anthropic":
-		return newAnthropic(ctx, modelName)
+		return newAnthropic(ctx, WireModelID(provider, modelName))
 	case "openai", "openai-responses":
-		return newOpenAI(ctx, provider, modelName)
+		return newOpenAI(ctx, provider, WireModelID(provider, modelName))
 	case "openrouter":
-		return newOpenRouter(ctx, modelName)
+		return newOpenRouter(ctx, WireModelID("openrouter", modelName))
 	case "cursor":
 		return NewCursor(ctx, modelName)
 	default:
@@ -253,6 +254,67 @@ func openRouterCheckAuth(ctx context.Context, key, base string) error {
 	default:
 		return fmt.Errorf("OpenRouter respondeu HTTP %d ao validar a chave", resp.StatusCode)
 	}
+}
+
+// WireModelID is the slug the provider endpoint accepts. ADK copies LLM.Name()
+// into the request, and that name is "provedor:modelo" (openrouter:deepseek/...).
+// OpenRouter rejects the colon form; it wants "deepseek/deepseek-v4.1-flash".
+// "openrouter/auto" stays: that single slash is a native OpenRouter route.
+func WireModelID(provider, modelName string) string {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	m := strings.TrimSpace(modelName)
+	switch p {
+	case "openrouter":
+		return openRouterWireID(m)
+	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
+		if id := StripOpenCodePrefix(m); id != "" {
+			return id
+		}
+		return m
+	case "cursor":
+		return cursorModelID(m)
+	case "agy", "antigravity":
+		slug, _ := ParseAgySpec(m)
+		if slug == "" {
+			return m
+		}
+		return slug
+	default:
+		return stripProviderTag(m, p)
+	}
+}
+
+func openRouterWireID(model string) string {
+	low := strings.ToLower(model)
+	if strings.HasPrefix(low, "openrouter:") {
+		if rest := strings.TrimSpace(model[len("openrouter:"):]); rest != "" {
+			return rest
+		}
+	}
+	const slash = "openrouter/"
+	if strings.HasPrefix(low, slash) {
+		rest := strings.TrimSpace(model[len(slash):])
+		if strings.Contains(rest, "/") {
+			return rest
+		}
+	}
+	return model
+}
+
+func stripProviderTag(model, provider string) string {
+	if provider == "" || model == "" {
+		return model
+	}
+	low := strings.ToLower(model)
+	for _, sep := range []string{":", "/"} {
+		pref := provider + sep
+		if strings.HasPrefix(low, pref) {
+			if rest := strings.TrimSpace(model[len(pref):]); rest != "" {
+				return rest
+			}
+		}
+	}
+	return model
 }
 
 // Model IDs follow the vendor format (e.g. "anthropic/claude-sonnet-4-5",

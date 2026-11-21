@@ -1,6 +1,8 @@
+import type { GitHubNotificationEvent } from "../types";
+
 export type Mood = "idle" | "thinking" | "working" | "success" | "error" | "attention";
 
-export type NoticeKind = "turn_end" | "plan_ready" | "confirm" | "error" | "routine_done";
+export type NoticeKind = "turn_end" | "plan_ready" | "confirm" | "error" | "routine_done" | "github";
 
 export type Channel = "bubble" | "system" | "silent";
 
@@ -26,7 +28,7 @@ export interface NoticeDraft {
 }
 
 export interface NoticeTarget {
-  surface: "team" | "resident";
+  surface: "team" | "resident" | "github";
   projectId: string;
   laneId: string;
   messageId: string;
@@ -162,5 +164,64 @@ export function clampPosition(x: number, y: number, w: number, h: number, vw: nu
   return {
     x: Math.min(maxX, Math.max(0, x)),
     y: Math.min(maxY, Math.max(0, y)),
+  };
+}
+
+export function formatGitHubEventNotice(ev: GitHubNotificationEvent): { title: string; body: string; mood: Mood } {
+  const who = ev.author ? `@${ev.author}` : "";
+  let title = "";
+  let mood: Mood = "attention";
+
+  switch (ev.kind) {
+    case "mention":
+      title = who ? `${who} marcou você no PR #${ev.prNumber}` : `Você foi marcado no PR #${ev.prNumber}`;
+      break;
+    case "my_pr_approved":
+      title = `PR #${ev.prNumber} pronto para merge`;
+      mood = "success";
+      break;
+    case "my_pr_changes":
+      title = `Ajustes pedidos no seu PR #${ev.prNumber}`;
+      break;
+    case "my_pr_comment":
+      title = who ? `${who} comentou no seu PR #${ev.prNumber}` : `Novo comentário no seu PR #${ev.prNumber}`;
+      break;
+    case "review_requested":
+      title = ev.reason === "Re-revisão"
+        ? `Re-revisão pedida no PR #${ev.prNumber}`
+        : `Revisão solicitada no PR #${ev.prNumber}`;
+      break;
+    case "pr_commit":
+      title = `Novo commit no PR #${ev.prNumber}`;
+      mood = "working";
+      break;
+    default:
+      title = who ? `Nova resposta de ${who} no PR #${ev.prNumber}` : `Nova atividade no PR #${ev.prNumber}`;
+      break;
+  }
+
+  const snippet = String(ev.snippet || "").trim();
+  const prTitle = String(ev.title || "").trim();
+  const rawBody = snippet ? (prTitle ? `${prTitle} — “${snippet}”` : snippet) : prTitle;
+  return { title, body: clip(rawBody, 110), mood };
+}
+
+export function noticeFromGitHubEvents(events: GitHubNotificationEvent[], projectName?: string): NoticeDraft | null {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  if (events.length === 1) {
+    const one = formatGitHubEventNotice(events[0]);
+    const prefix = projectName ? `[${projectName}] ` : "";
+    return { kind: "github", title: `${prefix}${one.title}`, body: one.body, mood: one.mood };
+  }
+  const summary = events
+    .slice(0, 3)
+    .map((ev) => formatGitHubEventNotice(ev).title)
+    .join(" · ");
+  const extra = events.length > 3 ? ` (+${events.length - 3})` : "";
+  return {
+    kind: "github",
+    title: `${events.length} novidades no GitHub${projectName ? ` (${projectName})` : ""}`,
+    body: clip(`${summary}${extra}`, 110),
+    mood: "attention",
   };
 }

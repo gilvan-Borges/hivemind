@@ -33,6 +33,7 @@ type App struct {
 	smokeCheck          bool
 	sessions            *idecore.SessionManager
 	autoReview          *idecore.AutoReviewManager
+	githubMonitor       *idecore.GitHubMonitor
 	pty                 *idecore.PTYManager
 	lsp                 *idecore.LSPManager
 	fileIndex           *idecore.FileIndex
@@ -46,6 +47,9 @@ type App struct {
 	openCodeCachedAt    time.Time
 	termMu              sync.Mutex
 	termCancels         map[string]context.CancelFunc
+	gitMu               sync.Mutex
+	gitGen              uint64
+	gitCalls            map[string]gitCall
 	inlineMu            sync.Mutex
 	ghostCancel         context.CancelFunc
 	editCancel          context.CancelFunc
@@ -103,6 +107,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		smokeCheck:  smokeCheck,
 		fileIndex:   idecore.NewFileIndex(),
 		termCancels: make(map[string]context.CancelFunc),
+		gitCalls:    make(map[string]gitCall),
 		watchers:    make(map[string]*idecore.FileWatcher),
 	}
 	app.sessions = idecore.NewSessionManager(func(ev idecore.LaneEvent) {
@@ -119,6 +124,11 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		}
 		if app.mobile != nil {
 			app.mobile.hub.HandleAutoReviewStatus(st)
+		}
+	})
+	app.githubMonitor = idecore.NewGitHubMonitor(func(ev idecore.GitHubSyncEvent) {
+		if app.ctx != nil && !app.smokeCheck {
+			wailsrt.EventsEmit(app.ctx, "hivemind:github-sync", ev)
 		}
 	})
 	app.pty = idecore.NewPTYManager(func(ev idecore.PTYEvent) {
@@ -216,6 +226,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.autoReview != nil {
 		a.autoReview.StopAll()
+	}
+	if a.githubMonitor != nil {
+		a.githubMonitor.StopAll()
 	}
 	if a.relay != nil {
 		a.relay.Stop()
@@ -449,6 +462,13 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 			}
 			a.autoReview.SyncWorkspace(baseCtx, root)
 		}(abs)
+	}
+	if a.githubMonitor != nil && !a.smokeCheck {
+		baseCtx := a.ctx
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+		a.githubMonitor.EnsureWatching(baseCtx, abs)
 	}
 	return proj, nil
 }
@@ -814,11 +834,83 @@ func (a *App) StageFile(workspace, relPath string, stage bool) error {
 	return idecore.StageWorkspaceFile(ctx, workspace, relPath, stage)
 }
 
+type gitCall struct {
+	cancel context.CancelFunc
+	gen    uint64
+}
+
+func gitWorkspaceKey(workspace string) string {
+	return strings.ToLower(filepath.Clean(strings.TrimSpace(workspace)))
+}
+
 // RunGitAction executes safe Source Control actions ("fetch", "pull", "push", "sync", "stash", "stash-pop").
+// The timeout comes from HIVEMIND_GIT_TIMEOUT or the 2 minute default.
 func (a *App) RunGitAction(workspace, action string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	return idecore.RunGitAction(ctx, workspace, action)
+	return a.RunGitActionTimeout(workspace, action, 0)
+}
+
+// RunGitActionTimeout is RunGitAction with a caller-chosen limit in seconds.
+// Progress lines are emitted on "hivemind:git-progress". CancelGitAction kills the child.
+func (a *App) RunGitActionTimeout(workspace, action string, timeoutSec int) (string, error) {
+	ctx, done := a.beginGit(workspace, idecore.ResolveGitTimeout(timeoutSec))
+	defer done()
+	res, err := idecore.RunGitActionProgress(ctx, workspace, action, func(p idecore.GitProgress) {
+		if a.ctx == nil || a.smokeCheck {
+			return
+		}
+		wailsrt.EventsEmit(a.ctx, "hivemind:git-progress", map[string]any{
+			"workspace": workspace,
+			"action":    action,
+			"phase":     p.Phase,
+			"label":     p.Label,
+			"line":      p.Line,
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.Summary, nil
+}
+
+// CancelGitAction kills the git child running for workspace.
+func (a *App) CancelGitAction(workspace string) bool {
+	key := gitWorkspaceKey(workspace)
+	a.gitMu.Lock()
+	cur, ok := a.gitCalls[key]
+	if ok {
+		delete(a.gitCalls, key)
+	}
+	a.gitMu.Unlock()
+	if !ok || cur.cancel == nil {
+		return false
+	}
+	cur.cancel()
+	return true
+}
+
+func (a *App) beginGit(workspace string, timeout time.Duration) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	key := gitWorkspaceKey(workspace)
+	a.gitMu.Lock()
+	if a.gitCalls == nil {
+		a.gitCalls = map[string]gitCall{}
+	}
+	if prev, ok := a.gitCalls[key]; ok && prev.cancel != nil {
+		prev.cancel()
+	}
+	a.gitGen++
+	gen := a.gitGen
+	a.gitCalls[key] = gitCall{cancel: cancel, gen: gen}
+	a.gitMu.Unlock()
+	done := func() {
+		cancel()
+		a.gitMu.Lock()
+		if cur, ok := a.gitCalls[key]; ok && cur.gen == gen {
+			delete(a.gitCalls, key)
+		}
+		a.gitMu.Unlock()
+	}
+	return ctx, done
 }
 
 // ListGitGraph returns commits in topological order for the Source Control Graph.
@@ -987,7 +1079,16 @@ func (a *App) SaveGitHubConfig(token, baseURL, workspace string) (idecore.GitHub
 	if err := githubx.SaveCredentials(token, baseURL); err != nil {
 		return idecore.GitHubStatusInfo{}, err
 	}
-	return a.GitHubStatus(workspace), nil
+	st := a.GitHubStatus(workspace)
+	if a.githubMonitor != nil && !a.smokeCheck && strings.TrimSpace(workspace) != "" && st.LoggedIn {
+		baseCtx := a.ctx
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+		a.githubMonitor.EnsureWatching(baseCtx, workspace)
+		a.githubMonitor.TriggerNow(workspace)
+	}
+	return st, nil
 }
 
 // InitGit initializes a Git repository in workspace.
@@ -1286,7 +1387,11 @@ func (a *App) ListIssues(workspace string) ([]idecore.ProjectIssue, error) {
 func (a *App) ListPullRequests(workspace string) ([]idecore.ProjectPullRequest, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return idecore.ListProjectPullRequests(ctx, workspace)
+	prs, err := idecore.ListProjectPullRequests(ctx, workspace)
+	if err == nil && a.githubMonitor != nil {
+		a.githubMonitor.RecordSnapshot(workspace, prs)
+	}
+	return prs, err
 }
 
 // CloseOwnGitHubItem closes a GitHub PR ("pr") or issue ("issue") opened by the authenticated user.
@@ -1517,7 +1622,7 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 	return idecore.ParseBuildProblems(rawOutput, workspace)
 }
 
-// --- Agente Residente Hive (Fase 2 · Sandbox e Cofre) ---
+// --- Agente Residente Hive ---
 
 // ExternalSessions lists outside processes by executable name. It does not control them.
 func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
@@ -1532,7 +1637,7 @@ func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
 // ResidentStatus returns the resident agent's live state (zero secrets).
 func (a *App) ResidentStatus() resident.Status {
 	if a.resident == nil {
-		return resident.Status{State: "ocioso", Phase: 2, ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
+		return resident.Status{State: "ocioso", ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
 	}
 	return a.resident.Status()
 }

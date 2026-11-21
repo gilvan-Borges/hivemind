@@ -1,9 +1,9 @@
-import type { ChatMessage, FileNode, GitHubStatus, ProjectInfo, ProjectWorkspaceContext } from "./types";
-import { exactTokens, matchAgentRuntime } from "./utils";
+import type { AgentRuntime, ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext, TeamLane } from "./types";
+import { chipForAgent, describeModelRoute, exactTokens, matchAgentRuntime } from "./utils";
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
-import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
+import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
@@ -14,10 +14,33 @@ import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
 import { countTurnFiles } from "./companion/logic";
-import { dismissMessage, mountCompanion, noteActivity, publishNotice } from "./companion/host";
+import { dismissMessage, mountCompanion, noteActivity, publishGitHubNotice, publishNotice } from "./companion/host";
 
 function noticeProjectId(isActive: boolean, ctx?: ProjectWorkspaceContext): string {
   return isActive ? state.activeProjectId : (ctx?.id || "");
+}
+
+function stampChiefModel(m: ChatMessage, ag?: AgentRuntime) {
+  if (!ag || m.modelLabel) return;
+  const label = m.label || "";
+  const named = label === ag.name || label.endsWith(`· ${ag.name}`);
+  if (!named) return;
+  const chip = chipForAgent(ag);
+  if (!chip.label) return;
+  m.modelLabel = chip.label;
+  m.modelProvider = chip.providerLabel;
+  m.modelFullId = chip.fullId;
+}
+
+function stampStreamingModel(lane: TeamLane, ag: AgentRuntime) {
+  const tail = lane.messages[lane.messages.length - 1];
+  if (!tail || tail.kind !== "chief") return;
+  if (!(tail.label === ag.name || tail.label.endsWith(`· ${ag.name}`))) return;
+  const chip = chipForAgent(ag);
+  if (!chip.label) return;
+  tail.modelLabel = chip.label;
+  tail.modelProvider = chip.providerLabel;
+  tail.modelFullId = chip.fullId;
 }
 
 export async function boot() {
@@ -68,20 +91,23 @@ export async function boot() {
     if (ev.kind === "stage") {
       updateAgentStatus(lane, ev.author, ev.label, "running");
       noteActivity({ laneId: lane.id, kind: "stage", stage: ev.stage, label: ev.label, author: ev.author });
-    } else if (ev.kind === "model_route") {
+    } else if (ev.kind === "model_route" || ev.kind === "provider_failover") {
       const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
-      const chosen = ev.provider && ev.model ? `${ev.provider}/${ev.model}` : String(ev.model || "");
-      if (ag && chosen) {
-        ag.routeModel = chosen;
+      const chip = describeModelRoute(String(ev.provider || ""), String(ev.model || ""));
+      if (ag && chip.label) {
+        ag.routeModel = chip.fullId;
+        ag.routeProvider = String(ev.provider || "");
+        ag.routeFriendly = chip.label;
         ag.routeTier = ev.tier ? String(ev.tier) : undefined;
         ag.routeReasons = Array.isArray(ev.reasons) ? ev.reasons.map(String) : undefined;
+        stampStreamingModel(lane, ag);
       }
-      const routeText = String(ev.text || (chosen ? `Jev escolheu ${chosen}` : "")).trim();
+      const routeText = String(ev.text || (chip.fullId ? `Jev escolheu ${chip.fullId}` : "")).trim();
       if (routeText) {
         lane.messages.push({
           id: `route-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "system",
-          label: "Rota Jev",
+          label: ev.kind === "provider_failover" ? "Failover" : "Rota Jev",
           text: routeText,
         });
       }
@@ -226,19 +252,33 @@ export async function boot() {
       const last = lane.messages[lane.messages.length - 1];
       const msgLabel = ev.label || ev.author || "Chefe";
       const evTok = !ev.partial && ev.tokens ? Number(ev.tokens) : undefined;
+      const ag = matchAgentRuntime(lane.agents, ev.author, msgLabel);
+      const keepStream = (current: string, incoming: string) =>
+        current.includes("[[hmtool:") && !incoming.includes("[[hmtool:");
       if (last && last.kind === "chief" && last.label === msgLabel && ev.partial) {
         last.text += ev.text;
+        stampChiefModel(last, ag);
       } else if (!ev.partial && last && last.kind === "chief" && last.label === msgLabel) {
-        last.text = ev.text;
+        if (keepStream(last.text, ev.text)) {
+          const summary = String(ev.text || "").trim();
+          if (summary && !last.text.includes(summary)) {
+            last.text = last.text.endsWith("\n") ? `${last.text}\n${summary}` : `${last.text}\n\n${summary}`;
+          }
+        } else {
+          last.text = ev.text;
+        }
         if (evTok) last.tokens = evTok;
+        stampChiefModel(last, ag);
       } else {
-        lane.messages.push({
+        const created: ChatMessage = {
           id: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "chief",
           label: msgLabel,
           text: ev.text,
           tokens: evTok,
-        });
+        };
+        stampChiefModel(created, ag);
+        lane.messages.push(created);
       }
     } else if (ev.kind === "error") {
       markToolsDone(lane);
@@ -363,6 +403,12 @@ export async function boot() {
     queueFileSystemRefresh(wsKey, changed, Boolean(payload?.overflow));
   });
 
+  window.runtime?.EventsOn("hivemind:git-progress", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!state.project || normalizePathKey(state.project.root) !== wsKey) return;
+    appendGitProgress(String(payload?.label || ""), String(payload?.line || ""));
+  });
+
   window.runtime?.EventsOn("hivemind:pty-output", (payload: any) => {
     handlePTYOutputEvent(payload);
   });
@@ -395,6 +441,47 @@ export async function boot() {
         void loadGitHubPRs();
         void refreshSessions(state.project!.root);
       }
+    }
+  });
+
+  window.runtime?.EventsOn("hivemind:github-sync", (payload: GitHubSyncEvent) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!wsKey) return;
+    const prs = Array.isArray(payload?.prs) ? payload.prs : [];
+    const events = Array.isArray(payload?.events) ? payload.events : [];
+    const syncedAt = String(payload?.syncedAt || "");
+
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    const isActive = Boolean(state.project && normalizePathKey(state.project.root) === wsKey);
+    const viewingFlow = isActive && state.sidebarView === "git" && state.showLeftSidebar && state.gitTab === "flow" && document.hasFocus();
+
+    if (ctx) {
+      ctx.prs.list = prs;
+      ctx.prs.loadedOnce = true;
+      ctx.prs.loading = false;
+      ctx.githubLastSyncAt = syncedAt;
+      if (events.length > 0 && !viewingFlow) {
+        ctx.githubUnreadCount = (ctx.githubUnreadCount || 0) + events.length;
+      }
+    }
+    if (isActive) {
+      state.prs.list = prs;
+      state.prs.loadedOnce = true;
+      state.prs.loading = false;
+      state.githubLastSyncAt = syncedAt;
+      if (events.length > 0 && !viewingFlow) {
+        state.githubUnreadCount += events.length;
+      }
+      if (state.sidebarView === "git" && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
+    }
+
+    updateGitActivityBadge();
+
+    if (events.length > 0) {
+      const projectName = ctx?.project.name || (isActive ? state.project?.name : undefined);
+      publishGitHubNotice(events, noticeProjectId(isActive, ctx), projectName);
     }
   });
 
@@ -591,6 +678,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
     prs: { list: [], loading: false, loadedOnce: false },
     gitGraph: { commits: [], loading: false, loadedOnce: false, allBranches: true, collapsed: false },
     gitTab: "changes",
+    githubUnreadCount: 0,
+    githubLastSyncAt: "",
     draftObjective: "",
     draftImages: [],
     jiraKeyInput: "",

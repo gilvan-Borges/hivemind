@@ -229,6 +229,8 @@ export function ResidentSessionMessages(arg1:string):Promise<Array<resident.Loca
 
 export function ResidentSetEventTriggers(arg1:boolean):Promise<resident.Status>;
 
+export function ResidentSetExperimentalUnisolated(arg1:boolean):Promise<resident.Status>;
+
 export function ResidentSetRoutineEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function ResidentSetSecret(arg1:string,arg2:string):Promise<resident.Status>;
