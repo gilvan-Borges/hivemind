@@ -75,13 +75,14 @@ func (s *Server) Start() error {
 	}
 	s.port = ln.Addr().(*net.TCPAddr).Port
 	s.urls = joinURLs(DetectAddrs(), s.port)
-	s.srv = &http.Server{
+	srv := &http.Server{
 		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	s.srv = srv
 	go func() {
-		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("remote bridge: %v", err)
 		}
 	}()

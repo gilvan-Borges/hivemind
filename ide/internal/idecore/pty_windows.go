@@ -202,10 +202,17 @@ func buildPTYEnvBlock() []uint16 {
 }
 
 func (p *ptySession) Read(buf []byte) (int, error) {
-	if p == nil || p.outFile == nil {
+	if p == nil {
 		return 0, io.EOF
 	}
-	return p.outFile.Read(buf)
+	p.mu.Lock()
+	f := p.outFile
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || f == nil {
+		return 0, io.EOF
+	}
+	return f.Read(buf)
 }
 
 func (p *ptySession) Write(data []byte) (int, error) {
@@ -235,12 +242,19 @@ func (p *ptySession) Resize(cols, rows int) error {
 }
 
 func (p *ptySession) Wait() int {
-	if p == nil || p.hProc == 0 {
+	if p == nil {
 		return 0
 	}
-	_, _ = windows.WaitForSingleObject(p.hProc, windows.INFINITE)
+	p.mu.Lock()
+	hProc := p.hProc
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || hProc == 0 {
+		return 0
+	}
+	_, _ = windows.WaitForSingleObject(hProc, windows.INFINITE)
 	var code uint32
-	if err := windows.GetExitCodeProcess(p.hProc, &code); err == nil {
+	if err := windows.GetExitCodeProcess(hProc, &code); err == nil {
 		return int(code)
 	}
 	return 0

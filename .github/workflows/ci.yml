@@ -140,7 +140,9 @@ jobs:
         if: steps.app_access.outputs.can_checkout == 'true'
       - name: Testes unitários e lint do app Android
         if: steps.app_access.outputs.can_checkout == 'true'
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest lintDebug
 
   govulncheck:
     name: Vulnerabilidades (govulncheck)

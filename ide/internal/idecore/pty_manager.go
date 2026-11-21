@@ -93,11 +93,15 @@ func (m *PTYManager) Start(termID, workspace string, cols, rows int) (string, er
 	}
 
 	m.mu.Lock()
-	if prev, ok := m.terms[key]; ok && prev.sess != nil {
-		_ = prev.sess.Close()
+	prev, hadPrev := m.terms[key]
+	if hadPrev && prev != nil {
+		prev.alive = false
 	}
 	m.terms[key] = mp
 	m.mu.Unlock()
+	if hadPrev && prev != nil && prev.sess != nil {
+		_ = prev.sess.Close()
+	}
 
 	go m.pump(key, mp)
 	return "", nil
@@ -148,8 +152,9 @@ func (m *PTYManager) Write(termID, data string) error {
 	key := normTermID(termID, "")
 	m.mu.Lock()
 	mp, ok := m.terms[key]
+	alive := ok && mp != nil && mp.alive
 	m.mu.Unlock()
-	if !ok || mp == nil || !mp.alive {
+	if !alive {
 		return fmt.Errorf("sessão PTY não está ativa")
 	}
 	_, err := mp.sess.Write([]byte(data))
@@ -161,8 +166,9 @@ func (m *PTYManager) Resize(termID string, cols, rows int) error {
 	key := normTermID(termID, "")
 	m.mu.Lock()
 	mp, ok := m.terms[key]
+	alive := ok && mp != nil && mp.alive
 	m.mu.Unlock()
-	if !ok || mp == nil || !mp.alive {
+	if !alive {
 		return nil
 	}
 	return mp.sess.Resize(cols, rows)
@@ -182,10 +188,12 @@ func (m *PTYManager) Close(termID string) {
 	mp, ok := m.terms[key]
 	if ok {
 		delete(m.terms, key)
+		if mp != nil {
+			mp.alive = false
+		}
 	}
 	m.mu.Unlock()
 	if ok && mp != nil && mp.sess != nil {
-		mp.alive = false
 		_ = mp.sess.Close()
 	}
 }
@@ -195,13 +203,15 @@ func (m *PTYManager) CloseAll() {
 	m.mu.Lock()
 	list := make([]*managedPTY, 0, len(m.terms))
 	for _, mp := range m.terms {
+		if mp != nil {
+			mp.alive = false
+		}
 		list = append(list, mp)
 	}
 	m.terms = make(map[string]*managedPTY)
 	m.mu.Unlock()
 	for _, mp := range list {
 		if mp != nil && mp.sess != nil {
-			mp.alive = false
 			_ = mp.sess.Close()
 		}
 	}
