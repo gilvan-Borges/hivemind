@@ -634,6 +634,13 @@ button.icon-btn:hover:not(:disabled) {
   line-height: 14px;
   font-variant-numeric: tabular-nums;
 }
+.act-badge-gh {
+  top: 1px;
+  bottom: auto;
+  background: var(--accent);
+  color: var(--action-primary-text);
+  box-shadow: var(--island-shadow);
+}
 
 /* Island Gaps / Resizers */
 .resizer-v {
@@ -3678,6 +3685,31 @@ button.lane-pill { text-align: left; }
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
 }
+.flow-pill.mention {
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-strong);
+}
+.pr-activity-snippet {
+  margin-top: 4px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gh-autosync-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .flow-pill.subtask-type-pill {
   background: rgba(56, 189, 248, 0.14);
   border: 1px solid rgba(56, 189, 248, 0.4);
@@ -5884,6 +5916,12 @@ button.status-chip:hover,
   box-shadow: var(--island-shadow);
   color: var(--text-body);
   animation: hive-companion-bubble-in 0.22s ease;
+}
+.hive-companion-bubble.is-clickable {
+  cursor: pointer;
+}
+.hive-companion-bubble.is-clickable:hover {
+  border-color: var(--accent);
 }
 .hive-companion.kind-success .hive-companion-bubble {
   border-color: var(--color-success-border);

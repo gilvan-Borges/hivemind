@@ -1,19 +1,19 @@
-import type { ChatMessage, FileNode, GitHubStatus, ProjectInfo, ProjectWorkspaceContext } from "./types";
+import type { ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext } from "./types";
 import { exactTokens, matchAgentRuntime } from "./utils";
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
-import { loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize } from "./git";
+import { clearGitHubUnread, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { handleResidentLaneEvent, refreshResidentStatus } from "./resident";
-import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
+import { mountShell, openSidebarView, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
-import { hiveNotifyFromLaneEvent, initHiveNotify } from "./notify";
+import { hiveNotifyFromLaneEvent, hiveNotifyGitHubEvents, initHiveNotify } from "./notify";
 
 export async function boot() {
   initInlineAIHooks();
@@ -366,6 +366,54 @@ export async function boot() {
     }
   });
 
+  window.runtime?.EventsOn("hivemind:github-sync", (payload: GitHubSyncEvent) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!wsKey) return;
+    const prs = Array.isArray(payload?.prs) ? payload.prs : [];
+    const events = Array.isArray(payload?.events) ? payload.events : [];
+    const syncedAt = String(payload?.syncedAt || "");
+
+    const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    const isActive = Boolean(state.project && normalizePathKey(state.project.root) === wsKey);
+    const viewingFlow = isActive && state.sidebarView === "git" && state.showLeftSidebar && state.gitTab === "flow" && document.hasFocus();
+
+    if (ctx) {
+      ctx.prs.list = prs;
+      ctx.prs.loadedOnce = true;
+      ctx.prs.loading = false;
+      ctx.githubLastSyncAt = syncedAt;
+      if (events.length > 0 && !viewingFlow) {
+        ctx.githubUnreadCount = (ctx.githubUnreadCount || 0) + events.length;
+      }
+    }
+    if (isActive) {
+      state.prs.list = prs;
+      state.prs.loadedOnce = true;
+      state.prs.loading = false;
+      state.githubLastSyncAt = syncedAt;
+      if (events.length > 0 && !viewingFlow) {
+        state.githubUnreadCount += events.length;
+      }
+      if (state.sidebarView === "git" && state.showLeftSidebar) {
+        renderLeftSidebar();
+      }
+    }
+
+    updateGitActivityBadge();
+
+    if (events.length > 0) {
+      const projectName = ctx?.project.name || (isActive ? state.project?.name : undefined);
+      hiveNotifyGitHubEvents(events, projectName, () => {
+        if (ctx && ctx.id !== state.activeProjectId) {
+          switchProjectTab(ctx.id);
+        }
+        state.gitTab = "flow";
+        clearGitHubUnread();
+        openSidebarView("git");
+      });
+    }
+  });
+
   try {
     const init = await backend.GetInitialState();
     state.recent = init.recentProjects || [];
@@ -559,6 +607,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
     prs: { list: [], loading: false, loadedOnce: false },
     gitGraph: { commits: [], loading: false, loadedOnce: false, allBranches: true, collapsed: false },
     gitTab: "changes",
+    githubUnreadCount: 0,
+    githubLastSyncAt: "",
     draftObjective: "",
     draftImages: [],
     jiraKeyInput: "",

@@ -32,6 +32,7 @@ type App struct {
 	smokeCheck          bool
 	sessions            *idecore.SessionManager
 	autoReview          *idecore.AutoReviewManager
+	githubMonitor       *idecore.GitHubMonitor
 	pty                 *idecore.PTYManager
 	lsp                 *idecore.LSPManager
 	fileIndex           *idecore.FileIndex
@@ -117,6 +118,11 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 		}
 		if app.mobile != nil {
 			app.mobile.hub.HandleAutoReviewStatus(st)
+		}
+	})
+	app.githubMonitor = idecore.NewGitHubMonitor(func(ev idecore.GitHubSyncEvent) {
+		if app.ctx != nil && !app.smokeCheck {
+			wailsrt.EventsEmit(app.ctx, "hivemind:github-sync", ev)
 		}
 	})
 	app.pty = idecore.NewPTYManager(func(ev idecore.PTYEvent) {
@@ -210,6 +216,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.autoReview != nil {
 		a.autoReview.StopAll()
+	}
+	if a.githubMonitor != nil {
+		a.githubMonitor.StopAll()
 	}
 	if a.relay != nil {
 		a.relay.Stop()
@@ -435,6 +444,13 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 			}
 			a.autoReview.SyncWorkspace(baseCtx, root)
 		}(abs)
+	}
+	if a.githubMonitor != nil && !a.smokeCheck {
+		baseCtx := a.ctx
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+		a.githubMonitor.EnsureWatching(baseCtx, abs)
 	}
 	return proj, nil
 }
@@ -973,7 +989,16 @@ func (a *App) SaveGitHubConfig(token, baseURL, workspace string) (idecore.GitHub
 	if err := githubx.SaveCredentials(token, baseURL); err != nil {
 		return idecore.GitHubStatusInfo{}, err
 	}
-	return a.GitHubStatus(workspace), nil
+	st := a.GitHubStatus(workspace)
+	if a.githubMonitor != nil && !a.smokeCheck && strings.TrimSpace(workspace) != "" && st.LoggedIn {
+		baseCtx := a.ctx
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+		a.githubMonitor.EnsureWatching(baseCtx, workspace)
+		a.githubMonitor.TriggerNow(workspace)
+	}
+	return st, nil
 }
 
 // InitGit initializes a Git repository in workspace.
@@ -1272,7 +1297,11 @@ func (a *App) ListIssues(workspace string) ([]idecore.ProjectIssue, error) {
 func (a *App) ListPullRequests(workspace string) ([]idecore.ProjectPullRequest, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return idecore.ListProjectPullRequests(ctx, workspace)
+	prs, err := idecore.ListProjectPullRequests(ctx, workspace)
+	if err == nil && a.githubMonitor != nil {
+		a.githubMonitor.RecordSnapshot(workspace, prs)
+	}
+	return prs, err
 }
 
 // CloseOwnGitHubItem closes a GitHub PR ("pr") or issue ("issue") opened by the authenticated user.

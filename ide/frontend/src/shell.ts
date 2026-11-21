@@ -6,7 +6,7 @@ import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
 import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
-import { loadGitGraph, refreshDiffs } from "./git";
+import { clearGitHubUnread, loadGitGraph, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
 import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
@@ -34,11 +34,7 @@ export function switchProjectTab(projectId: string) {
   renderEditorBody();
   renderTerminalDrawer();
   renderRightPane();
-  const gitBadge = document.getElementById("git-badge");
-  if (gitBadge) {
-    gitBadge.textContent = String(state.diffs.length);
-    gitBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
-  }
+  updateGitActivityBadge();
   setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
   void refreshJiraStatusAndProjects();
   void refreshProviderProfiles();
@@ -194,6 +190,7 @@ export function mountShell() {
           <button class="act-btn" data-act="git" title="Git / Diffs / PR / Issues">
             ${icons.gitBranch}
             <span class="act-badge" id="git-badge" style="display:none">0</span>
+            <span class="act-badge act-badge-gh" id="git-gh-badge" style="display:none" title="Novidades no GitHub">0</span>
           </button>
           <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
@@ -248,6 +245,9 @@ export function mountShell() {
 export function openSidebarView(view: SidebarView) {
   state.sidebarView = view;
   state.showLeftSidebar = true;
+  if (view === "git" && state.gitTab === "flow") {
+    clearGitHubUnread();
+  }
   syncActivityButtons();
   syncLayoutVisibility();
   renderLeftSidebar();

@@ -1,5 +1,7 @@
 /** Hive companion: aviso flutuante na IDE + toast nativo do SO quando a janela está fora de foco. */
 
+import type { GitHubNotificationEvent } from "./types";
+
 export type HiveNotifyKind = "info" | "success" | "error" | "attention";
 
 export type HiveNotifyPayload = {
@@ -8,6 +10,8 @@ export type HiveNotifyPayload = {
   kind?: HiveNotifyKind;
   /** Força toast do SO mesmo com a janela em foco (raro). */
   forceDesktop?: boolean;
+  /** Ação opcional ao clicar no balão do companion na IDE. */
+  onClick?: () => void;
 };
 
 type RuntimeNotify = {
@@ -28,6 +32,7 @@ let ready = false;
 let initPromise: Promise<void> | null = null;
 let dismissTimer = 0;
 let seq = 0;
+let activeBubbleClick: (() => void) | null = null;
 
 export function truncateNotifyBody(text: string, max = BODY_MAX): string {
   const t = String(text || "").replace(/\s+/g, " ").trim();
@@ -104,8 +109,17 @@ function ensureCompanion(): HTMLElement {
   const hide = () => {
     if (!bubble) return;
     bubble.hidden = true;
+    bubble.classList.remove("is-clickable");
+    activeBubbleClick = null;
     root!.classList.remove("is-speaking", "kind-info", "kind-success", "kind-error", "kind-attention");
   };
+  bubble?.addEventListener("click", () => {
+    const fn = activeBubbleClick;
+    if (fn) {
+      hide();
+      fn();
+    }
+  });
   root.querySelector(".hive-companion-dismiss")?.addEventListener("click", (e) => {
     e.stopPropagation();
     hide();
@@ -137,10 +151,14 @@ function showCompanion(payload: HiveNotifyPayload): void {
   const body = truncateNotifyBody(payload.body || "");
   bodyEl.textContent = body;
   bodyEl.hidden = !body;
+  activeBubbleClick = payload.onClick || null;
+  bubble.classList.toggle("is-clickable", Boolean(activeBubbleClick));
   bubble.hidden = false;
   if (dismissTimer) window.clearTimeout(dismissTimer);
   dismissTimer = window.setTimeout(() => {
     bubble.hidden = true;
+    bubble.classList.remove("is-clickable");
+    activeBubbleClick = null;
     root.classList.remove("is-speaking", `kind-${kind}`);
   }, DISMISS_MS);
 }
@@ -230,4 +248,80 @@ export function hiveNotifyFromLaneEvent(ev: {
       kind: "attention",
     });
   }
+}
+
+export function formatGitHubEventNotification(ev: GitHubNotificationEvent): {
+  title: string;
+  body: string;
+  kind: HiveNotifyKind;
+} {
+  const who = ev.author ? `@${ev.author}` : "";
+  let title = "";
+  let kind: HiveNotifyKind = "attention";
+
+  switch (ev.kind) {
+    case "mention":
+      title = who ? `${who} marcou você no PR #${ev.prNumber}` : `Você foi marcado no PR #${ev.prNumber}`;
+      break;
+    case "my_pr_approved":
+      title = `PR #${ev.prNumber} pronto para merge`;
+      kind = "success";
+      break;
+    case "my_pr_changes":
+      title = `Ajustes pedidos no seu PR #${ev.prNumber}`;
+      break;
+    case "my_pr_comment":
+      title = who ? `${who} comentou no seu PR #${ev.prNumber}` : `Novo comentário no seu PR #${ev.prNumber}`;
+      break;
+    case "review_requested":
+      title = ev.reason === "Re-revisão"
+        ? `Re-revisão pedida no PR #${ev.prNumber}`
+        : `Revisão solicitada no PR #${ev.prNumber}`;
+      break;
+    case "pr_commit":
+      title = `Novo commit no PR #${ev.prNumber}`;
+      kind = "info";
+      break;
+    default:
+      title = who ? `Nova resposta de ${who} no PR #${ev.prNumber}` : `Nova atividade no PR #${ev.prNumber}`;
+      break;
+  }
+
+  const snippet = String(ev.snippet || "").trim();
+  const prTitle = String(ev.title || "").trim();
+  const body = snippet
+    ? (prTitle ? `${prTitle} — “${snippet}”` : snippet)
+    : prTitle;
+  return { title, body, kind };
+}
+
+/** Notifica novidades detectadas pelo monitor automático do GitHub (agrupando se chegarem várias). */
+export function hiveNotifyGitHubEvents(
+  events: GitHubNotificationEvent[],
+  projectName?: string,
+  onOpenFlow?: () => void
+): void {
+  if (!Array.isArray(events) || events.length === 0) return;
+  if (events.length === 1) {
+    const formatted = formatGitHubEventNotification(events[0]);
+    const prefix = projectName ? `[${projectName}] ` : "";
+    void hiveNotify({
+      title: `${prefix}${formatted.title}`,
+      body: formatted.body,
+      kind: formatted.kind,
+      onClick: onOpenFlow,
+    });
+    return;
+  }
+  const summary = events
+    .slice(0, 3)
+    .map((ev) => formatGitHubEventNotification(ev).title)
+    .join(" · ");
+  const extra = events.length > 3 ? ` (+${events.length - 3})` : "";
+  void hiveNotify({
+    title: `${events.length} novidades no GitHub${projectName ? ` (${projectName})` : ""}`,
+    body: `${summary}${extra}`,
+    kind: "attention",
+    onClick: onOpenFlow,
+  });
 }

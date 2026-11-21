@@ -1535,35 +1535,94 @@ func listIssuesREST(ctx context.Context, baseURL, owner, repo, token, currentUse
 
 // ProjectPullRequest represents an open GitHub pull request listed in the IDE sidebar.
 type ProjectPullRequest struct {
-	Number             int      `json:"number"`
-	Title              string   `json:"title"`
-	Body               string   `json:"body,omitempty"`
-	URL                string   `json:"url"`
-	State              string   `json:"state"`
-	IsDraft            bool     `json:"isDraft"`
-	Author             string   `json:"author,omitempty"`
-	HeadRef            string   `json:"headRef,omitempty"`
-	BaseRef            string   `json:"baseRef,omitempty"`
-	UpdatedAt          string   `json:"updatedAt,omitempty"`
-	ReviewDecision     string   `json:"reviewDecision,omitempty"`
-	RequestedReviewers []string `json:"requestedReviewers,omitempty"`
-	IsMine             bool     `json:"isMine,omitempty"`
-	ReviewRequested    bool     `json:"reviewRequested,omitempty"`
-	MyResponse         string   `json:"myResponse,omitempty"`      // "", "approved", "changes_requested", "commented"
-	NeedsAttention     bool     `json:"needsAttention,omitempty"`  // true when the PR needs currentUser's attention now
-	AttentionReason    string   `json:"attentionReason,omitempty"` // "Sua revisão", "Re-revisão", "Nova resposta", "Novo commit"
+	Number              int      `json:"number"`
+	Title               string   `json:"title"`
+	Body                string   `json:"body,omitempty"`
+	URL                 string   `json:"url"`
+	State               string   `json:"state"`
+	IsDraft             bool     `json:"isDraft"`
+	Author              string   `json:"author,omitempty"`
+	HeadRef             string   `json:"headRef,omitempty"`
+	BaseRef             string   `json:"baseRef,omitempty"`
+	UpdatedAt           string   `json:"updatedAt,omitempty"`
+	ReviewDecision      string   `json:"reviewDecision,omitempty"`
+	RequestedReviewers  []string `json:"requestedReviewers,omitempty"`
+	IsMine              bool     `json:"isMine,omitempty"`
+	ReviewRequested     bool     `json:"reviewRequested,omitempty"`
+	MyResponse          string   `json:"myResponse,omitempty"`          // "", "approved", "changes_requested", "commented"
+	NeedsAttention      bool     `json:"needsAttention,omitempty"`      // true when the PR needs currentUser's attention now
+	AttentionReason     string   `json:"attentionReason,omitempty"`     // "Sua revisão", "Re-revisão", "Nova resposta", "Novo commit", "Você foi marcado", "Ajustes", "Pronto p/ merge"
+	MentionedMe         bool     `json:"mentionedMe,omitempty"`         // true when another human mentioned @me after my last interaction
+	LastActivityAt      string   `json:"lastActivityAt,omitempty"`      // RFC3339 timestamp of the latest relevant external activity
+	LastActivityAuthor  string   `json:"lastActivityAuthor,omitempty"`  // login of the user behind LastActivityAt
+	LastActivityKind    string   `json:"lastActivityKind,omitempty"`    // "mention", "comment", "review_approved", "review_changes", "review_requested", "commit"
+	LastActivitySnippet string   `json:"lastActivitySnippet,omitempty"` // short excerpt of the latest comment/review
 }
 
 type prActivityReview struct {
 	Author      string
 	State       string
+	Body        string
 	SubmittedAt time.Time
 }
 
 type prActivityComment struct {
 	Author          string
+	Body            string
 	ViewerDidAuthor bool
 	CreatedAt       time.Time
+}
+
+type prFlowDetails struct {
+	MyResponse          string
+	NeedsAttention      bool
+	AttentionReason     string
+	MentionedMe         bool
+	LastActivityAt      string
+	LastActivityAuthor  string
+	LastActivityKind    string
+	LastActivitySnippet string
+}
+
+func isGitHubHandleChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-'
+}
+
+// mentionsUser reports whether body contains an @username mention with valid GitHub handle boundaries.
+func mentionsUser(body, username string) bool {
+	user := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(username, "@")))
+	if user == "" || strings.TrimSpace(body) == "" {
+		return false
+	}
+	lower := strings.ToLower(body)
+	needle := "@" + user
+	offset := 0
+	for {
+		idx := strings.Index(lower[offset:], needle)
+		if idx < 0 {
+			return false
+		}
+		pos := offset + idx
+		end := pos + len(needle)
+		beforeOK := pos == 0 || !isGitHubHandleChar(lower[pos-1]) && lower[pos-1] != '_' && lower[pos-1] != '.'
+		afterOK := end == len(lower) || !isGitHubHandleChar(lower[end]) && lower[end] != '_'
+		if beforeOK && afterOK {
+			return true
+		}
+		offset = pos + 1
+	}
+}
+
+func compactActivitySnippet(raw string, maxRunes int) string {
+	s := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if s == "" || maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-1])) + "…"
 }
 
 func parseGHTime(raw string) time.Time {
@@ -1585,33 +1644,77 @@ func isBotLogin(login string) bool {
 	return strings.HasSuffix(low, "[bot]") || low == "dependabot" || low == "renovate" || low == "github-actions"
 }
 
-// computePRFlowState derives the user's latest response and whether the PR needs their attention now:
+// computePRFlowState derives the user's latest response and whether the PR needs their attention now.
+func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
+	det := computePRFlowDetails(me, isMine, reviewRequested, hasPendingReviewers, "", "", time.Time{}, reviews, comments, latestCommitAt)
+	return det.MyResponse, det.NeedsAttention, det.AttentionReason
+}
+
+// computePRFlowDetails derives the full flow state plus mention and latest external activity metadata:
 //   - Third-party PRs return to "Para revisar" when review is requested (or re-requested),
+//     when another human mentions @me in the PR body/comment/review after currentUser's last action,
 //     when another human comments/replies after currentUser's last review/comment,
 //     or when a new commit is pushed after CHANGES_REQUESTED.
 //   - Own PRs appear in active "Meus PRs" ONLY when action is needed from the author:
 //     (1) an external reviewer approved and the PR is ready to merge, or
 //     (2) another human commented/requested changes after the author's last comment or commit.
 //     Otherwise (author pushed/commented last and is waiting for reviewer), it moves to "Aguardando / Já respondidos".
-func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers bool, reviews []prActivityReview, comments []prActivityComment, latestCommitAt time.Time) (myResp string, needsAttention bool, reason string) {
+func computePRFlowDetails(
+	me string,
+	isMine, reviewRequested, hasPendingReviewers bool,
+	prAuthor, prBody string,
+	prUpdatedAt time.Time,
+	reviews []prActivityReview,
+	comments []prActivityComment,
+	latestCommitAt time.Time,
+) prFlowDetails {
 	me = strings.TrimSpace(me)
 	if me == "" {
-		return "", false, ""
+		return prFlowDetails{}
 	}
-	var myLastAt, otherLastAt, otherChangesAt time.Time
+	var (
+		myLastAt       time.Time
+		otherLastAt    time.Time
+		otherChangesAt time.Time
+		otherAuthor    string
+		otherKind      string
+		otherSnippet   string
+		mentionAt      time.Time
+		mentionAuthor  string
+		mentionSnippet string
+		approveAt      time.Time
+		approveAuthor  string
+		approveSnippet string
+		myResp         string
+	)
 	recordMy := func(ts time.Time) {
 		if ts.After(myLastAt) {
 			myLastAt = ts
 		}
 	}
-	recordOther := func(author string, ts time.Time) {
+	recordOther := func(author, kind, body string, ts time.Time) {
 		a := strings.TrimSpace(author)
 		if a == "" || strings.EqualFold(a, me) || isBotLogin(a) {
 			return
 		}
-		if ts.After(otherLastAt) {
-			otherLastAt = ts
+		if mentionsUser(body, me) && (mentionAt.IsZero() || ts.After(mentionAt)) {
+			mentionAt = ts
+			mentionAuthor = a
+			mentionSnippet = compactActivitySnippet(body, 120)
 		}
+		if ts.After(otherLastAt) || (otherLastAt.IsZero() && otherAuthor == "") {
+			otherLastAt = ts
+			otherAuthor = a
+			otherKind = kind
+			otherSnippet = compactActivitySnippet(body, 120)
+		}
+	}
+
+	// Check if another human mentioned @me directly in the PR description.
+	if !isMine && prAuthor != "" && !strings.EqualFold(prAuthor, me) && !isBotLogin(prAuthor) && mentionsUser(prBody, me) {
+		mentionAt = prUpdatedAt
+		mentionAuthor = strings.TrimSpace(prAuthor)
+		mentionSnippet = compactActivitySnippet(prBody, 120)
 	}
 
 	extLatestState := map[string]string{}
@@ -1633,7 +1736,13 @@ func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers 
 				}
 			}
 		} else {
-			recordOther(author, rv.SubmittedAt)
+			kind := "comment"
+			if st == "CHANGES_REQUESTED" {
+				kind = "review_changes"
+			} else if st == "APPROVED" {
+				kind = "review_approved"
+			}
+			recordOther(author, kind, rv.Body, rv.SubmittedAt)
 			if author != "" && !isBotLogin(author) {
 				low := strings.ToLower(author)
 				switch st {
@@ -1641,6 +1750,11 @@ func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers 
 					extLatestState[low] = st
 					if st == "CHANGES_REQUESTED" && rv.SubmittedAt.After(otherChangesAt) {
 						otherChangesAt = rv.SubmittedAt
+					}
+					if st == "APPROVED" && (approveAt.IsZero() || rv.SubmittedAt.After(approveAt)) {
+						approveAt = rv.SubmittedAt
+						approveAuthor = author
+						approveSnippet = compactActivitySnippet(rv.Body, 120)
 					}
 				case "DISMISSED":
 					delete(extLatestState, low)
@@ -1656,8 +1770,15 @@ func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers 
 				myResp = "commented"
 			}
 		} else {
-			recordOther(cm.Author, cm.CreatedAt)
+			recordOther(cm.Author, "comment", cm.Body, cm.CreatedAt)
 		}
+	}
+
+	formatTS := func(ts time.Time) string {
+		if ts.IsZero() {
+			return ""
+		}
+		return ts.UTC().Format(time.RFC3339)
 	}
 
 	if isMine {
@@ -1676,36 +1797,113 @@ func computePRFlowState(me string, isMine, reviewRequested, hasPendingReviewers 
 		}
 		// Ready to merge once at least one external reviewer approved with no pending re-review or changes requested.
 		if !hasPendingReviewers && approvedCount > 0 && changesCount == 0 {
-			return "", true, "Pronto p/ merge"
+			return prFlowDetails{
+				NeedsAttention:      true,
+				AttentionReason:     "Pronto p/ merge",
+				LastActivityAt:      formatTS(approveAt),
+				LastActivityAuthor:  approveAuthor,
+				LastActivityKind:    "review_approved",
+				LastActivitySnippet: approveSnippet,
+			}
 		}
 		// Needs author's reply/fix if an external human commented or reviewed AFTER the author's last comment/commit.
 		if !otherLastAt.IsZero() && (authorLast.IsZero() || otherLastAt.After(authorLast)) {
+			mentioned := mentionAuthor != "" && (authorLast.IsZero() || mentionAt.After(authorLast))
 			if !otherChangesAt.IsZero() && (authorLast.IsZero() || otherChangesAt.After(authorLast)) {
-				return "", true, "Ajustes"
+				return prFlowDetails{
+					NeedsAttention:      true,
+					AttentionReason:     "Ajustes",
+					MentionedMe:         mentioned,
+					LastActivityAt:      formatTS(otherLastAt),
+					LastActivityAuthor:  otherAuthor,
+					LastActivityKind:    "review_changes",
+					LastActivitySnippet: otherSnippet,
+				}
 			}
-			return "", true, "Nova resposta"
+			kind := otherKind
+			if mentioned {
+				kind = "mention"
+			}
+			return prFlowDetails{
+				NeedsAttention:      true,
+				AttentionReason:     "Nova resposta",
+				MentionedMe:         mentioned,
+				LastActivityAt:      formatTS(otherLastAt),
+				LastActivityAuthor:  otherAuthor,
+				LastActivityKind:    kind,
+				LastActivitySnippet: otherSnippet,
+			}
 		}
-		return "", false, ""
+		return prFlowDetails{}
 	}
 
+	hasFreshMention := mentionAuthor != "" && (myLastAt.IsZero() || mentionAt.After(myLastAt))
+
 	if myResp == "" {
-		if reviewRequested {
-			return "", true, "Sua revisão"
+		if hasFreshMention {
+			return prFlowDetails{
+				NeedsAttention:      true,
+				AttentionReason:     "Você foi marcado",
+				MentionedMe:         true,
+				LastActivityAt:      formatTS(mentionAt),
+				LastActivityAuthor:  mentionAuthor,
+				LastActivityKind:    "mention",
+				LastActivitySnippet: mentionSnippet,
+			}
 		}
-		return "", false, ""
+		if reviewRequested {
+			return prFlowDetails{
+				NeedsAttention:   true,
+				AttentionReason:  "Sua revisão",
+				LastActivityKind: "review_requested",
+			}
+		}
+		return prFlowDetails{}
 	}
 
 	// Already responded before — check if the PR needs attention again!
+	if hasFreshMention {
+		return prFlowDetails{
+			MyResponse:          myResp,
+			NeedsAttention:      true,
+			AttentionReason:     "Você foi marcado",
+			MentionedMe:         true,
+			LastActivityAt:      formatTS(mentionAt),
+			LastActivityAuthor:  mentionAuthor,
+			LastActivityKind:    "mention",
+			LastActivitySnippet: mentionSnippet,
+		}
+	}
 	if reviewRequested && (myResp == "approved" || myResp == "changes_requested") {
-		return myResp, true, "Re-revisão"
+		return prFlowDetails{
+			MyResponse:       myResp,
+			NeedsAttention:   true,
+			AttentionReason:  "Re-revisão",
+			LastActivityKind: "review_requested",
+		}
 	}
 	if !myLastAt.IsZero() && otherLastAt.After(myLastAt) {
-		return myResp, true, "Nova resposta"
+		return prFlowDetails{
+			MyResponse:          myResp,
+			NeedsAttention:      true,
+			AttentionReason:     "Nova resposta",
+			LastActivityAt:      formatTS(otherLastAt),
+			LastActivityAuthor:  otherAuthor,
+			LastActivityKind:    otherKind,
+			LastActivitySnippet: otherSnippet,
+		}
 	}
 	if myResp == "changes_requested" && !myLastAt.IsZero() && latestCommitAt.After(myLastAt) {
-		return myResp, true, "Novo commit"
+		return prFlowDetails{
+			MyResponse:         myResp,
+			NeedsAttention:     true,
+			AttentionReason:    "Novo commit",
+			LastActivityAt:     formatTS(latestCommitAt),
+			LastActivityAuthor: strings.TrimSpace(prAuthor),
+			LastActivityKind:   "commit",
+		}
 	}
-	return myResp, false, ""
+	return prFlowDetails{MyResponse: myResp}
 }
 
 // ParseGHPRList parses the JSON output from `gh pr list --json ...` and enriches personal flow fields for currentUser.
@@ -1731,12 +1929,14 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 		} `json:"reviewRequests"`
 		Reviews []struct {
 			State       string `json:"state"`
+			Body        string `json:"body"`
 			SubmittedAt string `json:"submittedAt"`
 			Author      struct {
 				Login string `json:"login"`
 			} `json:"author"`
 		} `json:"reviews"`
 		Comments []struct {
+			Body            string `json:"body"`
 			ViewerDidAuthor bool   `json:"viewerDidAuthor"`
 			CreatedAt       string `json:"createdAt"`
 			Author          struct {
@@ -1776,6 +1976,7 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 			revs = append(revs, prActivityReview{
 				Author:      rv.Author.Login,
 				State:       rv.State,
+				Body:        rv.Body,
 				SubmittedAt: parseGHTime(rv.SubmittedAt),
 			})
 		}
@@ -1783,30 +1984,36 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 		for _, cm := range item.Comments {
 			cmts = append(cmts, prActivityComment{
 				Author:          cm.Author.Login,
+				Body:            cm.Body,
 				ViewerDidAuthor: cm.ViewerDidAuthor,
 				CreatedAt:       parseGHTime(cm.CreatedAt),
 			})
 		}
-		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, len(reqs) > 0, revs, cmts, time.Time{})
+		flow := computePRFlowDetails(me, isMine, reviewRequested, len(reqs) > 0, author, item.Body, parseGHTime(item.UpdatedAt), revs, cmts, time.Time{})
 
 		out = append(out, ProjectPullRequest{
-			Number:             item.Number,
-			Title:              item.Title,
-			Body:               item.Body,
-			URL:                item.URL,
-			State:              item.State,
-			IsDraft:            item.IsDraft,
-			Author:             author,
-			HeadRef:            item.HeadRef,
-			BaseRef:            item.BaseRef,
-			UpdatedAt:          item.UpdatedAt,
-			ReviewDecision:     item.ReviewDecision,
-			RequestedReviewers: reqs,
-			IsMine:             isMine,
-			ReviewRequested:    reviewRequested,
-			MyResponse:         myResp,
-			NeedsAttention:     needsAttention,
-			AttentionReason:    reason,
+			Number:              item.Number,
+			Title:               item.Title,
+			Body:                item.Body,
+			URL:                 item.URL,
+			State:               item.State,
+			IsDraft:             item.IsDraft,
+			Author:              author,
+			HeadRef:             item.HeadRef,
+			BaseRef:             item.BaseRef,
+			UpdatedAt:           item.UpdatedAt,
+			ReviewDecision:      item.ReviewDecision,
+			RequestedReviewers:  reqs,
+			IsMine:              isMine,
+			ReviewRequested:     reviewRequested,
+			MyResponse:          flow.MyResponse,
+			NeedsAttention:      flow.NeedsAttention,
+			AttentionReason:     flow.AttentionReason,
+			MentionedMe:         flow.MentionedMe,
+			LastActivityAt:      flow.LastActivityAt,
+			LastActivityAuthor:  flow.LastActivityAuthor,
+			LastActivityKind:    flow.LastActivityKind,
+			LastActivitySnippet: flow.LastActivitySnippet,
 		})
 	}
 	return out, nil
@@ -1962,12 +2169,14 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
         reviews(last:50){
           nodes{
             state
+            body
             submittedAt
             author{ login }
           }
         }
         comments(last:50){
           nodes{
+            body
             createdAt
             author{ login }
           }
@@ -1976,6 +2185,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
           nodes{
             comments(last:20){
               nodes{
+                body
                 createdAt
                 author{ login }
               }
@@ -2053,6 +2263,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 						Reviews struct {
 							Nodes []struct {
 								State       string `json:"state"`
+								Body        string `json:"body"`
 								SubmittedAt string `json:"submittedAt"`
 								Author      *struct {
 									Login string `json:"login"`
@@ -2061,6 +2272,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 						} `json:"reviews"`
 						Comments struct {
 							Nodes []struct {
+								Body      string `json:"body"`
 								CreatedAt string `json:"createdAt"`
 								Author    *struct {
 									Login string `json:"login"`
@@ -2071,6 +2283,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 							Nodes []struct {
 								Comments struct {
 									Nodes []struct {
+										Body      string `json:"body"`
 										CreatedAt string `json:"createdAt"`
 										Author    *struct {
 											Login string `json:"login"`
@@ -2132,6 +2345,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 			revs = append(revs, prActivityReview{
 				Author:      login,
 				State:       rv.State,
+				Body:        rv.Body,
 				SubmittedAt: parseGHTime(rv.SubmittedAt),
 			})
 		}
@@ -2144,6 +2358,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 			}
 			cmts = append(cmts, prActivityComment{
 				Author:    login,
+				Body:      cm.Body,
 				CreatedAt: parseGHTime(cm.CreatedAt),
 			})
 		}
@@ -2155,6 +2370,7 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 				}
 				cmts = append(cmts, prActivityComment{
 					Author:    login,
+					Body:      tc.Body,
 					CreatedAt: parseGHTime(tc.CreatedAt),
 				})
 			}
@@ -2169,26 +2385,31 @@ func listPullRequestsGraphQL(ctx context.Context, baseURL, owner, repo, token, c
 			}
 		}
 
-		myResp, needsAttention, reason := computePRFlowState(me, isMine, reviewRequested, len(reqs) > 0, revs, cmts, latestCommitAt)
+		flow := computePRFlowDetails(me, isMine, reviewRequested, len(reqs) > 0, author, n.Body, parseGHTime(n.UpdatedAt), revs, cmts, latestCommitAt)
 
 		out = append(out, ProjectPullRequest{
-			Number:             n.Number,
-			Title:              n.Title,
-			Body:               n.Body,
-			URL:                n.URL,
-			State:              n.State,
-			IsDraft:            n.IsDraft,
-			Author:             author,
-			HeadRef:            n.HeadRefName,
-			BaseRef:            n.BaseRefName,
-			UpdatedAt:          n.UpdatedAt,
-			ReviewDecision:     n.ReviewDecision,
-			RequestedReviewers: reqs,
-			IsMine:             isMine,
-			ReviewRequested:    reviewRequested,
-			MyResponse:         myResp,
-			NeedsAttention:     needsAttention,
-			AttentionReason:    reason,
+			Number:              n.Number,
+			Title:               n.Title,
+			Body:                n.Body,
+			URL:                 n.URL,
+			State:               n.State,
+			IsDraft:             n.IsDraft,
+			Author:              author,
+			HeadRef:             n.HeadRefName,
+			BaseRef:             n.BaseRefName,
+			UpdatedAt:           n.UpdatedAt,
+			ReviewDecision:      n.ReviewDecision,
+			RequestedReviewers:  reqs,
+			IsMine:              isMine,
+			ReviewRequested:     reviewRequested,
+			MyResponse:          flow.MyResponse,
+			NeedsAttention:      flow.NeedsAttention,
+			AttentionReason:     flow.AttentionReason,
+			MentionedMe:         flow.MentionedMe,
+			LastActivityAt:      flow.LastActivityAt,
+			LastActivityAuthor:  flow.LastActivityAuthor,
+			LastActivityKind:    flow.LastActivityKind,
+			LastActivitySnippet: flow.LastActivitySnippet,
 		})
 	}
 	return out, nil
