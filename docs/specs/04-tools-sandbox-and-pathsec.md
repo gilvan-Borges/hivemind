@@ -1,6 +1,6 @@
 # Spec 04 — Blindagem de Ferramentas, Path Security (`pathsec`) e Sandbox OS
 
-> **Status:** Proposta Crítica de Segurança
+> **Status:** Implementado (Onda 1 — 2026-11-21; `go test -count=1 ./internal/{pathsec,sandboxx,shellx,tools}/...` verde)
 > **Alvos:** `internal/workspace/jail.go`, `internal/pathsec/sensitive.go`, `internal/tools/tools.go`, `internal/tools/search.go`, `internal/sandboxx/sandbox_windows.go`, `internal/sandboxx/sandbox_linux.go`, `internal/shellx/exec.go`
 
 ---

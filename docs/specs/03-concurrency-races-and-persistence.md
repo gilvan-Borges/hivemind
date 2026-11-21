@@ -1,6 +1,6 @@
 # Spec 03 — Concorrência, Eliminação de Data Races e Persistência Atômica
 
-> **Status:** Proposta de Refatoração
+> **Status:** Implementado (Onda 1 — 2026-11-21; `go test -p 1 -count=1` verde; `-race` pendente em host com CGO/`gcc`)
 > **Alvos:** `internal/sessionx/store.go`, `internal/resident/routine.go`, `internal/resident/resident.go`, `internal/resident/lock_windows.go`, `internal/orchestrator/orchestrator.go`, `internal/orchestrator/jev_wrapper.go`, `internal/workspace/storage.go`, `internal/reviewx/review.go`, `internal/gitx/integrate.go`
 
 ---

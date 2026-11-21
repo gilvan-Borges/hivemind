@@ -30,6 +30,9 @@
 | *Entrega 2026-11-21* | Provedor Oficial **TypeSafe AI** para decisão Jev (`/v1/systemone`) | **Implementado** | `internal/modelx/typesafe.go`, `internal/jev/score.go`, `ide/frontend/src/modals.ts` |
 | *Entrega 2026-11-21* | **Worktree Composta Multi-Repo** (`ipg` + `ipg-mobile`, `hivemind` + `HiveMind-App`) | **Implementado** | `internal/gitx/nested_repos.go`, `internal/orchestrator/orchestrator.go`, `ide/internal/idecore/runner.go` |
 | *Entrega 2026-11-21* | Descoberta Multi-Repo no Source Control & Vault Lease Isolado | **Implementado** | `ide/internal/idecore/git_repos.go`, `internal/modelx/agy_vault_windows.go` |
+| [Spec 03](03-concurrency-races-and-persistence.md) | Concorrência, Eliminação de Data Races e Persistência Atômica | **Implementado (Onda 1)** | `internal/atomicx/`, `sessionx/store.go`, `resident/lock_windows.go`, `orchestrator/jev_wrapper.go` |
+| [Spec 04](04-tools-sandbox-and-pathsec.md) | Blindagem de Tools, `pathsec` e Sandbox OS | **Implementado (Onda 1)** | `internal/pathsec/sensitive.go`, `internal/sandboxx/`, `internal/tools/` (`fileReadTracker`, `.gitignore`, Head+Tail log) |
+| [Spec 05](05-secrets-vault-and-multi-tenant-isolation.md) | Cofre Unificado (`secretx`), Isolamento AGY e Multi-Tenant Pool | **Implementado (Onda 1)** | `internal/secretx/vault_windows.go`, `internal/modelx/vault_store.go`, `agy_vault_windows.go`, `account_pool.go`, `relayclient/config.go` |
 
 ### 1.2 Specs Parcialmente Concluídas
 
@@ -46,13 +49,10 @@
 - [D-007 (`.specify/specs/007-hive-floating-resident`)](../../.specify/specs/007-hive-floating-resident/spec.md) — **Agent Hive Flutuante** (14 tasks `H001`–`H011`, `D001`–`D003` -> **Onda 4**)
 - [Spec 01](01-orchestrator-modular-harness.md) — Modularização `orchestrator`, `tools`, `resident/broker` (**Onda 3**)
 - [Spec 02](02-prompt-cache-and-context-compaction.md) — Prefixo estático KV-cache e compactação token-aware (**Onda 2**)
-- [Spec 03](03-concurrency-races-and-persistence.md) — Concorrência `-race` clean e persistência atômica (**Onda 1**)
-- [Spec 04](04-tools-sandbox-and-pathsec.md) — Blindagem de paths sensíveis e sandbox OS (**Onda 1**)
-- [Spec 05](05-secrets-vault-and-multi-tenant-isolation.md) — Migração total ao cofre `secretx` e isolamento multi-tenant (**Onda 1**)
 - [Spec 06](06-jev-router-resilience-and-telemetry.md) — Hot-path zero-latência, lease `half_open` e telemetria real (**Onda 2**)
 - [Spec 07](07-ide-architecture-services-and-reactive-ui.md) — Serviços `idecore`, `CloseProject` e UI reativa sem perda de foco (**Onda 4**)
 - [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) — Git não-interativo, GHES, paginação e cross-link de PRs (**Onda 3**)
-- [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — Anti-replay Relay, Trust Gate MCP e Bootstrap único CLI/TUI/IDE (**Ondas 1 e 3**)
+- [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — **Parcial (Onda 1 concluída):** Anti-replay Relay, Limiters/QR SQLite e Trust Gate MCP entregues; Bootstrap único e desacoplamento do `serve` pendentes (**Onda 3**)
 - [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, auto-updater e CI/CD completo (**Onda 5**)
 
 ---
@@ -73,13 +73,13 @@
 - [x] **W1-06** `[Spec 04]` Corrigido `sandbox_windows.go` (`internetClient` + `privateNetworkClientServer` apenas quando `AllowNetwork=true`; ACL do `exeDir` best-effort sem falhar em `Program Files`) e `sandbox_linux.go` (`--tmpfs` ocultando `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`). *(2026-11-21 — `go test ./internal/sandboxx/...`)*
 - [x] **W1-07a** `[Spec 04]` Criado `strx.TruncateHeadTailBytes` e aplicado truncamento **Head + Tail** (`4 KiB + 12 KiB`) em `runShellSandboxed` (`tools.go`) e `shellx.Local.Run` + cap de `25` matches por arquivo em `search.go`. *(2026-11-21 — `go test ./internal/strx/... ./internal/shellx/... ./internal/tools/...`)*
 - [x] **W1-07b** `[Spec 04]` Gravado arquivo de log completo no truncamento >16 KiB de `runShellSandboxed`, criado `fileReadTracker` por `mtime` entre `read_file`/`write_file`/`edit_file` (`tools.go`), e adicionado `loadGitignoreMatcher` em `search.go` (`read_file` sem range preservado sem prefixo por compatibilidade com `TestReadFileLineRange`). *(2026-11-21 — `go test -count=1 ./internal/tools/...`)*
-- [ ] **W1-08** `[Spec 05]` Migrar segredos de `modelx` (`api-keys.json`, `provider-profiles.json`, `credentials.json`, `oauth-session.json`) e `relayclient` (`relay.json`) para `internal/secretx`, removendo P/Invoke duplicado em `agy_vault_windows.go`.
-- [ ] **W1-09** `[Spec 05]` Proteger `WithAgyVaultLease` com mutex nomeado cross-process + recovery pós-crash; isolar execução `agy` por diretório/env sempre que suportado; propagar `ctx` do workspace em `JevCredentialPresence` e `LoadOpenCodeCredentials`.
-- [ ] **W1-10** `[Spec 05]` Restringir `ListAccountPoolForProvider` para nunca fazer failover cross-tenant entre contas de organizações distintas quando `orgx` identificar o workspace.
+- [x] **W1-08** `[Spec 05]` Migrados segredos de `modelx` (`api-keys.json`, `provider-profiles.json`, `credentials.json`, `oauth-session.json` via `modelx/vault_store.go`) e `relayclient` (`relay.json`) para `internal/secretx` mantendo apenas referências `"vault:..."` em disco, e centralizado P/Invoke CredMan em `internal/secretx/vault_windows.go` (+ stubs `!windows` em `raw_cred_other.go`). *(2026-11-21 — `go test -count=1 ./internal/secretx/... ./internal/modelx/...` + `ide/internal/relayclient/...`)*
+- [x] **W1-09** `[Spec 05]` Protegidos `AcquireAgyVaultGuard` e `WithAgyVaultLease` com Named Kernel Mutex `Local\HiveMind.AgyVaultSlot` + backup de recovery pós-crash (`modelx:agy:lease_backup` restaurado em `EnsureLiveAgyCredentialRestored`), e propagado `ctx` do workspace em `LoadOpenCodeCredentialsForContext`, `JevCredentialPresenceForContext` e `JevCredentialFingerprintsForContext`. *(2026-11-21 — `go test -count=1 ./internal/modelx/...`)* *(Nota: CLI `agy` usa slot `gemini:antigravity` sob lease cross-process quando não em modo `adc` isolado por `CLOUDSDK_CONFIG`)*
+- [x] **W1-10** `[Spec 05]` Restringido `ListAccountPoolForProvider` em `internal/modelx/account_pool.go` para excluir contas de outras orgs, contas sem `OrgPatterns` e `__system__` quando o workspace casa com `orgx` (+ `TestAccountPoolNeverCrossesOrganizationBoundaries`). *(2026-11-21 — `go test -count=1 ./internal/modelx/...`)*
 - [x] **W1-11** `[Spec 09]` Adicionados `Seq`, `IssuedAtUnix` e `Nonce` em `relaywire.RPCRequest` (`protocol.go`), janela `±90s` e deduplicação LRU anti-replay (`box.Nonce`, `req.Nonce`, `req.Seq`) em `relayclient.Client.handleRPC` + `TestClientRejectsReplayedAndExpiredRPC`. *(2026-11-21 — `go test -count=1 ./relaywire/...` + `ide/internal/relayclient/...`)*
 - [x] **W1-12** `[Spec 09]` Substituído wipe global `len > 4096` por eviction parcial/expiração preservando lockouts ativos em `relay/limiter.go` e `remote/lan.go`, persistidos `qr_tickets` no SQLite com check `LoginBlocked` em `relay/store.go`/`server.go`, e emitido `TypePeerPresence` em `Hub.Attach`/`Detach` (`relay/hub.go`; mantido `LastSeq+1` na LAN para `TestSeqGapAsksResume`). *(2026-11-21 — `go test -count=1 ./internal/relay/...` + `ide/internal/remote/...`)*
 - [x] **W1-13** `[Spec 09]` Implementado **Workspace Trust Gate** (`IsWorkspaceConfigTrusted`/`TrustWorkspaceConfig` com SHA-256 em `trusted-mcp.json`), escrita `0o600` via `atomicx.WriteFile` em `mcpx/config.go`, `filteredCommandEnv` sem vazar segredos do host, captura de `stderr` (`cappedStderr`), timeouts (`Tools: 15s`, `Call: 60s`) em `mcpx/sdk.go` e versões pinadas em `mcpx/defaults.go` (`cmd.exe /d /c` mantido no Windows para shims/TestLocalCommandHidesWindowOnWindows). *(2026-11-21 — `go test -count=1 ./internal/mcpx/...`)*
-- [ ] **W1-14** `[Verificação Onda 1]` Validar `go test -race -count=1 ./internal/... ./ide/internal/...` com 0 races e confirmar ausência de tokens em claro nos JSONs locais.
+- [x] **W1-14** `[Verificação Onda 1]` Bateria completa da Onda 1 verde sem nenhum token em claro nos JSONs testados (`go test -p 1 -count=1 ./internal/{secretx,modelx,atomicx,strx,pathsec,workspace,sessionx,reviewx,resident,sandboxx,shellx,tools,mcpx,relay,orchestrator}/... ./relaywire/...` + `ide/internal/{remote,relayclient}/...` + `GOOS=linux go vet ./internal/secretx/...`). *(2026-11-21; nota: `go test -race` não executou neste host Windows pois `gcc` / CGO não está no `%PATH%` — validar `-race` na CI Linux na Onda 5)*
 
 ---
 

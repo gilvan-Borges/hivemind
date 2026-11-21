@@ -1,6 +1,6 @@
 # Spec 05 — Cofre Unificado (`secretx`), Isolamento do Antigravity e Multi-Tenant Pool
 
-> **Status:** Proposta Crítica de Segurança e Isolamento
+> **Status:** Implementado (Onda 1 — 2026-11-21; `go test -count=1 ./internal/{secretx,modelx}/...` + `ide/internal/relayclient/...` verde)
 > **Alvos:** `internal/modelx/keys.go`, `profiles.go`, `opencode.go`, `agy_vault_windows.go`, `account_pool.go`, `jev_catalog.go`, `jev_health.go`, `internal/secretx/`
 
 ---
