@@ -85,16 +85,8 @@ func fetchJevOpenRouter(ctx context.Context) ([]jev.ModelEntry, error) {
 			Free:      strings.HasSuffix(strings.ToLower(m.ID), ":free"),
 		})
 	}
-	seen := make(map[string]bool, len(out))
-	for _, e := range out {
-		seen[strings.ToLower(e.Model)] = true
-	}
-	for _, seed := range jev.CuratedOpenRouterSeedEntries() {
-		if !seen[strings.ToLower(seed.Model)] {
-			seed.Source = "openrouter"
-			out = append(out, seed)
-		}
-	}
+	// A resposta de /models é a lista de candidatos. Semente que a API não devolveu
+	// (promo com slug antigo) não entra; sem rede, o catálogo estático continua valendo.
 	return out, nil
 }
 
