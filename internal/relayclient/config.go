@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 )
 

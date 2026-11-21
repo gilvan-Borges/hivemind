@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
@@ -62,10 +61,31 @@ func startHeadlessHealthProbe(ctx context.Context, hub *Hub) {
 	}()
 }
 
-// RunHeadless starts the Remote Bridge without the IDE window — the backend
-// of `hivemind serve`. It blocks until ctx is canceled (Ctrl+C).
-func RunHeadless(ctx context.Context, workspace string) error {
-	defer modelx.FlushAIUsage()
+// HeadlessOptions carries the host-specific pieces of a headless bridge run.
+// The generic runtime lives here (root module); the IDE fills these with its
+// SessionManager/ResidentManager/AutoReviewManager services, and the CLI
+// serve command fills them with its own remote.Deps implementation.
+type HeadlessOptions struct {
+	// Deps builds the HTTP API services (runs, approvals, listings) bound to
+	// the freshly created Hub — the hub is owned by the runtime because every
+	// Deps implementation emits lane events into it.
+	Deps func(hub *Hub) Deps
+	// RegisterProject enriches GET /api/v1/projects for the starting workspace
+	// (branch, stack, active team). Nil uses the generic registrar.
+	RegisterProject func(ctx context.Context, hub *Hub, workspace string)
+	// Banner prints host-specific status lines at boot (may be nil).
+	Banner func() string
+	// OnExit runs once when the bridge shuts down (e.g. modelx.FlushAIUsage).
+	OnExit func()
+}
+
+// RunHeadless starts the Remote Bridge without the IDE window — the shared
+// backend of `hivemind serve` (CLI) and `hivemind-ide --serve-bridge`. It
+// blocks until ctx is canceled (Ctrl+C).
+func RunHeadless(ctx context.Context, workspace string, opts HeadlessOptions) error {
+	if opts.OnExit != nil {
+		defer opts.OnExit()
+	}
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -73,16 +93,15 @@ func RunHeadless(ctx context.Context, workspace string) error {
 	cfg.Enabled = true
 
 	hub := NewHub()
-	sessions := idecore.NewSessionManager(hub.HandleLaneEvent)
-	residentMgr := idecore.NewResidentManager(idecore.ResidentManagerOptions{
-		Sessions: sessions,
-	})
-	autoReview := idecore.NewAutoReviewManager(sessions, hub.HandleAutoReviewStatus)
-	adapter := &Adapter{Sessions: sessions, Resident: residentMgr, AutoReview: autoReview, Hub: hub}
+	adapter := opts.Deps(hub)
 
 	if ws := workspace; ws != "" {
 		if abs, err := filepath.Abs(ws); err == nil {
-			registerProjectHeadless(ctx, hub, abs)
+			if opts.RegisterProject != nil {
+				opts.RegisterProject(ctx, hub, abs)
+			} else {
+				registerProjectHeadless(ctx, hub, abs, "")
+			}
 		}
 	}
 
@@ -96,7 +115,9 @@ func RunHeadless(ctx context.Context, workspace string) error {
 	st := srv.Status()
 	fmt.Printf("\nHiveMind Remote Bridge (headless) · v%s\n", st.Version)
 	fmt.Printf("Host: %s\n", st.Host)
-	fmt.Println(residentMgr.FormatHeadlessStatus())
+	if opts.Banner != nil {
+		fmt.Println(opts.Banner())
+	}
 	fmt.Println()
 	if len(st.URLs) == 0 {
 		fmt.Println("Aviso: nenhum IP Tailscale/LAN detectado — pareie via rede ativa.")
@@ -123,7 +144,10 @@ func RunHeadless(ctx context.Context, workspace string) error {
 	return nil
 }
 
-func registerProjectHeadless(ctx context.Context, hub *Hub, workspace string) {
+// registerProjectHeadless records workspace metadata (name, branch, active
+// team) using only root-module dependencies. Hosts with a richer stack
+// detector (the IDE) pass their own RegisterProject callback instead.
+func registerProjectHeadless(ctx context.Context, hub *Hub, workspace string, stack string) {
 	name := filepath.Base(workspace)
 	branch := ""
 	g := gitx.Local{}
@@ -132,7 +156,6 @@ func registerProjectHeadless(ctx context.Context, hub *Hub, workspace string) {
 			branch = b
 		}
 	}
-	stack := idecore.DetectStack(workspace).Summary
 	activeTeam := ""
 	if cfg, err := team.Load(workspace); err == nil {
 		activeTeam = cfg.Active

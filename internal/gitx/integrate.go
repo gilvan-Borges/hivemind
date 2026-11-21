@@ -68,8 +68,8 @@ func (g Local) Integrate(ctx context.Context, repo string, branches []string) (m
 // EnsureHiveIgnore appends .hivemind/ to the project gitignore when missing.
 func EnsureHiveIgnore(dir string) error {
 	path := filepath.Join(dir, ".gitignore")
-	data, err := osRead(path)
-	if err != nil && !osNotExist(err) {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	text := string(data)
@@ -85,7 +85,7 @@ func EnsureHiveIgnore(dir string) error {
 		b.WriteByte('\n')
 	}
 	b.WriteString("# HiveMind\n.hivemind/\n")
-	return osWrite(path, []byte(b.String()))
+	return atomicx.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // PrepareDeliveryWorktree ensures the default delivery worktree (_integracao) exists

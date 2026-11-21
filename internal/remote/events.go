@@ -20,15 +20,20 @@ func newErrorEvent(text string) orchestrator.Event {
 	}
 }
 
-// userMessageEvent builds the event that echoes a mobile-sent message inside
-// the IDE chat (label "Celular").
-func userMessageEvent(text string) orchestrator.Event {
+// UserMessageEvent builds the event that echoes a mobile-sent message inside
+// the IDE chat (label "Celular"). Exported for the idecore Adapter.
+func UserMessageEvent(text string) orchestrator.Event {
 	return orchestrator.Event{
 		Kind:   "text",
 		Author: "mobile",
 		Label:  "Celular",
 		Text:   text,
 	}
+}
+
+// userMessageEvent keeps the historical intra-package name.
+func userMessageEvent(text string) orchestrator.Event {
+	return UserMessageEvent(text)
 }
 
 // approvalResolvedEvent marks an approval gate as resolved in every open chat.

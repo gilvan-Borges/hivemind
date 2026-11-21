@@ -1178,18 +1178,24 @@ func TestBuildMyJiraIssuesJQL(t *testing.T) {
 	}
 }
 
-func TestMatchJiraProjectFromNamesGenericRepos(t *testing.T) {
+func TestMatchJiraProjectFromNamesSyntheticRepos(t *testing.T) {
+	// AGENTS.md: synthetic identities only. This suite mirrors every matching
+	// category the inference must handle (key, containment, camel token,
+	// ambiguous org-common token, unknown product) without any real org data.
 	projs := []jirax.Project{
-		{Key: "BIL", Name: "Billing"},
-		{Key: "CED", Name: "Acme Platform"},
-		{Key: "CORE", Name: "Core Engine (CORE)"},
-		{Key: "CTRL", Name: "Control"},
+		{Key: "ACME", Name: "Acme Principal"},
+		{Key: "AW", Name: "Alpha Web"},
+		{Key: "AM", Name: "Alpha Mobile"},
+		{Key: "CHT", Name: "ChatApp"},
 		{Key: "GERAL", Name: "Geral"},
-		{Key: "MDT", Name: "Mural de Troca"},
-		{Key: "OFC", Name: "Office"},
-		{Key: "PRT", Name: "Portal (DROPS)"},
-		{Key: "SPT", Name: "Acme Support"},
-		{Key: "TM", Name: "TimeTrack"},
+		{Key: "HLP", Name: "Helpdesk Central"},
+		{Key: "OFX", Name: "OfficeX"},
+		{Key: "PLAT", Name: "OrgAlpha (PLAT)"},
+		{Key: "QDI", Name: "Quadro de Ideias"},
+		{Key: "SIG", Name: "Sigma"},
+		{Key: "SMART", Name: "SmartHub"},
+		{Key: "SUP", Name: "Suporte"},
+		{Key: "TIME", Name: "TimeTracker"},
 	}
 
 	cases := []struct {
@@ -1197,31 +1203,38 @@ func TestMatchJiraProjectFromNamesGenericRepos(t *testing.T) {
 		want string
 	}{
 		// Projects in Jira
-		{repo: "core", want: "CORE"},
-		{repo: "core-mobile", want: "CORE"},
-		{repo: "drops", want: "PRT"},
-		{repo: "portal-drops", want: "PRT"},
-		{repo: "appPortal-drops", want: "PRT"},
-		{repo: "billing", want: "BIL"},
-		{repo: "AppBilling", want: "BIL"},
-		{repo: "TIMETRACK", want: "TM"},
-		{repo: "Office", want: "OFC"},
-		{repo: "office-ios", want: "OFC"},
-		{repo: "Control", want: "CTRL"},
-		{repo: "ControlAppApi", want: "CTRL"},
-		{repo: "support", want: "SPT"},
-		{repo: "acme-support", want: "SPT"},
-		{repo: "MuralDeTrocaWeb", want: "MDT"},
+		{repo: "acme", want: "ACME"},
+		{repo: "acme-mobile", want: "ACME"},
+		{repo: "orgAlpha", want: "PLAT"},
+		{repo: "orgalpha-plat", want: "PLAT"},
+		{repo: "AppOrgAlpha", want: "PLAT"},
+		{repo: "sigmaCore", want: "SIG"},
+		{repo: "SigmaAppApiAtualizado", want: "SIG"},
+		{repo: "QuadroIdeias", want: "QDI"},
+		{repo: "QuadroIdeiasWeb", want: "QDI"},
+		{repo: "helpdesk", want: "HLP"},
+		{repo: "TimeTracker", want: "TIME"},
+		{repo: "timetracker-ios", want: "TIME"},
+		{repo: "SmartHub", want: "SMART"},
+		{repo: "HubSmartApp", want: "SMART"},
+		{repo: "AuditSmartHub", want: "SMART"},
+		{repo: "ChatApp", want: "CHT"},
+		{repo: "officexApp", want: "OFX"},
+		{repo: "suporte", want: "SUP"},
+		{repo: "geral", want: "GERAL"},
 
 		// Repos not in Jira yet -> must return "" so no unrelated Jira tasks are mixed in
-		{repo: "analytics-web", want: ""},
-		{repo: "telemetry-ui", want: ""},
-		{repo: "telemetry-ui-demo", want: ""},
-		{repo: "attendance-service", want: ""},
-		{repo: "attendance-mobile", want: ""},
-		{repo: "hub-bi", want: ""},
+		{repo: "alpha", want: ""}, // org-common token shared by AW/AM/PLAT
+		{repo: "alpha-data", want: ""},
+		{repo: "alpha-web", want: "AW"},
+		{repo: "clinic-data", want: ""},
+		{repo: "clinic-data-demo", want: ""},
+		{repo: "service-ponto", want: ""},
+		{repo: "service-ponto-mobile", want: ""},
+		{repo: "service", want: ""},
+		{repo: "toolkit-bi", want: ""},
 		{repo: "syncApp", want: ""},
-		{repo: "RustAgent", want: ""},
+		{repo: "AgentCLI", want: ""},
 	}
 
 	for _, tc := range cases {

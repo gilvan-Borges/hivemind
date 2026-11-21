@@ -41,7 +41,7 @@ func (Local) Run(ctx context.Context, dir string, args ...string) (string, error
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = NonInteractiveEnv()
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -71,6 +71,10 @@ func (g Local) BranchExists(ctx context.Context, dir, branch string) bool {
 // EnsureWorktree creates an external worktree (<AppDataRoot>/workspaces/<slug>/worktrees/<agent>)
 // on branch when needed, automatically removing any legacy in-repo .hivemind/worktrees/<agent> first.
 func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (string, error) {
+	if ctx.Err() != nil {
+		// Transient cancellation: never destroy anything when the caller is gone.
+		return "", ctx.Err()
+	}
 	legacyWT := filepath.Join(repo, ".hivemind", "worktrees", agent)
 	if _, err := os.Stat(legacyWT); err == nil {
 		_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", legacyWT)
@@ -86,7 +90,15 @@ func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (
 	if g.IsRepo(ctx, wt) {
 		return wt, nil
 	}
-	_ = os.RemoveAll(wt)
+	// Only clear a leftover directory when it physically exists AND carries no
+	// .git metadata at all. A worktree that merely failed a transient probe
+	// (lock, race, ctx deadline) keeps its .git entry and is preserved.
+	if _, statErr := os.Stat(wt); statErr == nil {
+		if _, gitErr := os.Stat(filepath.Join(wt, ".git")); gitErr == nil {
+			return "", fmt.Errorf("worktree existente em %s falhou a verificação de repositório (possível falha transitória); nada foi removido — rode novamente ou inspecione manualmente", wt)
+		}
+		_ = os.RemoveAll(wt)
+	}
 	_, _ = g.Run(ctx, repo, "worktree", "prune")
 	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 		return "", err

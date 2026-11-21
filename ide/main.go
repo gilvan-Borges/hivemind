@@ -8,7 +8,8 @@ import (
 	"os/signal"
 	"path/filepath"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/version"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -74,12 +75,14 @@ func main() {
 		}
 	}
 
-	// Headless Remote Bridge (Marco 3: `hivemind serve` spawns this mode) —
-	// keeps the mobile bridge running without the IDE window.
+	// Headless Remote Bridge (Marco 3): keeps the mobile bridge running
+	// without the IDE window. The runtime is the root-module remote package;
+	// the IDE contributes its full service adapters here.
 	if serveBridge {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if err := remote.RunHeadless(ctx, initialDir); err != nil {
+		opts := idecore.HeadlessBridgeOptions()
+		if err := remote.RunHeadless(ctx, initialDir, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "hivemind serve: %v\n", err)
 			os.Exit(1)
 		}

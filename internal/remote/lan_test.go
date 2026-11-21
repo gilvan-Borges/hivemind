@@ -488,7 +488,11 @@ func TestHeadlessDoesNotPrintSessionToken(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- RunHeadless(ctx, t.TempDir()) }()
+	go func() {
+		errc <- RunHeadless(ctx, t.TempDir(), HeadlessOptions{
+			Deps: func(hub *Hub) Deps { return &fakeDeps{} },
+		})
+	}()
 
 	var mu sync.Mutex
 	var buf strings.Builder
@@ -569,7 +573,11 @@ func TestRunHeadlessProbeRespectsSixtySeconds(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- RunHeadless(ctx, "") }()
+	go func() {
+		errc <- RunHeadless(ctx, "", HeadlessOptions{
+			Deps: func(hub *Hub) Deps { return &fakeDeps{} },
+		})
+	}()
 	defer func() {
 		cancel()
 		select {
