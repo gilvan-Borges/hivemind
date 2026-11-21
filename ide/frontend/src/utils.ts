@@ -157,3 +157,224 @@ export function matchAgentRuntime(
   }
   return agents[0];
 }
+
+export interface ModelChip {
+  label: string;
+  providerLabel: string;
+  fullId: string;
+}
+
+const PROVIDER_LABEL: Record<string, string> = {
+  cursor: "Cursor",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Google",
+  google: "Google",
+  openrouter: "OpenRouter",
+  agy: "Antigravity",
+  antigravity: "Antigravity",
+  opencode: "OpenCode",
+  "opencode-go": "OpenCode",
+  xai: "xAI",
+  jev: "Jev",
+};
+
+function providerLabelOf(prov: string): string {
+  const key = prov.trim().toLowerCase();
+  if (!key) return "";
+  return PROVIDER_LABEL[key] || key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function humanizeModelSlug(slug: string): string {
+  const low = slug.toLowerCase();
+  if (low.startsWith("gpt-")) return "GPT-" + slug.slice(4);
+  if (/^o\d/.test(low)) return slug.toUpperCase();
+  if (low.startsWith("grok-")) return "Grok " + slug.slice(5).replace(/-/g, " ");
+  if (low.startsWith("composer-")) return "Composer " + slug.slice(9).replace(/-/g, " ");
+  if (low.startsWith("gemini")) {
+    const rest = slug.slice(6).replace(/^[-_]/, "").replace(/-/g, " ");
+    return ("Gemini " + rest).trim();
+  }
+  if (low.startsWith("claude-")) {
+    const parts = slug.slice(7).split("-").filter(Boolean);
+    const words: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const nxt = parts[i + 1] || "";
+      if (i === parts.length - 2 && /^\d+$/.test(parts[i]) && /^\d+$/.test(nxt) && nxt.length <= 2) {
+        words.push(`${parts[i]}.${nxt}`);
+        break;
+      }
+      words.push(/^\d/.test(parts[i]) ? parts[i] : parts[i].charAt(0).toUpperCase() + parts[i].slice(1));
+    }
+    return ("Claude " + words.join(" ")).trim();
+  }
+  return slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((p) => (/^\d/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join(" ");
+}
+
+// describeModelRoute turns a Jev/pin id into the chip the Equipe IA shows.
+// "cursor/cursor:auto" becomes "Cursor Auto"; the full id stays for the hover.
+export function describeModelRoute(provider: string, model: string): ModelChip {
+  const original = (model || "").trim();
+  const given = (provider || "").trim();
+  let prov = given;
+  const at = prov.indexOf("@");
+  if (at > 0) prov = prov.slice(0, at);
+  let rest = original;
+  if (rest.includes("/")) {
+    const i = rest.indexOf("/");
+    const head = rest.slice(0, i);
+    const tail = rest.slice(i + 1);
+    if (!prov) prov = head;
+    if (head.toLowerCase() === prov.toLowerCase()) rest = tail;
+  }
+  if (rest.includes(":")) {
+    const i = rest.indexOf(":");
+    const head = rest.slice(0, i);
+    const tail = rest.slice(i + 1);
+    if (!prov) {
+      prov = head;
+      rest = tail;
+    } else if (head.toLowerCase() === prov.toLowerCase()) {
+      rest = tail;
+    }
+  }
+  if (prov && rest.toLowerCase().startsWith(prov.toLowerCase() + ":")) {
+    rest = rest.slice(prov.length + 1);
+  }
+  const slug = rest.trim();
+  const slugLow = slug.toLowerCase();
+  if (!prov) {
+    if (slugLow.startsWith("grok")) prov = "xai";
+    else if (slugLow.startsWith("gpt") || /^o\d/.test(slugLow)) prov = "openai";
+    else if (slugLow.startsWith("claude")) prov = "anthropic";
+    else if (slugLow.startsWith("gemini")) prov = "gemini";
+    else if (slugLow.startsWith("composer")) prov = "cursor";
+  }
+  const providerLabel = providerLabelOf(prov);
+  const explicit = Boolean(given) || original.includes("/") || original.includes(":");
+  let fullId = original;
+  if (explicit && prov) {
+    const low = original.toLowerCase();
+    if (!original) fullId = prov;
+    else if (low.startsWith(prov.toLowerCase() + "/")) fullId = original;
+    else fullId = `${prov}/${original}`;
+  }
+  const auto = !slug || slugLow === "auto" || slugLow.endsWith(":auto") || (prov !== "" && slugLow === prov.toLowerCase());
+  if (!slug && !prov) return { label: "", providerLabel: "", fullId: "" };
+  if (auto) {
+    return { label: providerLabel ? `${providerLabel} Auto` : "Auto", providerLabel, fullId };
+  }
+  return { label: humanizeModelSlug(slug), providerLabel, fullId };
+}
+
+export function chipForAgent(agent: Pick<AgentRuntime, "model" | "routeModel" | "routeProvider" | "routeFriendly">): ModelChip {
+  if (agent.routeFriendly && agent.routeModel) {
+    return {
+      label: agent.routeFriendly,
+      providerLabel: providerLabelOf(agent.routeProvider || ""),
+      fullId: agent.routeModel,
+    };
+  }
+  return describeModelRoute("", agent.model || "");
+}
+
+export function modelChipHtml(chip: ModelChip | null | undefined): string {
+  if (!chip?.label) return "";
+  const tip = [chip.providerLabel, chip.fullId].filter(Boolean).join(" · ");
+  const aria = [`Modelo ${chip.label}`, chip.providerLabel ? `provedor ${chip.providerLabel}` : "", chip.fullId ? `identificador ${chip.fullId}` : ""]
+    .filter(Boolean)
+    .join(", ");
+  return `<span class="model-chip" title="${escapeHtml(tip)}" aria-label="${escapeHtml(aria)}">${escapeHtml(chip.label)}</span>`;
+}
+
+export function roleHeading(label: string): string {
+  const head = (label || "").split("·")[0].trim();
+  if (head === "Arquiteto") return "Arquiteto (Chefe)";
+  if (head === "Gerente de projeto" || head === "Gerente de Projeto") return "Gerente de Projeto (Chefe)";
+  return head || label;
+}
+
+export function shouldExpandChat(pref: boolean, openTabs: number): boolean {
+  return Boolean(pref) && openTabs <= 0;
+}
+
+export type AssistantBlock =
+  | { kind: "md"; text: string }
+  | { kind: "tools"; tools: Array<{ name: string; target: string }> };
+
+const TOOL_RE = /\[\[hmtool:([A-Za-z0-9_]+):([^\]]*)\]\]/g;
+const HIDDEN_TOOL_NAMES = new Set(["startedatms", "completedatms", "toolcallid", "hookadditionalcontexts"]);
+
+export function splitAssistantBlocks(raw: string): AssistantBlock[] {
+  const text = raw || "";
+  const blocks: AssistantBlock[] = [];
+  let last = 0;
+  let tools: Array<{ name: string; target: string }> | null = null;
+  const flushMd = (chunk: string) => {
+    if (!chunk) return;
+    const prev = blocks[blocks.length - 1];
+    if (prev && prev.kind === "md") prev.text += chunk;
+    else blocks.push({ kind: "md", text: chunk });
+  };
+  const flushTools = () => {
+    if (!tools || tools.length === 0) {
+      tools = null;
+      return;
+    }
+    blocks.push({ kind: "tools", tools });
+    tools = null;
+  };
+  for (const m of text.matchAll(TOOL_RE)) {
+    const idx = m.index ?? 0;
+    const before = text.slice(last, idx);
+    const name = m[1];
+    if (HIDDEN_TOOL_NAMES.has(name.toLowerCase())) {
+      if (before.trim() === "") {
+        if (!tools) flushMd(before);
+      } else {
+        flushTools();
+        flushMd(before);
+      }
+      last = idx + m[0].length;
+      continue;
+    }
+    if (before.trim() === "") {
+      if (!tools) flushMd(before);
+    } else {
+      flushTools();
+      flushMd(before);
+    }
+    if (!tools) tools = [];
+    tools.push({ name, target: m[2] });
+    last = idx + m[0].length;
+  }
+  flushTools();
+  const rest = text.slice(last);
+  if (rest.trim() !== "" || blocks.length === 0 || blocks[blocks.length - 1]?.kind === "md") {
+    flushMd(rest);
+  }
+  return blocks;
+}
+
+export function cursorToolPhrase(name: string, target: string): { verb: string; target: string } {
+  const n = name.toLowerCase();
+  const rel = target.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+  const base = rel.split("/").filter(Boolean).pop() || rel;
+  const fileLike = /[^/]+\.[A-Za-z0-9]+$/.test(rel);
+  const place = !rel ? "o projeto" : fileLike && rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : rel;
+  if (n === "read" || n === "read_file") return { verb: "Leu", target: base || "arquivo" };
+  if (n.includes("grep") || n === "search" || n === "search_text" || n.includes("ripgrep")) {
+    return { verb: "Buscou em", target: place };
+  }
+  if (n.includes("glob") || n === "find" || n === "find_files") return { verb: "Buscou", target: rel || "arquivos" };
+  if (n.includes("edit") || n.includes("strreplace") || n === "search_replace") return { verb: "Editou", target: base || "arquivo" };
+  if (n.includes("write")) return { verb: "Gravou", target: base || "arquivo" };
+  if (n.includes("shell") || n === "bash" || n === "run") return { verb: "Executou", target: rel || "comando" };
+  if (n.includes("mcp")) return { verb: "Consultou", target: rel || "ferramentas" };
+  if (n.includes("list")) return { verb: "Listou", target: rel || "diretório" };
+  return { verb: "Executou", target: rel || name };
+}

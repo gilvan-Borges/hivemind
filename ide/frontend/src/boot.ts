@@ -1,5 +1,5 @@
-import type { ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext } from "./types";
-import { exactTokens, matchAgentRuntime } from "./utils";
+import type { AgentRuntime, ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext, TeamLane } from "./types";
+import { chipForAgent, describeModelRoute, exactTokens, matchAgentRuntime } from "./utils";
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
@@ -14,6 +14,29 @@ import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
 import { hiveNotifyFromLaneEvent, hiveNotifyGitHubEvents, initHiveNotify } from "./notify";
+
+function stampChiefModel(m: ChatMessage, ag?: AgentRuntime) {
+  if (!ag || m.modelLabel) return;
+  const label = m.label || "";
+  const named = label === ag.name || label.endsWith(`· ${ag.name}`);
+  if (!named) return;
+  const chip = chipForAgent(ag);
+  if (!chip.label) return;
+  m.modelLabel = chip.label;
+  m.modelProvider = chip.providerLabel;
+  m.modelFullId = chip.fullId;
+}
+
+function stampStreamingModel(lane: TeamLane, ag: AgentRuntime) {
+  const tail = lane.messages[lane.messages.length - 1];
+  if (!tail || tail.kind !== "chief") return;
+  if (!(tail.label === ag.name || tail.label.endsWith(`· ${ag.name}`))) return;
+  const chip = chipForAgent(ag);
+  if (!chip.label) return;
+  tail.modelLabel = chip.label;
+  tail.modelProvider = chip.providerLabel;
+  tail.modelFullId = chip.fullId;
+}
 
 export async function boot() {
   initInlineAIHooks();
@@ -63,20 +86,23 @@ export async function boot() {
 
     if (ev.kind === "stage") {
       updateAgentStatus(lane, ev.author, ev.label, "running");
-    } else if (ev.kind === "model_route") {
+    } else if (ev.kind === "model_route" || ev.kind === "provider_failover") {
       const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
-      const chosen = ev.provider && ev.model ? `${ev.provider}/${ev.model}` : String(ev.model || "");
-      if (ag && chosen) {
-        ag.routeModel = chosen;
+      const chip = describeModelRoute(String(ev.provider || ""), String(ev.model || ""));
+      if (ag && chip.label) {
+        ag.routeModel = chip.fullId;
+        ag.routeProvider = String(ev.provider || "");
+        ag.routeFriendly = chip.label;
         ag.routeTier = ev.tier ? String(ev.tier) : undefined;
         ag.routeReasons = Array.isArray(ev.reasons) ? ev.reasons.map(String) : undefined;
+        stampStreamingModel(lane, ag);
       }
-      const routeText = String(ev.text || (chosen ? `Jev escolheu ${chosen}` : "")).trim();
+      const routeText = String(ev.text || (chip.fullId ? `Jev escolheu ${chip.fullId}` : "")).trim();
       if (routeText) {
         lane.messages.push({
           id: `route-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "system",
-          label: "Rota Jev",
+          label: ev.kind === "provider_failover" ? "Failover" : "Rota Jev",
           text: routeText,
         });
       }
@@ -206,19 +232,33 @@ export async function boot() {
       const last = lane.messages[lane.messages.length - 1];
       const msgLabel = ev.label || ev.author || "Chefe";
       const evTok = !ev.partial && ev.tokens ? Number(ev.tokens) : undefined;
+      const ag = matchAgentRuntime(lane.agents, ev.author, msgLabel);
+      const keepStream = (current: string, incoming: string) =>
+        current.includes("[[hmtool:") && !incoming.includes("[[hmtool:");
       if (last && last.kind === "chief" && last.label === msgLabel && ev.partial) {
         last.text += ev.text;
+        stampChiefModel(last, ag);
       } else if (!ev.partial && last && last.kind === "chief" && last.label === msgLabel) {
-        last.text = ev.text;
+        if (keepStream(last.text, ev.text)) {
+          const summary = String(ev.text || "").trim();
+          if (summary && !last.text.includes(summary)) {
+            last.text = last.text.endsWith("\n") ? `${last.text}\n${summary}` : `${last.text}\n\n${summary}`;
+          }
+        } else {
+          last.text = ev.text;
+        }
         if (evTok) last.tokens = evTok;
+        stampChiefModel(last, ag);
       } else {
-        lane.messages.push({
+        const created: ChatMessage = {
           id: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "chief",
           label: msgLabel,
           text: ev.text,
           tokens: evTok,
-        });
+        };
+        stampChiefModel(created, ag);
+        lane.messages.push(created);
       }
     } else if (ev.kind === "error") {
       markToolsDone(lane);
