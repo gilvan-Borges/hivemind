@@ -3,7 +3,7 @@ import { chipForAgent, describeModelRoute, exactTokens, matchAgentRuntime } from
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
-import { clearGitHubUnread, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
+import { appendGitProgress, clearGitHubUnread, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
@@ -369,6 +369,12 @@ export async function boot() {
     if (!wsKey) return;
     const changed: string[] = Array.isArray(payload?.changed) ? payload.changed.map(String) : [];
     queueFileSystemRefresh(wsKey, changed, Boolean(payload?.overflow));
+  });
+
+  window.runtime?.EventsOn("hivemind:git-progress", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!state.project || normalizePathKey(state.project.root) !== wsKey) return;
+    appendGitProgress(String(payload?.label || ""), String(payload?.line || ""));
   });
 
   window.runtime?.EventsOn("hivemind:pty-output", (payload: any) => {
