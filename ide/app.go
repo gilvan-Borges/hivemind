@@ -1532,7 +1532,7 @@ func (a *App) ParseOutputProblems(workspace, rawOutput string) []idecore.Problem
 	return idecore.ParseBuildProblems(rawOutput, workspace)
 }
 
-// --- Agente Residente Hive (Fase 2 · Sandbox e Cofre) ---
+// --- Agente Residente Hive ---
 
 // ExternalSessions lists outside processes by executable name. It does not control them.
 func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
@@ -1547,7 +1547,7 @@ func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
 // ResidentStatus returns the resident agent's live state (zero secrets).
 func (a *App) ResidentStatus() resident.Status {
 	if a.resident == nil {
-		return resident.Status{State: "ocioso", Phase: 2, ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
+		return resident.Status{State: "ocioso", ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
 	}
 	return a.resident.Status()
 }

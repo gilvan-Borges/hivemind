@@ -201,7 +201,7 @@ export function mountShell() {
           <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
           <button class="act-btn" data-act="mcp" title="Servidores MCP">${icons.mcp}</button>
           <div class="spacer"></div>
-          <button class="act-btn" id="act-resident" title="Hive Residente (Fase 1 · Somente Leitura)">${icons.sparkle}</button>
+          <button class="act-btn" id="act-resident" title="Hive Residente">${icons.sparkle}</button>
           <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
           <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
@@ -231,7 +231,7 @@ export function mountShell() {
         <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
         <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
         <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
-        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente (Fase 2 · Sandbox e Cofre)">hive: ocioso</button>
+        <button type="button" id="status-resident" class="dim plain-chip" title="Hive Residente — clique para abrir">hive: ocioso</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>

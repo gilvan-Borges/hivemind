@@ -185,7 +185,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	ag, err := llmagent.New(llmagent.Config{
 		Name:        "hive_resident",
 		Model:       llm,
-		Description: "Assistente residente pessoal Hive (Fase 2 · Ações na Sandbox).",
+		Description: "Assistente residente pessoal Hive.",
 		Instruction: SystemPrompt(),
 		Tools:       adkTools,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{

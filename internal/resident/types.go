@@ -123,7 +123,6 @@ type ProjectRef struct {
 // Status reports the resident assistant's live state for the IDE UI (§11).
 type Status struct {
 	State                  string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
-	Phase                  int      `json:"phase"`
 	ReadOnly               bool     `json:"readOnly"`
 	AccountID              string   `json:"accountId"`
 	Workstream             string   `json:"workstream"`

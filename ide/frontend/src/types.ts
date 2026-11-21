@@ -939,7 +939,6 @@ export interface ExternalSession {
 
 export interface ResidentStatus {
   state: string;
-  phase: number;
   readOnly: boolean;
   accountId: string;
   workstream: string;
