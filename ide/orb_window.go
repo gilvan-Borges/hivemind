@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	orbCollapsedW = 122
-	orbCollapsedH = 128
+	orbCollapsedW = 152
+	orbCollapsedH = 152
 	orbExpandedW  = 356
 	orbExpandedH  = 430
 )
@@ -288,6 +288,7 @@ func runOrbWindow(addr, token string) error {
 		Height:           orbCollapsedH,
 		MinWidth:         orbCollapsedW,
 		MinHeight:        orbCollapsedH,
+		DisableResize:    true,
 		Frameless:        true,
 		AlwaysOnTop:      true,
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},

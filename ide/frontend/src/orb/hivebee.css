@@ -44,17 +44,17 @@
   height: 100%;
   display: block;
   overflow: visible;
-  filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.42));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.34));
 }
 .mascot-shell.mascot-bee.is-mini .mascot-svg,
 .mascot-shell.mascot-bee.is-preview .mascot-svg {
   filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
 }
 .mascot-shell.mascot-bee[data-state="notify"] .mascot-svg {
-  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 14px rgba(255, 212, 71, 0.36));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.34));
 }
 .mascot-shell.mascot-bee[data-state="error"] .mascot-svg {
-  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.48)) drop-shadow(0 0 14px rgba(239, 68, 68, 0.36));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.38));
 }
 .mascot-bee .mc-character { transform-origin: 110px 212px; }
 .mascot-bee .mc-ground-shadow { transform-origin: 110px 218px; }

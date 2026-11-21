@@ -54,7 +54,8 @@ func (s *winSender) Send(n Notice) error {
 	if err := Validate(n); err != nil {
 		return err
 	}
-	return wintoast.Push(appID, WindowsToastXML(n.Title, n.Body, n.ID, n.Sound))
+	// Silencia o "pi" curto nativo do Toast porque o HiveMind toca seu próprio alarme de 2s.
+	return wintoast.Push(appID, WindowsToastXML(n.Title, n.Body, n.ID, false))
 }
 
 func (s *winSender) Close() error { return nil }

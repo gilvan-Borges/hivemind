@@ -290,6 +290,11 @@ func (a *App) ShowDesktopNotification(id, title, body string, sound bool) error 
 	return a.desk.Send(notify.Notice{ID: id, Title: title, Body: body, Sound: sound})
 }
 
+// PlayAlertSound plays the 2-second synthesized attention/error alarm natively on the host OS.
+func (a *App) PlayAlertSound(mood string) bool {
+	return playNativeAlertAlarm(mood)
+}
+
 // WindowClose hides the IDE to background when the floating Orb is active,
 // or quits normally when the Orb is not running.
 func (a *App) WindowClose() {

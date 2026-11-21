@@ -52,17 +52,17 @@
   height: 100%;
   display: block;
   overflow: visible;
-  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.55));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.38));
 }
 .mascot-shell.mascot-striker.is-mini .mascot-svg,
 .mascot-shell.mascot-striker.is-preview .mascot-svg {
   filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
 }
 .mascot-shell.mascot-striker[data-state="notify"] .mascot-svg {
-  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.6)) drop-shadow(0 0 16px rgba(255, 208, 66, 0.38));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.38));
 }
 .mascot-shell.mascot-striker[data-state="error"] .mascot-svg {
-  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 16px rgba(239, 68, 68, 0.42));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.42));
 }
 .mascot-striker .hm-character { transform-origin: 120px 236px; }
 .mascot-striker .hm-ground-shadow { transform-origin: 120px 244px; }
@@ -172,7 +172,7 @@
 @keyframes hmNotifyFistPump { 0%, 100% { transform: rotate(-34deg) translate(2px, -4px); } 45% { transform: rotate(-46deg) translate(3px, -8px); } }
 @keyframes hmCorePulseFast { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.18); opacity: 1; } }
 @keyframes hmFistAuraPulse { 0%, 100% { transform: scale(0.92); opacity: 0.72; } 50% { transform: scale(1.16); opacity: 1; } }
-@keyframes hmRadarExpand { 0% { transform: scale(0.4); opacity: 0.85; } 100% { transform: scale(2.05); opacity: 0; } }
+@keyframes hmRadarExpand { 0% { transform: scale(0.45); opacity: 0.78; } 100% { transform: scale(1.36); opacity: 0; } }
 @keyframes hmBadgeHover { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.07); } }
 @keyframes hmBadgePing { 0% { transform: scale(0.95); opacity: 0.9; } 100% { transform: scale(1.9); opacity: 0; } }
 @keyframes hmWorkingHover { 0%, 100% { transform: translateY(-8px) rotate(-1deg); } 50% { transform: translateY(-16px) rotate(1deg); } }

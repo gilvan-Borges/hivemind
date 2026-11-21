@@ -20,27 +20,68 @@ function newId(): string {
   return `hm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function playChime(mood: Mood): void {
+function playWebAlarm(mood: Mood): void {
   const Ctx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctx) return;
   try {
     const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = mood === "error" ? 196 : mood === "attention" ? 523 : 659;
     const now = ctx.currentTime;
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.045, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.2);
-    osc.onended = () => void ctx.close();
+    const pulses =
+      mood === "error"
+        ? [
+            { s: 0.0, e: 0.38, a: 960, b: 720 },
+            { s: 0.48, e: 0.86, a: 960, b: 720 },
+            { s: 0.96, e: 1.34, a: 1020, b: 760 },
+            { s: 1.44, e: 1.98, a: 1040, b: 720 },
+          ]
+        : [
+            { s: 0.0, e: 0.22, a: 784, b: 1175 },
+            { s: 0.25, e: 0.48, a: 1046.5, b: 1568 },
+            { s: 0.65, e: 0.87, a: 784, b: 1175 },
+            { s: 0.9, e: 1.15, a: 1046.5, b: 1568 },
+            { s: 1.32, e: 1.98, a: 1175, b: 1568 },
+          ];
+
+    for (const p of pulses) {
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now + p.s);
+      g.gain.linearRampToValueAtTime(0.18, now + p.s + 0.02);
+      g.gain.setValueAtTime(0.16, now + p.e - 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + p.e);
+      g.connect(ctx.destination);
+
+      const oscA = ctx.createOscillator();
+      oscA.type = mood === "error" ? "sawtooth" : "triangle";
+      oscA.frequency.value = p.a;
+      oscA.connect(g);
+      oscA.start(now + p.s);
+      oscA.stop(now + p.e + 0.01);
+
+      const oscB = ctx.createOscillator();
+      oscB.type = "sine";
+      oscB.frequency.value = p.b;
+      oscB.connect(g);
+      oscB.start(now + p.s);
+      oscB.stop(now + p.e + 0.01);
+    }
+
+    window.setTimeout(() => void ctx.close(), 2200);
   } catch {
     /* sem dispositivo de áudio */
   }
+}
+
+function playChime(mood: Mood): void {
+  const native = api()?.PlayAlertSound?.(mood);
+  if (!native) {
+    playWebAlarm(mood);
+    return;
+  }
+  void native
+    .then((played) => {
+      if (!played) playWebAlarm(mood);
+    })
+    .catch(() => playWebAlarm(mood));
 }
 
 function remember(notice: Stored): void {

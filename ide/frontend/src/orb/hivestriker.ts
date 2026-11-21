@@ -39,8 +39,8 @@ export function hiveStrikerSVG(): string {
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
-          <filter id="hsStrongGlow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="4.5" result="b" />
+          <filter id="hsStrongGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="2.8" result="b" />
             <feMerge>
               <feMergeNode in="b" />
               <feMergeNode in="SourceGraphic" />
@@ -158,7 +158,7 @@ export function hiveStrikerSVG(): string {
 
             <g class="hm-arm-r" filter="url(#hsShadow)">
               <g>
-                <circle class="fx-fist-energy" cx="180" cy="182" r="22" fill="url(#hsEnergy)" filter="url(#hsStrongGlow)" />
+                <circle class="fx-fist-energy" cx="180" cy="182" r="15" fill="url(#hsEnergy)" filter="url(#hsStrongGlow)" />
                 <path d="M 161 124 C 178 127 188 138 188 152 C 187 160 176 162 168 156 L 158 142 Z" fill="url(#hsSuit)" />
                 <path d="M 180 137 Q 182 146 178 152" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" opacity="0.18" />
                 <path d="M 188 150 C 194 161 192 175 184 181 L 170 177 C 166 169 166 159 170 151 Z"

@@ -10,7 +10,11 @@ import (
 )
 
 const (
+	gwlStyle              = -16
 	gwlExStyle            = -20
+	wsCaption             = 0x00C00000
+	wsThickFrame          = 0x00040000
+	wsPopup               = 0x80000000
 	wsExToolWindow        = 0x00000080
 	wsExAppWindow         = 0x00040000
 	swHide                = 0
@@ -22,6 +26,8 @@ const (
 	swpAsyncWindowPos     = 0x4000
 	swpNoMove             = 0x0002
 	vkLButton             = 0x01
+	dwmwaNcRenderingPolicy = 2
+	dwmncrpDisabled       = 1
 	dwmwaWindowCornerPref = 33
 	dwmwaBorderColor      = 34
 	dwmwcpDoNotRound      = 1
@@ -158,7 +164,15 @@ func configureOrbNativeWindow(windowTitle string) {
 		return
 	}
 
-	// Disable Windows 11 rounded corners and border line so transparent mascot has no box.
+	// Disable DWM non-client rendering, rectangular drop shadow, rounded corners, and borders
+	// so only the transparent mascot floats above the desktop with zero rectangular halo.
+	ncPolicy := uint32(dwmncrpDisabled)
+	_, _, _ = orbProcDwmSetWindowAttr.Call(
+		hwnd,
+		dwmwaNcRenderingPolicy,
+		uintptr(unsafe.Pointer(&ncPolicy)),
+		unsafe.Sizeof(ncPolicy),
+	)
 	cornerPref := uint32(dwmwcpDoNotRound)
 	_, _, _ = orbProcDwmSetWindowAttr.Call(
 		hwnd,
@@ -174,13 +188,23 @@ func configureOrbNativeWindow(windowTitle string) {
 		unsafe.Sizeof(borderNone),
 	)
 
-	// Switch from WS_EX_APPWINDOW to WS_EX_TOOLWINDOW so it never shows on the taskbar.
-	idx := int32(gwlExStyle)
-	exStyle, _, _ := orbProcGetWindowLongPtrW.Call(hwnd, uintptr(idx))
-	newStyle := (exStyle | wsExToolWindow) &^ wsExAppWindow
-	if newStyle != exStyle {
+	// Strip WS_CAPTION / WS_THICKFRAME and switch WS_EX_APPWINDOW -> WS_EX_TOOLWINDOW
+	// so there is neither a taskbar button nor an OS rectangular frame/shadow.
+	styleIdx := int32(gwlStyle)
+	curStyle, _, _ := orbProcGetWindowLongPtrW.Call(hwnd, uintptr(styleIdx))
+	nextStyle := (curStyle &^ uintptr(wsCaption|wsThickFrame)) | uintptr(wsPopup)
+
+	exIdx := int32(gwlExStyle)
+	exStyle, _, _ := orbProcGetWindowLongPtrW.Call(hwnd, uintptr(exIdx))
+	newExStyle := (exStyle | wsExToolWindow) &^ wsExAppWindow
+	if nextStyle != curStyle || newExStyle != exStyle {
 		_, _, _ = orbProcShowWindow.Call(hwnd, swHide)
-		_, _, _ = orbProcSetWindowLongPtrW.Call(hwnd, uintptr(idx), newStyle)
+		if nextStyle != curStyle {
+			_, _, _ = orbProcSetWindowLongPtrW.Call(hwnd, uintptr(styleIdx), nextStyle)
+		}
+		if newExStyle != exStyle {
+			_, _, _ = orbProcSetWindowLongPtrW.Call(hwnd, uintptr(exIdx), newExStyle)
+		}
 		_, _, _ = orbProcSetWindowPos.Call(
 			hwnd,
 			0, 0, 0, 0, 0,

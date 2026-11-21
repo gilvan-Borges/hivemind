@@ -228,8 +228,9 @@ export function mountOrbWindow(): void {
 
     if (!expanded) {
       host.innerHTML = `
-        <div class="orb-collapsed" data-mood="${escapeHtml(mood)}" title="HiveMind Orb — clique para abrir painel · duplo clique para abrir IDE">
-          <div class="orb-drag-ring" title="Arraste pela borda para mover o agente"></div>
+        <div class="orb-collapsed" data-mood="${escapeHtml(mood)}" data-has-notice="${count > 0 ? "1" : "0"}" title="HiveMind Orb — clique para abrir painel · duplo clique para abrir IDE">
+          <div class="orb-aura" aria-hidden="true"></div>
+          <div class="orb-drag-ring" title="Arraste para mover o agente"></div>
           ${renderMascotMarkup(cfg, mood, count, "full", badge)}
         </div>
       `;
