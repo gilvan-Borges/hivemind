@@ -1,14 +1,14 @@
 import { icons } from "./icons";
 import { renderMarkdownLite } from "./markdown";
 import type { ChatMessage, PermissionMode, RunMode } from "./types";
-import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel, safeImageSrc } from "./utils";
+import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
 import { refreshSessions } from "./boot";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar, setProjectPermissionMode, updateTeamStatusPills } from "./explorer";
 import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { renderModalLayer } from "./modals";
-import { openSidebarView, renderProjectTabsBar, updateStatusBar } from "./shell";
+import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
 import { api, setStatus, state, toastError } from "./state";
 import { openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
 
@@ -62,6 +62,7 @@ export function renderRightPane() {
     <div class="sidebar-header">
       <span class="eyebrow">${icons.sparkle}<span>Equipe IA</span></span>
       <div class="spacer"></div>
+      <button type="button" class="icon-btn" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}" aria-label="${state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA"}">${icons.expand}</button>
       <button class="mini ghost" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
       <button class="mini" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
     </div>
@@ -101,6 +102,7 @@ export function renderRightPane() {
   renderComposerImages();
   rebuildChatMessagesFull();
   bindRightStaticEvents();
+  syncChatExpandLayout();
 }
 
 export function renderComposerModeBar() {
@@ -373,7 +375,36 @@ export function attachImageFiles(files: FileList | File[]) {
 }
 
 export function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.modelLabel || ""}|${m.modelFullId || ""}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+}
+
+function chiefBadgeHtml(m: ChatMessage): string {
+  const lane = activeLane();
+  const ag = lane?.agents.find((a) => m.label === a.name || m.label.endsWith(`· ${a.name}`));
+  const role = ag ? roleLabelPt(ag.role) : roleHeading(m.label);
+  const chip = m.modelLabel
+    ? modelChipHtml({ label: m.modelLabel, providerLabel: m.modelProvider || "", fullId: m.modelFullId || "" })
+    : ag
+      ? modelChipHtml(chipForAgent(ag))
+      : "";
+  return `<span class="msg-badge badge-chief">${escapeHtml(role)}${chip ? ` ${chip}` : ""}</span>`;
+}
+
+function renderToolGroup(tools: Array<{ name: string; target: string }>, open: boolean): string {
+  const rows = tools.map((t) => {
+    const phrase = cursorToolPhrase(t.name, t.target);
+    return `<div class="tool-minimal-row stream-tool-row"><span class="tool-step-verb">${escapeHtml(phrase.verb)}</span><span class="tool-step-target">${escapeHtml(phrase.target)}</span></div>`;
+  }).join("");
+  if (tools.length < 2) return `<div class="stream-tool-group">${rows}</div>`;
+  return `<details class="stream-tool-group" ${open ? "open" : ""}><summary class="stream-tool-summary">${tools.length} ações</summary>${rows}</details>`;
+}
+
+function renderAssistantBody(text: string, streamOpen: boolean): string {
+  const blocks = splitAssistantBlocks(text);
+  return blocks.map((b, i) => {
+    if (b.kind === "md") return `<div class="md-prose">${renderMarkdownLite(b.text)}</div>`;
+    return renderToolGroup(b.tools, streamOpen && i === blocks.length - 1);
+  }).join("");
 }
 
 export function createMessageElement(m: ChatMessage): HTMLElement {
@@ -754,7 +785,16 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     return;
   }
 
-  const bodyHtml = m.kind === "chief" || m.kind === "system" ? renderMarkdownLite(m.text) : escapeHtml(m.text);
+  const laneNow = activeLane();
+  const streamOpen = Boolean(laneNow?.running && laneNow.messages[laneNow.messages.length - 1]?.id === m.id);
+  const bodyHtml = m.kind === "chief"
+    ? renderAssistantBody(m.text, streamOpen)
+    : m.kind === "system"
+      ? renderMarkdownLite(m.text)
+      : escapeHtml(m.text);
+  const badgeHtml = m.kind === "chief"
+    ? chiefBadgeHtml(m)
+    : `<span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>`;
   const validImages = (m.images || []).map(safeImageSrc).filter(Boolean);
   const imgsHtml = validImages.length > 0
     ? `<div class="msg-images">${validImages.map((src) => `<img src="${escapeHtml(src)}" data-preview-img="${escapeHtml(src)}" alt="anexo" />`).join("")}</div>`
@@ -763,7 +803,7 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     ? `<div class="msg-tok-footer">${icons.bolt}<span>${exactTokens(m.tokens)} tokens</span></div>`
     : "";
   el.innerHTML = `
-    <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>
+    ${badgeHtml}
     <div class="msg-body">${bodyHtml}</div>
     ${imgsHtml}
     ${tokHtml}
@@ -923,6 +963,10 @@ export function renderMentionPopup() {
 }
 
 export function bindRightStaticEvents() {
+  document.getElementById("btn-expand-chat")?.addEventListener("click", () => {
+    toggleChatExpanded();
+  });
+
   document.getElementById("btn-add-lane")?.addEventListener("click", () => {
     const lane = activeLane();
     const teams = state.project?.teamConfig?.teams || [];

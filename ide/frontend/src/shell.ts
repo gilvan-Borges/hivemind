@@ -1,7 +1,7 @@
 import { icons } from "./icons";
 import { refreshMCP } from "./mcp";
 import type { SidebarView } from "./types";
-import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel } from "./utils";
+import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel, shouldExpandChat } from "./utils";
 import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
 import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
@@ -144,6 +144,11 @@ export function renderProjectTabsBar() {
 }
 
 export function mountShell() {
+  try {
+    state.chatExpandedPref = localStorage.getItem("hivemind.chatExpanded") === "1";
+  } catch {
+    state.chatExpandedPref = false;
+  }
   const rootEl = document.getElementById("app");
   if (!rootEl) return;
   rootEl.innerHTML = `
@@ -243,6 +248,7 @@ export function mountShell() {
   `;
 
   bindStaticShellEvents();
+  syncChatExpandLayout();
 }
 
 export function openSidebarView(view: SidebarView) {
@@ -435,6 +441,11 @@ export function bindStaticShellEvents() {
   });
 
   document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      toggleChatExpanded();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       openSidebarView("search");
@@ -698,6 +709,45 @@ export function setupResizer(id: string, onMove: (dx: number) => void) {
   });
 }
 
+export function chatLayoutExpanded(): boolean {
+  return shouldExpandChat(state.chatExpandedPref, state.editorTabs.length);
+}
+
+export function syncChatExpandLayout() {
+  const on = chatLayoutExpanded();
+  document.querySelector(".workbench")?.classList.toggle("chat-expanded", on);
+  const right = document.getElementById("right-pane");
+  right?.classList.toggle("chat-reading", on);
+  if (right && !right.classList.contains("hidden")) {
+    right.style.width = on ? "" : `${state.rightWidth}px`;
+  }
+  const resR = document.getElementById("resizer-right");
+  if (resR) resR.style.display = on || !state.showRightAI ? "none" : "";
+  const btn = document.getElementById("btn-expand-chat");
+  if (btn) {
+    const label = state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA";
+    btn.setAttribute("aria-pressed", state.chatExpandedPref ? "true" : "false");
+    btn.setAttribute("aria-label", label);
+    btn.classList.toggle("is-on", state.chatExpandedPref);
+    btn.title = state.editorTabs.length > 0
+      ? "A preferência fica salva. O chat ocupa o centro quando não houver abas (Ctrl+Shift+E)."
+      : `${label} (Ctrl+Shift+E)`;
+  }
+}
+
+export function toggleChatExpanded() {
+  state.chatExpandedPref = !state.chatExpandedPref;
+  try {
+    localStorage.setItem("hivemind.chatExpanded", state.chatExpandedPref ? "1" : "0");
+  } catch {
+    // preview sem storage
+  }
+  syncChatExpandLayout();
+  if (state.chatExpandedPref && state.editorTabs.length > 0) {
+    setStatus("Equipe IA ocupa o centro quando o editor estiver sem abas.");
+  }
+}
+
 export function syncLayoutVisibility() {
   const left = document.getElementById("left-sidebar");
   const resL = document.getElementById("resizer-left");
@@ -707,6 +757,7 @@ export function syncLayoutVisibility() {
   if (resL) resL.style.display = state.showLeftSidebar ? "" : "none";
   right?.classList.toggle("hidden", !state.showRightAI);
   if (resR) resR.style.display = state.showRightAI ? "" : "none";
+  syncChatExpandLayout();
 }
 
 export function syncActivityButtons() {
