@@ -3,17 +3,22 @@ import { chipForAgent, describeModelRoute, exactTokens, matchAgentRuntime } from
 import { renderRightPane, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
-import { appendGitProgress, clearGitHubUnread, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
+import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { handleResidentLaneEvent, refreshResidentStatus } from "./resident";
-import { mountShell, openSidebarView, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
+import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
-import { hiveNotifyFromLaneEvent, hiveNotifyGitHubEvents, initHiveNotify } from "./notify";
+import { countTurnFiles } from "./companion/logic";
+import { dismissMessage, mountCompanion, noteActivity, publishGitHubNotice, publishNotice } from "./companion/host";
+
+function noticeProjectId(isActive: boolean, ctx?: ProjectWorkspaceContext): string {
+  return isActive ? state.activeProjectId : (ctx?.id || "");
+}
 
 function stampChiefModel(m: ChatMessage, ag?: AgentRuntime) {
   if (!ag || m.modelLabel) return;
@@ -42,6 +47,7 @@ export async function boot() {
   initInlineAIHooks();
   initLSPHooks();
   mountShell();
+  mountCompanion();
   const backend = api();
   if (!backend) {
     renderLeftSidebar();
@@ -51,8 +57,6 @@ export async function boot() {
     setStatus("Modo preview (sem runtime Wails)");
     return;
   }
-
-  void initHiveNotify();
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
     if (payload?.laneId === "resident") {
@@ -86,6 +90,7 @@ export async function boot() {
 
     if (ev.kind === "stage") {
       updateAgentStatus(lane, ev.author, ev.label, "running");
+      noteActivity({ laneId: lane.id, kind: "stage", stage: ev.stage, label: ev.label, author: ev.author });
     } else if (ev.kind === "model_route" || ev.kind === "provider_failover") {
       const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
       const chip = describeModelRoute(String(ev.provider || ""), String(ev.model || ""));
@@ -131,34 +136,47 @@ export async function boot() {
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       lane.messages.push({
-        id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: planId,
         kind: "plan",
         label: ev.label || "Plano pronto para aprovação",
         text: ev.text || "",
       });
-      hiveNotifyFromLaneEvent(ev);
+      publishNotice(
+        { laneId: lane.id, kind: "plan_ready", stage: ev.stage, label: ev.label, text: ev.text, gate: ev.gate },
+        { surface: "team", projectId: noticeProjectId(isActiveProject, ctx), laneId: lane.id, messageId: planId },
+      );
     } else if (ev.kind === "sdd_gate") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      const gateId = `gate-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       lane.messages.push({
-        id: `gate-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: gateId,
         kind: "plan",
         gate: (ev.gate === "jira" ? "jira" : "docs") as ChatMessage["gate"],
         label: ev.label || (ev.gate === "jira" ? "Gate 2 · Backlog Jira pronto" : "Gate 1 · Docs & Arquitetura SDD prontos"),
         text: ev.text || "",
       });
-      hiveNotifyFromLaneEvent(ev);
+      publishNotice(
+        { laneId: lane.id, kind: "sdd_gate", stage: ev.stage, label: ev.label, text: ev.text, gate: ev.gate },
+        { surface: "team", projectId: noticeProjectId(isActiveProject, ctx), laneId: lane.id, messageId: gateId },
+      );
     } else if (ev.kind === "approval_required") {
       markToolsDone(lane);
+      const apprId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       lane.messages.push({
-        id: `appr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: apprId,
         kind: "approval",
         label: ev.label || "Permissão Solicitada pelo Chefe",
         text: ev.text || "",
         approvalId: ev.approvalId || "",
+        toolName: ev.toolName || "",
       });
-      hiveNotifyFromLaneEvent(ev);
+      publishNotice(
+        { laneId: lane.id, kind: "approval_required", label: ev.label, text: ev.text, toolName: ev.toolName, gate: ev.gate },
+        { surface: "team", projectId: noticeProjectId(isActiveProject, ctx), laneId: lane.id, messageId: apprId },
+      );
     } else if (ev.kind === "devs_scaled") {
       if (Array.isArray(ev.devs) && ev.devs.length > 0) {
         syncDynamicDevsInLane(lane, ev.devs.map(String));
@@ -193,6 +211,7 @@ export async function boot() {
       } else {
         th.text = th.text ? `${th.text}\n\n${ev.text}` : ev.text;
       }
+      noteActivity({ laneId: lane.id, kind: "text", thought: true, author: ev.author, label: ev.label });
     } else if (ev.kind === "tool_call") {
       updateAgentStatus(lane, ev.author, ev.label, "running", ev.toolName);
       const th = findActiveThinking(lane);
@@ -223,6 +242,7 @@ export async function boot() {
           startedAt: Date.now(),
         });
       }
+      noteActivity({ laneId: lane.id, kind: "tool_call", toolName: ev.toolName, stage: lane.stage, author: ev.author });
     } else if (ev.kind === "tool_result") {
       markToolsDone(lane, ev.detail || "", ev.toolName);
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
@@ -268,17 +288,22 @@ export async function boot() {
       const prevMsg = lane.messages[lane.messages.length - 1];
       const isDuplicate = prevMsg && prevMsg.kind === "error" && prevMsg.text === errText;
       if (!isUserCancel && !isDuplicate) {
+        const errId = `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         lane.messages.push({
-          id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: errId,
           kind: "error",
           label: "Erro",
           text: errText,
         });
-        hiveNotifyFromLaneEvent(ev);
+        publishNotice(
+          { laneId: lane.id, kind: "error", stage: lane.stage, label: ev.label, author: ev.author, text: errText },
+          { surface: "team", projectId: noticeProjectId(isActiveProject, ctx), laneId: lane.id, messageId: errId },
+        );
       }
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      const stageNow = lane.stage || "";
       const wasSolo = isCurrentTurnSolo(lane);
       if (lane.stage && !lane.doneStages.includes(lane.stage)) {
         lane.doneStages.push(lane.stage);
@@ -289,7 +314,9 @@ export async function boot() {
         a.tool = "";
       });
       const lastMsg = lane.messages[lane.messages.length - 1];
+      let cardId = "";
       if (wasSolo && lastMsg && lastMsg.kind === "chief") {
+        cardId = lastMsg.id;
         if (lane.turnTotalTokens > 0) {
           lastMsg.tokens = lane.turnTotalTokens;
         }
@@ -297,14 +324,18 @@ export async function boot() {
         const tokSuffix = lane.turnTotalTokens > 0
           ? ` · ${exactTokens(lane.turnTotalTokens)} tokens no turno (Entrada: ${exactTokens(lane.turnInTokens)} / Saída: ${exactTokens(lane.turnOutTokens)})`
           : "";
+        cardId = `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         lane.messages.push({
-          id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: cardId,
           kind: "system",
           label: "Sistema",
           text: `${ev.text || "Execução concluída."}${tokSuffix}`,
         });
       }
-      hiveNotifyFromLaneEvent(ev);
+      publishNotice(
+        { laneId: lane.id, kind: "finish", stage: stageNow, text: String(ev.text || ""), origin: ev.origin, fileCount: countTurnFiles(lane.messages) },
+        { surface: "team", projectId: noticeProjectId(isActiveProject, ctx), laneId: lane.id, messageId: cardId },
+      );
       if (isActiveProject) {
         refreshDiffsAndSummarize(lane);
         refreshSessions();
@@ -314,6 +345,7 @@ export async function boot() {
       const target = lane.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
       if (target) {
         target.resolved = /recusada/.test(String(ev.text || "")) ? "denied" : "approved";
+        dismissMessage(target.id);
         if (isActiveProject) {
           renderRightPane();
           updateStatusBar();
@@ -449,14 +481,7 @@ export async function boot() {
 
     if (events.length > 0) {
       const projectName = ctx?.project.name || (isActive ? state.project?.name : undefined);
-      hiveNotifyGitHubEvents(events, projectName, () => {
-        if (ctx && ctx.id !== state.activeProjectId) {
-          switchProjectTab(ctx.id);
-        }
-        state.gitTab = "flow";
-        clearGitHubUnread();
-        openSidebarView("git");
-      });
+      publishGitHubNotice(events, noticeProjectId(isActive, ctx), projectName);
     }
   });
 

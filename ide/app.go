@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/ide/internal/notify"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/extsess"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
@@ -58,6 +59,7 @@ type App struct {
 	relay               *relayclient.Client
 	resident            *idecore.ResidentManager
 	healthMonitorCancel context.CancelFunc
+	desk                *notify.Hub
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -205,10 +207,14 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if !a.smokeCheck {
 		a.startJevHealthMonitor(ctx)
+		a.startDesktopNotices()
 	}
 }
 
 func (a *App) shutdown(_ context.Context) {
+	if a.desk != nil {
+		_ = a.desk.Close()
+	}
 	if a.healthMonitorCancel != nil {
 		a.healthMonitorCancel()
 	}
@@ -268,6 +274,14 @@ func (a *App) WindowToggleMaximize() {
 	if a.ctx != nil {
 		wailsrt.WindowToggleMaximise(a.ctx)
 	}
+}
+
+// ShowDesktopNotification sends one native OS notice. The click brings the IDE forward.
+func (a *App) ShowDesktopNotification(id, title, body string, sound bool) error {
+	if a.desk == nil {
+		return fmt.Errorf("notificações do sistema indisponíveis")
+	}
+	return a.desk.Send(notify.Notice{ID: id, Title: title, Body: body, Sound: sound})
 }
 
 // WindowClose closes the IDE window.

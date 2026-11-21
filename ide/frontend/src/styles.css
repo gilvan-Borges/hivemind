@@ -5869,116 +5869,196 @@ button.status-chip:hover,
   color: var(--text);
 }
 
-/* Hive companion — aviso flutuante leve (tipo mascote) */
-.hive-companion {
+/* Companion — mascote flutuante. Movimento só em transform/opacity. */
+.hm-companion {
   position: fixed;
-  right: 18px;
-  bottom: 48px;
-  z-index: 320;
+  z-index: 190;
   display: flex;
-  flex-direction: row-reverse;
+  flex-direction: column;
   align-items: flex-end;
-  gap: 10px;
-  pointer-events: none;
+  gap: 8px;
+  max-width: min(280px, calc(100vw - 24px));
+  color: var(--text-primary);
 }
-.hive-companion-avatar {
-  pointer-events: auto;
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  padding: 0;
-  border: 1px solid var(--accent-border);
-  background: var(--surface-elevated);
-  box-shadow: var(--island-shadow);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  animation: hive-companion-idle 3.2s ease-in-out infinite;
+.hm-companion[hidden],
+.hm-bubble[hidden],
+.hm-settings[hidden] { display: none; }
+.hm-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
 }
-.hive-companion-avatar img {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-.hive-companion.is-speaking .hive-companion-avatar {
-  animation: hive-companion-speak 0.55s ease;
-  border-color: var(--accent);
-}
-.hive-companion-bubble {
-  pointer-events: auto;
-  position: relative;
-  max-width: min(320px, calc(100vw - 96px));
-  padding: 10px 28px 10px 12px;
+.hm-bubble {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 260px;
+  padding: 8px 8px 8px 12px;
   border-radius: 14px 14px 4px 14px;
   background: var(--surface-elevated);
-  border: 1px solid var(--border-emphasis);
+  border: 1px solid var(--accent-border);
   box-shadow: var(--island-shadow);
-  color: var(--text-body);
-  animation: hive-companion-bubble-in 0.22s ease;
+  animation: hm-bubble-in 0.2s ease;
 }
-.hive-companion-bubble.is-clickable {
-  cursor: pointer;
-}
-.hive-companion-bubble.is-clickable:hover {
-  border-color: var(--accent);
-}
-.hive-companion.kind-success .hive-companion-bubble {
-  border-color: var(--color-success-border);
-}
-.hive-companion.kind-error .hive-companion-bubble {
-  border-color: var(--color-danger-border);
-}
-.hive-companion.kind-attention .hive-companion-bubble {
-  border-color: var(--accent-border);
-}
-.hive-companion-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.2px;
-}
-.hive-companion-body {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-.hive-companion-dismiss {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
+.hm-companion[data-mood="error"] .hm-bubble { border-color: var(--color-danger-border); }
+.hm-companion[data-mood="success"] .hm-bubble { border-color: var(--color-success-border); }
+.hm-companion[data-mood="attention"] .hm-bubble { border-color: var(--color-warning-border); }
+.hm-bubble-open {
+  flex: 1;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
   background: transparent;
-  color: var(--text-tertiary);
-  font-size: 16px;
-  line-height: 1;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
   cursor: pointer;
 }
-.hive-companion-dismiss:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
+.hm-bubble-x,
+.hm-gear,
+.hm-min,
+.hm-mascot {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
-.hive-companion-dismiss:focus-visible {
+.hm-bubble-x,
+.hm-gear,
+.hm-min {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+.hm-bubble-x:hover,
+.hm-gear:hover,
+.hm-min:hover { background: var(--surface-hover); color: var(--text-primary); }
+.hm-companion button:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
-@keyframes hive-companion-idle {
+.hm-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-divider);
+  box-shadow: var(--island-shadow);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.hm-settings label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.hm-dock { display: flex; align-items: flex-end; gap: 4px; }
+.hm-mascot {
+  width: 64px;
+  height: 64px;
+  padding: 4px;
+  border-radius: 18px;
+  border-color: var(--accent-border);
+  background: var(--surface-page);
+  box-shadow: var(--island-shadow);
+  color: var(--accent);
+}
+.hm-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.hm-hex { fill: none; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; }
+.hm-links { fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: round; opacity: 0.8; }
+.hm-node { fill: currentColor; }
+.hm-glow { fill: currentColor; opacity: 0; }
+.hm-eye { transform-box: fill-box; transform-origin: center; }
+.hm-brain { transform-origin: 60px 60px; transform-box: view-box; }
+.hm-svg[data-mood="idle"] .hm-brain { animation: hm-breathe 4.8s ease-in-out infinite; }
+.hm-svg[data-mood="idle"] .hm-node { animation: hm-node 4.8s ease-in-out infinite; }
+.hm-svg[data-mood="idle"] .hm-eye { animation: hm-node 4.8s ease-in-out infinite, hm-blink 5.6s linear infinite; }
+.hm-svg[data-mood="thinking"] .hm-node { animation: hm-seq 1.4s ease-in-out infinite; }
+.hm-svg[data-mood="thinking"] .n1 { animation-delay: 0.1s; }
+.hm-svg[data-mood="thinking"] .n2 { animation-delay: 0.2s; }
+.hm-svg[data-mood="thinking"] .n3 { animation-delay: 0.3s; }
+.hm-svg[data-mood="thinking"] .n4 { animation-delay: 0.4s; }
+.hm-svg[data-mood="thinking"] .n5 { animation-delay: 0.5s; }
+.hm-svg[data-mood="thinking"] .n6 { animation-delay: 0.6s; }
+.hm-svg[data-mood="thinking"] .n7 { animation-delay: 0.7s; }
+.hm-svg[data-mood="thinking"] .n8 { animation-delay: 0.15s; }
+.hm-svg[data-mood="thinking"] .n9 { animation-delay: 0.25s; }
+.hm-svg[data-mood="thinking"] .n10 { animation-delay: 0.35s; }
+.hm-svg[data-mood="thinking"] .n11 { animation-delay: 0.45s; }
+.hm-svg[data-mood="thinking"] .n12 { animation-delay: 0.55s; }
+.hm-svg[data-mood="thinking"] .n13 { animation-delay: 0.65s; }
+.hm-svg[data-mood="thinking"] .hm-eye { animation: hm-seq 1.4s ease-in-out infinite, hm-blink 3.2s linear infinite; }
+.hm-svg[data-mood="working"] .hm-brain { animation: hm-work 0.7s ease-in-out infinite; }
+.hm-svg[data-mood="working"] .hm-node { animation: hm-node 0.7s ease-in-out infinite; }
+.hm-svg[data-mood="success"] { color: var(--accent-strong); }
+.hm-svg[data-mood="success"] .hm-brain { animation: hm-jump 0.7s ease-out 1; }
+.hm-svg[data-mood="success"] .hm-glow { animation: hm-glow 0.9s ease-out 1; }
+.hm-svg[data-mood="error"] { color: var(--color-danger); }
+.hm-svg[data-mood="error"] .hm-brain { animation: hm-shake 0.45s ease-in-out 1; }
+.hm-svg[data-mood="attention"] { color: var(--color-warning); }
+.hm-svg[data-mood="attention"] .hm-brain { animation: hm-wave 0.9s ease-in-out 2; transform-origin: 60px 78px; }
+.hm-companion[data-min="1"] .hm-bubble,
+.hm-companion[data-min="1"] .hm-settings,
+.hm-companion[data-min="1"] .hm-gear,
+.hm-companion[data-min="1"] .hm-min { display: none; }
+.hm-companion[data-paused="1"] .hm-svg,
+.hm-companion[data-paused="1"] .hm-svg *,
+.hm-companion[data-paused="1"] .hm-bubble { animation-play-state: paused; }
+.msg-card.hm-target { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+@keyframes hm-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.045); }
+}
+@keyframes hm-node {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes hm-seq {
+  0%, 100% { opacity: 0.28; }
+  45% { opacity: 1; }
+}
+@keyframes hm-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.15); }
+}
+@keyframes hm-work {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  50% { transform: translateY(-2px); }
 }
-@keyframes hive-companion-speak {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.08); }
-  100% { transform: scale(1); }
+@keyframes hm-jump {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-8px); }
+  100% { transform: translateY(0); }
 }
-@keyframes hive-companion-bubble-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.96); }
-  to { opacity: 1; transform: none; }
+@keyframes hm-glow {
+  0% { opacity: 0; }
+  30% { opacity: 0.55; }
+  100% { opacity: 0; }
+}
+@keyframes hm-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
+  75% { transform: translateX(-2px); }
+}
+@keyframes hm-wave {
+  0%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(-8deg); }
+  60% { transform: rotate(6deg); }
+}
+@keyframes hm-bubble-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hm-svg,
+  .hm-svg *,
+  .hm-bubble { animation: none !important; }
 }
 
 .scm-git-op {

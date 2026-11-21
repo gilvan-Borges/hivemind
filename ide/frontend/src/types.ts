@@ -1095,6 +1095,7 @@ export interface WailsBackendApp {
   WindowMinimize(): Promise<void>;
   WindowToggleMaximize(): Promise<void>;
   WindowClose(): Promise<void>;
+  ShowDesktopNotification?(id: string, title: string, body: string, sound: boolean): Promise<void>;
   StartRun(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string): Promise<RunResultPayload>;
   StartRunWithImages(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<RunResultPayload>;
   StartRunWithOptions(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string, runMode: string, images: Array<{ name: string; mimeType: string; dataBase64: string }>): Promise<RunResultPayload>;

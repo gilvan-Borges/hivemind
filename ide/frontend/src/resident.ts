@@ -5,7 +5,7 @@ import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { updateStatusBar } from "./shell";
 import { api, setStatus, state, toast, toastError } from "./state";
-import { hiveNotifyFromLaneEvent } from "./notify";
+import { noteActivity, publishNotice } from "./companion/host";
 
 export const RESIDENT_TAB_KEY = "hive:resident";
 
@@ -207,6 +207,7 @@ export function handleResidentLaneEvent(payload: any): void {
   if (ev.kind === "stage") {
     residentState.running = true;
     if (residentState.status) residentState.status.state = ev.text || "pensando";
+    noteActivity({ laneId: "resident", kind: "stage", text: ev.text, label: ev.label });
   } else if (ev.kind === "user_message" && ev.text) {
     residentState.messages.push({
       id: `res-u-${Date.now()}`,
@@ -226,6 +227,7 @@ export function handleResidentLaneEvent(payload: any): void {
       riskTier: risk.tier,
       active: true,
     });
+    noteActivity({ laneId: "resident", kind: "tool_call", toolName: String(ev.toolName || "") });
   } else if (ev.kind === "tool_result") {
     for (let i = residentState.messages.length - 1; i >= 0; i--) {
       const m = residentState.messages[i];
@@ -237,8 +239,9 @@ export function handleResidentLaneEvent(payload: any): void {
   } else if (ev.kind === "approval_required") {
     if (residentState.status) residentState.status.state = "aguardando você";
     const tierRaw = String(ev.gate || ev.riskTier || "");
+    const apprId = `res-appr-${Date.now()}`;
     residentState.messages.push({
-      id: `res-appr-${Date.now()}`,
+      id: apprId,
       kind: "approval",
       label: String(ev.label || "Aprovação do Hive Residente"),
       text: String(ev.text || ""),
@@ -247,6 +250,10 @@ export function handleResidentLaneEvent(payload: any): void {
       riskTier: tierRaw,
       approvalId: String(ev.approvalId || ""),
     });
+    publishNotice(
+      { laneId: "resident", kind: "approval_required", toolName: String(ev.toolName || ""), text: String(ev.text || ""), label: String(ev.label || "") },
+      { surface: "resident", projectId: "", laneId: "resident", messageId: apprId },
+    );
   } else if (ev.kind === "approval_resolved") {
     const target = residentState.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
     if (target) {
@@ -269,17 +276,33 @@ export function handleResidentLaneEvent(payload: any): void {
   } else if (ev.kind === "error") {
     residentState.running = false;
     if (residentState.status) residentState.status.state = "ocioso";
+    const errId = `res-err-${Date.now()}`;
     residentState.messages.push({
-      id: `res-err-${Date.now()}`,
+      id: errId,
       kind: "error",
       label: "Erro",
       text: String(ev.text || "Erro no agente residente"),
     });
-    hiveNotifyFromLaneEvent(ev);
+    publishNotice(
+      { laneId: "resident", kind: "error", text: String(ev.text || ""), label: "Erro", origin: String(ev.origin || "") },
+      { surface: "resident", projectId: "", laneId: "resident", messageId: errId },
+    );
   } else if (ev.kind === "finish") {
     residentState.running = false;
     if (residentState.status) residentState.status.state = "ocioso";
-    hiveNotifyFromLaneEvent({ kind: "finish", text: ev.text || "Hive Residente concluiu." });
+    if (String(ev.origin || "") === "routine") {
+      const doneId = `res-routine-${Date.now()}`;
+      residentState.messages.push({
+        id: doneId,
+        kind: "system",
+        label: "Rotina",
+        text: String(ev.text || "Rotina concluída."),
+      });
+      publishNotice(
+        { laneId: "resident", kind: "finish", origin: "routine", text: String(ev.text || "") },
+        { surface: "resident", projectId: "", laneId: "resident", messageId: doneId },
+      );
+    }
     void refreshResidentData();
   }
 
@@ -359,7 +382,7 @@ function renderResidentChatHtml(): string {
         if (m.kind === "tool") {
           const risk = formatRiskBadge(m.riskTier);
           return `
-            <div class="msg-card role-tool">
+            <div class="msg-card role-tool" data-msg-id="${escapeHtml(m.id)}">
               <span class="msg-badge badge-tool">${escapeHtml(m.toolName || m.text)}</span>
               <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
               <span class="dim">${escapeHtml(m.toolDetail || "")}</span>
@@ -380,7 +403,7 @@ function renderResidentChatHtml(): string {
                 </div>
               `;
           return `
-            <div class="msg-card role-plan resident-approval-card">
+            <div class="msg-card role-plan resident-approval-card" data-msg-id="${escapeHtml(m.id)}">
               <div class="resident-approval-meta">
                 <span class="msg-badge badge-system">${escapeHtml(m.label)}</span>
                 <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
@@ -394,7 +417,7 @@ function renderResidentChatHtml(): string {
         }
         const body = m.kind === "chief" ? renderMarkdownLite(m.text) : escapeHtml(m.text);
         return `
-          <div class="msg-card role-${m.kind}">
+          <div class="msg-card role-${m.kind}" data-msg-id="${escapeHtml(m.id)}">
             <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>
             <div class="msg-body">${body}</div>
           </div>

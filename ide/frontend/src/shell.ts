@@ -13,6 +13,7 @@ import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, open
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
+import { loadSettings, toggleCompanionEnabled } from "./companion/settings";
 import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { countProblems, refreshLSPStatus } from "./lsp";
@@ -782,6 +783,7 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
     <button class="dropdown-item" id="menu-providers-pool">${icons.settings}<span>Provedores &amp; Contas (Pool)…</span></button>
     <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
+    <button type="button" class="dropdown-item" id="menu-companion" aria-pressed="${loadSettings().enabled ? "true" : "false"}">${icons.sparkle}<span>${loadSettings().enabled ? "Companion ligado" : "Companion desligado"}</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
       ? `<div class="dim" style="padding:6px 10px">Nenhum projeto recente</div>`
@@ -817,6 +819,11 @@ export function renderFileMenu() {
     state.showFileMenu = false;
     renderFileMenu();
     void openProvidersScanModal();
+  });
+  menu.querySelector("#menu-companion")?.addEventListener("click", () => {
+    toggleCompanionEnabled();
+    state.showFileMenu = false;
+    renderFileMenu();
   });
   menu.querySelectorAll("[data-recent]").forEach((el) => {
     el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!, true));
