@@ -2449,7 +2449,6 @@ export namespace resident {
 	}
 	export class Status {
 	    state: string;
-	    phase: number;
 	    readOnly: boolean;
 	    accountId: string;
 	    workstream: string;
@@ -2479,7 +2478,6 @@ export namespace resident {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
-	        this.phase = source["phase"];
 	        this.readOnly = source["readOnly"];
 	        this.accountId = source["accountId"];
 	        this.workstream = source["workstream"];

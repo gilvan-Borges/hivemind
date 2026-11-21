@@ -254,7 +254,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 
 	handler, ok := b.resolveHandler(toolName)
 	if !ok {
-		err := fmt.Errorf("ferramenta %q não registrada no broker da Fase 2", toolName)
+		err := fmt.Errorf("ferramenta %q não registrada no broker", toolName)
 		_ = b.cfg.Audit.RecordOutcome(AuditEntry{
 			AccountID:  b.cfg.AccountID,
 			DeviceID:   b.cfg.DeviceID,

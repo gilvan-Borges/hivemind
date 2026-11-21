@@ -298,7 +298,7 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 		return Decision{
 			Allow:  false,
 			Ask:    false,
-			Reason: fmt.Sprintf("ferramenta %q (classe %s) recusada pela política da Fase 2", name, tier),
+			Reason: fmt.Sprintf("ferramenta %q (classe %s) recusada pela política", name, tier),
 		}
 	}
 
