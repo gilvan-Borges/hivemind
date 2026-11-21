@@ -73,18 +73,18 @@ func TestRoleCommitAndPRToolSeparation(t *testing.T) {
 
 func TestFormatPRDetailShowsRoleAndAllComments(t *testing.T) {
 	pr := githubx.PullRequestDetail{
-		Number:  699,
+		Number:  101,
 		Title:   "feat: cabecalho execucao",
 		Author:  "gilvan-Borges",
 		State:   "open",
-		HeadRef: "feat/sdd-front-ft082-cabecalho-execucao",
+		HeadRef: "feat/header-actions",
 		BaseRef: "homolog",
 		ReviewComments: []githubx.Comment{
-			{ID: 777, Author: "marcusrdrigues", Path: "src/header.ts", Line: 42, Body: "Ajustar aria-label"},
+			{ID: 777, Author: "reviewer", Path: "src/header.ts", Line: 42, Body: "Ajustar aria-label"},
 		},
 	}
 	issueComments := []githubx.Comment{
-		{ID: 888, Author: "marcusrdrigues", Body: "Rodar E2E antes do merge"},
+		{ID: 888, Author: "reviewer", Body: "Rodar E2E antes do merge"},
 	}
 
 	own := formatPRDetail(pr, issueComments, "gilvan-Borges")

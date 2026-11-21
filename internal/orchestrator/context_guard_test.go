@@ -358,24 +358,24 @@ func TestRepeatReadGuardBlocksShiftedRangesAndRepeatedPRDiff(t *testing.T) {
 }
 
 func TestPRReviewGuardCallbacksAndExtractPRNumber(t *testing.T) {
-	if got := extractReviewPRNumber("Revisar PR #730 de @joaomarqu3ss — docs(spec-018)"); got != 730 {
-		t.Fatalf("extractReviewPRNumber = %d, want 730", got)
+	if got := extractReviewPRNumber("Revisar PR #120 de @reviewer — docs(spec-018)"); got != 120 {
+		t.Fatalf("extractReviewPRNumber = %d, want 120", got)
 	}
 	if !isGeneratedOrLockfile("frontend/package-lock.json") || isGeneratedOrLockfile("specs/018/spec.md") {
 		t.Fatal("unexpected isGeneratedOrLockfile classification")
 	}
 
-	before, after := newPRReviewGuardCallbacks(730, true, 3)
+	before, after := newPRReviewGuardCallbacks(120, true, 3)
 	getPRTool := stubNamedTool{name: "github_get_pr"}
 	diffTool := stubNamedTool{name: "github_pr_diff"}
 	readTool := stubNamedTool{name: "read_file"}
 	reviewTool := stubNamedTool{name: "github_review_pr"}
 
 	// Preloaded PR metadata and full diff are short-circuited immediately.
-	if res, _ := before(nil, getPRTool, map[string]any{"number": 730}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
+	if res, _ := before(nil, getPRTool, map[string]any{"number": 120}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
 		t.Fatalf("expected github_get_pr cache hit, got %v", res)
 	}
-	if res, _ := before(nil, diffTool, map[string]any{"number": 730}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
+	if res, _ := before(nil, diffTool, map[string]any{"number": 120}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ") {
 		t.Fatalf("expected github_pr_diff cache hit when allPatchesComplete=true, got %v", res)
 	}
 
@@ -397,17 +397,17 @@ func TestPRReviewGuardCallbacksAndExtractPRNumber(t *testing.T) {
 }
 
 func TestChiefTriageBudgetCallbacksAndJiraKeyExtract(t *testing.T) {
-	if got := extractJiraKeyFromObjective("Resolver issue IPG-874 — Front F3 (RN-018-15, D-179, FT-232)"); got != "IPG-874" {
-		t.Fatalf("extractJiraKeyFromObjective = %q, want IPG-874", got)
+	if got := extractJiraKeyFromObjective("Resolver issue PROJ-874 — Front F3 (RN-018-15, D-179, FT-232)"); got != "PROJ-874" {
+		t.Fatalf("extractJiraKeyFromObjective = %q, want PROJ-874", got)
 	}
 
-	before, after := newChiefTriageBudgetCallbacks("IPG-874", 3)
+	before, after := newChiefTriageBudgetCallbacks("PROJ-874", 3)
 	jiraGetTool := stubNamedTool{name: "jira_get"}
 	readTool := stubNamedTool{name: "read_file"}
 	delegateTool := stubNamedTool{name: "delegate_to_squad"}
 
 	// Preloaded Jira key is short-circuited immediately.
-	if res, _ := before(nil, jiraGetTool, map[string]any{"key": "ipg-874"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ JIRA") {
+	if res, _ := before(nil, jiraGetTool, map[string]any{"key": "proj-874"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "CACHE DO DOSSIÊ JIRA") {
 		t.Fatalf("expected jira_get cache hit, got %v", res)
 	}
 

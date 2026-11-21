@@ -2,9 +2,9 @@
 
 > **Spec:** `spec.md` · **Constituição:** `.specify/memory/constitution.md`
 
-## 1. Arquitetura Escolhida (Comparativo `Vibetex/ipg` vs `Havruss/havrus`)
-- **Do `Vibetex/ipg`**: adotamos a camada de governança `.specify/` (`memory/constitution.md`, `templates/*-design-template.md`, `specs/NNN-*/{spec,plan,tasks}.md` e matriz em `.specify/README.md`) para garantir rastreabilidade de requisitos antes do código.
-- **Do `Havruss/havrus`**: adotamos a fundação de design tokens por papel (`--surface-*`, `--text-*`, `--border-*`, `--action-primary*`, `--accent*`, `--color-*`), a separação de camadas (fundo `#050505` / conteúdo sólido `#111111` / elevado `#1F1F1F`), a skill prática de execução (`.agents/skills/hivemind-design-sdd/SKILL.md`) e o script conferidor automático de tokens + contraste WCAG (`ide/frontend/scripts/check-design-tokens.mjs`).
+## 1. Arquitetura Escolhida (SDD Rastreável + Fundação Visual Havrus)
+- **Camada SDD**: adotamos a governança em `.specify/` (`memory/constitution.md`, `templates/*-design-template.md`, `specs/NNN-*/{spec,plan,tasks}.md` e matriz em `.specify/README.md`) para garantir rastreabilidade de requisitos antes do código.
+- **Camada Visual (Havrus Obsidian & Brand Gold)**: adotamos design tokens por papel (`--surface-*`, `--text-*`, `--border-*`, `--action-primary*`, `--accent*`, `--color-*`), separação de camadas (fundo `#050505` / conteúdo sólido `#111111` / elevado `#1F1F1F`), a skill prática de execução (`.agents/skills/hivemind-design-sdd/SKILL.md`) e o script conferidor automático de tokens + contraste WCAG (`ide/frontend/scripts/check-design-tokens.mjs`).
 
 ## 2. Arquivos Criados/Atualizados neste Worktree
 - `.specify/memory/constitution.md`

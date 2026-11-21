@@ -41,12 +41,12 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	root := t.TempDir()
 	initTestGitRepo(t, root, map[string]string{
-		".gitignore":     "ipg-mobile/\n",
+		".gitignore":     "app-mobile/\n",
 		"api/Main.java":  "class Main {}\n",
 		"README.md":      "root\n",
 	})
-	// Nested repo 1: explicitly gitignored (like ipg-mobile inside ipg).
-	mobileDir := filepath.Join(root, "ipg-mobile")
+	// Nested repo 1: explicitly gitignored (like app-mobile inside a monorepo).
+	mobileDir := filepath.Join(root, "app-mobile")
 	initTestGitRepo(t, mobileDir, map[string]string{
 		"lib/app.dart": "void main() {}\n",
 	})
@@ -64,7 +64,7 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 		t.Fatalf("DiscoverNestedRepos = %d, want 2 (%+v)", len(discovered), discovered)
 	}
 
-	parentWT, effBranch, err := PrepareDeliveryWorktreeForSlot(ctx, g, root, "lane-principal", "hivemind/ipg-929", false)
+	parentWT, effBranch, err := PrepareDeliveryWorktreeForSlot(ctx, g, root, "lane-principal", "hivemind/proj-929", false)
 	if err != nil {
 		t.Fatalf("PrepareDeliveryWorktreeForSlot: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	}
 
 	// Verify both nested repos exist physically inside parentWT on isolated branches.
-	mountedDart := filepath.Join(parentWT, "ipg-mobile", "lib", "app.dart")
+	mountedDart := filepath.Join(parentWT, "app-mobile", "lib", "app.dart")
 	if _, err := os.Stat(mountedDart); err != nil {
 		t.Fatalf("expected nested file inside parent worktree at %s: %v", mountedDart, err)
 	}
@@ -100,7 +100,7 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	}
 
 	// Re-running PrepareDeliveryWorktreeForSlot + PrepareNestedWorktrees for the same slot preserves WIP!
-	parentWT2, _, err := PrepareDeliveryWorktreeForSlot(ctx, g, root, "lane-principal", "hivemind/ipg-929", false)
+	parentWT2, _, err := PrepareDeliveryWorktreeForSlot(ctx, g, root, "lane-principal", "hivemind/proj-929", false)
 	if err != nil || parentWT2 != parentWT {
 		t.Fatalf("reused parentWT = %q (%v), want %q", parentWT2, err, parentWT)
 	}
@@ -121,15 +121,15 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	if _, err := AlignNestedWorktrees(ctx, g, devWT, "hivemind/dev_1-test", nestedWTs); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(devWT, "ipg-mobile", "lib", "app.dart"), []byte("void main() { print(2); }\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(devWT, "app-mobile", "lib", "app.dart"), []byte("void main() { print(2); }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	synced, err := SyncCompositeUncommittedToDelivery(ctx, g, []string{devWT}, parentWT, []string{"ipg-mobile", "sub-app"})
+	synced, err := SyncCompositeUncommittedToDelivery(ctx, g, []string{devWT}, parentWT, []string{"app-mobile", "sub-app"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(synced) == 0 || synced[0] != "ipg-mobile/lib/app.dart" {
-		t.Fatalf("expected ipg-mobile/lib/app.dart synced, got %v", synced)
+	if len(synced) == 0 || synced[0] != "app-mobile/lib/app.dart" {
+		t.Fatalf("expected app-mobile/lib/app.dart synced, got %v", synced)
 	}
 	consolidated, _ := os.ReadFile(mountedDart)
 	if !strings.Contains(string(consolidated), "print(2)") {
@@ -137,7 +137,7 @@ func TestCompositeNestedWorktreeLifecycle(t *testing.T) {
 	}
 
 	// Commit inside nested worktree and verify HasCommitsAhead.
-	committed, err := g.CommitAll(ctx, filepath.Join(parentWT, "ipg-mobile"), "feat: mobile change")
+	committed, err := g.CommitAll(ctx, filepath.Join(parentWT, "app-mobile"), "feat: mobile change")
 	if err != nil || !committed {
 		t.Fatalf("CommitAll in nested worktree failed: committed=%v err=%v", committed, err)
 	}

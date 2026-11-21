@@ -9,7 +9,7 @@ O HiveMind precisava de uma regra SDD formal para governar layout, cores e compo
 
 ## 2. Escopo e Não-Escopo
 - **Inclui:**
-  - Constituição SDD `.specify/memory/constitution.md` e templates em `.specify/templates/*-design-template.md` (combinando rastreabilidade de `Vibetex/ipg` com a disciplina visual e conferidores automáticos de `Havruss/havrus`).
+  - Constituição SDD `.specify/memory/constitution.md` e templates em `.specify/templates/*-design-template.md` (combinando rastreabilidade SDD formal com disciplina visual e conferidores automáticos da paleta Havrus).
   - Documentação de referência em `docs/design/` com mapeamento 1:1 CSS ↔ Jetpack Compose (`Theme.kt`).
   - Skill de execução `.agents/skills/hivemind-design-sdd/SKILL.md`.
   - Conferidor automatizado `ide/frontend/scripts/check-design-tokens.mjs` (`npm run check:design`).

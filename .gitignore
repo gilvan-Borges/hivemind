@@ -1,8 +1,31 @@
 /hivemind
 /hivemind.exe
+HiveMindSetup*.exe
+*.msi
+*.apk
+*.aab
 /dist/
 *.test
 .hivemind/
+# Segredos, credenciais e bancos locais (nunca versionar em repo público)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.sqlite
+*.sqlite3
+*.db
+credentials.json
+api-keys.json
+oauth-session.json
+provider-profiles.json
+relay.json
+local.properties
 # Índices locais dos MCPs (produto e Cursor). Não versionar.
 .code-review-graph/
 .codebase-memory/

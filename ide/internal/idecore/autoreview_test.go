@@ -75,7 +75,7 @@ func TestAutoReviewRequeuesApprovedPRAfterHumanActivity(t *testing.T) {
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{
 			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
-			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+			{Author: "reviewer2", State: "CHANGES_REQUESTED", SubmittedAt: t2},
 		},
 		nil,
 		time.Time{},

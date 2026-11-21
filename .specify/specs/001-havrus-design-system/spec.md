@@ -6,8 +6,8 @@
 
 ## 1. Contexto e Objetivo
 Unificar a identidade visual do **HiveMind** e do **HiveMind-App** sob uma fundação SDD única, combinando:
-- **Estrutura SDD rastreável** inspirada em `Vibetex/ipg` (`.specify/memory/constitution.md`, `spec.md`, `plan.md`, `tasks.md`, matriz em `.specify/README.md`).
-- **Fundação visual, camadas, tokens por papel e conferidores automáticos** inspirados em `Havruss/havrus` (`tela-do-havrus`, `frontend/src/styles.scss` e `frontend/fundacao/`).
+- **Estrutura SDD rastreável** (`.specify/memory/constitution.md`, `spec.md`, `plan.md`, `tasks.md`, matriz em `.specify/README.md`).
+- **Fundação visual, camadas, tokens por papel e conferidores automáticos** (paleta **Havrus Obsidian & Brand Gold**).
 - **Paleta Havrus Obsidian & Brand Gold** aplicada para teste imediato na IDE (preto profundo `#050505`, grafite sólido `#111111`, elevado `#1F1F1F`, branco `#FFFFFF`/`#E5E5E5`, ação primária `#F3F2F0`, dourado de marca `#C6A15B`/`#E8C881` e sinais WCAG >= 4.5:1).
 
 ## 2. Camadas e Tokens por Papel (D1, D2)

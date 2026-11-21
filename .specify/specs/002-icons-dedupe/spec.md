@@ -6,7 +6,7 @@
 
 ## 1. Contexto e Problema
 
-A activity bar e o status bar reutilizam o mesmo glifo Material Symbols em papéis diferentes (`hub` para swarm e MCP; `auto_awesome` para residente e uso de IA; `bolt` para tokens e bolt genérico). O IPG ([Vibetex/ipg](https://github.com/Vibetex/ipg)) usa Lucide (`@lucide/angular`) com ícones distintos por item de navegação. A constituição HiveMind (D6) fixa **Material Symbols** em `icons.ts` — não Lucide — então a solução é deduplicar glifos dentro da família já padronizada e favorecer outline (sem fill) onde o traço fino se aproxima do visual Lucide.
+A activity bar e o status bar reutilizam o mesmo glifo Material Symbols em papéis diferentes (`hub` para swarm e MCP; `auto_awesome` para residente e uso de IA; `bolt` para tokens e bolt genérico). Sistemas de ícones como Lucide usam variantes distintas por item de navegação, mas a constituição HiveMind (D6) fixa **Material Symbols** em `icons.ts` — não Lucide — então a solução é deduplicar glifos dentro da família já padronizada e favorecer outline (sem fill) onde o traço fino oferece melhor contraste visual.
 
 ## 2. Escopo e Não-Escopo
 

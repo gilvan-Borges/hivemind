@@ -2,14 +2,14 @@
 
 **Status:** Implementada  
 **Data:** 2026-11-19  
-**Origem:** Dogfooding real na IDE (`C:\ProjetosVibetex\IPG`, revisão do PR #716, sessão `af7795677497`)
+**Origem:** Dogfooding real na IDE em monorepo de referência (revisão de PR grande com 34 chamadas LLM)
 
 ---
 
 ## 1. Problema Observado em Produção
 
-Durante a revisão real do **PR #716** no monorepo `IPG`:
-- A **qualidade técnica** do Chefe foi excelente: ele não ficou preso ao diff — auditou DTOs reais do backend (`PageResponse`, `ClienteResponse`, `CondominioResponse`), permissões de rota (`SUPER_ADMIN`/`ADMIN`), a regra da catraca de a11y (`a11y-web.txt`), guard de termos e status de CI.
+Durante a revisão real de um PR extenso em um monorepo multi-módulo:
+- A **qualidade técnica** do Chefe foi excelente: ele não ficou preso ao diff — auditou DTOs reais do backend (`PageResponse`, `ClientResponse`, `UnitResponse`), permissões de rota (`SUPER_ADMIN`/`ADMIN`), a regra da catraca de a11y (`a11y-web.txt`), guard de termos e status de CI.
 - **Princípio preservado:** quando houver dúvida fora do diff, o Chefe **deve continuar podendo investigar o projeto inteiro** para validar contratos e efeitos colaterais reais.
 - **Custo medido nessa revisão (34 chamadas LLM):**
   - Ferramentas chamadas: `read_file` × 36, `list_dir` × 13, `github_pr_diff` × 2, `github_get_pr` × 1, `github_ci_status` × 1.
@@ -19,7 +19,7 @@ Durante a revisão real do **PR #716** no monorepo `IPG`:
 1. **Falta de ferramentas cirúrgicas de investigação** em `internal/tools/tools.go`: o Chefe só tem `list_dir` e `read_file` (arquivo inteiro até 64 KiB), obrigando-o a fazer 13 `list_dir` + 36 `read_file` para localizar símbolos, rotas e arquivos num monorepo.
 2. **Ausência de compactação *in-turn***: `sessionx.CompactOldToolOutputs` roda apenas entre turnos (abertura/fecho da sessão). Dentro de um turno longo com 30+ chamadas de leitura, cada nova chamada reenvia todos os arquivos já lidos integralmente.
 3. **Achados colaterais em monorepo (IDE):**
-   - `DetectStack` (`ide/internal/idecore/stack.go`) só inspeciona a raiz e classificou o `IPG` como `"Stack genérica / não identificada"`.
+   - `DetectStack` (`ide/internal/idecore/stack.go`) só inspeciona a raiz e classificou o monorepo como `"Stack genérica / não identificada"`.
    - `.worktrees/` (worktrees criadas por outros agentes) não está em `ignoredDirs`, aumentando uso de RAM/CPU no `FileIndex` e `FileWatcher`.
 
 ---

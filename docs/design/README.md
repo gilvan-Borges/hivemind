@@ -6,7 +6,7 @@ Esta pasta centraliza a especificação orientada por spec (**SDD**) de layout, 
 
 Comparamos dois repositórios de referência para montar a estrutura ideal para o ecossistema HiveMind:
 
-| Aspecto | `Vibetex/ipg` | `Havruss/havrus` | Estrutura adotada no HiveMind |
+| Aspecto | Modelo SDD (Referência) | Fundação Visual Havrus | Estrutura adotada no HiveMind |
 |---|---|---|---|
 | Governança SDD | `.specify/memory/constitution.md` + templates (`spec`, `plan`, `tasks`) + rastreabilidade por ID (`P1–P10`, `T001`) | `docs/front/01-constituicao.md` a `08-checklist-producao.md` | **`.specify/memory/constitution.md`** + templates dedicados em `.specify/templates/*-design-template.md` com IDs (`D1–D8`, `D001`) |
 | Execução por agentes | Skills operacionais em `.claude/skills/` | Skill focada de tela (`.claude/skills/tela-do-havrus/SKILL.md`) | **`.agents/skills/hivemind-design-sdd/SKILL.md`** cobrindo desktop IDE e app mobile |
