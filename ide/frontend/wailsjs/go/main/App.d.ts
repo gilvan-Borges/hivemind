@@ -187,6 +187,8 @@ export function OrbShow():Promise<void>;
 
 export function ParseOutputProblems(arg1:string,arg2:string):Promise<Array<idecore.ProblemItem>>;
 
+export function PlayAlertSound(arg1:string):Promise<boolean>;
+
 export function ProbeProviders():Promise<Array<jev.ProviderHealthView>>;
 
 export function QuitAll():Promise<void>;
@@ -202,6 +204,8 @@ export function RelayClaimLinkCode(arg1:string):Promise<relayclient.Status>;
 export function RelayCreateAccount(arg1:string,arg2:string):Promise<void>;
 
 export function RelayCreateLinkCode():Promise<relayclient.LinkCode>;
+
+export function RelayCreateQRLogin():Promise<relayclient.LinkCode>;
 
 export function RelayLogin(arg1:string,arg2:string,arg3:string):Promise<relayclient.Status>;
 

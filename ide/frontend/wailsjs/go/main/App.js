@@ -350,6 +350,10 @@ export function ParseOutputProblems(arg1, arg2) {
   return window['go']['main']['App']['ParseOutputProblems'](arg1, arg2);
 }
 
+export function PlayAlertSound(arg1) {
+  return window['go']['main']['App']['PlayAlertSound'](arg1);
+}
+
 export function ProbeProviders() {
   return window['go']['main']['App']['ProbeProviders']();
 }
@@ -380,6 +384,10 @@ export function RelayCreateAccount(arg1, arg2) {
 
 export function RelayCreateLinkCode() {
   return window['go']['main']['App']['RelayCreateLinkCode']();
+}
+
+export function RelayCreateQRLogin() {
+  return window['go']['main']['App']['RelayCreateQRLogin']();
 }
 
 export function RelayLogin(arg1, arg2, arg3) {
