@@ -395,15 +395,24 @@ func runGitStream(ctx context.Context, dir string, onLine func(string), args ...
 		return "", err
 	}
 	var buf lineBuf
+	var onMu sync.Mutex
+	safeOnLine := func(line string) {
+		if onLine == nil {
+			return
+		}
+		onMu.Lock()
+		onLine(line)
+		onMu.Unlock()
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		readProgress(stdout, onLine, &buf)
+		readProgress(stdout, safeOnLine, &buf)
 	}()
 	go func() {
 		defer wg.Done()
-		readProgress(stderr, onLine, &buf)
+		readProgress(stderr, safeOnLine, &buf)
 	}()
 	wg.Wait()
 	err = cmd.Wait()
