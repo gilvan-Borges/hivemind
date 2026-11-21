@@ -90,7 +90,8 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
 
   out.push({ id: "jev", label: "Jev (Auto)" });
   if (agyProfiles.length > 0) {
-    out.push({ id: "agy", label: `Antigravity (Pool Auto: Conta 1 → ${agyProfiles.length + 1})${agyCount}` });
+    const agyRange = agyProfiles.length > 1 ? `Pool Auto: Conta 1 → ${agyProfiles.length}` : "Conta 1";
+    out.push({ id: "agy", label: `Antigravity (${agyRange})${agyCount}` });
     agyProfiles.forEach((p, idx) => {
       out.push({ id: `agy@${p.id}`, label: `Antigravity · Conta ${idx + 1} (${p.name})` });
     });
@@ -110,7 +111,8 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
     { id: "openai", label: "OpenAI / Grok" },
   );
   if (orProfiles.length > 0) {
-    out.push({ id: "openrouter", label: `OpenRouter (Pool Auto: Conta 1 → ${orProfiles.length})` });
+    const orRange = orProfiles.length > 1 ? `Pool Auto: Conta 1 → ${orProfiles.length}` : "Conta 1";
+    out.push({ id: "openrouter", label: `OpenRouter (${orRange})` });
     orProfiles.forEach((p, idx) => {
       out.push({ id: `openrouter@${p.id}`, label: `OpenRouter · Conta ${idx + 1} (${p.name})` });
     });
@@ -142,8 +144,8 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
       const pinnedProf = accountId ? agyProfiles.find((p) => p.id.toLowerCase() === accountId.toLowerCase()) : undefined;
       const poolHint = pinnedProf
         ? ` (${pinnedProf.name} → reserva nas demais)`
-        : agyProfiles.length > 0
-          ? ` — Pool (Conta 1 → ${agyProfiles.length + 1} por modelo)`
+        : agyProfiles.length > 1
+          ? ` — Pool (Conta 1 → ${agyProfiles.length} por modelo)`
           : "";
       const baseModels = state.models.length > 0
         ? state.models.map((m) => ({ slug: m.slug, value: `agy${accPref}:${m.slug}`, label: `${m.slug}${poolHint}` }))

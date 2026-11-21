@@ -146,4 +146,26 @@ describe("seletor de provedor Jev", () => {
     state.providerHealth = [];
     state.providersScan = null;
   });
+
+  it("exibe contagem exata de contas no Pool Auto do Antigravity (sem +1 fantasma)", () => {
+    const prevOverview = state.profilesOverview;
+    state.profilesOverview = {
+      defaultProvider: "agy",
+      profiles: Array.from({ length: 5 }, (_, i) => ({
+        id: `agy-${i + 1}`,
+        name: `conta${i + 1}@gmail.com`,
+        provider: "agy",
+        authMode: "vault",
+        ready: true,
+        isDefault: i === 0,
+      })),
+    } as any;
+    const agyItem = getProviderList().find((p) => p.id === "agy");
+    expect(agyItem?.label).toContain("Conta 1 → 5");
+    expect(agyItem?.label).not.toContain("1 → 6");
+    const models = getModelsForProvider("agy");
+    expect(models[0]?.label).toContain("Conta 1 → 5 por modelo");
+    expect(models[0]?.label).not.toContain("1 → 6");
+    state.profilesOverview = prevOverview;
+  });
 });
