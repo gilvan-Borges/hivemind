@@ -12,6 +12,8 @@ import (
 // SupportedStoredKeyNames lists the API key/setting names the IDE can persist
 // outside environment variables (saved in the user config dir, never in the repo).
 var SupportedStoredKeyNames = []string{
+	"TYPESAFE_API_KEY",
+	"TYPESAFE_BASE_URL",
 	"OPENCODE_API_KEY",
 	"OPENCODE_BASE_URL",
 	"CURSOR_API_KEY",

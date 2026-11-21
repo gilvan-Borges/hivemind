@@ -55,6 +55,7 @@ type providerScanDeps struct {
 	probeOpenRouter func(context.Context) ([]OpenRouterModel, error)
 	probeORAuth     func(context.Context) error
 	probeCursor     func(context.Context) ([]AgyModel, CursorStatus, error)
+	probeTypeSafe   func(context.Context) ([]string, error)
 }
 
 func defaultProviderScanDeps() providerScanDeps {
@@ -67,6 +68,7 @@ func defaultProviderScanDeps() providerScanDeps {
 		probeOpenRouter: OpenRouterModels,
 		probeORAuth:     ProbeOpenRouterAuth,
 		probeCursor:     ListCursorModels,
+		probeTypeSafe:   ProbeTypeSafeJev,
 	}
 }
 
@@ -104,11 +106,18 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 		orChecked   bool
 		curModels   []AgyModel
 		curSt       CursorStatus
+		tsModels    []string
+		tsErr       error
+		tsChecked   bool
 	)
 
 	hasORCred := strings.TrimSpace(deps.getenv("OPENROUTER_API_KEY")) != "" ||
 		stored["OPENROUTER_API_KEY"] != "" ||
 		hasReadyProfile(profilesByProv["openrouter"])
+
+	hasTSCred := strings.TrimSpace(deps.getenv("TYPESAFE_API_KEY")) != "" ||
+		stored["TYPESAFE_API_KEY"] != "" ||
+		hasReadyProfile(profilesByProv["typesafe"])
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -143,9 +152,20 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 			}
 		}()
 	}
+	if hasTSCred && deps.probeTypeSafe != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			tsChecked = true
+			tsModels, tsErr = deps.probeTypeSafe(pCtx)
+		}()
+	}
 	wg.Wait()
 
 	items := []ProviderScanItem{
+		buildTypeSafeScanItem(tsChecked, tsErr, tsModels, profilesByProv["typesafe"], stored, deps.getenv),
 		buildAgyScanItem(agySt, agyModels, profilesByProv["agy"], overview.Resolved["agy"]),
 		buildOpenCodeScanItem(ocSt, ocGoModels, ocZenModels, profilesByProv["opencode"], stored, deps.getenv),
 		buildOpenRouterScanItem(orChecked, orAuthErr, orModels, profilesByProv["openrouter"], stored, deps.getenv),
@@ -391,6 +411,56 @@ func buildOpenRouterScanItem(checked bool, authErr error, models []OpenRouterMod
 	}
 }
 
+func buildTypeSafeScanItem(checked bool, probeErr error, models []string, profiles []ProviderProfileSummary, stored map[string]string, getenv func(string) string) ProviderScanItem {
+	accounts := collectPoolAccounts(profiles, "TYPESAFE_API_KEY")
+	if envKey := strings.TrimSpace(getenv("TYPESAFE_API_KEY")); envKey != "" {
+		accounts = append(accounts, ProviderScanAccount{
+			Name:       "Variável TYPESAFE_API_KEY",
+			Source:     "env",
+			Active:     len(profiles) == 0,
+			Ready:      true,
+			MaskedHint: MaskKey(envKey),
+		})
+	} else if stored["TYPESAFE_API_KEY"] != "" {
+		accounts = append(accounts, ProviderScanAccount{
+			Name:       "Chave global TypeSafe AI",
+			Source:     "global",
+			Active:     len(profiles) == 0,
+			Ready:      true,
+			MaskedHint: stored["TYPESAFE_API_KEY"],
+		})
+	}
+
+	found := len(accounts) > 0
+	connected := found && (!checked || probeErr == nil)
+	statusLabel := "Desconectado"
+	detail := "Sem token TypeSafe AI (console.typesafe.ai/keys) — Jev usa OpenRouter/heurística."
+	if connected {
+		statusLabel = "Conectado"
+		if len(models) > 0 {
+			detail = fmt.Sprintf("Motor oficial Jev (System One) ativo · %d modelo(s)", len(models))
+		} else {
+			detail = "Token TypeSafe AI pronto (decisões Jev desacopladas do OpenRouter)"
+		}
+	} else if found && probeErr != nil {
+		statusLabel = "Parcial"
+		detail = fmt.Sprintf("Token encontrado, mas TypeSafe AI falhou: %s", sanitizeScanError(probeErr))
+	}
+
+	return ProviderScanItem{
+		ID:           "typesafe",
+		Name:         "TypeSafe AI (Jev Oficial)",
+		Found:        found,
+		Connected:    connected,
+		StatusLabel:  statusLabel,
+		Source:       summarizeSources(accounts),
+		Detail:       detail,
+		ModelCount:   len(models),
+		ModelsSample: capSlice(models, 20),
+		Accounts:     accounts,
+	}
+}
+
 func buildAPIKeyProviderScanItem(id, name string, envKeys []string, profiles []ProviderProfileSummary, stored map[string]string, getenv func(string) string) ProviderScanItem {
 	primaryKey := envKeys[0]
 	accounts := collectPoolAccounts(profiles, primaryKey)
@@ -608,7 +678,7 @@ func sanitizeScanError(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	for _, tok := range []string{"sk-or-v1-", "sk-ant-", "sk-", "AIza", "crsr_", "oc_"} {
+	for _, tok := range []string{"sk-or-v1-", "sk-ant-", "sk-", "AIza", "crsr_", "oc_", "ts_"} {
 		if idx := strings.Index(msg, tok); idx >= 0 {
 			msg = msg[:idx] + "[chave ocultada]"
 		}

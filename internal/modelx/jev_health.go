@@ -56,6 +56,7 @@ func JevCredentialFingerprints() map[string]string {
 	agyBin, _ := LookAgy()
 	curBin, _ := LookCursor()
 	return map[string]string{
+		"typesafe":         hashVal(resolveEnvForContext(bg, "typesafe", "TYPESAFE_API_KEY"), resolveEnvForContext(bg, "typesafe", "TYPESAFE_BASE_URL")),
 		"agy":              hashVal(agyBin),
 		"cursor":           hashVal(curBin, resolveEnvForContext(bg, "cursor", "CURSOR_API_KEY")),
 		"opencode":         hashVal(ocKey, ocBase),
@@ -165,6 +166,10 @@ func ProbeProviderRecovery(ctx context.Context, hs *jev.HealthStore, provider st
 		err := ProbeOpenRouterAuth(ctx)
 		hs.UpdateQuotaProbe("openrouter", -1, time.Time{}, err)
 
+	case "typesafe":
+		_, err := ProbeTypeSafeJev(ctx)
+		hs.UpdateQuotaProbe("typesafe", -1, time.Time{}, err)
+
 	case "cursor":
 		st := ProbeCursor()
 		if !st.Found || !st.HasKey {
@@ -196,6 +201,9 @@ func ProbeAllProvidersHealth(ctx context.Context, hs *jev.HealthStore, policy je
 	}
 	if creds["opencode"] {
 		targets["opencode"] = true
+	}
+	if creds["typesafe"] {
+		targets["typesafe"] = true
 	}
 
 	var wg sync.WaitGroup

@@ -299,6 +299,10 @@ func weightsForTask(policy Policy, task Task) Weights {
 }
 
 func isOpenRouterReserveLocked(policy Policy, health HealthSnapshot) bool {
+	if health.TypeSafeDecisionReady {
+		// Jev decision engine runs on TypeSafe AI; OpenRouter no longer needs a $1.00 reserve.
+		return false
+	}
 	if !health.OpenRouterBalanceKnown {
 		return false
 	}

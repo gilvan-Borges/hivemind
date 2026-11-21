@@ -18,6 +18,7 @@ func JevCredentialPresence() map[string]bool {
 	cursorKey := strings.TrimSpace(resolveEnvForContext(bg, "cursor", "CURSOR_API_KEY")) != ""
 
 	return map[string]bool{
+		"typesafe":         strings.TrimSpace(resolveEnvForContext(bg, "typesafe", "TYPESAFE_API_KEY")) != "",
 		"agy":              AgyAvailable(),
 		"cursor":           cursorErr == nil && cursorKey,
 		"opencode":         strings.TrimSpace(ocKey) != "",

@@ -535,6 +535,7 @@ export function renderModalLayer() {
 
     const provLabels: Record<string, string> = {
       agy: "Antigravity (Google)",
+      typesafe: "TypeSafe AI (Jev Oficial)",
       openrouter: "OpenRouter",
       opencode: "OpenCode Go & Zen",
       anthropic: "Anthropic (Claude)",
@@ -543,6 +544,7 @@ export function renderModalLayer() {
       cursor: "Cursor CLI",
     };
     const nonAgyProvs: Record<string, string> = {
+      typesafe: "TypeSafe AI (Jev Oficial)",
       openrouter: "OpenRouter",
       opencode: "OpenCode Go & Zen",
       anthropic: "Anthropic (Claude)",
@@ -551,6 +553,7 @@ export function renderModalLayer() {
       cursor: "Cursor CLI",
     };
     const provKeys: Record<string, Array<{ key: string; label: string; placeholder: string; secret?: boolean }>> = {
+      typesafe: [{ key: "TYPESAFE_API_KEY", label: "TypeSafe AI API Key (console.typesafe.ai/keys)", placeholder: "ts_…", secret: true }],
       openrouter: [{ key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", placeholder: "sk-or-v1-…", secret: true }],
       opencode: [{ key: "OPENCODE_API_KEY", label: "OpenCode Token", placeholder: "oc_…", secret: true }],
       anthropic: [{ key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", placeholder: "sk-ant-…", secret: true }],
@@ -737,9 +740,12 @@ export function renderModalLayer() {
               <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
                 Chaves globais padrão salvas fora do repositório (<code>api-keys.json</code> e credenciais OpenCode). Campos deixados em branco mantêm o valor já salvo; use o botão de lixeira para remover uma chave específica.
               </p>
+              ${state.apiKeysStatus?.["env_TYPESAFE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>TYPESAFE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
               ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
               ${state.apiKeysStatus?.["env_OPENCODE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENCODE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
               <div class="form-grid">
+                ${field("ak-TYPESAFE_API_KEY", "TYPESAFE_API_KEY", "TypeSafe AI Key (Jev · console.typesafe.ai):", "ts_… (TYPESAFE_API_KEY)", saved["TYPESAFE_API_KEY"])}
+                ${field("ak-TYPESAFE_BASE_URL", "TYPESAFE_BASE_URL", "TypeSafe Base URL:", "https://api.typesafe.ai", saved["TYPESAFE_BASE_URL"])}
                 ${field("ak-OPENCODE_API_KEY", "OPENCODE_API_KEY", "OpenCode Go & Zen Token:", "oc_… (OPENCODE_API_KEY)", saved["OPENCODE_API_KEY"])}
                 ${field("ak-OPENCODE_BASE_URL", "OPENCODE_BASE_URL", "OpenCode Base URL:", "https://opencode.ai/zen/v1", saved["OPENCODE_BASE_URL"])}
                 ${field("ak-OPENROUTER_API_KEY", "OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
@@ -1095,7 +1101,7 @@ export function renderModalLayer() {
       const backend = api();
       if (!backend?.SaveAPIKeys) return;
       const entries: Record<string, string> = {};
-      for (const name of ["OPENCODE_API_KEY", "OPENCODE_BASE_URL", "CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
+      for (const name of ["TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
         const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
         const val = el?.value?.trim() || "";
         if (val !== "") {

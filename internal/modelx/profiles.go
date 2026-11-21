@@ -156,6 +156,8 @@ func NormalizeProfileProvider(provider string) string {
 		return "agy"
 	case "opencode", "opencode-go", "opencode_go", "opencode-zen", "zen":
 		return "opencode"
+	case "typesafe", "typesafe-ai", "typesafe_ai":
+		return "typesafe"
 	case "gemini", "vertex":
 		return "gemini"
 	case "openai", "openai-responses":
@@ -450,7 +452,7 @@ func ListProfilesOverview(workspace string) ProfilesOverview {
 
 	wsKey := orgx.NormalizeWorkspaceKey(ws)
 	ctx := WithWorkspace(context.Background(), ws)
-	providers := []string{"agy", "cursor", "openrouter", "openai", "anthropic", "gemini", "opencode"}
+	providers := []string{"agy", "typesafe", "cursor", "openrouter", "openai", "anthropic", "gemini", "opencode"}
 	resolved := make(map[string]ResolvedProviderInfo, len(providers))
 	for _, prov := range providers {
 		prof, mode, rule := ResolveProfile(ctx, prov)
@@ -573,6 +575,11 @@ func evaluateProfileReadiness(p ProviderProfile) (bool, string) {
 			return true, "Token OpenCode dedicado configurado"
 		}
 		return false, "Informe OPENCODE_API_KEY"
+	case "typesafe":
+		if strings.TrimSpace(p.Env["TYPESAFE_API_KEY"]) != "" {
+			return true, "Token TypeSafe AI (Jev Oficial) configurado"
+		}
+		return false, "Informe TYPESAFE_API_KEY (console.typesafe.ai/keys)"
 	default:
 		return len(p.Env) > 0, ""
 	}

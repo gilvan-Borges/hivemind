@@ -141,9 +141,12 @@ type HealthSnapshot struct {
 	// OpenRouterBalanceUSD holds the last known remaining credit balance in USD on OpenRouter
 	// when OpenRouterBalanceKnown is true. When <= OpenRouterMinReserveUSD ($1.00), Jev stops
 	// selecting OpenRouter to preserve the $1.00 operational reserve and routes to other
-	// active providers (agy, cursor, opencode, gemini).
+	// active providers (agy, cursor, opencode, gemini) UNLESS TypeSafeDecisionReady is true.
 	OpenRouterBalanceUSD   float64
 	OpenRouterBalanceKnown bool
+	// TypeSafeDecisionReady is true when the official TypeSafe AI Jev API (TYPESAFE_API_KEY)
+	// is configured, completely separating Jev's decision engine from OpenRouter credits.
+	TypeSafeDecisionReady bool
 }
 
 // AgentPin represents an explicit model pin from .hivemind/team.yaml.

@@ -254,6 +254,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 		if creds["openrouter"] {
 			snap.OpenRouterBalanceUSD, snap.OpenRouterBalanceKnown = modelx.GetOpenRouterBalanceUSD(ctx)
 		}
+		snap.TypeSafeDecisionReady = creds["typesafe"]
 
 		// Failover bypasses the failed team.yaml pin so another healthy provider can take over.
 		choice, ref := jev.Score(task, cat, w.policy, snap, jev.AgentPin{}, w.repoPol)

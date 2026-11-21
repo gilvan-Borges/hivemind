@@ -325,6 +325,19 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 	if rescueChoice.Provider != "openrouter" {
 		t.Fatalf("expected openrouter rescue choice, got %+v", rescueChoice)
 	}
+
+	// When TypeSafe AI (Jev official API) handles Jev decisions, OpenRouter's $1.00 reserve lock
+	// MUST be disabled so 100% of OpenRouter credits remain usable for coding/agent models.
+	tsUnlockedHealth := HealthSnapshot{
+		Credentials:            map[string]bool{"openrouter": true, "typesafe": true},
+		OpenRouterBalanceUSD:   0.85,
+		OpenRouterBalanceKnown: true,
+		TypeSafeDecisionReady:  true,
+	}
+	unlockedChoice, unlockedRef := Score(medTask, cat, pol, tsUnlockedHealth, AgentPin{Provider: "openrouter", Model: "openrouter:auto"}, RepoPolicy{})
+	if unlockedRef.Code != "" || unlockedChoice.Provider != "openrouter" {
+		t.Fatalf("expected OpenRouter unlocked below $1.00 when TypeSafeDecisionReady=true, got choice=%+v ref=%+v", unlockedChoice, unlockedRef)
+	}
 }
 
 func TestIsSafeCatalogIDRejectsBannerColons(t *testing.T) {

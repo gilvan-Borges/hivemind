@@ -50,11 +50,19 @@ func jevRouteHintFrom(ctx context.Context) (jevRouteHint, bool) {
 	return h, ok
 }
 
-func classifyObjective(ctx context.Context, build func(context.Context, string, string) (model.LLM, error), injected func(context.Context, string) (string, error), objective string) (string, error) {
+func classifyObjective(ctx context.Context, build func(context.Context, string, string) (model.LLM, error), injected func(context.Context, string) (string, error), objective string, useTypeSafe bool) (string, error) {
 	if injected != nil {
 		return injected(ctx, objective)
 	}
-	if build == nil || strings.TrimSpace(objective) == "" {
+	if strings.TrimSpace(objective) == "" {
+		return "", nil
+	}
+	if useTypeSafe {
+		if raw, err := modelx.ClassifyWithTypeSafeJev(ctx, objective); err == nil && strings.TrimSpace(raw) != "" {
+			return raw, nil
+		}
+	}
+	if build == nil {
 		return "", nil
 	}
 	llm, err := build(ctx, "opencode", "deepseek-v4.1-flash")
@@ -295,8 +303,10 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			NeedsTools:   hint.NeedsTools || role == team.RoleDeveloper || role == team.RoleQA,
 		}
 		class, comp := jev.Classify(classIn)
-		if policy.ClassifyEnabled && jev.LowConfidence(classIn) {
-			raw, err := classifyObjective(ctx, buildModel, opts.Classify, hint.Objective)
+		typeSafeReady := credsFn()["typesafe"]
+		shouldUseClassifier := jev.LowConfidence(classIn) || (typeSafeReady && (strings.Contains(strings.ToLower(hint.Step), "triage") || strings.Contains(strings.ToLower(hint.Step), "plan")) && strings.TrimSpace(hint.Objective) != "")
+		if policy.ClassifyEnabled && shouldUseClassifier {
+			raw, err := classifyObjective(ctx, buildModel, opts.Classify, hint.Objective, typeSafeReady)
 			if err == nil {
 				if nextClass, nextComp, ok := jev.ParseClassifier(raw); ok {
 					class, comp = nextClass, nextComp
@@ -370,6 +380,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					}
 					snap.OpenRouterBalanceUSD = orBal
 					snap.OpenRouterBalanceKnown = orKnown
+					snap.TypeSafeDecisionReady = creds["typesafe"]
 					return snap
 				}
 			}
