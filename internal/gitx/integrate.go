@@ -155,6 +155,7 @@ func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targ
 			return "", "", err
 		}
 	}
+	ensureNestedExcludes(ctx, g, repo)
 	_, _ = g.Run(ctx, wt, "clean", "-fd")
 	return wt, branch, nil
 }
@@ -289,9 +290,18 @@ func UpdateIntegrationRef(ctx context.Context, g Git, repo, deliveryWT string) {
 	}
 }
 
-// RemoveWorktree removes a single worktree path (and prunes git worktree metadata)
-// plus optionally deletes its draft branch when deleteBranch is non-empty.
+// RemoveWorktree removes a single worktree path (tearing down any nested repo
+// worktrees inside it first, pruning git worktree metadata, and optionally
+// deleting its draft branch when deleteBranch is non-empty).
 func RemoveWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch string) {
+	if strings.TrimSpace(repo) == "" || strings.TrimSpace(wtPath) == "" || filepath.Clean(wtPath) == filepath.Clean(repo) {
+		return
+	}
+	removeNestedWorktreesInside(ctx, g, repo, wtPath, deleteBranch)
+	removeSingleWorktree(ctx, g, repo, wtPath, deleteBranch)
+}
+
+func removeSingleWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch string) {
 	if strings.TrimSpace(repo) == "" || strings.TrimSpace(wtPath) == "" || filepath.Clean(wtPath) == filepath.Clean(repo) {
 		return
 	}

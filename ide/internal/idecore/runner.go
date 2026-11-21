@@ -934,6 +934,16 @@ func (m *SessionManager) RunTurnWithOptions(
 			syncBranch = res.IntegrationBranch
 		}
 		n, syncErr := SyncWorktreeToWorkspace(ctx, workspaceDir, res.WorktreeDir, syncBranch)
+		for _, nd := range res.NestedDeliveries {
+			if syncErr != nil {
+				break
+			}
+			sn, sErr := SyncWorktreeToWorkspace(ctx, nd.RepoDir, nd.WorktreeDir, nd.Branch)
+			n += sn
+			if sErr != nil {
+				syncErr = sErr
+			}
+		}
 		if syncErr == nil {
 			// Once the delivery worktree is synced (or already pushed), clean up temporary worktrees.
 			if len(res.PullRequests) > 0 {
@@ -944,6 +954,9 @@ func (m *SessionManager) RunTurnWithOptions(
 				gitx.RemoveWorktree(ctx, g, workspaceDir, wtToRemove, "")
 			}
 			gitx.CleanupMergedWorktrees(ctx, g, workspaceDir, cfg.Settings.BaseBranch)
+			for _, nd := range res.NestedDeliveries {
+				gitx.CleanupMergedWorktrees(ctx, g, nd.RepoDir, nd.BaseBranch)
+			}
 		}
 		if m.Emit != nil {
 			switch {

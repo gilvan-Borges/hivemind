@@ -110,6 +110,7 @@ type Runner struct {
 	integration       string
 	deliveryRoot      string
 	deliveryBranch    string
+	nestedWorktrees   []gitx.NestedWorktree
 	issueKey          string
 	objectiveText     string
 	reviewRequested   bool
@@ -242,6 +243,17 @@ type Request struct {
 	Attachments []Attachment
 }
 
+// NestedDelivery reports worktree, branch, and optional PR metadata for a
+// nested independent Git repository mounted inside the conversation worktree.
+type NestedDelivery struct {
+	RelPath     string               `json:"relPath"`
+	RepoDir     string               `json:"repoDir"`
+	WorktreeDir string               `json:"worktreeDir"`
+	Branch      string               `json:"branch"`
+	BaseBranch  string               `json:"baseBranch,omitempty"`
+	PullRequest *githubx.PullRequest `json:"pullRequest,omitempty"`
+}
+
 // Result is what the CLI prints after the team finishes.
 type Result struct {
 	SessionID         string
@@ -251,9 +263,10 @@ type Result struct {
 	DeliveryBranch    string `json:"deliveryBranch,omitempty"`
 	WorktreeDir       string `json:"worktreeDir,omitempty"`
 	PullRequests      []githubx.PullRequest
-	InputTokens       int64 `json:"inputTokens"`
-	OutputTokens      int64 `json:"outputTokens"`
-	TotalTokens       int64 `json:"totalTokens"`
+	NestedDeliveries  []NestedDelivery `json:"nestedDeliveries,omitempty"`
+	InputTokens       int64            `json:"inputTokens"`
+	OutputTokens      int64            `json:"outputTokens"`
+	TotalTokens       int64            `json:"totalTokens"`
 	// PendingQA reports that the run finished without an explicit QA approval, so
 	// no commit/push/PR was made on the delivery worktree (see finish).
 	PendingQA bool `json:"pendingQa,omitempty"`
@@ -265,6 +278,7 @@ type devEnv struct {
 	Root       string
 	Branch     string
 	OwnedPaths []string
+	Nested     []gitx.NestedWorktree
 }
 
 // Run builds the ADK pipeline and streams events until it finishes.
@@ -337,6 +351,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.integration = ""
 	r.deliveryRoot = ""
 	r.deliveryBranch = ""
+	r.nestedWorktrees = nil
 	if strings.TrimSpace(req.LaneID) != "" {
 		r.LaneID = strings.TrimSpace(req.LaneID)
 	}
@@ -720,8 +735,20 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 		r.integration = delivWT
 		r.deliveryRoot = delivWT
 		r.deliveryBranch = effBranch
+		if nested, nErr := gitx.PrepareNestedWorktrees(ctx, r.Git, r.Workspace, delivWT, effBranch, preserveExisting); nErr != nil {
+			fmt.Fprintf(r.Err, "aviso: worktree de sub-repositório: %v\n", nErr)
+		} else {
+			r.nestedWorktrees = nested
+		}
 	} else {
 		r.deliveryRoot = r.Workspace
+		for _, nr := range gitx.DiscoverNestedRepos(ctx, r.Git, r.Workspace) {
+			r.nestedWorktrees = append(r.nestedWorktrees, gitx.NestedWorktree{
+				NestedRepo:  nr,
+				WorktreeDir: nr.RepoDir,
+				Branch:      nr.BaseBranch,
+			})
+		}
 	}
 
 	// Single conversation worktree model (Anthropic pattern):
@@ -751,6 +778,7 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 		} else if len(agents) > 1 && shareConversationWT {
 			r.sharedBoard.RegisterOwner(adkName, nil)
 		}
+		var devNested []gitx.NestedWorktree
 		if repo && !shareConversationWT {
 			branch = names.Branch(key, a.Name, objective)
 			wt, err := gitx.AlignDeveloperWorktree(ctx, r.Git, r.Workspace, adkName, branch, r.deliveryBranch)
@@ -758,8 +786,13 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 				return nil, fmt.Errorf("worktree de %s: %w", a.Name, err)
 			}
 			root = wt
+			if aligned, aErr := gitx.AlignNestedWorktrees(ctx, r.Git, wt, branch, r.nestedWorktrees); aErr == nil {
+				devNested = aligned
+			}
+		} else {
+			devNested = r.nestedWorktrees
 		}
-		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch, OwnedPaths: owned})
+		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch, OwnedPaths: owned, Nested: devNested})
 		devNames = append(devNames, a.Name)
 	}
 	if r.OnEvent != nil && len(devNames) > 0 {
@@ -854,6 +887,9 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 			scopeDesc = "worktree isolada"
 		}
 		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+		if hint := r.nestedWorktreesPromptHint(); hint != "" {
+			extra += "\n" + hint
+		}
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {
@@ -902,6 +938,9 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	qaExtra := "Worktree da conversa: " + qaRoot
 	if !r.sharedDevWorktree {
 		qaExtra = "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
+	}
+	if hint := r.nestedWorktreesPromptHint(); hint != "" {
+		qaExtra += "\n" + hint
 	}
 	if qaSkillGuide := r.guidanceForRole(team.SkillTargetQA, true); qaSkillGuide != "" {
 		qaExtra += qaSkillGuide
@@ -1186,6 +1225,40 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	return llmagent.New(cfg)
 }
 
+func (r *Runner) nestedWorktreesPromptHint() string {
+	if len(r.nestedWorktrees) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(r.nestedWorktrees))
+	for _, nw := range r.nestedWorktrees {
+		parts = append(parts, fmt.Sprintf("%s (branch %s)", nw.RelPath, nw.Branch))
+	}
+	return "Sub-repositórios Git independentes montados nesta worktree: " + strings.Join(parts, ", ") + ". Leia/edite pelos caminhos relativos normalmente; commit, push e PR por repositório serão executados após aprovação do QA."
+}
+
+func (r *Runner) compositeStatus(ctx context.Context) (string, error) {
+	st, err := r.Git.Status(ctx, r.deliveryRoot)
+	if err != nil {
+		return "", err
+	}
+	if len(r.nestedWorktrees) == 0 {
+		return st, nil
+	}
+	var b strings.Builder
+	b.WriteString(st)
+	for _, nw := range r.nestedWorktrees {
+		subSt, subErr := r.Git.Status(ctx, nw.WorktreeDir)
+		if subErr != nil || strings.TrimSpace(subSt) == "" {
+			continue
+		}
+		b.WriteString("\n[")
+		b.WriteString(nw.RelPath)
+		b.WriteString("]\n")
+		b.WriteString(subSt)
+	}
+	return b.String(), nil
+}
+
 // recordQAStall conta reprovações consecutivas do QA sem nenhuma alteração na
 // entrega desde a reprovação anterior. Na terceira reprovação com a entrega
 // imutável, devolve a mensagem que encerra o loop Dev→QA (o Chefe de fecho
@@ -1196,7 +1269,7 @@ func (r *Runner) recordQAStall() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	status, err := r.Git.Status(ctx, r.deliveryRoot)
+	status, err := r.compositeStatus(ctx)
 	if err != nil {
 		return ""
 	}
@@ -1226,7 +1299,11 @@ func (r *Runner) newIntegrateAgent(devs []devEnv) (agent.Agent, error) {
 						devRoots = append(devRoots, dev.Root)
 					}
 				}
-				synced, err := gitx.SyncUncommittedToDelivery(ctx, r.Git, devRoots, r.deliveryRoot)
+				var nestedRels []string
+				for _, nw := range r.nestedWorktrees {
+					nestedRels = append(nestedRels, nw.RelPath)
+				}
+				synced, err := gitx.SyncCompositeUncommittedToDelivery(ctx, r.Git, devRoots, r.deliveryRoot, nestedRels)
 				text := "Nada novo para consolidar."
 				delta := map[string]any{"integrate_status": ""}
 				if err != nil {
@@ -1518,6 +1595,16 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		}
 	}
 
+	for _, nw := range r.nestedWorktrees {
+		result.NestedDeliveries = append(result.NestedDeliveries, NestedDelivery{
+			RelPath:     nw.RelPath,
+			RepoDir:     nw.RepoDir,
+			WorktreeDir: nw.WorktreeDir,
+			Branch:      nw.Branch,
+			BaseBranch:  nw.BaseBranch,
+		})
+	}
+
 	// Governance gate: a delivery is only committed/pushed/opened as PR after an
 	// explicit qa_approve from the QA agent. Without it, the code stays in the
 	// delivery worktree and the run is reported as pending QA. This is what makes
@@ -1534,18 +1621,24 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 
 	var notes []string
 	pushedToRemote := false
+	rootCommitted := false
 	if (r.Project.Settings.AutoCommit || r.Project.Settings.AutoPR || r.prNumber > 0) && r.Git.IsRepo(ctx, commitRoot) {
-		if _, err := r.Git.CommitAll(ctx, commitRoot, names.CommitMessage(key, objective)); err != nil {
+		committed, err := r.Git.CommitAll(ctx, commitRoot, names.CommitMessage(key, objective))
+		if err != nil {
 			return fmt.Errorf("commit do Chefe/Arquiteto em %s: %w", commitBranch, err)
 		}
+		rootCommitted = committed
 		gitx.UpdateIntegrationRef(ctx, r.Git, r.Workspace, commitRoot)
 	}
 
 	hasOrigin := false
-	if _, remErr := r.Git.RemoteURL(ctx, r.Workspace); remErr == nil {
+	rootRemoteURL := ""
+	if remURL, remErr := r.Git.RemoteURL(ctx, r.Workspace); remErr == nil {
 		hasOrigin = true
+		rootRemoteURL = strings.TrimSpace(remURL)
 	}
 
+	rootShouldDeliver := r.prNumber > 0 || len(r.nestedWorktrees) == 0 || rootCommitted || gitx.HasCommitsAhead(ctx, r.Git, r.Workspace, commitBranch, base)
 	if r.prNumber > 0 && r.GitHub != nil && r.GitHub.Enabled() {
 		if hasOrigin && commitBranch != "" {
 			if err := r.Git.Push(ctx, commitRoot, "origin", commitBranch); err != nil {
@@ -1556,7 +1649,7 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		if len(r.prReviewers) > 0 {
 			_ = r.GitHub.RequestReviewers(ctx, r.prNumber, r.prReviewers)
 		}
-	} else if r.Project.Settings.AutoPR && commitBranch != "" {
+	} else if r.Project.Settings.AutoPR && commitBranch != "" && rootShouldDeliver {
 		if !hasOrigin || r.GitHub == nil || !r.GitHub.Enabled() {
 			fmt.Fprintf(r.Err, "aviso: auto_pr está ativo, mas remote origin / GitHub não está configurado; alterações commitadas na worktree isolada (%s)\n", commitBranch)
 		} else {
@@ -1589,6 +1682,61 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		}
 	}
 
+	for i, nw := range r.nestedWorktrees {
+		if !r.Git.IsRepo(ctx, nw.WorktreeDir) {
+			continue
+		}
+		subCommitted := false
+		if r.Project.Settings.AutoCommit || r.Project.Settings.AutoPR || r.prNumber > 0 {
+			c, err := r.Git.CommitAll(ctx, nw.WorktreeDir, names.CommitMessage(key, objective))
+			if err != nil {
+				return fmt.Errorf("commit em sub-repositório %s (%s): %w", nw.RelPath, nw.Branch, err)
+			}
+			subCommitted = c
+		}
+		subBase := strings.TrimSpace(nw.BaseBranch)
+		if subBase == "" {
+			subBase = "main"
+		}
+		subDirtyOrAhead := subCommitted || gitx.HasCommitsAhead(ctx, r.Git, nw.RepoDir, nw.Branch, subBase)
+		if r.Project.Settings.AutoPR && nw.Branch != "" && subDirtyOrAhead {
+			subRem, remErr := r.Git.RemoteURL(ctx, nw.RepoDir)
+			subClient := r.githubClientForNestedRepo(rootRemoteURL, strings.TrimSpace(subRem))
+			if remErr != nil || subClient == nil || !subClient.Enabled() {
+				fmt.Fprintf(r.Err, "aviso: auto_pr ativo em %s, mas remote origin / GitHub indisponível; alterações commitadas em (%s)\n", nw.RelPath, nw.Branch)
+			} else {
+				if err := r.Git.Push(ctx, nw.WorktreeDir, "origin", nw.Branch); err != nil {
+					return fmt.Errorf("push de %s (%s): %w", nw.RelPath, nw.Branch, err)
+				}
+				pushedToRemote = true
+				var pr githubx.PullRequest
+				if existing, _ := subClient.FindOpenPullRequestByHead(ctx, nw.Branch); existing != nil {
+					pr = *existing
+				} else {
+					body := fmt.Sprintf("Aberta pelo Chefe/Arquiteto HiveMind para o sub-repositório `%s`.\n\nSessão: %s\n", nw.RelPath, result.SessionID)
+					if key != "" {
+						body += "Issue: " + key + "\n"
+					}
+					createdPR, err := subClient.CreatePullRequest(ctx, githubx.CreatePR{
+						Title: fmt.Sprintf("[%s] %s", nw.RelPath, names.PRTitle(key, objective)),
+						Head:  nw.Branch,
+						Base:  subBase,
+						Body:  body,
+					})
+					if err != nil {
+						return fmt.Errorf("pull request de %s (%s): %w", nw.RelPath, nw.Branch, err)
+					}
+					pr = createdPR
+				}
+				prCopy := pr
+				result.NestedDeliveries[i].PullRequest = &prCopy
+				result.PullRequests = append(result.PullRequests, pr)
+				notes = append(notes, pr.URL)
+				fmt.Fprintf(r.Out, "Pull request (%s): %s\n", nw.RelPath, pr.URL)
+			}
+		}
+	}
+
 	// Clean up developer draft worktrees once consolidated & pushed to remote (or merged),
 	// and always prune any already-merged worktrees.
 	if pushedToRemote {
@@ -1599,6 +1747,9 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		}
 	}
 	gitx.CleanupMergedWorktrees(ctx, r.Git, r.Workspace, base)
+	for _, nw := range r.nestedWorktrees {
+		gitx.CleanupMergedWorktrees(ctx, r.Git, nw.RepoDir, nw.BaseBranch)
+	}
 
 	if key != "" && r.Jira != nil && r.Jira.Enabled() {
 		body := fmt.Sprintf("HiveMind concluiu a sessão %s.", result.SessionID)
@@ -2681,6 +2832,13 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
   • Tarefa grande em serviços/pastas independentes (ex.: backend Go vs frontend TS): divida em 2..%d itens em "dev_tasks" E preencha "owned_paths" com os prefixos exclusivos de cada dev (ex.: [["internal/relay/"], ["ide/frontend/"]]). Todos compartilham a mesma worktree da conversa com trava determinística de escrita e memória compartilhada via share_team_note.
   • Tarefa multi-etapa tocando o mesmo módulo/build: passe sequential=true (onda sequencial na mesma worktree, zero conflito de build).
 - CADA fatia deve caber em poucas edições: o dev tem orçamento rígido por rodada (%d chamadas e %d leituras/buscas antes da 1ª edição; estouro aborta a execução). Prefira fatiar objetivo e listar os caminhos exatos.`, maxDevs, maxDevs, maxDevs, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+	if nestedRepos := gitx.DiscoverNestedRepos(ctx, r.Git, r.Workspace); len(nestedRepos) > 0 {
+		rels := make([]string, 0, len(nestedRepos))
+		for _, nr := range nestedRepos {
+			rels = append(rels, nr.RelPath+" (branch "+nr.BaseBranch+")")
+		}
+		scaleGuidance += "\n- SUB-REPOSITÓRIOS GIT ANINHADOS: " + strings.Join(rels, ", ") + ". Ao delegar com delegate_to_squad, o HiveMind monta automaticamente a worktree de cada sub-repositório no mesmo caminho relativo dentro da worktree da conversa (use normalmente em owned_paths/dev_tasks; o commit/PR por repositório é tratado no fecho)."
+	}
 
 	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
@@ -2940,4 +3098,17 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 // writeHandoffDossier grava o pacote sanitizado. O markdown no worktree nasce 0600.
 func (r *Runner) writeHandoffDossier(sessionID string) {
 	r.sealHandoff(sessionID)
+}
+
+func (r *Runner) githubClientForNestedRepo(rootRemoteURL, subRemoteURL string) githubx.Client {
+	if r.GitHub == nil || !r.GitHub.Enabled() {
+		return nil
+	}
+	if subRemoteURL != "" && strings.EqualFold(rootRemoteURL, subRemoteURL) {
+		return r.GitHub
+	}
+	if owner, repo, ok := githubx.ParseRemote(subRemoteURL); ok {
+		return githubx.Detect(owner, repo)
+	}
+	return nil
 }
