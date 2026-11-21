@@ -844,7 +844,7 @@ func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []Model
 }
 
 func isSafeCatalogID(id string) bool {
-	if len(id) > 200 {
+	if len(id) > 200 || strings.HasSuffix(id, ":") {
 		return false
 	}
 	for _, r := range id {
@@ -927,6 +927,9 @@ func LoadCatalogFrom(path string) (Catalog, error) {
 	var cat Catalog
 	if err := json.Unmarshal(data, &cat); err != nil {
 		return Catalog{}, err
+	}
+	if len(cat.Entries) > 0 {
+		cat.Entries = sanitizeEntries("", cat.Entries, time.Now())
 	}
 	return cat, nil
 }

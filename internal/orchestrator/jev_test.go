@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 
@@ -217,6 +218,49 @@ func TestJevModelFactoryBuildErrorRedacted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "sk-secretvalue99999") {
 		t.Fatalf("secret leaked in returned error: %v", err)
+	}
+}
+
+func TestJevModelFactorySkipsBusyHalfOpenSlots(t *testing.T) {
+	pol := jev.DefaultPolicy()
+	tmp := t.TempDir()
+	catOnly := jev.NewCatalogStore(tmp+"/catalog2.json", nil)
+	catOnly.MergeSource("openrouter", []jev.ModelEntry{
+		{Provider: "openrouter", Model: "healthy-e", ContextLength: 128_000, PromptMicroUSD: 0.2, CompletionMicroUSD: 0.4, Quality: 0.70, Capabilities: jev.Capabilities{Tools: true}, DataClass: jev.DataClassHTTPAPI, Tier: jev.TierCheap},
+		{Provider: "openrouter", Model: "ho-1", ContextLength: 128_000, PromptMicroUSD: 0.1, CompletionMicroUSD: 0.1, Quality: 0.99, Capabilities: jev.Capabilities{Tools: true}, DataClass: jev.DataClassHTTPAPI, Tier: jev.TierCheap},
+		{Provider: "openrouter", Model: "ho-2", ContextLength: 128_000, PromptMicroUSD: 0.1, CompletionMicroUSD: 0.1, Quality: 0.98, Capabilities: jev.Capabilities{Tools: true}, DataClass: jev.DataClassHTTPAPI, Tier: jev.TierCheap},
+		{Provider: "openrouter", Model: "ho-3", ContextLength: 128_000, PromptMicroUSD: 0.1, CompletionMicroUSD: 0.1, Quality: 0.97, Capabilities: jev.Capabilities{Tools: true}, DataClass: jev.DataClassHTTPAPI, Tier: jev.TierCheap},
+		{Provider: "openrouter", Model: "ho-4", ContextLength: 128_000, PromptMicroUSD: 0.1, CompletionMicroUSD: 0.1, Quality: 0.96, Capabilities: jev.Capabilities{Tools: true}, DataClass: jev.DataClassHTTPAPI, Tier: jev.TierCheap},
+	})
+	var builtModel string
+	// First 4 calls hit half_open busy (simulated by build returning transient outage without consuming all attempts when >3? Wait: buildFails caps at 3!).
+	// Verify real HealthStore half_open contention: seed 4 models into half_open via outage, wait for Snapshot transition, claim their slots, then factory skips all 4!
+	hs2 := jev.NewHealthStore(tmp+"/health2.json", jev.CooldownConfig{Quota: "1ms", RateLimit: "1ms", Outage: "1ms"})
+	for _, m := range []string{"ho-1", "ho-2", "ho-3", "ho-4"} {
+		hs2.RecordFailure("openrouter", m, jev.ErrClassOutage, time.Time{})
+	}
+	time.Sleep(15 * time.Millisecond)
+	for _, m := range []string{"ho-1", "ho-2", "ho-3", "ho-4"} {
+		if !hs2.TryAcquireHalfOpen("openrouter", m) {
+			t.Fatalf("expected %s to acquire half-open probe slot", m)
+		}
+	}
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy:      &pol,
+		Catalog:     catOnly,
+		HealthStore: hs2,
+		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true} },
+		BuildModel: func(_ context.Context, prov, mod string) (model.LLM, error) {
+			builtModel = prov + "/" + mod
+			return &modelx.Scripted{}, nil
+		},
+	})
+	ag := team.Agent{Name: "qa", Role: team.RoleQA, Provider: "jev", Model: "auto"}
+	if _, err := factory(context.Background(), ag); err != nil {
+		t.Fatalf("expected factory to skip all 4 busy half_open models and pick healthy-e, got %v", err)
+	}
+	if builtModel != "openrouter/healthy-e" {
+		t.Fatalf("expected openrouter/healthy-e, got %q", builtModel)
 	}
 }
 

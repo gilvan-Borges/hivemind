@@ -308,6 +308,34 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 	if fallbackChoice.Provider != "agy" && fallbackChoice.Provider != "cursor" {
 		t.Fatalf("expected Jev to fall back to agy or cursor when OpenRouter <= $1.00, got %+v", fallbackChoice)
 	}
+
+	// Safety net: when agy/cursor/opencode are down and dailyUsd was exceeded, Jev MUST NOT
+	// stop the task when OpenRouter still has real credits above the reserve (e.g. $1.59).
+	exhaustedOthersHealth := HealthSnapshot{
+		Credentials:            map[string]bool{"openrouter": true, "agy": true, "cursor": false, "opencode": false},
+		Circuits:               map[string]ProviderHealth{"agy": {Circuit: CircuitOpen, Reason: "quota"}},
+		DailySpentMicroUSD:     map[string]int64{"openrouter": 1_200_000}, // > $1.00 dailyUsd
+		OpenRouterBalanceUSD:   1.59,
+		OpenRouterBalanceKnown: true,
+	}
+	rescueChoice, rescueRef := Score(medTask, cat, pol, exhaustedOthersHealth, AgentPin{}, RepoPolicy{})
+	if rescueRef.Code != "" {
+		t.Fatalf("expected Jev to use available $1.59 OpenRouter credits instead of failing, got %+v", rescueRef)
+	}
+	if rescueChoice.Provider != "openrouter" {
+		t.Fatalf("expected openrouter rescue choice, got %+v", rescueChoice)
+	}
+}
+
+func TestIsSafeCatalogIDRejectsBannerColons(t *testing.T) {
+	kept := sanitizeEntries("cursor", []ModelEntry{
+		{Provider: "cursor", Model: "auto"},
+		{Provider: "cursor", Model: "Tip:"},
+		{Provider: "cursor", Model: "claude-4-sonnet"},
+	}, time.Now())
+	if len(kept) != 2 {
+		t.Fatalf("expected Tip: dropped from cursor catalog, got %+v", kept)
+	}
 }
 
 func TestRouteRejectsNonCatalogIDAndAsyncRefresh(t *testing.T) {

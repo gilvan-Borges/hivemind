@@ -144,6 +144,8 @@ type Runner struct {
 	hasImages        bool
 	jevRepo          string
 	devBudgets       map[string]*devTurnBudget
+	resolvedChoiceMu sync.Mutex
+	lastWorkingRoute team.Agent
 }
 
 // devTurnBudget tracks, per developer agent and per Dev↔QA round, how many LLM
@@ -998,6 +1000,19 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 	return r.llmCore(ctx, a, adkName, outputKey, root, extra, jiraKey, stateKeys, qa, disableGitWrite, nil)
 }
 
+func (r *Runner) wrapRouteEvent(next func(Event)) func(Event) {
+	return func(ev Event) {
+		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && strings.TrimSpace(ev.Provider) != "" && strings.TrimSpace(ev.Model) != "" {
+			r.resolvedChoiceMu.Lock()
+			r.lastWorkingRoute = team.Agent{Provider: ev.Provider, Model: ev.Model}
+			r.resolvedChoiceMu.Unlock()
+		}
+		if next != nil {
+			next(ev)
+		}
+	}
+}
+
 func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool, ownedPaths []string) (agent.Agent, error) {
 	ctx = modelx.WithAgentDir(ctx, root)
 	label := roleLabel(a.Role) + " · " + a.Name
@@ -1027,7 +1042,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		Stage:        inferStage(adkName, label),
 		Git:          r.Git,
 		Approve:      r.Approve,
-		OnEvent:      r.OnEvent,
+		OnEvent:      r.wrapRouteEvent(r.OnEvent),
 	})
 	llm, err := r.modelFor(ctx, a)
 	if err != nil {
@@ -1266,16 +1281,26 @@ func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) 
 	if err != nil && (a.Role == team.RoleQA || a.Role == team.RoleDeveloper || a.Role == team.RoleTechLead) {
 		// If a specialist agent (e.g. QA pinned to Cursor without CURSOR_API_KEY, or Dev
 		// on Jev when secondary providers have no active credentials/catalog match) fails
-		// to initialize, fall back to the Chief's working provider/model so the squad run
-		// does not abort mid-pipeline after Triage already succeeded.
+		// to initialize, fall back to the Chief's working provider/model (or last resolved
+		// Jev route in this run) so the squad run does not abort mid-pipeline.
 		errMsg := strings.ToLower(err.Error())
-		isJevRefusal := strings.Contains(errMsg, "roteamento jev recusou") || strings.Contains(errMsg, "provedores estão esgotados")
+		isJevRefusal := strings.Contains(errMsg, "roteamento jev recusou") || strings.Contains(errMsg, "provedores estão esgotados") || strings.Contains(errMsg, "bloqueado pelo teto de orçamento")
 		if jev.ClassifyError(err) == jev.ErrClassAuth || isJevRefusal {
+			candidates := []team.Agent{}
+			r.resolvedChoiceMu.Lock()
+			working := r.lastWorkingRoute
+			r.resolvedChoiceMu.Unlock()
+			if working.Provider != "" && working.Model != "" {
+				candidates = append(candidates, working)
+			}
 			chief := r.primaryChief()
 			if !strings.EqualFold(chief.Provider, a.Provider) || !strings.EqualFold(chief.Model, a.Model) {
+				candidates = append(candidates, chief)
+			}
+			for _, cand := range candidates {
 				fallback := a
-				fallback.Provider = chief.Provider
-				fallback.Model = chief.Model
+				fallback.Provider = cand.Provider
+				fallback.Model = cand.Model
 				if fm, fErr := buildOne(fallback); fErr == nil {
 					return fm, nil
 				}
@@ -2314,7 +2339,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		Stage:        "chief",
 		Git:          r.Git,
 		Approve:      r.Approve,
-		OnEvent:      r.OnEvent,
+		OnEvent:      r.wrapRouteEvent(r.OnEvent),
 	})
 	llm, err := r.modelFor(triageCtx, chief)
 	if err != nil {

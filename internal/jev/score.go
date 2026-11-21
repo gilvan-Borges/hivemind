@@ -167,6 +167,26 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 			}
 		}
 	}
+	// Safety net: if all free/CLI and within-daily-cap providers failed or were tripped,
+	// do NOT abort the task while OpenRouter still holds real credits above the reserve
+	// (or above $0.05 as last resort). AutoEscalateUSD per-call ceiling still holds.
+	if best == nil && refusal.Code != "allowlist" {
+		openTask := task
+		openTask.OnlyProvider = ""
+		if rb, re, rr := selectTierWithOpts(openTask, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{ignoreDailyBudget: true}); rb != nil {
+			best = rb
+			estMicro = re
+			refusal = rr
+			crossProviderFallbackReason = "daily_cap_bypass_credit_ok"
+		} else if (!health.OpenRouterBalanceKnown || health.OpenRouterBalanceUSD > 0.05) && isOpenRouterReserveLocked(policy, health) {
+			if rb2, re2, rr2 := selectTierWithOpts(openTask, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{ignoreDailyBudget: true, ignoreOpenRouterReserve: true}); rb2 != nil {
+				best = rb2
+				estMicro = re2
+				refusal = rr2
+				crossProviderFallbackReason = "openrouter_last_resort"
+			}
+		}
+	}
 	if best == nil {
 		if refusal.Code == "" {
 			refusal = Refusal{Code: "none_fit", Reason: "nenhum modelo do catálogo atende aos filtros da tarefa"}
@@ -289,6 +309,33 @@ func isOpenRouterReserveLocked(policy Policy, health HealthSnapshot) bool {
 	return health.OpenRouterBalanceUSD <= minRes
 }
 
+type tierSelectOpts struct {
+	ignoreDailyBudget       bool
+	ignoreOpenRouterReserve bool
+}
+
+func selectTierWithOpts(
+	task Task,
+	catalog Catalog,
+	policy Policy,
+	health HealthSnapshot,
+	repoPolicy RepoPolicy,
+	targetTier Tier,
+	opts tierSelectOpts,
+) (*ModelEntry, int64, Refusal) {
+	best, est, ref := selectBestInTierWithOpts(task, catalog, policy, health, repoPolicy, targetTier, opts)
+	if best == nil && targetTier == TierMid && ref.Code != "budget" {
+		cheapBest, cheapEst, cheapRef := selectBestInTierWithOpts(task, catalog, policy, health, repoPolicy, TierCheap, opts)
+		if cheapBest != nil {
+			return cheapBest, cheapEst, cheapRef
+		}
+		if cheapRef.Code != "" {
+			ref = cheapRef
+		}
+	}
+	return best, est, ref
+}
+
 func selectBestInTier(
 	task Task,
 	catalog Catalog,
@@ -296,6 +343,18 @@ func selectBestInTier(
 	health HealthSnapshot,
 	repoPolicy RepoPolicy,
 	targetTier Tier,
+) (*ModelEntry, int64, Refusal) {
+	return selectBestInTierWithOpts(task, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{})
+}
+
+func selectBestInTierWithOpts(
+	task Task,
+	catalog Catalog,
+	policy Policy,
+	health HealthSnapshot,
+	repoPolicy RepoPolicy,
+	targetTier Tier,
+	opts tierSelectOpts,
 ) (*ModelEntry, int64, Refusal) {
 	var sawAllowlist, sawCircuit, sawContext bool
 	var overBudgetNeed *Choice
@@ -315,7 +374,7 @@ func selectBestInTier(
 
 	// Pass 1: filter & compute normalization maxima with zero slice allocation.
 	onlyProv := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
-	orReserveLocked := isOpenRouterReserveLocked(policy, health)
+	orReserveLocked := !opts.ignoreOpenRouterReserve && isOpenRouterReserveLocked(policy, health)
 	checkBlockedInline := len(catalog.Entries) <= 64
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
@@ -384,18 +443,20 @@ func selectBestInTier(
 			tierForEst = targetTier
 		}
 		estMicro, estExact := estimateCallCost(task.InputTokens, *e, tierForEst)
-		if ref := checkDailyBudget(e.Provider, estMicro, policy, health); ref != nil {
-			if overBudgetNeed == nil || estMicro < overBudgetNeed.EstimatedMicroUSD {
-				cp := Choice{
-					Provider:          e.Provider,
-					Model:             e.Model,
-					Tier:              tierForEst,
-					Reasons:           []string{"budget_wait"},
-					EstimatedMicroUSD: estMicro,
+		if !opts.ignoreDailyBudget {
+			if ref := checkDailyBudget(e.Provider, estMicro, policy, health); ref != nil {
+				if overBudgetNeed == nil || estMicro < overBudgetNeed.EstimatedMicroUSD {
+					cp := Choice{
+						Provider:          e.Provider,
+						Model:             e.Model,
+						Tier:              tierForEst,
+						Reasons:           []string{"budget_wait"},
+						EstimatedMicroUSD: estMicro,
+					}
+					overBudgetNeed = &cp
 				}
-				overBudgetNeed = &cp
+				continue
 			}
-			continue
 		}
 		effectiveAutoCap := autoCapMicroUSD
 		if effectiveAutoCap > 0 && e.DiscountPct > 0 {
@@ -511,7 +572,7 @@ func selectBestInTier(
 			tierForEst = targetTier
 		}
 		estMicro, estExact := estimateCallCost(task.InputTokens, *e, tierForEst)
-		if checkDailyBudget(e.Provider, estMicro, policy, health) != nil {
+		if !opts.ignoreDailyBudget && checkDailyBudget(e.Provider, estMicro, policy, health) != nil {
 			continue
 		}
 		effectiveAutoCap := autoCapMicroUSD

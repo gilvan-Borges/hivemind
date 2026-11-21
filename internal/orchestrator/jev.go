@@ -350,8 +350,9 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			firstChoice jev.Choice
 			firstErr    jev.ErrorClass
 			llm         model.LLM
+			buildFails  int
 		)
-		for attempt := 0; attempt < 3; attempt++ {
+		for iter := 0; iter < 16 && buildFails < 3; iter++ {
 			healthFn := opts.Health
 			if healthFn == nil {
 				creds := credsFn()
@@ -401,7 +402,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				choice = *ref.Need
 				choice.Reasons = []string{"budget_approved"}
 			} else if ref.Code != "" {
-				if attempt > 0 && onEvent != nil {
+				if (iter > 0 || buildFails > 0) && onEvent != nil {
 					var sum []jev.ProviderHealthView
 					if healthStore != nil {
 						sum = healthStore.Summary(policy, credsFn())
@@ -433,14 +434,15 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				if healthStore != nil {
 					healthStore.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
 				}
-				if attempt == 0 {
+				if buildFails == 0 {
 					firstChoice = choice
 					firstErr = buildClass
 				}
 				// If buildModel fails due to auth/quota/outage, exclude this pair and try next healthy provider.
 				exclude[pairKey(choice.Provider, choice.Model)] = true
 				agentPin = jev.AgentPin{}
-				if attempt == 2 {
+				buildFails++
+				if buildFails >= 3 {
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}
 				continue

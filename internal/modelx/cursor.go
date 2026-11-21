@@ -580,7 +580,8 @@ func parseCursorModelList(text string) []string {
 	var out []string
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(strings.ToLower(line), "available") {
+		lowLine := strings.ToLower(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(lowLine, "available") || strings.HasPrefix(lowLine, "tip:") || strings.HasPrefix(lowLine, "note:") || strings.HasPrefix(lowLine, "usage:") {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -588,7 +589,7 @@ func parseCursorModelList(text string) []string {
 			continue
 		}
 		id := strings.Trim(fields[0], "-*")
-		if id == "" || strings.EqualFold(id, "model") || strings.EqualFold(id, "models") {
+		if id == "" || strings.HasSuffix(id, ":") || strings.EqualFold(id, "model") || strings.EqualFold(id, "models") {
 			continue
 		}
 		out = append(out, id)
