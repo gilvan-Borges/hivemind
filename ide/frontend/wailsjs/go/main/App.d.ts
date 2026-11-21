@@ -6,16 +6,22 @@ import {main} from '../models';
 import {idecore} from '../models';
 import {team} from '../models';
 import {extsess} from '../models';
+import {remote} from '../models';
 import {jev} from '../models';
 import {mcpx} from '../models';
-import {remote} from '../models';
+import {sessionx} from '../models';
+import {gitx} from '../models';
 import {relayclient} from '../models';
 import {resident} from '../models';
 import {orchestrator} from '../models';
 
 export function ActivateAgyAccount(arg1:string,arg2:string):Promise<modelx.ProfilesOverview>;
 
+export function AppVersion():Promise<string>;
+
 export function ApplyHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
+
+export function ArchiveWorktree(arg1:string,arg2:string):Promise<void>;
 
 export function BindJiraWorkspace(arg1:string,arg2:string):Promise<jirax.ConnectorStatus>;
 
@@ -35,6 +41,8 @@ export function CancelInlineAI():Promise<void>;
 
 export function CancelRun(arg1:string):Promise<boolean>;
 
+export function CheckForUpdates():Promise<main.UpdateCheckResult>;
+
 export function CheckWorkspaceProblems(arg1:string,arg2:string):Promise<idecore.ProblemsCheckResult>;
 
 export function CheckoutBranch(arg1:string,arg2:string,arg3:boolean):Promise<void>;
@@ -45,6 +53,8 @@ export function CloseOwnGitHubItem(arg1:string,arg2:string,arg3:number):Promise<
 
 export function ClosePTY(arg1:string):Promise<void>;
 
+export function CloseProject(arg1:string):Promise<boolean>;
+
 export function CommentJira(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CommitChanges(arg1:string,arg2:string,arg3:boolean):Promise<string>;
@@ -54,6 +64,8 @@ export function ConnectNewAgyGoogleAccount(arg1:string):Promise<modelx.ProfilesO
 export function CreateDir(arg1:string,arg2:string):Promise<void>;
 
 export function CreateFile(arg1:string,arg2:string):Promise<void>;
+
+export function CreateWorktreeAsync(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function CursorCLIStatus():Promise<modelx.CursorStatus>;
 
@@ -69,11 +81,17 @@ export function DeleteSession(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteTeam(arg1:string,arg2:string):Promise<team.File>;
 
+export function DesignModeListPages(arg1:string):Promise<Array<idecore.DesignModePage>>;
+
+export function DesignModePickElement(arg1:string,arg2:number,arg3:string):Promise<idecore.DesignModeElement>;
+
 export function DiscardChanges(arg1:string):Promise<void>;
 
 export function DiscardFile(arg1:string,arg2:string):Promise<void>;
 
 export function DoctorAgy():Promise<modelx.AgyStatus>;
+
+export function DownloadUpdate(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
 
 export function EnsureTeamMemory(arg1:string):Promise<string>;
 
@@ -83,13 +101,13 @@ export function GetAIUsage():Promise<modelx.AIUsageReport>;
 
 export function GetAPIKeysStatus():Promise<Record<string, string>>;
 
-export function GetAutoReviewStatus(arg1:string):Promise<idecore.AutoReviewStatus>;
+export function GetAutoReviewStatus(arg1:string):Promise<remote.AutoReviewStatus>;
 
 export function GetCommitDetail(arg1:string,arg2:string):Promise<idecore.CommitDetail>;
 
-export function GetDiff(arg1:string):Promise<Array<idecore.FileDiff>>;
+export function GetDiff(arg1:string):Promise<Array<remote.FileDiff>>;
 
-export function GetFileUnstagedDiff(arg1:string,arg2:string):Promise<idecore.FileDiff>;
+export function GetFileUnstagedDiff(arg1:string,arg2:string):Promise<remote.FileDiff>;
 
 export function GetInitialState():Promise<main.InitialState>;
 
@@ -104,6 +122,10 @@ export function GetProviderProfilesOverview(arg1:string):Promise<modelx.Profiles
 export function GetRecentProjects():Promise<Array<string>>;
 
 export function GetWorkspaceGitRepos(arg1:string):Promise<Array<idecore.WorkspaceGitRepo>>;
+
+export function GitBlameFile(arg1:string,arg2:string):Promise<Array<idecore.BlameLine>>;
+
+export function GitFileHistory(arg1:string,arg2:string,arg3:number):Promise<Array<idecore.FileCommitEntry>>;
 
 export function GitHubStatus(arg1:string):Promise<idecore.GitHubStatusInfo>;
 
@@ -137,6 +159,8 @@ export function LSPStatus(arg1:string):Promise<idecore.LSPStatus>;
 
 export function ListBranches(arg1:string):Promise<Array<string>>;
 
+export function ListConflictedFiles(arg1:string):Promise<Array<idecore.ConflictedFile>>;
+
 export function ListCursorModels():Promise<Array<modelx.AgyModel>>;
 
 export function ListDirectory(arg1:string,arg2:string):Promise<Array<idecore.FileNode>>;
@@ -145,7 +169,7 @@ export function ListFiles(arg1:string):Promise<Array<idecore.FileNode>>;
 
 export function ListGitGraph(arg1:string,arg2:number,arg3:boolean):Promise<Array<idecore.GitGraphCommit>>;
 
-export function ListIssues(arg1:string):Promise<Array<idecore.ProjectIssue>>;
+export function ListIssues(arg1:string):Promise<Array<remote.ProjectIssue>>;
 
 export function ListJiraProjects():Promise<Array<jirax.Project>>;
 
@@ -157,15 +181,21 @@ export function ListModels():Promise<Array<modelx.AgyModel>>;
 
 export function ListOpenRouterModels():Promise<Array<modelx.OpenRouterModel>>;
 
-export function ListPullRequests(arg1:string):Promise<Array<idecore.ProjectPullRequest>>;
+export function ListPullRequests(arg1:string):Promise<Array<remote.ProjectPullRequest>>;
 
-export function ListSessions(arg1:string):Promise<idecore.WorkspaceSessionsSummary>;
+export function ListSessions(arg1:string):Promise<sessionx.WorkspaceSessionsSummary>;
 
 export function ListSkills(arg1:string):Promise<Array<idecore.SkillInfo>>;
 
-export function LoadSession(arg1:string,arg2:string):Promise<idecore.SessionDetail>;
+export function ListWorktreeCheckpoints(arg1:string):Promise<Array<gitx.Checkpoint>>;
+
+export function ListWorktrees(arg1:string):Promise<Array<gitx.WorktreeInfo>>;
+
+export function LoadSession(arg1:string,arg2:string):Promise<sessionx.SessionDetail>;
 
 export function LoginAgyProfile(arg1:string):Promise<string>;
+
+export function MarkConflictResolved(arg1:string,arg2:string):Promise<void>;
 
 export function MobileBridgeStatus():Promise<remote.StatusInfo>;
 
@@ -192,6 +222,8 @@ export function ParseOutputProblems(arg1:string,arg2:string):Promise<Array<ideco
 export function PlayAlertSound(arg1:string):Promise<boolean>;
 
 export function ProbeProviders():Promise<Array<jev.ProviderHealthView>>;
+
+export function PruneWorktrees(arg1:string):Promise<gitx.PruneResult>;
 
 export function QuitAll():Promise<void>;
 
@@ -237,6 +269,8 @@ export function ResidentDeleteRoutine(arg1:string):Promise<void>;
 
 export function ResidentDeleteSecret(arg1:string):Promise<resident.Status>;
 
+export function ResidentGetSoul():Promise<string>;
+
 export function ResidentListMemory(arg1:string):Promise<Array<resident.MemoryFact>>;
 
 export function ResidentListRoutines():Promise<Array<resident.Routine>>;
@@ -249,11 +283,15 @@ export function ResidentSavePolicy(arg1:Array<string>,arg2:Array<string>):Promis
 
 export function ResidentSaveRoutine(arg1:string,arg2:string,arg3:string,arg4:string,arg5:Array<string>):Promise<resident.Routine>;
 
+export function ResidentSaveSoul(arg1:string):Promise<void>;
+
 export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
 
 export function ResidentSetEventTriggers(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetExperimentalUnisolated(arg1:boolean):Promise<resident.Status>;
+
+export function ResidentSetIsolatedSandbox(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetRoutineEnabled(arg1:string,arg2:boolean):Promise<void>;
 
@@ -265,11 +303,15 @@ export function ResidentStatus():Promise<resident.Status>;
 
 export function ResizePTY(arg1:string,arg2:number,arg3:number):Promise<void>;
 
+export function ResolveConflictBlock(arg1:string,arg2:string,arg3:number,arg4:string):Promise<idecore.ConflictedFile>;
+
 export function RespondApproval(arg1:string,arg2:boolean):Promise<boolean>;
 
 export function RestartPTY(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
 export function RevertHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
+
+export function RollbackWorktreeCheckpoint(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function RotateMobileToken():Promise<remote.StatusInfo>;
 
@@ -311,7 +353,7 @@ export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSe
 
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
-export function SetAutoReviewConfig(arg1:string,arg2:team.AutoReviewSettings):Promise<idecore.AutoReviewStatus>;
+export function SetAutoReviewConfig(arg1:string,arg2:team.AutoReviewSettings):Promise<remote.AutoReviewStatus>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<Array<mcpx.ServerView>>;
 
@@ -325,19 +367,21 @@ export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function StageHunk(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<void>;
 
+export function StartLanePTY(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<string>;
+
 export function StartPTY(arg1:string,arg2:string,arg3:number,arg4:number):Promise<string>;
 
 export function StartRun(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<orchestrator.Result>;
 
-export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
+export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<remote.ImageInput>):Promise<orchestrator.Result>;
 
-export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<idecore.ImageInput>):Promise<orchestrator.Result>;
+export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<remote.ImageInput>):Promise<orchestrator.Result>;
 
 export function StopActiveAutoReview(arg1:string):Promise<boolean>;
 
 export function SubmitAgyOAuthCode(arg1:string,arg2:string):Promise<modelx.ProfilesOverview>;
 
-export function TriggerAutoReviewPoll(arg1:string):Promise<idecore.AutoReviewStatus>;
+export function TriggerAutoReviewPoll(arg1:string):Promise<remote.AutoReviewStatus>;
 
 export function UpdateAgentModel(arg1:string,arg2:string,arg3:string,arg4:string):Promise<team.File>;
 

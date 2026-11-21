@@ -2,7 +2,8 @@ import { fileBadge, icons } from "./icons";
 import type { AutoReviewSettings, AutoReviewStatus, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane, WorkspaceGitRepo } from "./types";
 import { escapeHtml, formatTokens } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
-import { openDiffInEditor, openFileInEditor, promptDiscardChanges, renderEditorBody, renderEditorTabs } from "./editor";
+import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs, renderEditorBody, renderEditorTabs } from "./editor";
+import { bindConflictResolutionEvents, refreshConflictedFiles, renderConflictsSectionHtml } from "./git-history";
 import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./explorer";
 import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
@@ -247,6 +248,7 @@ export async function refreshDiffs() {
     state.activeGitRepoRoot = nextActiveRoot;
     state.diffs = activeDiffs;
     updateGitActivityBadge();
+    await refreshConflictedFiles(nextActiveRoot || targetRoot);
 
     // Sync any open diff tabs with updated diff objects across all discovered repos
     let activeDiffChanged = false;
@@ -873,13 +875,16 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 
   let tabContentHtml = "";
   if (activeGitTab === "changes" && hasGit) {
+    const conflictsHtml = renderConflictsSectionHtml(state.gitConflicts);
     if (multiRepo) {
       tabContentHtml = `
+        ${conflictsHtml}
         ${renderMultiRepoChangesHtml(repos, activeRepo)}
         ${renderGitGraphSectionHtml()}
       `;
     } else if (activeRepo) {
       tabContentHtml = `
+        ${conflictsHtml}
         ${renderRepoCommitBoxHtml(activeRepo, false)}
         <div class="scm-section">
           <div class="scm-section-head">
@@ -1401,6 +1406,12 @@ export function bindGitSidebarEvents() {
     }
     if (state.gitTab === "flow") void loadGitHubPRs();
     if (state.gitTab === "worktrees") void refreshWorktreesPanel(renderLeftSidebar);
+  });
+
+  bindConflictResolutionEvents(async () => {
+    await reloadCleanOpenTabs();
+    await refreshDiffs();
+    renderLeftSidebar();
   });
 
   document.getElementById("btn-scm-more")?.addEventListener("click", (ev) => {

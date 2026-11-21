@@ -1049,6 +1049,7 @@ export interface ResidentStatus {
   vaultSecrets?: string[];
   eventTriggers?: boolean;
   experimentalUnisolated?: boolean;
+  isolatedSandbox?: boolean;
   experimentalWarning?: string;
   isolatedBrowser?: boolean;
   isolatedBrowserReason?: string;
@@ -1110,6 +1111,10 @@ export interface WailsBackendApp {
   SaveOpenCodeConfig(apiKey: string, baseURL: string): Promise<{ status: OpenCodeStatus; goModels?: AgyModel[]; models: AgyModel[] }>;
   ChooseDirectory(): Promise<string>;
   OpenProject(dir: string): Promise<ProjectInfo>;
+  CloseProject?(workspace: string): Promise<boolean>;
+  AppVersion?(): Promise<string>;
+  CheckForUpdates?(): Promise<UpdateCheckResult>;
+  DownloadUpdate?(versionStr: string, artifactName: string, downloadURL: string, sha256Hex: string, size: number): Promise<string>;
   GetRecentProjects(): Promise<string[]>;
   ListFiles(workspace: string): Promise<FileNode[]>;
   ListDirectory(workspace: string, relDir: string): Promise<FileNode[]>;
@@ -1232,6 +1237,11 @@ export interface WailsBackendApp {
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
   ListPullRequests(workspace: string): Promise<ProjectPullRequest[]>;
   CloseOwnGitHubItem(workspace: string, kind: "pr" | "issue", number: number): Promise<void>;
+  GitBlameFile?(workspace: string, relPath: string): Promise<BlameLine[]>;
+  GitFileHistory?(workspace: string, relPath: string, limit: number): Promise<FileCommitEntry[]>;
+  ListConflictedFiles?(workspace: string): Promise<ConflictedFile[]>;
+  ResolveConflictBlock?(workspace: string, relPath: string, blockIndex: number, choice: "ours" | "theirs" | "both"): Promise<ConflictedFile>;
+  MarkConflictResolved?(workspace: string, relPath: string): Promise<void>;
   OpenExternalURL(rawURL: string): Promise<void>;
   GetAIUsage(): Promise<AIUsageReport>;
   SaveAIUsageLimits(provider: string, fiveHourTokens: number, weeklyTokens: number): Promise<AIUsageReport>;
@@ -1258,6 +1268,7 @@ export interface WailsBackendApp {
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
   ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
   ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetIsolatedSandbox?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;
@@ -1304,4 +1315,50 @@ export interface ResidentRoutine {
   workstream?: string;
   classes?: string[];
   enabled: boolean;
+}
+
+export interface UpdateCheckResult {
+  available: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  commit?: string;
+  buildDate?: string;
+  artifactName?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  size?: number;
+}
+
+export interface BlameLine {
+  line: number;
+  commit: string;
+  short: string;
+  author: string;
+  timestamp: string;
+  summary: string;
+  text: string;
+}
+
+export interface FileCommitEntry {
+  hash: string;
+  short: string;
+  author: string;
+  timestamp: string;
+  subject: string;
+}
+
+export interface ConflictBlock {
+  index: number;
+  startLine: number;
+  endLine: number;
+  oursLabel: string;
+  theirsLabel: string;
+  ours: string;
+  base?: string;
+  theirs: string;
+}
+
+export interface ConflictedFile {
+  path: string;
+  blocks: ConflictBlock[];
 }

@@ -150,6 +150,19 @@ func (m *ResidentManager) SetExperimentalUnisolated(on bool) (resident.Status, e
 	return m.Status(), nil
 }
 
+// SetIsolatedSandbox enables or disables Windows Sandbox (.wsb) provisioning for resident browser opens.
+func (m *ResidentManager) SetIsolatedSandbox(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.IsolatedSandbox = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
 // Close solta a trava do processo para o diretório temporário do teste poder sair.
 func (m *ResidentManager) Close() {
 	if m == nil {
@@ -254,6 +267,7 @@ func (m *ResidentManager) Status() resident.Status {
 		VaultSecrets:           vaultNames,
 		EventTriggers:          cfg.EventTriggers,
 		ExperimentalUnisolated: cfg.ExperimentalUnisolated,
+		IsolatedSandbox:        cfg.IsolatedSandbox,
 		ExperimentalWarning:    warning,
 		IsolatedBrowser:        browserOK,
 		IsolatedBrowserReason:  browserReason,

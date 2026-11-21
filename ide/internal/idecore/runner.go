@@ -15,11 +15,12 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
-	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/internal/runtime"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -265,6 +266,7 @@ type SessionManager struct {
 	cancels     map[string]context.CancelFunc
 	approvals   map[string]pendingApproval
 	approvalSeq uint64
+	mcpPool     *runtime.MCPPool
 	Emit        func(LaneEvent)
 	// HostSignal wakes an opt-in listener. It must not run tools.
 	HostSignal func(kind string)
@@ -282,7 +284,15 @@ func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	return &SessionManager{
 		cancels:   make(map[string]context.CancelFunc),
 		approvals: make(map[string]pendingApproval),
+		mcpPool:   runtime.NewMCPPool(),
 		Emit:      emit,
+	}
+}
+
+// ReleaseWorkspace closes any pooled warm MCP host associated with workspaceDir.
+func (m *SessionManager) ReleaseWorkspace(workspaceDir string) {
+	if m != nil && m.mcpPool != nil {
+		m.mcpPool.ReleaseWorkspace(workspaceDir)
 	}
 }
 
@@ -853,23 +863,8 @@ func (m *SessionManager) RunTurnWithOptions(
 	nativeRoot := NativeSkillsDir()
 	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
-	mcpHost := mcpx.Start(ctx, workspaceDir)
-	defer mcpHost.Close()
 
-	var routedMu sync.Mutex
-	routedModels := map[string][2]string{}
 	recordLaneEvent := func(ev orchestrator.Event) {
-		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && ev.Author != "" && ev.Provider != "" {
-			routedMu.Lock()
-			routedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
-			routedMu.Unlock()
-		}
-		if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
-			// O ledger central de uso agora é gravado pelo próprio orquestrador
-			// (Runner.recordUsage — Spec 06 §4): CLI, TUI e IDE contam igual e
-			// esta camada não duplica mais o evento.
-			_ = ev
-		}
 		if ev.Kind == "finish" {
 			m.noteHostSignal("lane")
 		}
@@ -884,7 +879,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		return m.RequestApprovalWithGate(ctx, laneID, selected.Name, gate, prompt)
 	}
 
-	runner := &orchestrator.Runner{
+	runner, mcpCleanup := runtime.BuildRunner(ctx, runtime.RunnerOptions{
 		Workspace:          workspaceDir,
 		LaneID:             laneID,
 		Project:            cfg,
@@ -893,24 +888,20 @@ func (m *SessionManager) RunTurnWithOptions(
 		GitHub:             gh,
 		Jira:               jira,
 		Sessions:           store,
-		Confirm:            confirmShell,
+		Confirm:            shellx.Confirmer(confirmShell),
 		Approve:            askApproval,
-		MCP:                mcpHost,
+		BudgetApprove:      budgetApprove,
+		ApproveGate:        gateApprove,
+		MCPPool:            m.mcpPool,
+		NativeSkills:       nativeSkills,
+		NativeSkillsRoot:   nativeRoot,
 		Out:                io.Discard,
 		Err:                io.Discard,
 		EnableTriage:       true,
 		EnableClosingChief: true,
-		NativeSkills:       nativeSkills,
-		NativeSkillsRoot:   nativeRoot,
 		OnEvent:            recordLaneEvent,
-	}
-	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-		Workspace:   workspaceDir,
-		Git:         g,
-		Approve:     budgetApprove,
-		ApproveGate: gateApprove,
-		OnEvent:     recordLaneEvent,
 	})
+	defer mcpCleanup()
 	res, runErr := runner.Run(ctx, orchestrator.Request{
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
@@ -1082,18 +1073,8 @@ func (m *SessionManager) RunAutoReviewTurn(
 	nativeRoot := NativeSkillsDir()
 	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
-	mcpHost := mcpx.Start(ctx, workspaceDir)
-	defer mcpHost.Close()
 
-	var autoRoutedMu sync.Mutex
-	autoRoutedModels := map[string][2]string{}
 	recordAutoReviewEvent := func(ev orchestrator.Event) {
-		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && ev.Author != "" && ev.Provider != "" {
-			autoRoutedMu.Lock()
-			autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
-			autoRoutedMu.Unlock()
-		}
-		// Uso gravado centralmente pelo orquestrador (Spec 06 §4): sem duplicar aqui.
 		if ev.Kind == "finish" {
 			m.noteHostSignal("lane")
 		}
@@ -1102,7 +1083,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 		}
 	}
 
-	runner := &orchestrator.Runner{
+	runner, mcpCleanup := runtime.BuildRunner(ctx, runtime.RunnerOptions{
 		Workspace:          workspaceDir,
 		ReviewRoot:         reviewRoot,
 		Project:            cfg,
@@ -1113,20 +1094,16 @@ func (m *SessionManager) RunAutoReviewTurn(
 		Sessions:           store,
 		Confirm:            denyDangerous,
 		Approve:            denyDangerous,
-		MCP:                mcpHost,
+		MCPPool:            m.mcpPool,
+		NativeSkills:       nativeSkills,
+		NativeSkillsRoot:   nativeRoot,
 		Out:                io.Discard,
 		Err:                io.Discard,
 		EnableTriage:       true,
 		EnableClosingChief: false,
-		NativeSkills:       nativeSkills,
-		NativeSkillsRoot:   nativeRoot,
 		OnEvent:            recordAutoReviewEvent,
-	}
-	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-		Workspace: workspaceDir,
-		Approve:   denyDangerous,
-		OnEvent:   recordAutoReviewEvent,
 	})
+	defer mcpCleanup()
 	return runner.Run(ctx, orchestrator.Request{
 		Objective: fullObjective,
 		RunMode:   "auto-review",
@@ -1170,5 +1147,8 @@ func (m *SessionManager) CancelAll() {
 	}
 	for _, c := range list {
 		c()
+	}
+	if m.mcpPool != nil {
+		m.mcpPool.CloseAll()
 	}
 }

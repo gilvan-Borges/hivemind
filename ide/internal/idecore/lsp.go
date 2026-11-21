@@ -288,6 +288,44 @@ func (m *LSPManager) Hover(ctx context.Context, workspaceDir, relPath string, li
 	return cl.hover(ctx, absPath, line, col)
 }
 
+// CloseWorkspace shuts down running gopls servers associated with workspaceDir.
+func (m *LSPManager) CloseWorkspace(workspaceDir string) {
+	if m == nil {
+		return
+	}
+	wsTrim := strings.TrimSpace(workspaceDir)
+	if wsTrim == "" {
+		return
+	}
+	absWS, err := filepath.Abs(wsTrim)
+	if err != nil {
+		absWS = wsTrim
+	}
+	cleanWS := filepath.Clean(absWS)
+	normWS := strings.ToLower(filepath.ToSlash(cleanWS))
+
+	m.mu.Lock()
+	var list []*lspClient
+	for key, cl := range m.clients {
+		if cl == nil {
+			delete(m.clients, key)
+			continue
+		}
+		clWS := cl.workspaceDir
+		if clABS, aErr := filepath.Abs(strings.TrimSpace(clWS)); aErr == nil {
+			clWS = clABS
+		}
+		if key == normWS || strings.HasPrefix(key, normWS+"/") || strings.EqualFold(filepath.Clean(clWS), cleanWS) {
+			list = append(list, cl)
+			delete(m.clients, key)
+		}
+	}
+	m.mu.Unlock()
+	for _, cl := range list {
+		cl.Close()
+	}
+}
+
 // CloseAll shuts down all running gopls servers cleanly.
 func (m *LSPManager) CloseAll() {
 	m.mu.Lock()

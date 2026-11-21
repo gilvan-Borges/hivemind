@@ -351,7 +351,7 @@ async function refreshMobilePairing() {
 let activeModalTrap: FocusTrapHandle | null = null;
 
 /** IDs de botões que descartam o modal com segurança quando Escape é pressionado. */
-const DISMISSIBLE_MODAL_BUTTONS = ["confirm-modal-cancel", "img-preview-close", "path-modal-cancel"];
+const DISMISSIBLE_MODAL_BUTTONS = ["confirm-modal-cancel", "img-preview-close", "path-modal-cancel", "updates-modal-close"];
 
 function dismissDismissibleModal(): void {
   for (const id of DISMISSIBLE_MODAL_BUTTONS) {
@@ -361,6 +361,38 @@ function dismissDismissibleModal(): void {
       return;
     }
   }
+}
+
+export async function runUpdateCheck() {
+  const backend = api();
+  state.updateCheckState.status = "checking";
+  state.updateCheckState.error = "";
+  state.updateCheckState.downloadedPath = "";
+  if (state.showUpdatesModal) renderModalLayer();
+  if (!backend?.CheckForUpdates) {
+    state.updateCheckState.status = "error";
+    state.updateCheckState.error = "Verificador de atualizações indisponível neste host.";
+    if (state.showUpdatesModal) renderModalLayer();
+    return;
+  }
+  try {
+    if (backend.AppVersion && !state.updateCheckState.version) {
+      state.updateCheckState.version = await backend.AppVersion();
+    }
+    const res = await backend.CheckForUpdates();
+    state.updateCheckState.result = res;
+    state.updateCheckState.status = "ready";
+  } catch (err: any) {
+    state.updateCheckState.status = "error";
+    state.updateCheckState.error = err?.message || String(err);
+  }
+  if (state.showUpdatesModal) renderModalLayer();
+}
+
+export async function openUpdatesModal() {
+  state.showUpdatesModal = true;
+  renderModalLayer();
+  await runUpdateCheck();
 }
 
 /**
@@ -1978,6 +2010,99 @@ function renderModalLayerInner() {
           errEl.textContent = `Não foi possível salvar a skill: ${reason}`;
           errEl.style.display = "block";
         }
+      }
+    });
+    return;
+  }
+
+  if (state.showUpdatesModal) {
+    const upd = state.updateCheckState;
+    const res = upd.result;
+    let bodyHtml = "";
+    if (upd.status === "checking") {
+      bodyHtml = `
+        <div class="dim" style="display:flex;align-items:center;gap:8px;padding:10px 0;font-size:12.5px">
+          ${icons.spinner}
+          <span>Verificando <code>manifest.json</code> no GitHub Releases…</span>
+        </div>
+      `;
+    } else if (upd.status === "error") {
+      bodyHtml = `
+        <div style="padding:10px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
+          <div style="color:var(--red);font-size:12.5px;margin-bottom:6px">Falha ao verificar atualizações: ${escapeHtml(upd.error)}</div>
+          <button type="button" class="mini" id="updates-retry">${icons.refresh}<span>Tentar novamente</span></button>
+        </div>
+      `;
+    } else if (upd.status === "ready" && res) {
+      if (!res.available) {
+        bodyHtml = `
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:12.5px">
+            <div>${icons.check} Você já está na versão mais recente (<code style="font-variant-numeric:tabular-nums">v${escapeHtml(res.currentVersion)}</code>).</div>
+          </div>
+        `;
+      } else {
+        const sizeMB = res.size ? `${(res.size / (1024 * 1024)).toFixed(1)} MB` : "—";
+        bodyHtml = `
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;display:flex;flex-direction:column;gap:6px">
+            <div><strong>Nova versão disponível:</strong> <code style="font-variant-numeric:tabular-nums">v${escapeHtml(res.latestVersion)}</code> <span class="dim">(atual: <span style="font-variant-numeric:tabular-nums">v${escapeHtml(res.currentVersion)}</span>)</span></div>
+            <div class="dim">Artefato: <code>${escapeHtml(res.artifactName || "installer")}</code> · <span style="font-variant-numeric:tabular-nums">${escapeHtml(sizeMB)}</span></div>
+            ${res.sha256 ? `<div class="dim" style="font-size:11px;font-family:var(--mono);word-break:break-all">SHA-256: ${escapeHtml(res.sha256)}</div>` : ""}
+            ${upd.downloadedPath ? `<div style="font-size:12px;word-break:break-all">${icons.check} Baixado e verificado em: <code>${escapeHtml(upd.downloadedPath)}</code></div>` : ""}
+          </div>
+        `;
+      }
+    } else {
+      bodyHtml = `<div class="dim" style="font-size:12.5px;padding:8px 0">Clique em Verificar para consultar o último release oficial.</div>`;
+    }
+    const canDownload = Boolean(upd.status === "ready" && res?.available && res.artifactName && res.downloadUrl && res.sha256 && !upd.downloading);
+    layer.innerHTML = `
+      <div class="modal-backdrop" id="updates-modal-backdrop">
+        <div class="modal-box" role="dialog" aria-modal="true" style="width:520px">
+          <h3 class="modal-title">Atualizações do HiveMind</h3>
+          <div class="dim" style="font-size:11.5px;margin-top:-6px;margin-bottom:10px;font-variant-numeric:tabular-nums">
+            Versão instalada: <code>${escapeHtml(upd.version || res?.currentVersion || "dev")}</code>
+          </div>
+          ${bodyHtml}
+          <div class="modal-footer" style="margin-top:12px">
+            <button type="button" id="updates-modal-close">Fechar</button>
+            <button type="button" id="updates-check-btn" ${upd.status === "checking" ? "disabled" : ""}>${icons.refresh}<span>Verificar</span></button>
+            ${canDownload || upd.downloading ? `<button type="button" class="primary" id="updates-download-btn" ${upd.downloading ? "disabled" : ""}>${upd.downloading ? icons.spinner : icons.download}<span>${upd.downloading ? "Baixando & Verificando…" : "Baixar instalador (SHA-256)"}</span></button>` : ""}
+          </div>
+        </div>
+      </div>
+    `;
+    const closeUpd = () => {
+      state.showUpdatesModal = false;
+      renderModalLayer();
+    };
+    document.getElementById("updates-modal-close")?.addEventListener("click", closeUpd);
+    document.getElementById("updates-modal-backdrop")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "updates-modal-backdrop") closeUpd();
+    });
+    document.getElementById("updates-retry")?.addEventListener("click", () => void runUpdateCheck());
+    document.getElementById("updates-check-btn")?.addEventListener("click", () => void runUpdateCheck());
+    document.getElementById("updates-download-btn")?.addEventListener("click", async () => {
+      const b = api();
+      if (!b?.DownloadUpdate || !res?.available) return;
+      state.updateCheckState.downloading = true;
+      state.updateCheckState.error = "";
+      renderModalLayer();
+      try {
+        const saved = await b.DownloadUpdate(
+          res.latestVersion,
+          res.artifactName || "HiveMind-Setup.exe",
+          res.downloadUrl || "",
+          res.sha256 || "",
+          res.size || 0,
+        );
+        state.updateCheckState.downloadedPath = saved;
+        toast("Instalador baixado e conferido via SHA-256.", "success");
+      } catch (err: any) {
+        state.updateCheckState.status = "error";
+        state.updateCheckState.error = err?.message || String(err);
+      } finally {
+        state.updateCheckState.downloading = false;
+        if (state.showUpdatesModal) renderModalLayer();
       }
     });
     return;

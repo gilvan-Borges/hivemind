@@ -26,15 +26,15 @@ func TestRecordQAStallStopsSpinningLoop(t *testing.T) {
 	r := &Runner{Git: fakeStatusGit{status: " M a.go"}, deliveryRoot: "wt"}
 
 	// 1ª reprovação: registra o estado, ainda não para.
-	if got := r.recordQAStall(); got != "" {
+	if got := r.recordQAStall(context.Background()); got != "" {
 		t.Fatalf("primeira reprovação não deveria parar o loop: %q", got)
 	}
 	// 2ª reprovação consecutiva sem mudanças: uma chance a mais para os devs.
-	if got := r.recordQAStall(); got != "" {
+	if got := r.recordQAStall(context.Background()); got != "" {
 		t.Fatalf("segunda reprovação não deveria parar o loop: %q", got)
 	}
 	// 3ª consecutiva com a entrega imutável: para e explica.
-	got := r.recordQAStall()
+	got := r.recordQAStall(context.Background())
 	if !strings.Contains(got, "sem nenhuma alteração nova") {
 		t.Fatalf("terceira reprovação deveria encerrar o loop com motivo; got = %q", got)
 	}
@@ -44,11 +44,11 @@ func TestRecordQAStallStopsSpinningLoop(t *testing.T) {
 
 	// Devs entregaram algo novo: contador zera e o ciclo recomeça limpo.
 	r.Git = fakeStatusGit{status: " M a.go\n M b.go"}
-	if got := r.recordQAStall(); got != "" {
+	if got := r.recordQAStall(context.Background()); got != "" {
 		t.Fatalf("com entrega nova não deveria parar: %q", got)
 	}
 	r.Git = fakeStatusGit{status: " M a.go\n M b.go"}
-	if got := r.recordQAStall(); got != "" {
+	if got := r.recordQAStall(context.Background()); got != "" {
 		t.Fatalf("primeira re-reprovação pós-mudança não deveria parar: %q", got)
 	}
 }
@@ -57,7 +57,7 @@ func TestRecordQAStallStopsSpinningLoop(t *testing.T) {
 // (ex.: workspace sem git) o backpressure não interfere.
 func TestRecordQAStallNeedsDeliveryRoot(t *testing.T) {
 	r := &Runner{Git: fakeStatusGit{status: "x"}, deliveryRoot: ""}
-	if got := r.recordQAStall(); got != "" {
+	if got := r.recordQAStall(context.Background()); got != "" {
 		t.Fatalf("sem deliveryRoot não deveria agir: %q", got)
 	}
 }

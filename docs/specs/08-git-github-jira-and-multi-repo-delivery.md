@@ -1,7 +1,7 @@
 # Spec 08 — Endurecimento VCS (`gitx`, `githubx`, `jirax`) e Entrega Multi-Repo
 
-> **Status:** Em Progresso (Onda 3 parcial: `W3-06`, `W3-07` e helpers de `W3-08` implementados — env não-interativo/worktree safety em `gitx`, GHES/paginação/crosslink helper em `githubx` e sanitização heurística em `idecore`; hook de cross-linking no `orchestrator` pendente)
-> **Alvos:** `internal/gitx/`, `internal/githubx/`, `internal/jirax/`, `ide/internal/idecore/diff.go`, `ide/internal/idecore/git_repos.go`
+> **Status:** Implementado (Onda 3 concluída — `W3-06`, `W3-07`, `W3-08`: env não-interativo/worktree safety + normalização Windows 8.3 em `gitx`, GHES/paginação/crosslink + `UpdatePullRequestBody` em `githubx`, sanitização genérica de Jira e cross-linking automático multi-repo plugado no `orchestrator`)
+> **Alvos:** `internal/gitx/`, `internal/githubx/`, `internal/jirax/`, `ide/internal/idecore/jira_discovery.go`, `ide/internal/idecore/github_prs.go`, `ide/internal/idecore/git_repos.go`, `internal/orchestrator/delivery.go`
 
 ---
 

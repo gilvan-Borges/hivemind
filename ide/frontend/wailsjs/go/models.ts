@@ -48,74 +48,29 @@ export namespace githubx {
 
 }
 
-export namespace idecore {
+export namespace gitx {
 	
-	export class AutoReviewEntry {
-	    prNumber: number;
-	    title: string;
-	    author?: string;
-	    headRef?: string;
-	    baseRef?: string;
-	    status: string;
-	    summary?: string;
-	    tokens?: number;
-	    durationMs?: number;
-	    sessionId?: string;
-	    reviewedAt: string;
-	    error?: string;
+	export class Checkpoint {
+	    id: string;
+	    ref: string;
+	    sha: string;
+	    label?: string;
+	    hasDiff?: boolean;
+	    // Go type: time
+	    createdAt: any;
 	
 	    static createFrom(source: any = {}) {
-	        return new AutoReviewEntry(source);
+	        return new Checkpoint(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.prNumber = source["prNumber"];
-	        this.title = source["title"];
-	        this.author = source["author"];
-	        this.headRef = source["headRef"];
-	        this.baseRef = source["baseRef"];
-	        this.status = source["status"];
-	        this.summary = source["summary"];
-	        this.tokens = source["tokens"];
-	        this.durationMs = source["durationMs"];
-	        this.sessionId = source["sessionId"];
-	        this.reviewedAt = source["reviewedAt"];
-	        this.error = source["error"];
-	    }
-	}
-	export class AutoReviewStatus {
-	    workspace: string;
-	    enabled: boolean;
-	    state: string;
-	    config: team.AutoReviewSettings;
-	    activePr?: number;
-	    activePrTitle?: string;
-	    queueCount: number;
-	    reviewedLastHour: number;
-	    lastPollAt?: string;
-	    nextPollAt?: string;
-	    lastError?: string;
-	    history?: AutoReviewEntry[];
-	
-	    static createFrom(source: any = {}) {
-	        return new AutoReviewStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.workspace = source["workspace"];
-	        this.enabled = source["enabled"];
-	        this.state = source["state"];
-	        this.config = this.convertValues(source["config"], team.AutoReviewSettings);
-	        this.activePr = source["activePr"];
-	        this.activePrTitle = source["activePrTitle"];
-	        this.queueCount = source["queueCount"];
-	        this.reviewedLastHour = source["reviewedLastHour"];
-	        this.lastPollAt = source["lastPollAt"];
-	        this.nextPollAt = source["nextPollAt"];
-	        this.lastError = source["lastError"];
-	        this.history = this.convertValues(source["history"], AutoReviewEntry);
+	        this.id = source["id"];
+	        this.ref = source["ref"];
+	        this.sha = source["sha"];
+	        this.label = source["label"];
+	        this.hasDiff = source["hasDiff"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -135,6 +90,79 @@ export namespace idecore {
 		    }
 		    return a;
 		}
+	}
+	export class PruneResult {
+	    prunedRefs: number;
+	    removedOrphans?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PruneResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prunedRefs = source["prunedRefs"];
+	        this.removedOrphans = source["removedOrphans"];
+	    }
+	}
+	export class WorktreeInfo {
+	    path: string;
+	    branch?: string;
+	    head?: string;
+	    agent?: string;
+	    sizeBytes: number;
+	    isMain?: boolean;
+	    detached?: boolean;
+	    prunable?: boolean;
+	    orphan?: boolean;
+	    locked?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorktreeInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.branch = source["branch"];
+	        this.head = source["head"];
+	        this.agent = source["agent"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.isMain = source["isMain"];
+	        this.detached = source["detached"];
+	        this.prunable = source["prunable"];
+	        this.orphan = source["orphan"];
+	        this.locked = source["locked"];
+	    }
+	}
+
+}
+
+export namespace idecore {
+	
+	export class BlameLine {
+	    line: number;
+	    commit: string;
+	    short: string;
+	    author: string;
+	    timestamp: string;
+	    summary: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BlameLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.line = source["line"];
+	        this.commit = source["commit"];
+	        this.short = source["short"];
+	        this.author = source["author"];
+	        this.timestamp = source["timestamp"];
+	        this.summary = source["summary"];
+	        this.text = source["text"];
+	    }
 	}
 	export class CommandOutput {
 	    command: string;
@@ -154,60 +182,6 @@ export namespace idecore {
 	        this.durationMs = source["durationMs"];
 	    }
 	}
-	export class DiffLine {
-	    kind: string;
-	    text: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new DiffLine(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.kind = source["kind"];
-	        this.text = source["text"];
-	    }
-	}
-	export class FileDiff {
-	    path: string;
-	    status?: string;
-	    staged?: boolean;
-	    added: number;
-	    removed: number;
-	    lines: DiffLine[];
-	
-	    static createFrom(source: any = {}) {
-	        return new FileDiff(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.status = source["status"];
-	        this.staged = source["staged"];
-	        this.added = source["added"];
-	        this.removed = source["removed"];
-	        this.lines = this.convertValues(source["lines"], DiffLine);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class CommitDetail {
 	    hash: string;
 	    short: string;
@@ -215,7 +189,7 @@ export namespace idecore {
 	    date: string;
 	    subject: string;
 	    body?: string;
-	    files: FileDiff[];
+	    files: remote.FileDiff[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CommitDetail(source);
@@ -229,7 +203,7 @@ export namespace idecore {
 	        this.date = source["date"];
 	        this.subject = source["subject"];
 	        this.body = source["body"];
-	        this.files = this.convertValues(source["files"], FileDiff);
+	        this.files = this.convertValues(source["files"], remote.FileDiff);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -250,8 +224,128 @@ export namespace idecore {
 		    return a;
 		}
 	}
+	export class ConflictBlock {
+	    index: number;
+	    startLine: number;
+	    endLine: number;
+	    oursLabel: string;
+	    theirsLabel: string;
+	    ours: string;
+	    base?: string;
+	    theirs: string;
 	
+	    static createFrom(source: any = {}) {
+	        return new ConflictBlock(source);
+	    }
 	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.startLine = source["startLine"];
+	        this.endLine = source["endLine"];
+	        this.oursLabel = source["oursLabel"];
+	        this.theirsLabel = source["theirsLabel"];
+	        this.ours = source["ours"];
+	        this.base = source["base"];
+	        this.theirs = source["theirs"];
+	    }
+	}
+	export class ConflictedFile {
+	    path: string;
+	    blocks: ConflictBlock[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ConflictedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.blocks = this.convertValues(source["blocks"], ConflictBlock);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DesignModeElement {
+	    url?: string;
+	    selector: string;
+	    tag?: string;
+	    id?: string;
+	    classes?: string[];
+	    textSnippet?: string;
+	    outerHtml?: string;
+	    computedStyles?: Record<string, string>;
+	    boundingBox?: Record<string, number>;
+	
+	    static createFrom(source: any = {}) {
+	        return new DesignModeElement(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.selector = source["selector"];
+	        this.tag = source["tag"];
+	        this.id = source["id"];
+	        this.classes = source["classes"];
+	        this.textSnippet = source["textSnippet"];
+	        this.outerHtml = source["outerHtml"];
+	        this.computedStyles = source["computedStyles"];
+	        this.boundingBox = source["boundingBox"];
+	    }
+	}
+	export class DesignModePage {
+	    index: number;
+	    title?: string;
+	    url: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DesignModePage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.title = source["title"];
+	        this.url = source["url"];
+	    }
+	}
+	export class FileCommitEntry {
+	    hash: string;
+	    short: string;
+	    author: string;
+	    timestamp: string;
+	    subject: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileCommitEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hash = source["hash"];
+	        this.short = source["short"];
+	        this.author = source["author"];
+	        this.timestamp = source["timestamp"];
+	        this.subject = source["subject"];
+	    }
+	}
 	export class FileNode {
 	    name: string;
 	    path: string;
@@ -346,22 +440,6 @@ export namespace idecore {
 	        this.baseUrl = source["baseUrl"];
 	    }
 	}
-	export class ImageInput {
-	    name: string;
-	    mimeType: string;
-	    dataBase64: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImageInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.mimeType = source["mimeType"];
-	        this.dataBase64 = source["dataBase64"];
-	    }
-	}
 	export class InlineAIStatus {
 	    ghostAvailable: boolean;
 	    ghostProvider?: string;
@@ -408,7 +486,7 @@ export namespace idecore {
 	}
 	export class InlineEditResponse {
 	    replacement: string;
-	    diffLines: DiffLine[];
+	    diffLines: remote.DiffLine[];
 	    added: number;
 	    removed: number;
 	    model?: string;
@@ -423,7 +501,7 @@ export namespace idecore {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.replacement = source["replacement"];
-	        this.diffLines = this.convertValues(source["diffLines"], DiffLine);
+	        this.diffLines = this.convertValues(source["diffLines"], remote.DiffLine);
 	        this.added = source["added"];
 	        this.removed = source["removed"];
 	        this.model = source["model"];
@@ -580,142 +658,6 @@ export namespace idecore {
 		    return a;
 		}
 	}
-	export class ProjectSubtask {
-	    key: string;
-	    summary: string;
-	    status?: string;
-	    done: boolean;
-	    url?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProjectSubtask(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.key = source["key"];
-	        this.summary = source["summary"];
-	        this.status = source["status"];
-	        this.done = source["done"];
-	        this.url = source["url"];
-	    }
-	}
-	export class ProjectIssue {
-	    source: string;
-	    key: string;
-	    title: string;
-	    body?: string;
-	    status?: string;
-	    issueType?: string;
-	    isSubtask?: boolean;
-	    parentKey?: string;
-	    parentTitle?: string;
-	    parentUrl?: string;
-	    subtaskTotal?: number;
-	    subtaskDone?: number;
-	    subtaskPending?: number;
-	    subtasks?: ProjectSubtask[];
-	    author?: string;
-	    url?: string;
-	    isMine?: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProjectIssue(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.source = source["source"];
-	        this.key = source["key"];
-	        this.title = source["title"];
-	        this.body = source["body"];
-	        this.status = source["status"];
-	        this.issueType = source["issueType"];
-	        this.isSubtask = source["isSubtask"];
-	        this.parentKey = source["parentKey"];
-	        this.parentTitle = source["parentTitle"];
-	        this.parentUrl = source["parentUrl"];
-	        this.subtaskTotal = source["subtaskTotal"];
-	        this.subtaskDone = source["subtaskDone"];
-	        this.subtaskPending = source["subtaskPending"];
-	        this.subtasks = this.convertValues(source["subtasks"], ProjectSubtask);
-	        this.author = source["author"];
-	        this.url = source["url"];
-	        this.isMine = source["isMine"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class ProjectPullRequest {
-	    number: number;
-	    title: string;
-	    body?: string;
-	    url: string;
-	    state: string;
-	    isDraft: boolean;
-	    author?: string;
-	    headRef?: string;
-	    baseRef?: string;
-	    updatedAt?: string;
-	    reviewDecision?: string;
-	    requestedReviewers?: string[];
-	    isMine?: boolean;
-	    reviewRequested?: boolean;
-	    myResponse?: string;
-	    needsAttention?: boolean;
-	    attentionReason?: string;
-	    mentionedMe?: boolean;
-	    lastActivityAt?: string;
-	    lastActivityAuthor?: string;
-	    lastActivityKind?: string;
-	    lastActivitySnippet?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProjectPullRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.number = source["number"];
-	        this.title = source["title"];
-	        this.body = source["body"];
-	        this.url = source["url"];
-	        this.state = source["state"];
-	        this.isDraft = source["isDraft"];
-	        this.author = source["author"];
-	        this.headRef = source["headRef"];
-	        this.baseRef = source["baseRef"];
-	        this.updatedAt = source["updatedAt"];
-	        this.reviewDecision = source["reviewDecision"];
-	        this.requestedReviewers = source["requestedReviewers"];
-	        this.isMine = source["isMine"];
-	        this.reviewRequested = source["reviewRequested"];
-	        this.myResponse = source["myResponse"];
-	        this.needsAttention = source["needsAttention"];
-	        this.attentionReason = source["attentionReason"];
-	        this.mentionedMe = source["mentionedMe"];
-	        this.lastActivityAt = source["lastActivityAt"];
-	        this.lastActivityAuthor = source["lastActivityAuthor"];
-	        this.lastActivityKind = source["lastActivityKind"];
-	        this.lastActivitySnippet = source["lastActivitySnippet"];
-	    }
-	}
 	export class ProjectStack {
 	    root: string;
 	    name: string;
@@ -736,113 +678,6 @@ export namespace idecore {
 	        this.buildTools = source["buildTools"];
 	        this.testHint = source["testHint"];
 	        this.summary = source["summary"];
-	    }
-	}
-	
-	export class RestoredMessage {
-	    id: string;
-	    kind: string;
-	    label: string;
-	    text: string;
-	    tokens?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new RestoredMessage(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.kind = source["kind"];
-	        this.label = source["label"];
-	        this.text = source["text"];
-	        this.tokens = source["tokens"];
-	    }
-	}
-	export class TokenStat {
-	    inputTokens: number;
-	    outputTokens: number;
-	    totalTokens: number;
-	    calls: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new TokenStat(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.inputTokens = source["inputTokens"];
-	        this.outputTokens = source["outputTokens"];
-	        this.totalTokens = source["totalTokens"];
-	        this.calls = source["calls"];
-	    }
-	}
-	export class SessionDetail {
-	    id: string;
-	    title: string;
-	    jiraKey?: string;
-	    inputTokens: number;
-	    outputTokens: number;
-	    totalTokens: number;
-	    agentUsage: Record<string, TokenStat>;
-	    messages: RestoredMessage[];
-	
-	    static createFrom(source: any = {}) {
-	        return new SessionDetail(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.jiraKey = source["jiraKey"];
-	        this.inputTokens = source["inputTokens"];
-	        this.outputTokens = source["outputTokens"];
-	        this.totalTokens = source["totalTokens"];
-	        this.agentUsage = this.convertValues(source["agentUsage"], TokenStat, true);
-	        this.messages = this.convertValues(source["messages"], RestoredMessage);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class SessionSummary {
-	    id: string;
-	    updatedAt: string;
-	    title: string;
-	    jiraKey?: string;
-	    inputTokens: number;
-	    outputTokens: number;
-	    totalTokens: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new SessionSummary(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.updatedAt = source["updatedAt"];
-	        this.title = source["title"];
-	        this.jiraKey = source["jiraKey"];
-	        this.inputTokens = source["inputTokens"];
-	        this.outputTokens = source["outputTokens"];
-	        this.totalTokens = source["totalTokens"];
 	    }
 	}
 	export class SkillInfo {
@@ -885,7 +720,6 @@ export namespace idecore {
 	        this.preview = source["preview"];
 	    }
 	}
-	
 	export class WizardInput {
 	    teamName: string;
 	    chiefRole: string;
@@ -954,7 +788,7 @@ export namespace idecore {
 	    relPath: string;
 	    branch: string;
 	    isRoot: boolean;
-	    diffs: FileDiff[];
+	    diffs: remote.FileDiff[];
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceGitRepo(source);
@@ -967,43 +801,7 @@ export namespace idecore {
 	        this.relPath = source["relPath"];
 	        this.branch = source["branch"];
 	        this.isRoot = source["isRoot"];
-	        this.diffs = this.convertValues(source["diffs"], FileDiff);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class WorkspaceSessionsSummary {
-	    sessions: SessionSummary[];
-	    projectInputTokens: number;
-	    projectOutputTokens: number;
-	    projectTotalTokens: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceSessionsSummary(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sessions = this.convertValues(source["sessions"], SessionSummary);
-	        this.projectInputTokens = source["projectInputTokens"];
-	        this.projectOutputTokens = source["projectOutputTokens"];
-	        this.projectTotalTokens = source["projectTotalTokens"];
+	        this.diffs = this.convertValues(source["diffs"], remote.FileDiff);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1470,6 +1268,35 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	export class UpdateCheckResult {
+	    available: boolean;
+	    currentVersion: string;
+	    latestVersion: string;
+	    commit?: string;
+	    buildDate?: string;
+	    artifactName?: string;
+	    downloadUrl?: string;
+	    sha256?: string;
+	    size?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.commit = source["commit"];
+	        this.buildDate = source["buildDate"];
+	        this.artifactName = source["artifactName"];
+	        this.downloadUrl = source["downloadUrl"];
+	        this.sha256 = source["sha256"];
+	        this.size = source["size"];
+	    }
+	}
 
 }
 
@@ -1526,6 +1353,7 @@ export namespace modelx {
 	    totalTokens: number;
 	    calls: number;
 	    oldestAt?: string;
+	    costMicroUsd?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new UsageWindow(source);
@@ -1538,6 +1366,7 @@ export namespace modelx {
 	        this.totalTokens = source["totalTokens"];
 	        this.calls = source["calls"];
 	        this.oldestAt = source["oldestAt"];
+	        this.costMicroUsd = source["costMicroUsd"];
 	    }
 	}
 	export class AIProviderUsage {
@@ -1579,6 +1408,48 @@ export namespace modelx {
 		    }
 		    return a;
 		}
+	}
+	export class AgentUsageCost {
+	    agent: string;
+	    role?: string;
+	    provider?: string;
+	    model?: string;
+	    calls: number;
+	    totalTokens: number;
+	    costMicroUsd: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentUsageCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agent = source["agent"];
+	        this.role = source["role"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.calls = source["calls"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costMicroUsd = source["costMicroUsd"];
+	    }
+	}
+	export class RoleUsageCost {
+	    role: string;
+	    calls: number;
+	    totalTokens: number;
+	    costMicroUsd: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RoleUsageCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.calls = source["calls"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costMicroUsd = source["costMicroUsd"];
+	    }
 	}
 	export class RemoteQuotaWindow {
 	    percent: number;
@@ -1770,6 +1641,11 @@ export namespace modelx {
 	    agyAccounts?: AgyAccountQuota[];
 	    openCodeQuota: OpenCodeQuota;
 	    providers: AIProviderUsage[];
+	    costSummary5hMicroUsd?: number;
+	    costSummaryWeeklyMicroUsd?: number;
+	    costSummaryMonthlyMicroUsd?: number;
+	    costByRole?: RoleUsageCost[];
+	    costByAgent?: AgentUsageCost[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AIUsageReport(source);
@@ -1782,6 +1658,11 @@ export namespace modelx {
 	        this.agyAccounts = this.convertValues(source["agyAccounts"], AgyAccountQuota);
 	        this.openCodeQuota = this.convertValues(source["openCodeQuota"], OpenCodeQuota);
 	        this.providers = this.convertValues(source["providers"], AIProviderUsage);
+	        this.costSummary5hMicroUsd = source["costSummary5hMicroUsd"];
+	        this.costSummaryWeeklyMicroUsd = source["costSummaryWeeklyMicroUsd"];
+	        this.costSummaryMonthlyMicroUsd = source["costSummaryMonthlyMicroUsd"];
+	        this.costByRole = this.convertValues(source["costByRole"], RoleUsageCost);
+	        this.costByAgent = this.convertValues(source["costByAgent"], AgentUsageCost);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1802,6 +1683,7 @@ export namespace modelx {
 		    return a;
 		}
 	}
+	
 	
 	export class AgyModel {
 	    slug: string;
@@ -2115,6 +1997,7 @@ export namespace modelx {
 	}
 	
 	
+	
 	export class SaveProfileRequest {
 	    id: string;
 	    provider: string;
@@ -2148,6 +2031,30 @@ export namespace modelx {
 
 export namespace orchestrator {
 	
+	export class AgentCost {
+	    agent: string;
+	    role: string;
+	    provider?: string;
+	    model?: string;
+	    calls: number;
+	    totalTokens: number;
+	    costMicroUsd: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agent = source["agent"];
+	        this.role = source["role"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.calls = source["calls"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costMicroUsd = source["costMicroUsd"];
+	    }
+	}
 	export class NestedDelivery {
 	    relPath: string;
 	    repoDir: string;
@@ -2188,6 +2095,24 @@ export namespace orchestrator {
 		    return a;
 		}
 	}
+	export class RoleCost {
+	    role: string;
+	    calls: number;
+	    totalTokens: number;
+	    costMicroUsd: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RoleCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.calls = source["calls"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costMicroUsd = source["costMicroUsd"];
+	    }
+	}
 	export class Result {
 	    SessionID: string;
 	    Summary: string;
@@ -2200,6 +2125,9 @@ export namespace orchestrator {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    costMicroUsd?: number;
+	    costByAgent?: AgentCost[];
+	    costByRole?: RoleCost[];
 	    pendingQa?: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -2219,6 +2147,9 @@ export namespace orchestrator {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.costMicroUsd = source["costMicroUsd"];
+	        this.costByAgent = this.convertValues(source["costByAgent"], AgentCost);
+	        this.costByRole = this.convertValues(source["costByRole"], RoleCost);
 	        this.pendingQa = source["pendingQa"];
 	    }
 	
@@ -2331,6 +2262,162 @@ export namespace relayclient {
 
 export namespace remote {
 	
+	export class AutoReviewEntry {
+	    prNumber: number;
+	    title: string;
+	    author?: string;
+	    headRef?: string;
+	    baseRef?: string;
+	    status: string;
+	    summary?: string;
+	    tokens?: number;
+	    durationMs?: number;
+	    sessionId?: string;
+	    reviewedAt: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoReviewEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prNumber = source["prNumber"];
+	        this.title = source["title"];
+	        this.author = source["author"];
+	        this.headRef = source["headRef"];
+	        this.baseRef = source["baseRef"];
+	        this.status = source["status"];
+	        this.summary = source["summary"];
+	        this.tokens = source["tokens"];
+	        this.durationMs = source["durationMs"];
+	        this.sessionId = source["sessionId"];
+	        this.reviewedAt = source["reviewedAt"];
+	        this.error = source["error"];
+	    }
+	}
+	export class AutoReviewStatus {
+	    workspace: string;
+	    enabled: boolean;
+	    state: string;
+	    config: team.AutoReviewSettings;
+	    activePr?: number;
+	    activePrTitle?: string;
+	    queueCount: number;
+	    reviewedLastHour: number;
+	    lastPollAt?: string;
+	    nextPollAt?: string;
+	    lastError?: string;
+	    history?: AutoReviewEntry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoReviewStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspace = source["workspace"];
+	        this.enabled = source["enabled"];
+	        this.state = source["state"];
+	        this.config = this.convertValues(source["config"], team.AutoReviewSettings);
+	        this.activePr = source["activePr"];
+	        this.activePrTitle = source["activePrTitle"];
+	        this.queueCount = source["queueCount"];
+	        this.reviewedLastHour = source["reviewedLastHour"];
+	        this.lastPollAt = source["lastPollAt"];
+	        this.nextPollAt = source["nextPollAt"];
+	        this.lastError = source["lastError"];
+	        this.history = this.convertValues(source["history"], AutoReviewEntry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DiffLine {
+	    kind: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiffLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.text = source["text"];
+	    }
+	}
+	export class FileDiff {
+	    path: string;
+	    status?: string;
+	    staged?: boolean;
+	    added: number;
+	    removed: number;
+	    lines: DiffLine[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FileDiff(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.status = source["status"];
+	        this.staged = source["staged"];
+	        this.added = source["added"];
+	        this.removed = source["removed"];
+	        this.lines = this.convertValues(source["lines"], DiffLine);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageInput {
+	    name: string;
+	    mimeType: string;
+	    dataBase64: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.mimeType = source["mimeType"];
+	        this.dataBase64 = source["dataBase64"];
+	    }
+	}
 	export class PairingInfo {
 	    uri: string;
 	    urls: string[];
@@ -2351,6 +2438,143 @@ export namespace remote {
 	        this.exp = source["exp"];
 	    }
 	}
+	export class ProjectSubtask {
+	    key: string;
+	    summary: string;
+	    status?: string;
+	    done: boolean;
+	    url?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectSubtask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.summary = source["summary"];
+	        this.status = source["status"];
+	        this.done = source["done"];
+	        this.url = source["url"];
+	    }
+	}
+	export class ProjectIssue {
+	    source: string;
+	    key: string;
+	    title: string;
+	    body?: string;
+	    status?: string;
+	    issueType?: string;
+	    isSubtask?: boolean;
+	    parentKey?: string;
+	    parentTitle?: string;
+	    parentUrl?: string;
+	    subtaskTotal?: number;
+	    subtaskDone?: number;
+	    subtaskPending?: number;
+	    subtasks?: ProjectSubtask[];
+	    author?: string;
+	    url?: string;
+	    isMine?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectIssue(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.key = source["key"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.status = source["status"];
+	        this.issueType = source["issueType"];
+	        this.isSubtask = source["isSubtask"];
+	        this.parentKey = source["parentKey"];
+	        this.parentTitle = source["parentTitle"];
+	        this.parentUrl = source["parentUrl"];
+	        this.subtaskTotal = source["subtaskTotal"];
+	        this.subtaskDone = source["subtaskDone"];
+	        this.subtaskPending = source["subtaskPending"];
+	        this.subtasks = this.convertValues(source["subtasks"], ProjectSubtask);
+	        this.author = source["author"];
+	        this.url = source["url"];
+	        this.isMine = source["isMine"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProjectPullRequest {
+	    number: number;
+	    title: string;
+	    body?: string;
+	    url: string;
+	    state: string;
+	    isDraft: boolean;
+	    author?: string;
+	    headRef?: string;
+	    baseRef?: string;
+	    updatedAt?: string;
+	    reviewDecision?: string;
+	    requestedReviewers?: string[];
+	    isMine?: boolean;
+	    reviewRequested?: boolean;
+	    myResponse?: string;
+	    needsAttention?: boolean;
+	    attentionReason?: string;
+	    mentionedMe?: boolean;
+	    lastActivityAt?: string;
+	    lastActivityAuthor?: string;
+	    lastActivityKind?: string;
+	    lastActivitySnippet?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectPullRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.number = source["number"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.url = source["url"];
+	        this.state = source["state"];
+	        this.isDraft = source["isDraft"];
+	        this.author = source["author"];
+	        this.headRef = source["headRef"];
+	        this.baseRef = source["baseRef"];
+	        this.updatedAt = source["updatedAt"];
+	        this.reviewDecision = source["reviewDecision"];
+	        this.requestedReviewers = source["requestedReviewers"];
+	        this.isMine = source["isMine"];
+	        this.reviewRequested = source["reviewRequested"];
+	        this.myResponse = source["myResponse"];
+	        this.needsAttention = source["needsAttention"];
+	        this.attentionReason = source["attentionReason"];
+	        this.mentionedMe = source["mentionedMe"];
+	        this.lastActivityAt = source["lastActivityAt"];
+	        this.lastActivityAuthor = source["lastActivityAuthor"];
+	        this.lastActivityKind = source["lastActivityKind"];
+	        this.lastActivitySnippet = source["lastActivitySnippet"];
+	    }
+	}
+	
 	export class StatusInfo {
 	    enabled: boolean;
 	    running: boolean;
@@ -2567,6 +2791,7 @@ export namespace resident {
 	    vaultSecrets: string[];
 	    eventTriggers: boolean;
 	    experimentalUnisolated: boolean;
+	    isolatedSandbox: boolean;
 	    experimentalWarning?: string;
 	    isolatedBrowser: boolean;
 	    isolatedBrowserReason?: string;
@@ -2598,6 +2823,7 @@ export namespace resident {
 	        this.vaultSecrets = source["vaultSecrets"];
 	        this.eventTriggers = source["eventTriggers"];
 	        this.experimentalUnisolated = source["experimentalUnisolated"];
+	        this.isolatedSandbox = source["isolatedSandbox"];
 	        this.experimentalWarning = source["experimentalWarning"];
 	        this.isolatedBrowser = source["isolatedBrowser"];
 	        this.isolatedBrowserReason = source["isolatedBrowserReason"];
@@ -2638,6 +2864,154 @@ export namespace resident {
 
 }
 
+export namespace sessionx {
+	
+	export class RestoredMessage {
+	    id: string;
+	    kind: string;
+	    label: string;
+	    text: string;
+	    tokens?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestoredMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.label = source["label"];
+	        this.text = source["text"];
+	        this.tokens = source["tokens"];
+	    }
+	}
+	export class TokenStat {
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	    calls: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TokenStat(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.calls = source["calls"];
+	    }
+	}
+	export class SessionDetail {
+	    id: string;
+	    title: string;
+	    jiraKey?: string;
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	    agentUsage: Record<string, TokenStat>;
+	    messages: RestoredMessage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.jiraKey = source["jiraKey"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.agentUsage = this.convertValues(source["agentUsage"], TokenStat, true);
+	        this.messages = this.convertValues(source["messages"], RestoredMessage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SessionSummary {
+	    id: string;
+	    updatedAt: string;
+	    title: string;
+	    jiraKey?: string;
+	    inputTokens: number;
+	    outputTokens: number;
+	    totalTokens: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.updatedAt = source["updatedAt"];
+	        this.title = source["title"];
+	        this.jiraKey = source["jiraKey"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
+	    }
+	}
+	
+	export class WorkspaceSessionsSummary {
+	    sessions: SessionSummary[];
+	    projectInputTokens: number;
+	    projectOutputTokens: number;
+	    projectTotalTokens: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceSessionsSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessions = this.convertValues(source["sessions"], SessionSummary);
+	        this.projectInputTokens = source["projectInputTokens"];
+	        this.projectOutputTokens = source["projectOutputTokens"];
+	        this.projectTotalTokens = source["projectTotalTokens"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace team {
 	
 	export class Agent {
@@ -2645,6 +3019,7 @@ export namespace team {
 	    role: string;
 	    provider: string;
 	    model: string;
+	    worker?: string;
 	    instructions?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -2657,6 +3032,7 @@ export namespace team {
 	        this.role = source["role"];
 	        this.provider = source["provider"];
 	        this.model = source["model"];
+	        this.worker = source["worker"];
 	        this.instructions = source["instructions"];
 	    }
 	}
@@ -2741,6 +3117,7 @@ export namespace team {
 	    jira_enabled: boolean;
 	    jira_project?: string;
 	    worktrees?: boolean;
+	    shared_directories?: string[];
 	    auto_commit: boolean;
 	    auto_pr: boolean;
 	    homolog_branch?: string;
@@ -2773,6 +3150,7 @@ export namespace team {
 	        this.jira_enabled = source["jira_enabled"];
 	        this.jira_project = source["jira_project"];
 	        this.worktrees = source["worktrees"];
+	        this.shared_directories = source["shared_directories"];
 	        this.auto_commit = source["auto_commit"];
 	        this.auto_pr = source["auto_pr"];
 	        this.homolog_branch = source["homolog_branch"];

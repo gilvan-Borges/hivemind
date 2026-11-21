@@ -1847,24 +1847,26 @@ func TestPrintUsageSummaryWritesNothingWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestTeamMemorySnippetInjectsSharedMemory valida o achado #7 do dogfooding:
-// o CLI passa a ler .hivemind/MEMORY.md em todo run, como a IDE já fazia.
+// TestTeamMemorySnippetInjectsSharedMemory valida o achado #7 do dogfooding e Spec 01 §3.3:
+// o CLI lê .hivemind/MEMORY.md em todo run de forma 100% read-only (sem criar arquivo se ausente).
 func TestTeamMemorySnippetInjectsSharedMemory(t *testing.T) {
 	dir := t.TempDir()
 	r := &Runner{Workspace: dir}
 
-	// Primeiro run: arquivo não existe — cria o starter e não injeta nada.
+	// Primeiro run: arquivo não existe — retorna vazio e NÃO cria arquivo em disco.
 	if got := r.teamMemorySnippet(); got != "" {
 		t.Fatalf("primeiro run não deveria injetar nada; got = %q", got)
 	}
 	memPath := workspace.MemoryPath(dir)
-	starter, err := os.ReadFile(memPath)
-	if err != nil || !strings.Contains(string(starter), "Memória Compartilhada") {
-		t.Fatalf("starter não foi criado: %v", err)
+	if _, err := os.Stat(memPath); !os.IsNotExist(err) {
+		t.Fatalf("teamMemorySnippet deve ser read-only e não criar %s (err=%v)", memPath, err)
 	}
 
-	// Conhecimento caro do run anterior (ex.: o JDK 21 da T1) fica disponível.
+	// Quando existir memória persistida pelo usuário/time, fica disponível no prompt.
 	note := "Testes do core: rode .\\gradlew.bat com JDK 21 (o JDK 25 padrão quebra o Gradle 8.x)."
+	if err := os.MkdirAll(filepath.Dir(memPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(memPath, []byte("# Mem\n\n"+note), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { clearGitHubUnread, loadGitGraph, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
@@ -59,6 +59,7 @@ export function closeProjectTab(projectId: string) {
         await api()?.CancelRun(l.id);
       }
     }
+    await api()?.CloseProject?.(target.project.root);
     const idx = state.projectTabs.findIndex((p) => p.id === projectId);
     state.projectTabs = state.projectTabs.filter((p) => p.id !== projectId);
     if (state.activeProjectId === projectId) {
@@ -801,6 +802,7 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
     <button type="button" class="dropdown-item" id="menu-companion" aria-pressed="${loadSettings().enabled ? "true" : "false"}">${icons.sparkle}<span>${loadSettings().enabled ? "Companion ligado" : "Companion desligado"}</span></button>
     <button type="button" class="dropdown-item" id="menu-orb-show">${icons.sparkle}<span>Mostrar Orb flutuante</span></button>
+    <button type="button" class="dropdown-item" id="menu-check-updates">${icons.refresh}<span>Verificar atualizações…</span></button>
     <button type="button" class="dropdown-item danger" id="menu-quit-all">${icons.closeSmall}<span>Sair completamente (IDE + Orb)</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
@@ -847,6 +849,11 @@ export function renderFileMenu() {
     state.showFileMenu = false;
     renderFileMenu();
     void api()?.OrbShow?.();
+  });
+  menu.querySelector("#menu-check-updates")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    void openUpdatesModal();
   });
   menu.querySelector("#menu-quit-all")?.addEventListener("click", () => {
     state.showFileMenu = false;

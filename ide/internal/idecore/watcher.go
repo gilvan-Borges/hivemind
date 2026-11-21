@@ -14,31 +14,35 @@ import (
 // FileChangeEvent coalesces debounced filesystem changes under Root.
 // Changed holds relative slash paths; when Overflow is true the batch exceeded
 // the cap and the receiver should treat the whole workspace as stale.
+// GitChanged is true when .git state files (HEAD, index, MERGE_HEAD, REBASE_HEAD) changed.
 type FileChangeEvent struct {
-	Root     string   `json:"root"`
-	Changed  []string `json:"changed"`
-	Overflow bool     `json:"overflow"`
+	Root       string   `json:"root"`
+	Changed    []string `json:"changed"`
+	Overflow   bool     `json:"overflow"`
+	GitChanged bool     `json:"gitChanged,omitempty"`
 }
 
 const (
 	watchDebounce = 250 * time.Millisecond
-	watchMaxBatch  = 400
+	watchMaxBatch = 400
 )
 
 // FileWatcher recursively watches root for filesystem changes (agents editing
 // files, git operations, external tools) and delivers them as debounced,
 // coalesced batches to onChange. Directories in ignoredDirs plus .hivemind are
 // excluded, mirroring the FileIndex walk. New directories get watches as they
-// appear.
+// appear, and root/nested .git directories are watched non-recursively for
+// HEAD/index/MERGE_HEAD/REBASE_HEAD transitions.
 type FileWatcher struct {
 	root     string
 	onChange func(FileChangeEvent)
 
-	w    *fsnotify.Watcher
-	done chan struct{}
-	once sync.Once
-	mu   sync.Mutex
-	pend map[string]bool
+	w        *fsnotify.Watcher
+	done     chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	pend     map[string]bool
+	gitDirty bool
 }
 
 // NewFileWatcher constructs a watcher for root. Call Start to begin.
@@ -81,6 +85,7 @@ func (fw *FileWatcher) Start() error {
 		_ = w.Close()
 		return err
 	}
+	fw.watchGitDirs()
 
 	go fw.loop()
 	return nil
@@ -144,7 +149,28 @@ func (fw *FileWatcher) handle(ev fsnotify.Event) {
 		return
 	}
 	rel = filepath.ToSlash(rel)
-	if rel == "." || isIgnoredRelPath(rel) {
+	if rel == "." {
+		return
+	}
+	if isWatchedGitStateRel(rel) {
+		fw.mu.Lock()
+		fw.gitDirty = true
+		fw.mu.Unlock()
+		return
+	}
+	if (rel == ".git" || strings.HasSuffix(rel, "/.git")) && ev.Has(fsnotify.Create) {
+		if info, sErr := os.Stat(ev.Name); sErr == nil && info.IsDir() {
+			fw.mu.Lock()
+			w := fw.w
+			fw.gitDirty = true
+			fw.mu.Unlock()
+			if w != nil {
+				_ = w.Add(ev.Name)
+			}
+		}
+		return
+	}
+	if isIgnoredRelPath(rel) {
 		return
 	}
 	if ev.Has(fsnotify.Create) {
@@ -161,7 +187,7 @@ func (fw *FileWatcher) handle(ev fsnotify.Event) {
 // timer flush by the loop; exported for tests.
 func (fw *FileWatcher) emitFlush() {
 	fw.mu.Lock()
-	if len(fw.pend) == 0 {
+	if len(fw.pend) == 0 && !fw.gitDirty {
 		fw.mu.Unlock()
 		return
 	}
@@ -170,7 +196,9 @@ func (fw *FileWatcher) emitFlush() {
 	for rel := range fw.pend {
 		changed = append(changed, rel)
 	}
+	gitChanged := fw.gitDirty
 	fw.pend = make(map[string]bool)
+	fw.gitDirty = false
 	fw.mu.Unlock()
 
 	if len(changed) > watchMaxBatch {
@@ -178,7 +206,70 @@ func (fw *FileWatcher) emitFlush() {
 		changed = nil
 	}
 	sort.Strings(changed)
-	fw.onChange(FileChangeEvent{Root: fw.root, Changed: changed, Overflow: overflow})
+	fw.onChange(FileChangeEvent{
+		Root:       fw.root,
+		Changed:    changed,
+		Overflow:   overflow,
+		GitChanged: gitChanged,
+	})
+}
+
+// watchGitDirs adds non-recursive watches to <root>/.git and nested repo .git
+// folders (up to depth 2) so branch switches and staging changes emit GitChanged
+// without watching .git/objects.
+func (fw *FileWatcher) watchGitDirs() {
+	var scan func(dir string, depth int)
+	scan = func(dir string, depth int) {
+		fw.mu.Lock()
+		w := fw.w
+		fw.mu.Unlock()
+		if w == nil {
+			return
+		}
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+			_ = w.Add(gitDir)
+		}
+		if depth >= 2 {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if shouldSkipRepoScanDir(name) {
+				continue
+			}
+			scan(filepath.Join(dir, name), depth+1)
+		}
+	}
+	scan(fw.root, 0)
+}
+
+func isWatchedGitStateRel(rel string) bool {
+	clean := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(rel)), "./")
+	var rest string
+	switch {
+	case strings.HasPrefix(clean, ".git/"):
+		rest = clean[len(".git/"):]
+	default:
+		if idx := strings.LastIndex(clean, "/.git/"); idx >= 0 {
+			rest = clean[idx+len("/.git/"):]
+		} else {
+			return false
+		}
+	}
+	switch rest {
+	case "HEAD", "index", "MERGE_HEAD", "REBASE_HEAD":
+		return true
+	default:
+		return false
+	}
 }
 
 func (fw *FileWatcher) watchTree(dir string) error {

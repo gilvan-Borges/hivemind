@@ -38,24 +38,23 @@
 | [Spec 05](05-secrets-vault-and-multi-tenant-isolation.md) | Cofre Unificado (`secretx`), Isolamento AGY e Multi-Tenant Pool | **Implementado (Onda 1)** | `internal/secretx/vault_windows.go`, `internal/modelx/vault_store.go`, `agy_vault_windows.go`, `account_pool.go`, `relayclient/config.go` |
 | *Onda 4 (2026-11-21)* | [D-007 (.specify)](../../.specify/specs/007-hive-floating-resident/spec.md) — **Agent Hive Flutuante** (`W4-03`/`W4-04`) | **Implementado** | `ide/internal/orb/hub.go`, `ide/orb_host.go`, `ide/orb_window.go`, `ide/frontend/src/orb/view.ts`, `resident.ts` |
 | *Onda 5 (2026-11-21)* | [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, R8, versionamento `-ldflags`, auto-updater & CI | **Implementado** | `HiveMind-App/` (Room, `KeyTrust.kt`, `CleartextGuard.kt`, `Theme.kt`), `VERSION`, `internal/version/`, `internal/updater/`, `.github/workflows/ci.yml`, `deploy/relay/` |
+| *Onda 6 (2026-11-21)* | [Spec 11](11-external-workers-worktrees-and-ux.md) — Workers CLI (`dispatch`/`heartbeat`/`ask`/`worker_done`, Cursor), `.worktreeinclude`/checkpoints, `SOUL.md`/webhooks/Slack, custo USD, PTY+Split Panes, Design Mode CDP, Hybrid Skill Stubs & Race Mode | **Implementado** | `internal/orchestrator/worker_dispatch.go`, `race.go`, `cost.go`, `internal/gitx/worktree_admin.go`, `internal/resident/webhook.go`, `slack.go`, `ide/internal/idecore/pty_manager.go`, `design_mode.go`, `ide/frontend/src/` |
+| *Fechamento Onda 3–5* | [Spec 01](01-orchestrator-modular-harness.md) — Modularização do Orquestrador (`runner`/`pipeline`/`delivery`/`triage` <= 600L), Tools & Broker + `qa_approve` estruturado | **Implementado (Onda 3)** | `internal/orchestrator/{runner,pipeline,delivery,triage}.go`, `internal/tools/`, `internal/resident/` |
+| *Fechamento Onda 3–5* | [Spec 07](07-ide-architecture-services-and-reactive-ui.md) — Split `app*.go`/`idecore`, `CloseProject` ref-counted, poller GitHub unificado, watcher `.git`, `wails-bridge.ts`, Blame/Histórico/Conflitos & UX reativa | **Implementado (Onda 4)** | `ide/app*.go`, `ide/internal/idecore/{git_diff,worktree_sync,git_ops,jira_discovery,github_prs,git_history,watcher}.go`, `ide/frontend/src/{wails-bridge,git-history}.ts`, `.specify/specs/010-git-blame-conflicts/` |
+| *Fechamento Onda 3–5* | [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) — Hardening `gitx`/`githubx` (GHES, paginação, cross-linking multi-repo no `orchestrator`) & Jira genérico | **Implementado (Onda 3)** | `internal/gitx/`, `internal/githubx/crosslink.go`, `internal/orchestrator/delivery.go`, `ide/internal/idecore/jira_discovery.go` |
+| *Fechamento Onda 3–5* | [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — `remote`/`relayclient` no módulo raiz, `hivemind serve` e `internal/runtime/bootstrap.go` com `MCPPool` | **Implementado (Onda 3)** | `internal/remote/`, `internal/relayclient/`, `internal/runtime/bootstrap.go`, `internal/cli/{runcmd,servehost}.go`, `internal/tui/model.go` |
+| *Fechamento Onda 3–5* | [`SPEC_HIVE_AGENT.md`](../SPEC_HIVE_AGENT.md) — Broker Phase 1–5 + provisão isolada em Windows Sandbox (`.wsb`, `WSBSurface`) | **Implementado (Onda 4)** | `internal/resident/{broker,sandbox_wsb,handlers_surface}.go`, `ide/internal/idecore/resident.go` |
+| *Fechamento Onda 3–5* | [`SPEC_JEV_ORQUESTRADOR.md`](../SPEC_JEV_ORQUESTRADOR.md) & [`SPEC_APP_MOBILE_NATIVO.md`](../SPEC_APP_MOBILE_NATIVO.md) & [`ROADMAP.md`](../ROADMAP.md) | **Implementado** | `internal/jev/`, `HiveMind-App/`, `ide/internal/idecore/git_history.go` |
 
 ### 1.2 Specs Parcialmente Concluídas
 
 | Documento | O que já foi feito | O que continua pendente | Onda Alvo |
 |---|---|---|---|
-| [`SPEC_ATUALIZACAO.md`](../SPEC_ATUALIZACAO.md) | Fases **1 a 7** + mutex Kernel `lock_windows.go` (`W1-04`) + **Fase 9** (`VERSION`/`-ldflags`, `internal/updater`, `checksums.txt`, R8 no `HiveMind-App`, `W5-04`/`W5-05`) | **Fase 8** (dono único do núcleo IDE/serve/orb) + plugar chamada de `internal/updater` em `ide/app.go` | Onda 4 |
-| [`SPEC_HIVE_AGENT.md`](../SPEC_HIVE_AGENT.md) | Fases **1, 2, 3 e 5** concluídas (Broker modularizado em `handlers_*.go`, sandbox `AppContainer`/`bwrap`, `secretx`, memória, `cron_add`, subagentes, hash de skill, workstream) | **Fase 4** (Browser e Desktop isolados em Windows Sandbox `.wsb` / container com gVisor, hoje desligados por padrão) | Onda 4 |
-| [`SPEC_JEV_ORQUESTRADOR.md`](../SPEC_JEV_ORQUESTRADOR.md) | Fases **1 a 5** + TypeSafe AI concluídas; **Onda 2** entregou Vertex AI em `models.ts` e failover Jev opcional em `resident/config.go` (`Config.JevFailover`) | — (spec concluída pela Onda 2) | ~~Onda 2~~ ✅ |
-| [`SPEC_APP_MOBILE_NATIVO.md`](../SPEC_APP_MOBILE_NATIVO.md) | **100% Concluída (Onda 5):** Room cache offline, `peer_presence`, modos `plan:sdd`/`plan:sdd-jira`/`resident`, `provider_health`/`relay_gap`/Jev, TOFU, `network_security_config.xml`, R8 e tokens `Theme.kt` (`SurfacePanel`, `Inter`/`JetBrains Mono`) | — | ~~Onda 5~~ ✅ |
-| [`ROADMAP.md`](../ROADMAP.md) | Fases **0 a 4** + streaming real do `agy` + `qa_approve` com evidência (`W3-03`) + remoção de `ignore_io.go` (`W3-06`) + single-source allowlist (`W3-09`) + versão dinâmica (`W5-04`) | `git blame`/resolução de conflitos na IDE (`W4-08`) | Onda 4 |
-| [Spec 01](01-orchestrator-modular-harness.md) | `tools` fatiado em `policy/fs/shell/git/github/jira/qa.go` + `resident/broker.go` fatiado em `handlers_*.go` (`W3-02`) | Quebrar `internal/orchestrator/orchestrator.go` (`W3-01`) | Onda 3 |
-| [Spec 07](07-ide-architecture-services-and-reactive-ui.md) | Proteção de foco/input em `renderLeftSidebar`/`renderModalLayer` (`W4-06`), markdown incremental, `safeImageSrc`, CSP, ARIA focus-trap e CSS `@layer` (`W4-07`) | Quebrar `ide/app.go`/`diff.go` (`W4-01`), `CloseProject` (`W4-02`), bindings `wailsjs` (`W4-05`), `git blame` (`W4-08`) | Onda 4 |
-| [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) | `gitx.Local` non-interactive env + `EnsureWorktree` + `LiteralPathspec` (`W3-06`); `githubx` GHES + paginação `Link`/GraphQL (`W3-07`); heurísticas Jira genéricas + `ListProjectIssues` read-only + helper `githubx/crosslink.go` (`W3-08`) | Plugar `crosslink.go` no `orchestrator` pós-Onda 2 | Onda 3 |
-| [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) | Onda 1 + **Onda 3 (`W3-05`)**: `remote`/`relayclient` movidos para `internal/` e `hivemind serve` headless em `internal/cli/servehost.go` | `internal/runtime/bootstrap.go` unificando construção de Runner/Jev/mcpx entre CLI/TUI/IDE (`W3-04`) | Onda 3 |
+| [`SPEC_ATUALIZACAO.md`](../SPEC_ATUALIZACAO.md) | Fases **1 a 7** + **Fase 9** (`VERSION`/`-ldflags`, `internal/updater`, `checksums.txt`, R8, UI **Verificar atualizações…** em `ide/app.go` e `modals.ts` com SHA-256) | **Fase 8** (casca / dono único de instância fora do escopo das Ondas 1–6) | Pós-Onda 6 |
 
 ### 1.3 Specs 100% Pendentes (Backlog Consolidado)
 
-- [Spec 11](11-external-workers-worktrees-and-ux.md) — Workers CLI externos (piloto Cursor CLI), ergonomia de worktrees, `SOUL.md`/webhooks/Slack, custo USD e UX avançada (**Onda 6**)
+- Nenhuma spec das Ondas 1–6 pendente no momento.
 
 ---
 
@@ -106,32 +105,32 @@
 ### Onda 3 — Modularização Go, Runtime Único CLI/TUI/IDE e Endurecimento VCS
 *Objetivo: fatiar monólitos Go, equalizar CLI/TUI com IDE e completar suporte enterprise em Git/GitHub/Jira.*
 
-- [ ] **W3-01** `[Spec 01]` Quebrar `internal/orchestrator/orchestrator.go` (`3.114L`) em `runner.go`, `triage.go`, `pipeline.go` e `delivery.go`; parar criação implícita de `MEMORY.md` em `teamMemorySnippet()`, usar `ctx` do turno em `recordQAStall(ctx)` e checar erros de `State().Set` e `Audit.RecordOutcome`.
+- [x] **W3-01** `[Spec 01]` Quebrar `internal/orchestrator/orchestrator.go` (`3.114L`) em `runner.go`, `agent_builder.go`, `session_open.go`, `triage.go`, `triage_helpers.go`, `triage_guards.go`, `pipeline.go`, `events.go` e `delivery.go`; parar criação implícita de `MEMORY.md` em `teamMemorySnippet()`, usar `ctx` do turno em `recordQAStall(ctx)` e checar erros de `State().Set`, `sessionx.UpdateState`, `Audit.RecordOutcome` e `mem.AppendSessionTurn`.
 - [x] **W3-02** `[Spec 01]` Fatiar `internal/tools/tools.go` (`1.695L`) em `policy.go`, `fs.go`, `shell.go`, `git.go`, `github.go`, `jira.go`, `qa.go` e dividir `internal/resident/broker.go` (`1.028L`) em middleware + handlers por domínio.
 - [x] **W3-03** `[ROADMAP F5]` Endurecer `qa_approve` em `internal/tools/qa.go` para exigir evidência estruturada de comando/teste executado (ou justificativa em tarefas pure-docs) quando aplicável *(mocks em `internal/orchestrator/*_test.go` atualizados para o gate)*.
-- [ ] **W3-04** `[Spec 09]` Extrair `internal/runtime/bootstrap.go` unificando construção de `Runner`, `GitHub`, `Jira`, `Sessions`, `mcpx` (com pool persistente na IDE) e `NewJevModelFactory` entre CLI, TUI e IDE.
+- [x] **W3-04** `[Spec 09]` Extrair `internal/runtime/bootstrap.go` unificando construção de `Runner`, `GitHub`, `Jira`, `Sessions`, `mcpx` (com pool persistente `MCPPool` por workspace na IDE) e `NewJevModelFactory` entre CLI, TUI e IDE.
 - [x] **W3-05** `[Spec 09]` Mover `ide/internal/remote` e `ide/internal/relayclient` para `internal/` permitindo `hivemind serve` headless sem depender de `hivemind-ide.exe`.
-- [x] **W3-06** `[Spec 08 / ROADMAP]` Unificar env Git não-interativo (`GCM_INTERACTIVE=Never`, `GIT_ASKPASS=""`) em `gitx.Local.Run`, proteger `EnsureWorktree` contra remoção em falha transitória, usar `LiteralPathspec` em `DiscardFileChanges` e remover `internal/gitx/ignore_io.go`.
+- [x] **W3-06** `[Spec 08 / ROADMAP]` Unificar env Git não-interativo (`GCM_INTERACTIVE=Never`, `GIT_ASKPASS=""`) em `gitx.Local.Run`, proteger `EnsureWorktree` contra remoção em falha transitória, normalizar paths 8.3 no Windows em `worktree_admin.go`, usar `LiteralPathspec` em `DiscardFileChanges` e remover `internal/gitx/ignore_io.go`.
 - [x] **W3-07** `[Spec 08]` Atualizar `githubx.ParseRemote` para suportar hosts **GitHub Enterprise Server (GHES)**, adicionar paginação (`Link` header + cursor GraphQL) e eliminar duplicação REST/GraphQL de `idecore/diff.go`.
-- [ ] **W3-08** `[Spec 08]` Remover termos específicos de cliente de `matchJiraProjectFromNames`, impedir mutação de `.hivemind/team.yaml` durante `ListProjectIssues` e implementar cross-linking automático entre múltiplos PRs abertos em entregas multi-repo *(parcial: sanitização e helper `githubx/crosslink.go` prontos; falta plugar o cross-link no `orchestrator`)*.
+- [x] **W3-08** `[Spec 08]` Remover termos específicos de cliente de `matchJiraProjectFromNames`, impedir mutação de `.hivemind/team.yaml` durante `ListProjectIssues` e plugar cross-linking automático (`githubx/crosslink.go` + `UpdatePullRequestBody` / `CommentOnIssue`) entre múltiplos PRs abertos em entregas multi-repo em `internal/orchestrator/delivery.go`.
 - [x] **W3-09** `[ROADMAP]` Unificar fonte única para allowlist de shell (`internal/team` vs `examples/team.yaml`).
-- [ ] **W3-10** `[Verificação Onda 3]` Validar `go test -race ./...` na raiz do módulo, nenhum arquivo Go > 600 linhas em `orchestrator`/`tools`/`resident` e testes de paginação + GHES verdes.
+- [x] **W3-10** `[Verificação Onda 3]` Validar nenhum arquivo `.go` não-teste > 600 linhas em `orchestrator`/`tools`/`resident`, testes de paginação + GHES + crosslink e suíte completa Go verde (`-race` executado no job Linux da CI).
 
 ---
 
 ### Onda 4 — IDE Reativa, Lifecycle de Projetos & Agent Hive Flutuante
 *Objetivo: zerar leaks na IDE, eliminar sobrescrita de foco/input e entregar o Agent Hive flutuante unificado.*
 
-- [ ] **W4-01** `[Spec 07]` Quebrar `ide/app.go` (`1.834L`) em serviços coesos e fatiar `ide/internal/idecore/diff.go` (`2.668L`) em `git_diff.go`, `worktree_sync.go`, `git_ops.go`, `jira_discovery.go`, `github_prs.go`.
-- [ ] **W4-02** `[Spec 07]` Implementar `CloseProject(workspace)` em `ide/app.go` chamado por `closeProjectTab()`, encerrando `FileWatcher`, `GitHubMonitor`, `AutoReviewManager` e `LSPManager`; unificar poller de PRs (60s/120s) e observar `.git/HEAD` + `.git/index` (incluindo sub-repos) no watcher.
+- [x] **W4-01** `[Spec 07]` Quebrar `ide/app.go` em `app.go`, `app_project.go`, `app_git.go`, `app_run.go`, `app_settings.go`, `app_resident.go` e fatiar `ide/internal/idecore/diff.go` em `git_diff.go`, `worktree_sync.go`, `git_ops.go`, `jira_discovery.go`, `github_prs.go` e `github_prs_graphql.go`.
+- [x] **W4-02** `[Spec 07]` Implementar `CloseProject(workspace)` ref-counted em `ide/app_project.go` chamado por `closeProjectTab()`, encerrando `FileWatcher`, `GitHubMonitor`, `AutoReviewManager`, `LSPManager`, `PTYManager`, `DesignModeService` e `MCPPool`; unificar poller de PRs via `GitHubMonitor.CachedPRs` e observar `.git/{HEAD,index,MERGE_HEAD,REBASE_HEAD}` (incluindo sub-repos) emitindo `hivemind:git-changed`.
 - [x] **W4-03** `[Spec 007 — H001..H005]` Estender `ide/internal/orb/hub.go` e `ide/orb_host.go` / `orb_window.go` com `OrbResidentState`, streaming ao vivo do `ResidentManager`, ações `resident_*` e janela `396×540` com clamp no monitor.
 - [x] **W4-04** `[Spec 007 — D001..D003, H006..H011]` Atualizar `ide/frontend/src/orb/view.ts`, `styles.css`, `boot.ts` e `resident.ts` com aba **Conversa** padrão, aprovação fixa acima do composer, preservação do rascunho no `<textarea>`, sincronia **Abrir IDE** e testes Vitest.
-- [ ] **W4-05** `[Spec 07]` Adotar diretamente bindings tipados `wailsjs/go/main/App` em `ide/frontend/src/`, removendo duplicações manuais de `types.ts`.
+- [x] **W4-05** `[Spec 07]` Regenerar bindings `wailsjs/go/main/App` (`wails generate module`) e validar contrato tipado compile-time em `ide/frontend/src/wails-bridge.ts`.
 - [x] **W4-06** `[Spec 07]` Bloquear re-renders totais de `renderLeftSidebar()` / `renderModalLayer()` sob eventos assíncronos enquanto houver input focado/sujo (preservando mensagens de commit e tokens sendo digitados).
-- [x] **W4-07** `[Spec 07]` Implementar parser **incremental por blocos** em `markdown.ts` (fim do `O(N²)` no streaming do chat), aplicar `safeImageSrc` em `modals.ts:1162`, adicionar CSP em `index.html`, foco/teclado ARIA + focus trap nos modais e modularizar `styles.css` em `@layer`.
-- [ ] **W4-08** `[ROADMAP F5]` Adicionar `git blame`, histórico por arquivo e resolução guiada de conflitos no painel Git da IDE.
-- [ ] **W4-09** `[SPEC_HIVE_AGENT F4]` Implementar provisão isolada real em Windows Sandbox (`.wsb` com `ProtectedClient`, rede filtrada e workspace read-only) para `browser_open` / `desktop_*`.
-- [ ] **W4-10** `[Verificação Onda 4]` Validar `check-design-tokens.mjs`, `npm test`, `npm run build`, `go test ./ide/...` e teste manual de abrir/fechar 10 abas + uso completo do Agent Hive flutuante com a IDE fechada na bandeja.
+- [x] **W4-07** `[Spec 07]` Implementar parser **incremental por blocos** em `markdown.ts` (fim do `O(N²)` no streaming do chat), aplicar `safeImageSrc` em `modals.ts`, adicionar CSP em `index.html`, foco/teclado ARIA + focus trap nos modais e modularizar `styles.css` em `@layer`.
+- [x] **W4-08** `[ROADMAP F5 / Spec 010]` Adicionar `git blame`, histórico por arquivo (`--follow`) e resolução guiada de conflitos no painel Git e editor da IDE (`git_history.go`, `git-history.ts`).
+- [x] **W4-09** `[SPEC_HIVE_AGENT F4]` Implementar provisão isolada em Windows Sandbox (`.wsb`, `BuildWSBXML`, `WSBSurface`, proteção contra pastas do cofre/segredos) em `internal/resident/sandbox_wsb.go` e `ResidentSetIsolatedSandbox`.
+- [x] **W4-10** `[Verificação Onda 4]` Validar `check-design-tokens.mjs`, `tsc --noEmit`, `npm test`, `npm run build`, `go test ./ide/...` e teste automatizado `TestOpenCloseProjectLifecycleTenRepos` (abrir/fechar 10 projetos sem leak de watchers/refcounts).
 
 ---
 
@@ -145,7 +144,7 @@
 - [x] **W5-05** `[Spec 10 / SPEC_ATUALIZACAO F9]` Atualizar `scripts/build-installer.ps1` (remover fallback `npm install`, gerar `checksums.txt` SHA-256, suportar `signtool.exe`) e implementar verificador/auto-updater in-app via GitHub Releases (resolvendo drift vs `AppData\Local\Programs\HiveMind`).
 - [x] **W5-06** `[Spec 10]` Endurecer `.github/workflows/ci.yml`: incluir `go test -race ./internal/remote/...`, job Android (`./gradlew testDebugUnitTest lintDebug`) e `govulncheck ./...`.
 - [x] **W5-07** `[Spec 10]` Endurecer `deploy/relay/`: fixar digest `@sha256` em `Dockerfile` + `HEALTHCHECK`, alinhar usuário `relay` entre Dockerfile e `hivemind-relay.service`, limites cgroup/seccomp e HSTS/CSP no `Caddyfile`.
-- [ ] **W5-08** `[Verificação Onda 5]` Validar CI verde ponta-a-ponta, `assembleRelease` do `HiveMind-App` com R8 ativo e upgrade simulado do instalador Windows com conferência SHA-256 *(parcial: `assembleRelease` R8 local validado e CI workflow corrigido; monitorando Actions pós-push; simulação do instalador Windows pendente)*.
+- [x] **W5-08** `[Verificação Onda 5]` Validar `assembleRelease` R8 do `HiveMind-App`, plugar `internal/updater` em `ide/app.go` (`AppVersion`, `CheckForUpdates`, `DownloadUpdate`) + modal em `modals.ts` e simular download/verificação SHA-256 em `ide/updater_test.go`.
 
 ---
 

@@ -100,6 +100,8 @@ type Config struct {
 	// ExperimentalUnisolated libera browser_open, desktop_click e desktop_type
 	// na sessão real. O padrão é falso: sem o campo, a política continua recusando.
 	ExperimentalUnisolated bool `json:"experimentalUnisolated,omitempty"`
+	// IsolatedSandbox provisions browser_open inside an ephemeral Windows Sandbox (.wsb).
+	IsolatedSandbox bool `json:"isolatedSandbox,omitempty"`
 	// JevFailover (SPEC_JEV_ORQUESTRADOR / W2-10): failover opcional do
 	// resident — quando ligado, uma rota que falha em construir aciona o
 	// Score novamente excluindo o par que falhou, em vez de abortar o turno.
@@ -147,6 +149,7 @@ type Status struct {
 	VaultSecrets           []string `json:"vaultSecrets"`
 	EventTriggers          bool     `json:"eventTriggers"`
 	ExperimentalUnisolated bool     `json:"experimentalUnisolated"`
+	IsolatedSandbox        bool     `json:"isolatedSandbox"`
 	ExperimentalWarning    string   `json:"experimentalWarning,omitempty"`
 	IsolatedBrowser        bool     `json:"isolatedBrowser"`
 	IsolatedBrowserReason  string   `json:"isolatedBrowserReason,omitempty"`

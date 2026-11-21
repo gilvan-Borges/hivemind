@@ -2,10 +2,9 @@ package resident
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +61,8 @@ type BrokerConfig struct {
 	// ExperimentalUnisolated lets browser and desktop run on the real session.
 	// Default is false. The vault is never read on that path.
 	ExperimentalUnisolated bool
+	// IsolatedSandbox provisions browser_open inside Windows Sandbox (.wsb).
+	IsolatedSandbox bool
 	// Surface is the host browser/desktop. Nil uses the OS implementation.
 	Surface Surface
 	// CustomHandlers optionally overrides built-in handlers (used in tests
@@ -143,9 +144,14 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	sandboxState := sandboxRequirement(toolName)
 
 	dec := DecideWithPolicy(call, b.cfg.Policy)
-	if isHostSurfaceTool(toolName) && b.cfg.ExperimentalUnisolated {
-		sandboxState = "unisolated"
-		dec = decideExperimentalSurface(call, b.fullAccess())
+	if isHostSurfaceTool(toolName) {
+		if b.cfg.ExperimentalUnisolated {
+			sandboxState = "unisolated"
+			dec = decideExperimentalSurface(call, b.fullAccess())
+		} else if b.cfg.IsolatedSandbox {
+			sandboxState = "windows_sandbox"
+			dec = decideExperimentalSurface(call, b.fullAccess())
+		}
 	}
 
 	// 1. Fail closed if denied by policy.
@@ -255,7 +261,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	handler, ok := b.resolveHandler(toolName)
 	if !ok {
 		err := fmt.Errorf("ferramenta %q não registrada no broker", toolName)
-		_ = b.cfg.Audit.RecordOutcome(AuditEntry{
+		b.recordOutcomeChecked(AuditEntry{
 			AccountID:  b.cfg.AccountID,
 			DeviceID:   b.cfg.DeviceID,
 			Origin:     call.Origin,
@@ -317,7 +323,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 
 	scrubbedOut := RedactSecretValues(rawOut, resolvedSecrets...)
 	fenced := WrapUntrustedData("tool", RedactTarget(target), scrubbedOut)
-	_ = b.cfg.Audit.RecordOutcome(AuditEntry{
+	b.recordOutcomeChecked(AuditEntry{
 		AccountID:  b.cfg.AccountID,
 		DeviceID:   b.cfg.DeviceID,
 		Origin:     call.Origin,
@@ -379,11 +385,17 @@ func (b *Broker) recordDenyBestEffort(callID string, call Call, tier Tier, targe
 	})
 }
 
-func (b *Broker) recordOutcomeError(callID string, call Call, tier Tier, target, sandboxState, errClass, safeErr string) {
+func (b *Broker) recordOutcomeChecked(entry AuditEntry) {
 	if b.cfg.Audit == nil {
 		return
 	}
-	_ = b.cfg.Audit.RecordOutcome(AuditEntry{
+	if err := b.cfg.Audit.RecordOutcome(entry); err != nil {
+		log.Printf("residente: falha ao registrar desfecho de auditoria (%s/%s): %v", entry.Tool, entry.Outcome, err)
+	}
+}
+
+func (b *Broker) recordOutcomeError(callID string, call Call, tier Tier, target, sandboxState, errClass, safeErr string) {
+	b.recordOutcomeChecked(AuditEntry{
 		AccountID:  b.cfg.AccountID,
 		DeviceID:   b.cfg.DeviceID,
 		Origin:     call.Origin,
@@ -476,149 +488,15 @@ func (b *Broker) surface() Surface {
 	if b.cfg.Surface != nil {
 		return b.cfg.Surface
 	}
+	if b.cfg.IsolatedSandbox && !b.cfg.ExperimentalUnisolated {
+		return NewWSBSurface(b.cfg.BaseDir, b.cfg.Workspace)
+	}
 	return defaultSurface()
 }
 
 func (b *Broker) refuseIfSurfaceOff() error {
-	if b.cfg.ExperimentalUnisolated {
+	if b.cfg.ExperimentalUnisolated || b.cfg.IsolatedSandbox {
 		return nil
 	}
-	return fmt.Errorf("recusado: experimental_unisolated desligado")
-}
-
-func extractTarget(toolName string, args map[string]any) string {
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "read_file", "list_dir", "write_file", "edit_file", "delete_file":
-		if p := strArg(args, "path"); p != "" {
-			return p
-		}
-		return "."
-	case "search_text":
-		q := strArg(args, "query")
-		if p := strArg(args, "path"); p != "" {
-			return p + " :: " + q
-		}
-		return q
-	case "find_files":
-		return strArg(args, "pattern")
-	case "memory_search":
-		return strArg(args, "query")
-	case "memory_write", "memory_forget":
-		return firstNonEmptyStr(strArg(args, "key"), strArg(args, "id"), strArg(args, "text"))
-	case "list_projects":
-		return "workspaces"
-	case "exec_command":
-		if argv := strSliceArg(args, "argv"); len(argv) > 0 {
-			return strings.Join(argv, " ")
-		}
-		return "exec_command"
-	case "net_fetch":
-		if u := strArg(args, "url"); u != "" {
-			if cred := firstNonEmptyStr(strArg(args, "credential_name"), strArg(args, "secret_name")); cred != "" {
-				return fmt.Sprintf("%s (credencial=%s)", u, cred)
-			}
-			return u
-		}
-		return "net_fetch"
-	case "browser_open":
-		if u := strArg(args, "url"); u != "" {
-			return u
-		}
-		return "browser_open"
-	case "desktop_click":
-		return fmt.Sprintf("click %d,%d", intArg(args, "x"), intArg(args, "y"))
-	case "desktop_type":
-		return strArg(args, "text")
-	default:
-		if p := strArg(args, "path"); p != "" {
-			return p
-		}
-		if c := strArg(args, "command"); c != "" {
-			return c
-		}
-		if u := strArg(args, "url"); u != "" {
-			return u
-		}
-		return toolName
-	}
-}
-
-func classifyError(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, sandboxx.ErrSandboxUnavailable) {
-		return "sandbox_unavailable"
-	}
-	if errors.Is(err, secretx.ErrVaultUnavailable) || errors.Is(err, secretx.ErrSecretNotFound) {
-		return "vault_error"
-	}
-	low := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(low, "fora do workspace"):
-		return "path_escape"
-	case strings.Contains(low, ".git"), strings.Contains(low, ".hivemind"), strings.Contains(low, "sensível"):
-		return "forbidden_path"
-	case strings.Contains(low, "not exist"), strings.Contains(low, "no such file"), strings.Contains(low, "cannot find"):
-		return "not_found"
-	case strings.Contains(low, "context canceled"), strings.Contains(low, "deadline exceeded"), strings.Contains(low, "tempo esgotado"):
-		return "canceled"
-	case strings.Contains(low, "ssrf"), strings.Contains(low, "allowlist"):
-		return "policy_denied"
-	default:
-		return "io_error"
-	}
-}
-
-func strArg(args map[string]any, key string) string {
-	if args == nil {
-		return ""
-	}
-	v, ok := args[key]
-	if !ok || v == nil {
-		return ""
-	}
-	s, ok := v.(string)
-	if ok {
-		return strings.TrimSpace(s)
-	}
-	return strings.TrimSpace(fmt.Sprint(v))
-}
-
-func intArg(args map[string]any, key string) int {
-	if args == nil {
-		return 0
-	}
-	v, ok := args[key]
-	if !ok || v == nil {
-		return 0
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	case string:
-		i, _ := strconv.Atoi(strings.TrimSpace(n))
-		return i
-	default:
-		return 0
-	}
-}
-
-func boolArg(args map[string]any, key string) bool {
-	if args == nil {
-		return false
-	}
-	v, ok := args[key]
-	if !ok || v == nil {
-		return false
-	}
-	b, ok := v.(bool)
-	if ok {
-		return b
-	}
-	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(v)), "true")
+	return fmt.Errorf("recusado: experimental_unisolated e sandbox .wsb desligados")
 }

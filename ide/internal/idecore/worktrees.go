@@ -10,8 +10,8 @@ import (
 )
 
 type (
-	WorktreeInfo       = gitx.WorktreeInfo
-	WorktreeCheckpoint = gitx.Checkpoint
+	WorktreeInfo        = gitx.WorktreeInfo
+	WorktreeCheckpoint  = gitx.Checkpoint
 	WorktreePruneResult = gitx.PruneResult
 )
 

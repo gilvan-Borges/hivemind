@@ -12,6 +12,7 @@ import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
 import { closeInlineEdit, ghostButtonTitle, openInlineEdit, renderInlineEditBar, scheduleGhostText, syncEditorInlineReview, toggleGhostText } from "./inline-ai";
+import { bindFileGitInspectEvents, openFileGitInspect, renderFileGitInspectPanelHtml } from "./git-history";
 import { applyDiagnosticsToActiveEditor, notifyLSPDidClose, notifyLSPDidOpen, notifyLSPDidSave, scheduleLSPDidChange } from "./lsp";
 
 export async function reloadCleanOpenTabs() {
@@ -784,17 +785,29 @@ export function renderEditorBody() {
     return;
   }
 
+  const inspectHtml = state.fileGitInspect.relPath === activeTab.relPath
+    ? renderFileGitInspectPanelHtml(state.fileGitInspect)
+    : "";
+  const isBlameActive = state.fileGitInspect.mode === "blame" && state.fileGitInspect.relPath === activeTab.relPath;
+  const isHistoryActive = state.fileGitInspect.mode === "history" && state.fileGitInspect.relPath === activeTab.relPath;
+
   if (isMdFile && activeTab.mdView !== "source") {
     body.innerHTML = `
       <div class="editor-breadcrumb">
         <span class="dim">${escapeHtml(activeTab.relPath)}</span>
         <div class="spacer"></div>
+        <button class="mini ${isBlameActive ? "active" : ""}" id="btn-editor-blame" title="Git Blame por linha">${icons.gitSmall}<span>Blame</span></button>
+        <button class="mini ${isHistoryActive ? "active" : ""}" id="btn-editor-history" title="Histórico de commits do arquivo">${icons.sessions}<span>Histórico</span></button>
         <button class="mini primary" id="btn-md-preview" title="Visualização renderizada do Markdown (padrão)">Visualização</button>
         <button class="mini" id="btn-md-source" title="Ver e editar o código-fonte do Markdown">Código</button>
         <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
       </div>
       <div class="md-preview" id="md-preview-scroll"><div class="md-preview-inner">${renderMarkdownLite(activeTab.content)}</div></div>
+      ${inspectHtml}
     `;
+    document.getElementById("btn-editor-blame")?.addEventListener("click", () => void openFileGitInspect("blame", activeTab.relPath, renderEditorBody));
+    document.getElementById("btn-editor-history")?.addEventListener("click", () => void openFileGitInspect("history", activeTab.relPath, renderEditorBody));
+    bindFileGitInspectEvents(renderEditorBody);
     document.getElementById("btn-md-preview")?.addEventListener("click", () => {
       activeTab.mdView = "preview";
       renderEditorBody();
@@ -823,6 +836,8 @@ export function renderEditorBody() {
         ? `<button class="mini" id="btn-md-preview" title="Voltar para a visualização renderizada">Visualização</button><button class="mini primary" id="btn-md-source" title="Editar o código-fonte do Markdown">Código</button>`
         : `<button class="mini" id="btn-inline-edit" title="Editar seleção ou inserir código com IA (Ctrl+K)">${icons.sparkle}<span>Editar IA (Ctrl+K)</span></button><button class="mini ${state.ghostTextEnabled ? "active" : ""}" id="btn-toggle-ghost" title="${escapeHtml(ghostButtonTitle())}">${icons.bolt}<span>Ghost</span></button><button class="mini" id="btn-editor-find" title="Localizar e Substituir no arquivo (Ctrl+F / Ctrl+H)">${icons.search}<span>Localizar</span></button><button class="mini" id="btn-send-selection" title="Envia as linhas selecionadas para o chat do Chefe (Ctrl+L)">${icons.send}<span>Chefe (Ctrl+L)</span></button>`
       }
+      <button class="mini ${isBlameActive ? "active" : ""}" id="btn-editor-blame" title="Git Blame por linha">${icons.gitSmall}<span>Blame</span></button>
+      <button class="mini ${isHistoryActive ? "active" : ""}" id="btn-editor-history" title="Histórico de commits do arquivo">${icons.sessions}<span>Histórico</span></button>
       <button class="mini primary" id="btn-save-file" ${activeTab.dirty ? "" : "disabled"}>${icons.save}<span>Salvar (Ctrl+S)</span></button>
     </div>
     <div class="editor-live-wrap">
@@ -831,6 +846,7 @@ export function renderEditorBody() {
       <div id="editor-find-layer"></div>
       <div id="cm-host" style="flex:1;min-width:0;height:100%;overflow:hidden"></div>
     </div>
+    ${inspectHtml}
   `;
 
   if (state.editorFind.open) {
@@ -855,6 +871,10 @@ export function renderEditorBody() {
     renderInlineEditBar();
   }
   void syncEditorInlineReview(tab.relPath);
+
+  document.getElementById("btn-editor-blame")?.addEventListener("click", () => void openFileGitInspect("blame", tab.relPath, renderEditorBody));
+  document.getElementById("btn-editor-history")?.addEventListener("click", () => void openFileGitInspect("history", tab.relPath, renderEditorBody));
+  bindFileGitInspectEvents(renderEditorBody);
 
   document.getElementById("btn-inline-edit")?.addEventListener("click", () => openInlineEdit());
   document.getElementById("btn-toggle-ghost")?.addEventListener("click", () => toggleGhostText());

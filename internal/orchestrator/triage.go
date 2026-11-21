@@ -1,0 +1,339 @@
+package orchestrator
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"google.golang.org/genai"
+
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
+
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
+	"github.com/gilvan-Borges/HiveMind/internal/modelx"
+	"github.com/gilvan-Borges/HiveMind/internal/names"
+	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/ui"
+)
+
+type delegateArgs struct {
+	Plan             string     `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	ContextBrief     string     `json:"context_brief,omitempty" jsonschema:"Dossiê técnico com os pontos importantes que você JÁ leu (regras RN exatas, assinaturas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, rotas, caminhos de arquivos e faixas de linha) para o Dev e o QA consultarem direto sem reler spec.md/plan.md/tasks.md inteiros."`
+	DevTasks         []string   `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos (1 item para tarefas focadas; 2+ itens quando realmente paralelizáveis)."`
+	OwnedPaths       [][]string `json:"owned_paths,omitempty" jsonschema:"Opcional (recomendado para 2+ dev_tasks): lista de prefixos/pastas exclusivos para cada dev na mesma ordem de dev_tasks, ex.: [[\"internal/api/\"], [\"ide/frontend/\"]]. Quando disjuntos, todos os devs compartilham 1 única worktree da conversa com trava de posse e memória compartilhada."`
+	Sequential       bool       `json:"sequential,omitempty" jsonschema:"Use true quando 2+ dev_tasks precisarem editar o mesmo serviço/arquivos sem colisão (roda Wave 1 -> Wave 2 na mesma worktree da conversa)."`
+	PRNumber         int        `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
+	PRBranch         string     `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
+	Reviewers        []string   `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
+	Skills           []string   `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills do projeto que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
+	NativeSkills     []string   `json:"native_skills,omitempty" jsonschema:"Opcional: nomes das skills NATIVAS da IDE que a equipe deve seguir. Use quando a nativa parecer mais atual ou melhor que a versão do projeto; se houver conflito de nome, o usuário será consultado para autorizar."`
+	PauseForApproval bool       `json:"pause_for_approval,omitempty" jsonschema:"No modo Auto: use true quando a tarefa for grande, arriscada ou de escopo amplo e você julgar que o usuário deve revisar e aprovar o plano ANTES de disparar o Squad. false (padrão) executa direto."`
+}
+
+type delegateResult struct {
+	Status string `json:"status"`
+}
+
+func isLightOperationalObjective(raw string) bool {
+	text := strings.TrimSpace(raw)
+	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
+	}
+	if len(text) == 0 || len(text) > 360 {
+		return false
+	}
+	low := strings.ToLower(text)
+	for _, heavy := range []string{
+		"resolver issue", "resolva a issue", "resolver task", "resolver tarefa", "resolver ipg",
+		"revisar pr", "reavaliar pr", "revisar automaticamente", "atender feedback",
+		"implement", "refator", "crie o arquivo", "criar arquivo", "edite o código",
+		"editar o código", "corrija o bug", "corrigir o bug", "desenvolv", "escreva o teste",
+		"adicione o endpoint", "criar componente", "migração", "fazer uma task", "pegar uma task",
+		"pegue uma task", "fazer a task", "executar a task", "worktree", "onda ", "fase ",
+		"descrição:", "critérios de aceite",
+	} {
+		if strings.Contains(low, heavy) {
+			return false
+		}
+	}
+	for _, kw := range []string{
+		"mude o status", "mudar status", "mudar o status", "atualize o status", "atualizar status",
+		"mover para", "mova para", "transicionar", "transição",
+		"comentar no jira", "comente no jira", "comentar na task", "comente na task",
+		"comentar no pr", "comente no pr", "comentar na issue",
+		"qual o status", "conferir status", "verificar status", "listar tasks", "liste as tasks",
+	} {
+		if strings.Contains(low, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) resolveLightJevAgent(chief team.Agent) (team.Agent, bool) {
+	cProv := team.NormalizeProvider(chief.Provider, chief.Model)
+	cLow := strings.ToLower(strings.TrimSpace(chief.Model))
+	if cProv == "jev" || strings.HasPrefix(cLow, "jev:") || strings.HasSuffix(cLow, ":auto") {
+		return chief, true
+	}
+	for _, ag := range r.Team.Agents {
+		p := team.NormalizeProvider(ag.Provider, ag.Model)
+		m := strings.ToLower(strings.TrimSpace(ag.Model))
+		if p == "jev" || strings.HasPrefix(m, "jev:") || (p != "cursor" && strings.HasSuffix(m, ":auto")) {
+			routed := chief
+			routed.Provider = ag.Provider
+			routed.Model = ag.Model
+			return routed, true
+		}
+	}
+	creds := modelx.JevCredentialPresence()
+	routed := chief
+	routed.Provider = "jev"
+	if creds["openrouter"] {
+		routed.Model = "jev:openrouter"
+	} else {
+		routed.Model = "jev:auto"
+	}
+	return routed, true
+}
+
+func (r *Runner) resolveTriageChief() team.Agent {
+	chief := r.primaryChief()
+	if r.autoReviewMode {
+		if arm := strings.TrimSpace(r.Project.Settings.AutoReview.Model); arm != "" {
+			chief.Model = arm
+			chief.Provider = team.NormalizeProvider("", arm)
+			return chief
+		}
+	}
+	if r.reviewRequested {
+		if rm := strings.TrimSpace(r.Project.Settings.ReviewModel); rm != "" {
+			chief.Model = rm
+			chief.Provider = team.NormalizeProvider("", rm)
+		}
+		return chief
+	}
+	if isLightOperationalObjective(r.objectiveText) {
+		if light, ok := r.resolveLightJevAgent(chief); ok {
+			return light
+		}
+	}
+	return chief
+}
+
+func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *genai.Content, jiraKey string, mode agent.StreamingMode, runMode string) (bool, string, error) {
+	chief := r.resolveTriageChief()
+
+	sddDocs := runMode == "plan:sdd"
+	sddJira := runMode == "plan:sdd-jira"
+	isAutoReview := runMode == "auto-review"
+
+	var (
+		preloadedPR       int
+		preloadedOwnPR    bool
+		preloadedAllDiffs bool
+		preloadedJiraKey  string
+	)
+	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
+		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
+			dossier, isOwn, allComplete := buildPreHydratedPRDossier(ctx, r.GitHub, prNum)
+			if dossier != "" {
+				preloadedPR = prNum
+				preloadedOwnPR = isOwn
+				preloadedAllDiffs = allComplete
+				msg = appendTextToFirstPart(msg, dossier)
+			}
+		}
+	} else if !sddDocs && !sddJira && r.Jira != nil && r.Jira.Enabled() {
+		jiraDossier, resKey := buildPreHydratedJiraDossier(ctx, r.Jira, jiraKey, r.Project.Settings.JiraProject, r.objectiveText)
+		if jiraDossier != "" {
+			preloadedJiraKey = resKey
+			if jiraKey == "" && resKey != "" {
+				jiraKey = resKey
+				r.issueKey = resKey
+			}
+			msg = appendTextToFirstPart(msg, jiraDossier)
+		}
+	}
+
+	toolRoot := r.Workspace
+	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
+		toolRoot = r.ReviewRoot
+	}
+	triageStep := "triage_chief"
+	if isLightOperationalObjective(r.objectiveText) && !sddDocs && !sddJira && !isAutoReview {
+		triageStep = "light_ops"
+	}
+	triageCtx := modelx.WithAgentDir(ctx, toolRoot)
+	triageCtx = withJevRouteHint(triageCtx, jevRouteHint{
+		RunMode:      runMode,
+		Step:         triageStep,
+		ObjectiveLen: len(r.objectiveText),
+		Objective:    r.objectiveText,
+		InputTokens:  jev.EstimateFirstStepInputTokens(len(r.objectiveText), len(r.teamMemorySnippet()), true),
+		HasImages:    r.hasImages || hasImageContent(msg),
+		NeedsTools:   true,
+		QAStall:      r.qaStallCount,
+		Workspace:    r.Workspace,
+		WorkDir:      toolRoot,
+		RepoKey:      r.jevRepo,
+		Author:       chief.Name,
+		Label:        roleLabel(chief.Role) + " · " + chief.Name,
+		Stage:        "chief",
+		Git:          r.Git,
+		Approve:      r.Approve,
+		OnEvent:      r.wrapRouteEvent(r.OnEvent),
+	})
+	llm, err := r.modelFor(triageCtx, chief)
+	if err != nil {
+		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
+	}
+
+	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview)
+	if err != nil {
+		return false, "", err
+	}
+
+	baseDevs := r.Team.ByRole(team.RoleDeveloper)
+	maxDevs := r.maxAllowedDevs()
+
+	var delegateMu sync.Mutex
+	var delegated bool
+	var planCardEmitted bool
+
+	if sddDocs {
+		docsReady, err := r.newSDDDocsReadyTool(chief)
+		if err != nil {
+			return false, "", err
+		}
+		allTools = append(allTools, docsReady)
+	}
+
+	if runMode != "direct" && runMode != "auto-review" && !sddDocs {
+		delegateTool, err := r.newTriageDelegateTool(chief, sess, runMode, maxDevs, baseDevs, &delegateMu, &delegated, &planCardEmitted)
+		if err != nil {
+			return false, "", err
+		}
+		allTools = append(allTools, delegateTool)
+	}
+
+	triageInstr := r.buildTriageInstructions(ctx, chief, runMode, maxDevs)
+
+	adkName := names.ADK(chief.Name + "_triage")
+	beforeToolCBs := []llmagent.BeforeToolCallback{
+		newRepeatReadGuardCallback(),
+	}
+	var afterToolCBs []llmagent.AfterToolCallback
+	if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
+		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, revAfter)
+	} else if !sddDocs && !sddJira && runMode != "direct" {
+		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, defaultMaxTriageExploreCalls)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, triAfter)
+	}
+	keepInTurn := r.Project.Settings.EffectiveInTurnKeepToolResults()
+	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {
+		keepInTurn = 6
+	}
+	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
+		contextx.NewCompactionCallback(contextx.Budget{
+			ContextWindow: agentContextWindow(chief),
+			KeepRecent:    keepInTurn,
+		}),
+	}
+	triageAgent, err := llmagent.New(llmagent.Config{
+		Name:                     adkName,
+		Description:              "Triagem e coordenação do Chefe HiveMind.",
+		Model:                    llm,
+		Mode:                     llmagent.ModeChat,
+		IncludeContents:          llmagent.IncludeContentsDefault,
+		DisallowTransferToParent: true,
+		DisallowTransferToPeers:  true,
+		Tools:                    allTools,
+		Instruction:              triageInstr,
+		BeforeModelCallbacks:     triageBeforeModelCBs,
+		BeforeToolCallbacks:      beforeToolCBs,
+		AfterToolCallbacks:       afterToolCBs,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	triageRunner, err := runner.New(runner.Config{
+		AppName:        sessionx.AppName,
+		Agent:          triageAgent,
+		SessionService: r.Sessions,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	labels := map[string]string{
+		adkName: roleLabel(chief.Role) + " (Chefe) · " + chief.Name,
+	}
+	if r.OnEvent != nil {
+		r.OnEvent(Event{Kind: "stage", Stage: "chief", Author: adkName, Label: labels[adkName]})
+	}
+	printer := &ui.Printer{Out: r.Out, Labels: labels}
+	var summary string
+	for ev, err := range triageRunner.Run(ctx, sessionx.UserID, sess.ID(), msg, agent.RunConfig{
+		StreamingMode: mode,
+		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
+	}) {
+		if err != nil {
+			return false, "", err
+		}
+		printer.Event(ev)
+		if ev != nil {
+			r.recordUsage(ev, labels)
+			if r.OnEvent != nil {
+				r.emitEvent(ev, labels)
+			}
+			tokenLimit := r.Project.Settings.MaxTokens
+			if isAutoReview {
+				tokenLimit = r.Project.Settings.AutoReview.EffectiveMaxTokensPerPR(tokenLimit)
+			}
+			if tokenLimit > 0 && r.turnTotalTokens > tokenLimit {
+				return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, tokenLimit)
+			}
+		}
+		if ev != nil && !ev.Partial && ev.LLMResponse.Content != nil {
+			for _, part := range ev.LLMResponse.Content.Parts {
+				if part != nil && part.Text != "" && !part.Thought {
+					summary = strings.TrimSpace(part.Text)
+				}
+			}
+		}
+	}
+	delegateMu.Lock()
+	wasDelegated := delegated
+	wasPlanCard := planCardEmitted
+	delegateMu.Unlock()
+	if wasDelegated {
+		r.sealHandoff(sess.ID())
+	}
+	if wasDelegated && r.chiefPlan != "" {
+		r.setStateChecked(sess.State(), "chief_plan", r.chiefPlan)
+	}
+	if wasDelegated && r.chiefContextBrief != "" {
+		r.setStateChecked(sess.State(), "chief_context_brief", r.chiefContextBrief)
+	}
+	if runMode == "plan" && !wasPlanCard && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
+		r.OnEvent(Event{
+			Kind:   "plan_ready",
+			Stage:  "chief",
+			Author: chief.Name,
+			Label:  "Plano pronto para aprovação",
+			Text:   strings.TrimSpace(summary),
+		})
+	}
+	return wasDelegated, summary, nil
+}

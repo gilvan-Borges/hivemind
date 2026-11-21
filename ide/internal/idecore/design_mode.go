@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -25,14 +26,14 @@ type DesignModePage struct {
 
 // DesignModeElement captures inspected DOM structure and computed styles for the composer.
 type DesignModeElement struct {
-	URL            string            `json:"url,omitempty"`
-	Selector       string            `json:"selector"`
-	Tag            string            `json:"tag,omitempty"`
-	ID             string            `json:"id,omitempty"`
-	Classes        []string          `json:"classes,omitempty"`
-	TextSnippet    string            `json:"textSnippet,omitempty"`
-	OuterHTML      string            `json:"outerHtml,omitempty"`
-	ComputedStyles map[string]string `json:"computedStyles,omitempty"`
+	URL            string             `json:"url,omitempty"`
+	Selector       string             `json:"selector"`
+	Tag            string             `json:"tag,omitempty"`
+	ID             string             `json:"id,omitempty"`
+	Classes        []string           `json:"classes,omitempty"`
+	TextSnippet    string             `json:"textSnippet,omitempty"`
+	OuterHTML      string             `json:"outerHtml,omitempty"`
+	ComputedStyles map[string]string  `json:"computedStyles,omitempty"`
 	BoundingBox    map[string]float64 `json:"boundingBox,omitempty"`
 }
 
@@ -58,6 +59,40 @@ func NewDesignModeService() *DesignModeService {
 		newHostFn: func(ctx context.Context, workspace string) mcpCaller {
 			return mcpx.Start(ctx, workspace)
 		},
+	}
+}
+
+// CloseWorkspace closes and removes any lazy CDP MCP host opened for workspace.
+func (s *DesignModeService) CloseWorkspace(workspace string) {
+	if s == nil {
+		return
+	}
+	ws := strings.TrimSpace(workspace)
+	if ws == "" {
+		return
+	}
+	abs, err := filepath.Abs(ws)
+	if err != nil {
+		abs = ws
+	}
+	cleanTarget := filepath.Clean(abs)
+	s.mu.Lock()
+	var closing []mcpCaller
+	for key, h := range s.hosts {
+		kAbs, kErr := filepath.Abs(strings.TrimSpace(key))
+		if kErr != nil {
+			kAbs = strings.TrimSpace(key)
+		}
+		if strings.EqualFold(filepath.Clean(kAbs), cleanTarget) || strings.EqualFold(strings.TrimSpace(key), ws) {
+			if h != nil {
+				closing = append(closing, h)
+			}
+			delete(s.hosts, key)
+		}
+	}
+	s.mu.Unlock()
+	for _, h := range closing {
+		_ = h.Close()
 	}
 }
 

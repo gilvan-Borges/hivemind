@@ -412,6 +412,28 @@ export async function boot() {
     }
   });
 
+  let gitChangedTimer: ReturnType<typeof setTimeout> | null = null;
+  window.runtime?.EventsOn("hivemind:git-changed", (payload: { workspace?: string; branch?: string }) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!wsKey) return;
+    const branch = String(payload?.branch || "").trim();
+    const tabCtx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === wsKey);
+    if (tabCtx && branch) {
+      tabCtx.project.branch = branch;
+    }
+    if (state.project && normalizePathKey(state.project.root) === wsKey) {
+      if (branch) {
+        state.project.branch = branch;
+        updateHeaderAndStatusBar();
+      }
+      if (gitChangedTimer) clearTimeout(gitChangedTimer);
+      gitChangedTimer = setTimeout(() => {
+        gitChangedTimer = null;
+        void refreshDiffs();
+      }, 250);
+    }
+  });
+
   window.runtime?.EventsOn("hivemind:fs-event", (payload: any) => {
     const wsKey = normalizePathKey(payload?.workspace || "");
     if (!wsKey) return;

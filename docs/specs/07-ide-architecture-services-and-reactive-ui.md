@@ -1,6 +1,6 @@
 # Spec 07 — Desacoplamento da IDE (`idecore`), Ciclo de Vida de Projetos e UI Reativa
 
-> **Status:** Parcialmente Implementado (Onda 4 concluiu `W4-06`/`W4-07`: render guards, markdown incremental, `safeImageSrc`, CSP, ARIA focus-trap e CSS `@layer`; pendentes `W4-01`, `W4-02`, `W4-05`, `W4-08`)
+> **Status:** Implementado (Onda 4 concluída — `W4-01`, `W4-02`, `W4-05`, `W4-06`, `W4-07`, `W4-08`: split de `ide/app.go` e `idecore/diff.go`, `CloseProject` com cleanup ref-counted, poller GitHub unificado, observação de `.git/HEAD`+`index`, bridge tipado `wailsjs` em `wails-bridge.ts`, render guards, markdown incremental, CSP, ARIA focus-trap, CSS `@layer` e Blame/Histórico/Conflitos)
 > **Alvos:** `ide/app.go`, `ide/internal/idecore/`, `ide/frontend/src/`, `ide/frontend/index.html`
 
 ---

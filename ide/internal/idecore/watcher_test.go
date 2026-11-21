@@ -14,7 +14,7 @@ func waitForBatch(t *testing.T, batches chan FileChangeEvent, timeout time.Durat
 	for {
 		select {
 		case b := <-batches:
-			if len(b.Changed) > 0 || b.Overflow {
+			if len(b.Changed) > 0 || b.Overflow || b.GitChanged {
 				return b
 			}
 		case <-deadline:
@@ -155,15 +155,78 @@ func TestFileWatcherWatchesNewSubdirectories(t *testing.T) {
 
 func TestIsIgnoredRelPath(t *testing.T) {
 	cases := map[string]bool{
-		".hivemind/team.yaml":        true,
-		".hivemind/sessions/a.json":  true,
-		"node_modules/pkg/index.js":  true,
-		"internal/idecore/watch.go":  false,
-		"cmd/app/main.go":            false,
+		".hivemind/team.yaml":       true,
+		".hivemind/sessions/a.json": true,
+		"node_modules/pkg/index.js": true,
+		"internal/idecore/watch.go": false,
+		"cmd/app/main.go":           false,
 	}
 	for rel, want := range cases {
 		if got := isIgnoredRelPath(rel); got != want {
 			t.Fatalf("isIgnoredRelPath(%q) = %v, queria %v", rel, got, want)
+		}
+	}
+}
+
+func TestIsWatchedGitStateRel(t *testing.T) {
+	cases := map[string]bool{
+		".git/HEAD":                   true,
+		".git/index":                  true,
+		".git/MERGE_HEAD":             true,
+		".git/REBASE_HEAD":            true,
+		"sub/repo/.git/HEAD":          true,
+		"sub/repo/.git/index":         true,
+		".git/index.lock":             false,
+		".git/objects/ab/1234":        false,
+		"src/main.go":                 false,
+	}
+	for rel, want := range cases {
+		if got := isWatchedGitStateRel(rel); got != want {
+			t.Fatalf("isWatchedGitStateRel(%q) = %v, queria %v", rel, got, want)
+		}
+	}
+}
+
+func TestFileWatcherDetectsGitHEADAndIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("espera eventos reais de filesystem")
+	}
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	objDir := filepath.Join(gitDir, "objects", "ab")
+	if err := os.MkdirAll(objDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	batches := make(chan FileChangeEvent, 16)
+	fw, err := NewFileWatcher(root, func(ev FileChangeEvent) { batches <- ev })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer fw.Close()
+
+	// Object writes must never produce events.
+	if err := os.WriteFile(filepath.Join(objDir, "deadbeef"), []byte("obj"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Switching HEAD must set GitChanged=true without polluting Changed slice.
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/feat/test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := waitForBatch(t, batches, 5*time.Second)
+	if !batch.GitChanged {
+		t.Fatalf("expected GitChanged=true on .git/HEAD update, got %+v", batch)
+	}
+	for _, p := range batch.Changed {
+		if p == ".git/HEAD" || isIgnoredRelPath(p) {
+			t.Fatalf("did not expect git internal path %q in Changed: %v", p, batch.Changed)
 		}
 	}
 }

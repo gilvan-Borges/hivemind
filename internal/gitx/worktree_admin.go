@@ -54,7 +54,8 @@ func ListWorktrees(ctx context.Context, g Git, repo string) ([]WorktreeInfo, err
 		if cur.Path != "" {
 			clean := filepath.Clean(cur.Path)
 			cur.IsMain = sameNormalizedPath(clean, mainAbs)
-			if !cur.IsMain && strings.HasPrefix(strings.ToLower(clean), strings.ToLower(wtRootClean+string(filepath.Separator))) {
+			wtRootPrefix := strings.TrimSuffix(normPathKey(wtRootClean), "/") + "/"
+			if !cur.IsMain && strings.HasPrefix(normPathKey(clean), wtRootPrefix) {
 				cur.Agent = filepath.Base(clean)
 			}
 			cur.SizeBytes = dirSizeSafe(clean)

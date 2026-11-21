@@ -3,6 +3,7 @@ package resident
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -176,6 +177,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		BaseDir:                baseDir,
 		OnRoutineSaved:         r.OnRoutineSaved,
 		ExperimentalUnisolated: r.Config.ExperimentalUnisolated,
+		IsolatedSandbox:        r.Config.IsolatedSandbox,
 	})
 	r.brokerMu.Lock()
 	r.LastBroker = broker
@@ -374,7 +376,9 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	}
 
 	// Persist short-term turn locally per account (never long-term facts from tool output, §5.8).
-	_ = mem.AppendSessionTurn(ws, msg, finalText)
+	if err := mem.AppendSessionTurn(ws, msg, finalText); err != nil {
+		log.Printf("residente: falha ao salvar turno em memória de curto prazo: %v", err)
+	}
 
 	r.emit(Event{
 		Kind:   "finish",

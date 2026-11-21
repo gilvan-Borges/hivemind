@@ -16,30 +16,30 @@ import (
 var trayIconICO []byte
 
 const (
-	wmAppTray         = 0x8000 + 42
-	wmDestroy         = 0x0002
-	wmCommand         = 0x0111
-	wmLButtonUp       = 0x0202
-	wmLButtonDblClk   = 0x0203
-	wmRButtonUp       = 0x0205
-	wmContextMenu     = 0x007B
-	nimAdd            = 0x00000000
-	nimDelete         = 0x00000002
-	nifMessage        = 0x00000001
-	nifIcon           = 0x00000002
-	nifTip            = 0x00000004
-	imageIcon         = 1
-	lrLoadFromFile    = 0x00000010
-	lrDefaultSize     = 0x00000040
-	mfString          = 0x00000000
-	mfSeparator       = 0x00000800
-	tpmRightButton    = 0x0002
-	tpmBottomAlign    = 0x0020
-	tpmReturnCmd      = 0x0100
-	trayCmdOpenIDE    = 1001
-	trayCmdShowOrb    = 1002
-	trayCmdQuitAll    = 1003
-	idiApplication    = 32512
+	wmAppTray       = 0x8000 + 42
+	wmDestroy       = 0x0002
+	wmCommand       = 0x0111
+	wmLButtonUp     = 0x0202
+	wmLButtonDblClk = 0x0203
+	wmRButtonUp     = 0x0205
+	wmContextMenu   = 0x007B
+	nimAdd          = 0x00000000
+	nimDelete       = 0x00000002
+	nifMessage      = 0x00000001
+	nifIcon         = 0x00000002
+	nifTip          = 0x00000004
+	imageIcon       = 1
+	lrLoadFromFile  = 0x00000010
+	lrDefaultSize   = 0x00000040
+	mfString        = 0x00000000
+	mfSeparator     = 0x00000800
+	tpmRightButton  = 0x0002
+	tpmBottomAlign  = 0x0020
+	tpmReturnCmd    = 0x0100
+	trayCmdOpenIDE  = 1001
+	trayCmdShowOrb  = 1002
+	trayCmdQuitAll  = 1003
+	idiApplication  = 32512
 )
 
 type trayWndClassEx struct {

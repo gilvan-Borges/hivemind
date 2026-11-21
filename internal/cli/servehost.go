@@ -13,12 +13,11 @@ import (
 	"google.golang.org/adk/v2/agent"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
-	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/internal/runtime"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
-	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -174,47 +173,23 @@ func (s *serveHost) RunStart(
 			return
 		}
 
-		mcpHost := mcpx.Start(runCtx, ws)
-		defer mcpHost.Close()
-
-		nativeRoot := skillx.UserSkillsDir()
-		if _, seedErr := skillx.SeedProductSkills(nativeRoot); seedErr != nil {
-			s.hub.HandleLaneEvent(remote.LaneEvent{
-				LaneID: laneID,
-				Team:   squad.Name,
-				Event: orchestrator.Event{
-					Kind:  "text",
-					Stage: "chief",
-					Label: "HiveMind serve",
-					Text:  "aviso: skills nativas: " + seedErr.Error(),
-				},
-			})
-		}
-
 		emit := func(ev orchestrator.Event) {
 			s.hub.HandleLaneEvent(remote.LaneEvent{LaneID: laneID, Team: squad.Name, Event: ev})
 		}
-
-		runner := &orchestrator.Runner{
-			Workspace:        ws,
-			Project:          project,
-			Team:             squad,
-			Git:              gitx.Local{},
-			Confirm:          func(command string) bool { return s.requestApproval(laneID, squad.Name, "shell", command) },
-			Approve:          func(prompt string) bool { return s.requestApproval(laneID, squad.Name, "merge", prompt) },
-			MCP:              mcpHost,
-			NativeSkills:     skillx.LoadNative(nativeRoot),
-			NativeSkillsRoot: nativeRoot,
-			Out:              io.Discard,
-			Err:              io.Discard,
-			Streaming:        agent.StreamingModeSSE,
-			OnEvent:          emit,
-		}
-		runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
+		runner, cleanup := runtime.BuildRunner(runCtx, runtime.RunnerOptions{
 			Workspace: ws,
-			Approve:   runner.Approve,
-			OnEvent:   runner.OnEvent,
+			LaneID:    laneID,
+			Project:   project,
+			Team:      squad,
+			Git:       gitx.Local{},
+			Confirm:   func(command string) bool { return s.requestApproval(laneID, squad.Name, "shell", command) },
+			Approve:   func(prompt string) bool { return s.requestApproval(laneID, squad.Name, "merge", prompt) },
+			Out:       io.Discard,
+			Err:       io.Discard,
+			Streaming: agent.StreamingModeSSE,
+			OnEvent:   emit,
 		})
+		defer cleanup()
 
 		_, runErr := runner.Run(runCtx, orchestrator.Request{
 			Objective:   objective,

@@ -21,11 +21,10 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
-	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/runtime"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
-	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
@@ -397,20 +396,13 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 	}
 	go func() {
 		defer close(ch)
-		nativeRoot := skillx.UserSkillsDir()
-		_, _ = skillx.SeedProductSkills(nativeRoot)
-		mcpHost := mcpx.Start(ctx, workspaceDir)
-		defer mcpHost.Close()
-		r := &orchestrator.Runner{
+		r, cleanup := runtime.BuildRunner(ctx, runtime.RunnerOptions{
 			Workspace:          workspaceDir,
 			Project:            projectSnapshot,
 			Team:               squad,
 			Git:                gitx.Local{},
 			Confirm:            askHuman,
 			Approve:            askHuman,
-			MCP:                mcpHost,
-			NativeSkills:       skillx.LoadNative(nativeRoot),
-			NativeSkillsRoot:   nativeRoot,
 			Out:                io.Discard,
 			Err:                io.Discard,
 			EnableTriage:       true,
@@ -421,12 +413,8 @@ func (m model) beginRun(text string) (tea.Model, tea.Cmd) {
 				case <-ctx.Done():
 				}
 			},
-		}
-		r.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-			Workspace: workspaceDir,
-			Approve:   askHuman,
-			OnEvent:   r.OnEvent,
 		})
+		defer cleanup()
 		res, runErr := r.Run(ctx, orchestrator.Request{
 			Objective: text,
 			SessionID: reqSessionID,

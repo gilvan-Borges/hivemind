@@ -398,6 +398,38 @@ func (m *AutoReviewManager) StopActivePR(workspace string) bool {
 	return true
 }
 
+// StopWorkspace halts any active auto-review loop and PR review for workspace.
+func (m *AutoReviewManager) StopWorkspace(workspace string) {
+	if m == nil {
+		return
+	}
+	key := autoReviewWorkspaceKey(workspace)
+	m.mu.Lock()
+	w, ok := m.workers[key]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.workers, key)
+	cancelActive := w.activeCancel
+	cancelLoop := w.loopCancel
+	done := w.doneCh
+	w.activeCancel = nil
+	w.loopCancel = nil
+	w.doneCh = nil
+	m.mu.Unlock()
+
+	if cancelActive != nil {
+		cancelActive()
+	}
+	if cancelLoop != nil {
+		cancelLoop()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
 // StopAll halts all active auto-review workers (called on IDE shutdown).
 func (m *AutoReviewManager) StopAll() {
 	m.mu.Lock()

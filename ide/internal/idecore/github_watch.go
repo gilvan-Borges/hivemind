@@ -176,6 +176,7 @@ type githubWatchWorker struct {
 	workspace  string
 	hasBase    bool
 	lastPRs    []ProjectPullRequest
+	lastPollAt time.Time
 	failStreak int
 	cancel     context.CancelFunc
 	triggerCh  chan struct{}
@@ -286,7 +287,29 @@ func (m *GitHubMonitor) RecordSnapshot(workspace string, prs []ProjectPullReques
 	cloned := append([]ProjectPullRequest(nil), prs...)
 	w.lastPRs = cloned
 	w.hasBase = true
+	w.lastPollAt = m.now()
 	w.failStreak = 0
+}
+
+// CachedPRs returns the last polled PR snapshot for workspace when it is fresher
+// than maxAge (or any cached snapshot when maxAge <= 0). Used so AutoReviewManager
+// reuses GitHubMonitor results instead of polling GitHub twice.
+func (m *GitHubMonitor) CachedPRs(workspace string, maxAge time.Duration) ([]ProjectPullRequest, bool) {
+	if m == nil {
+		return nil, false
+	}
+	key := githubWorkspaceKey(workspace)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w := m.workers[key]
+	if w == nil || !w.hasBase {
+		return nil, false
+	}
+	if maxAge > 0 && (w.lastPollAt.IsZero() || m.now().Sub(w.lastPollAt) > maxAge) {
+		return nil, false
+	}
+	cloned := append([]ProjectPullRequest(nil), w.lastPRs...)
+	return cloned, true
 }
 
 // StopWorkspace stops background polling for a single workspace.
@@ -397,6 +420,7 @@ func (m *GitHubMonitor) pollOnce(ctx context.Context, _ string, w *githubWatchWo
 	}
 	w.lastPRs = append([]ProjectPullRequest(nil), prs...)
 	w.hasBase = true
+	w.lastPollAt = m.now()
 	w.failStreak = 0
 	m.mu.Unlock()
 

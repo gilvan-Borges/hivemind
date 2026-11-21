@@ -12,10 +12,9 @@ import (
 	"google.golang.org/adk/v2/agent"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
-	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
+	"github.com/gilvan-Borges/HiveMind/internal/runtime"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
-	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -91,22 +90,13 @@ func executeRunDetailed(cmd *cobra.Command, objective, jiraKey, sessionID string
 	}
 	confirm := confirmerWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
 	approve := approverWithReader(cmd, project.Settings, yes, sharedReader, &promptMu)
-	nativeRoot := skillx.UserSkillsDir()
-	if _, err := skillx.SeedProductSkills(nativeRoot); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "aviso: skills nativas: %v\n", err)
-	}
-	mcpHost := mcpx.Start(cmd.Context(), dir)
-	defer mcpHost.Close()
-	runner := &orchestrator.Runner{
+	runner, cleanup := runtime.BuildRunner(cmd.Context(), runtime.RunnerOptions{
 		Workspace:        dir,
 		Project:          project,
 		Team:             squad,
 		Git:              gitx.Local{},
 		Confirm:          confirm,
 		Approve:          approve,
-		MCP:              mcpHost,
-		NativeSkills:     skillx.LoadNative(nativeRoot),
-		NativeSkillsRoot: nativeRoot,
 		Out:              cmd.OutOrStdout(),
 		Err:              cmd.ErrOrStderr(),
 		Streaming:        agent.StreamingModeSSE,
@@ -115,12 +105,8 @@ func executeRunDetailed(cmd *cobra.Command, objective, jiraKey, sessionID string
 				fmt.Fprintf(cmd.OutOrStdout(), "[jev] %s\n", ev.Text)
 			}
 		},
-	}
-	runner.NewModel = orchestrator.NewJevModelFactory(orchestrator.JevFactoryOptions{
-		Workspace: dir,
-		Approve:   approve,
-		OnEvent:   runner.OnEvent,
 	})
+	defer cleanup()
 	res, runErr := runner.Run(cmd.Context(), orchestrator.Request{
 		Objective: objective,
 		JiraKey:   jiraKey,

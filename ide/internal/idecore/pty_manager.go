@@ -2,6 +2,7 @@ package idecore
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -200,6 +201,47 @@ func (m *PTYManager) Close(termID string) {
 	m.mu.Unlock()
 	if ok && mp != nil && mp.sess != nil {
 		_ = mp.sess.Close()
+	}
+}
+
+func normWorkspaceKey(workspace string) string {
+	ws := strings.TrimSpace(workspace)
+	if ws == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(ws); err == nil {
+		ws = abs
+	}
+	return strings.TrimRight(strings.ToLower(filepath.ToSlash(filepath.Clean(ws))), "/")
+}
+
+// CloseWorkspace terminates all active PTY sessions belonging to workspace.
+func (m *PTYManager) CloseWorkspace(workspace string) {
+	if m == nil {
+		return
+	}
+	target := normWorkspaceKey(workspace)
+	if target == "" {
+		return
+	}
+	m.mu.Lock()
+	var list []*managedPTY
+	for k, mp := range m.terms {
+		if mp == nil {
+			delete(m.terms, k)
+			continue
+		}
+		if normWorkspaceKey(mp.workspace) == target || strings.TrimRight(k, "/") == target {
+			mp.alive = false
+			list = append(list, mp)
+			delete(m.terms, k)
+		}
+	}
+	m.mu.Unlock()
+	for _, mp := range list {
+		if mp.sess != nil {
+			_ = mp.sess.Close()
+		}
 	}
 }
 

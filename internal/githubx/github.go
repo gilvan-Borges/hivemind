@@ -134,6 +134,12 @@ type Client interface {
 	CIStatus(ctx context.Context, ref string) (string, error)
 }
 
+// PullRequestBodyUpdater is optionally implemented by GitHub clients that support
+// editing the body of an existing pull request (used for multi-repo PR cross-linking).
+type PullRequestBodyUpdater interface {
+	UpdatePullRequestBody(ctx context.Context, number int, body string) error
+}
+
 // Disabled explains why GitHub calls are turned off.
 type Disabled struct{ Reason string }
 
@@ -670,6 +676,14 @@ func (r *REST) ReplyToReviewComment(ctx context.Context, number int, commentID i
 	}
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%d/replies", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number, commentID)
 	return r.do(ctx, http.MethodPost, path, map[string]string{"body": body}, nil)
+}
+
+func (r *REST) UpdatePullRequestBody(ctx context.Context, number int, body string) error {
+	if number <= 0 {
+		return fmt.Errorf("número de PR inválido: %d", number)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(r.Owner), url.PathEscape(r.Repo), number)
+	return r.do(ctx, http.MethodPatch, path, map[string]string{"body": body}, nil)
 }
 
 func (r *REST) RequestReviewers(ctx context.Context, number int, reviewers []string) error {

@@ -1,6 +1,6 @@
 # Spec 09 — Segurança E2EE do Relay/LAN Bridge, Sandbox/Pool MCP e Runtime Único
 
-> **Status:** Em Progresso (Onda 3 parcial: `W3-05` implementado — `internal/remote` e `internal/relayclient` promovidos para o módulo raiz; `W3-04` `internal/runtime/bootstrap.go` e pool `mcpx` pendentes)
+> **Status:** Implementado (Onda 3 concluída — `W3-04`, `W3-05`: `internal/remote` e `internal/relayclient` no módulo raiz, `hivemind serve` headless em `internal/cli/servehost.go` e `internal/runtime/bootstrap.go` com pool `MCPPool` unificado entre CLI, TUI e IDE)
 > **Alvos:** `relaywire/`, `internal/relay/`, `ide/internal/relayclient/`, `ide/internal/remote/`, `internal/mcpx/`, `cmd/`, `internal/cli/`, `internal/tui/`, `ide/internal/idecore/runner.go`, `docs/MODELO_AMEACAS.md`
 
 ---

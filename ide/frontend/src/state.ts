@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp, WorkspaceGitRepo } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, UpdateCheckResult, WailsBackendApp, WorkspaceGitRepo } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -97,6 +97,15 @@ export const state = {
   showJiraModal: false,
   showAPIKeysModal: false,
   showMobileModal: false,
+  showUpdatesModal: false,
+  updateCheckState: {
+    status: "idle" as "idle" | "checking" | "ready" | "error",
+    version: "",
+    result: null as UpdateCheckResult | null,
+    downloading: false,
+    downloadedPath: "",
+    error: "",
+  },
   mobileStatus: null as MobileBridgeStatus | null,
   mobilePairing: null as MobilePairing | null,
   relayStatus: null as RelayStatus | null,
@@ -280,6 +289,20 @@ export const state = {
     replaceText: "",
     matchIndex: 0,
     matches: [] as Array<{ start: number; end: number }>,
+  },
+  fileGitInspect: {
+    mode: "none" as "none" | "blame" | "history",
+    relPath: "",
+    loading: false,
+    error: "",
+    blame: [] as import("./types").BlameLine[],
+    history: [] as import("./types").FileCommitEntry[],
+  },
+  gitConflicts: {
+    loading: false,
+    error: "",
+    files: [] as import("./types").ConflictedFile[],
+    busyKey: "",
   },
 };
 

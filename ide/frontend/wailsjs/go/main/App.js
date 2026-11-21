@@ -6,8 +6,16 @@ export function ActivateAgyAccount(arg1, arg2) {
   return window['go']['main']['App']['ActivateAgyAccount'](arg1, arg2);
 }
 
+export function AppVersion() {
+  return window['go']['main']['App']['AppVersion']();
+}
+
 export function ApplyHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ApplyHunk'](arg1, arg2, arg3, arg4);
+}
+
+export function ArchiveWorktree(arg1, arg2) {
+  return window['go']['main']['App']['ArchiveWorktree'](arg1, arg2);
 }
 
 export function BindJiraWorkspace(arg1, arg2) {
@@ -46,6 +54,10 @@ export function CancelRun(arg1) {
   return window['go']['main']['App']['CancelRun'](arg1);
 }
 
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
 export function CheckWorkspaceProblems(arg1, arg2) {
   return window['go']['main']['App']['CheckWorkspaceProblems'](arg1, arg2);
 }
@@ -66,6 +78,10 @@ export function ClosePTY(arg1) {
   return window['go']['main']['App']['ClosePTY'](arg1);
 }
 
+export function CloseProject(arg1) {
+  return window['go']['main']['App']['CloseProject'](arg1);
+}
+
 export function CommentJira(arg1, arg2, arg3) {
   return window['go']['main']['App']['CommentJira'](arg1, arg2, arg3);
 }
@@ -84,6 +100,10 @@ export function CreateDir(arg1, arg2) {
 
 export function CreateFile(arg1, arg2) {
   return window['go']['main']['App']['CreateFile'](arg1, arg2);
+}
+
+export function CreateWorktreeAsync(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CreateWorktreeAsync'](arg1, arg2, arg3);
 }
 
 export function CursorCLIStatus() {
@@ -114,6 +134,14 @@ export function DeleteTeam(arg1, arg2) {
   return window['go']['main']['App']['DeleteTeam'](arg1, arg2);
 }
 
+export function DesignModeListPages(arg1) {
+  return window['go']['main']['App']['DesignModeListPages'](arg1);
+}
+
+export function DesignModePickElement(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DesignModePickElement'](arg1, arg2, arg3);
+}
+
 export function DiscardChanges(arg1) {
   return window['go']['main']['App']['DiscardChanges'](arg1);
 }
@@ -124,6 +152,10 @@ export function DiscardFile(arg1, arg2) {
 
 export function DoctorAgy() {
   return window['go']['main']['App']['DoctorAgy']();
+}
+
+export function DownloadUpdate(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['DownloadUpdate'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function EnsureTeamMemory(arg1) {
@@ -184,6 +216,14 @@ export function GetRecentProjects() {
 
 export function GetWorkspaceGitRepos(arg1) {
   return window['go']['main']['App']['GetWorkspaceGitRepos'](arg1);
+}
+
+export function GitBlameFile(arg1, arg2) {
+  return window['go']['main']['App']['GitBlameFile'](arg1, arg2);
+}
+
+export function GitFileHistory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GitFileHistory'](arg1, arg2, arg3);
 }
 
 export function GitHubStatus(arg1) {
@@ -250,6 +290,10 @@ export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
 }
 
+export function ListConflictedFiles(arg1) {
+  return window['go']['main']['App']['ListConflictedFiles'](arg1);
+}
+
 export function ListCursorModels() {
   return window['go']['main']['App']['ListCursorModels']();
 }
@@ -302,12 +346,24 @@ export function ListSkills(arg1) {
   return window['go']['main']['App']['ListSkills'](arg1);
 }
 
+export function ListWorktreeCheckpoints(arg1) {
+  return window['go']['main']['App']['ListWorktreeCheckpoints'](arg1);
+}
+
+export function ListWorktrees(arg1) {
+  return window['go']['main']['App']['ListWorktrees'](arg1);
+}
+
 export function LoadSession(arg1, arg2) {
   return window['go']['main']['App']['LoadSession'](arg1, arg2);
 }
 
 export function LoginAgyProfile(arg1) {
   return window['go']['main']['App']['LoginAgyProfile'](arg1);
+}
+
+export function MarkConflictResolved(arg1, arg2) {
+  return window['go']['main']['App']['MarkConflictResolved'](arg1, arg2);
 }
 
 export function MobileBridgeStatus() {
@@ -360,6 +416,10 @@ export function PlayAlertSound(arg1) {
 
 export function ProbeProviders() {
   return window['go']['main']['App']['ProbeProviders']();
+}
+
+export function PruneWorktrees(arg1) {
+  return window['go']['main']['App']['PruneWorktrees'](arg1);
 }
 
 export function QuitAll() {
@@ -450,6 +510,10 @@ export function ResidentDeleteSecret(arg1) {
   return window['go']['main']['App']['ResidentDeleteSecret'](arg1);
 }
 
+export function ResidentGetSoul() {
+  return window['go']['main']['App']['ResidentGetSoul']();
+}
+
 export function ResidentListMemory(arg1) {
   return window['go']['main']['App']['ResidentListMemory'](arg1);
 }
@@ -474,6 +538,10 @@ export function ResidentSaveRoutine(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ResidentSaveRoutine'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function ResidentSaveSoul(arg1) {
+  return window['go']['main']['App']['ResidentSaveSoul'](arg1);
+}
+
 export function ResidentSessionMessages(arg1) {
   return window['go']['main']['App']['ResidentSessionMessages'](arg1);
 }
@@ -484,6 +552,10 @@ export function ResidentSetEventTriggers(arg1) {
 
 export function ResidentSetExperimentalUnisolated(arg1) {
   return window['go']['main']['App']['ResidentSetExperimentalUnisolated'](arg1);
+}
+
+export function ResidentSetIsolatedSandbox(arg1) {
+  return window['go']['main']['App']['ResidentSetIsolatedSandbox'](arg1);
 }
 
 export function ResidentSetRoutineEnabled(arg1, arg2) {
@@ -506,6 +578,10 @@ export function ResizePTY(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizePTY'](arg1, arg2, arg3);
 }
 
+export function ResolveConflictBlock(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ResolveConflictBlock'](arg1, arg2, arg3, arg4);
+}
+
 export function RespondApproval(arg1, arg2) {
   return window['go']['main']['App']['RespondApproval'](arg1, arg2);
 }
@@ -516,6 +592,10 @@ export function RestartPTY(arg1, arg2, arg3, arg4) {
 
 export function RevertHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['RevertHunk'](arg1, arg2, arg3, arg4);
+}
+
+export function RollbackWorktreeCheckpoint(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RollbackWorktreeCheckpoint'](arg1, arg2, arg3);
 }
 
 export function RotateMobileToken() {
@@ -624,6 +704,10 @@ export function StageFile(arg1, arg2, arg3) {
 
 export function StageHunk(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['StageHunk'](arg1, arg2, arg3, arg4);
+}
+
+export function StartLanePTY(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StartLanePTY'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function StartPTY(arg1, arg2, arg3, arg4) {

@@ -1,6 +1,6 @@
 # Spec 01 — Modularização do Orquestrador, Ferramentas e Broker do Resident
 
-> **Status:** Em Progresso (Onda 3 parcial: `W3-02` e `W3-03` implementados — split de `internal/tools/`, `internal/resident/` e gate estruturado de `qa_approve`; `W3-01` split de `orchestrator.go` pendente)
+> **Status:** Implementado (Onda 3 concluída — `W3-01`, `W3-02`, `W3-03`, `W3-10`: split de `orchestrator.go`, `internal/tools/` e `internal/resident/` em arquivos <= 600 linhas, `teamMemorySnippet()` 100% read-only, `recordQAStall(ctx)` herdando o contexto do turno, checagem de erros de persistência/audit e gate estruturado em `qa_approve`)
 > **Alvos:** `internal/orchestrator/`, `internal/tools/`, `internal/resident/`
 
 ---

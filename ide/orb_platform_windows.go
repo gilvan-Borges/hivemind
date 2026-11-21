@@ -10,28 +10,28 @@ import (
 )
 
 const (
-	gwlStyle              = -16
-	gwlExStyle            = -20
-	wsCaption             = 0x00C00000
-	wsThickFrame          = 0x00040000
-	wsPopup               = 0x80000000
-	wsExToolWindow        = 0x00000080
-	wsExAppWindow         = 0x00040000
-	swHide                = 0
-	swShowNoActivate      = 4
-	swpNoSize             = 0x0001
-	swpNoZOrder           = 0x0004
-	swpNoActivate         = 0x0010
-	swpFrameChanged       = 0x0020
-	swpAsyncWindowPos     = 0x4000
-	swpNoMove             = 0x0002
-	vkLButton             = 0x01
+	gwlStyle               = -16
+	gwlExStyle             = -20
+	wsCaption              = 0x00C00000
+	wsThickFrame           = 0x00040000
+	wsPopup                = 0x80000000
+	wsExToolWindow         = 0x00000080
+	wsExAppWindow          = 0x00040000
+	swHide                 = 0
+	swShowNoActivate       = 4
+	swpNoSize              = 0x0001
+	swpNoZOrder            = 0x0004
+	swpNoActivate          = 0x0010
+	swpFrameChanged        = 0x0020
+	swpAsyncWindowPos      = 0x4000
+	swpNoMove              = 0x0002
+	vkLButton              = 0x01
 	dwmwaNcRenderingPolicy = 2
-	dwmncrpDisabled       = 1
-	dwmwaWindowCornerPref = 33
-	dwmwaBorderColor      = 34
-	dwmwcpDoNotRound      = 1
-	dwmwaColorNone        = 0xFFFFFFFE
+	dwmncrpDisabled        = 1
+	dwmwaWindowCornerPref  = 33
+	dwmwaBorderColor       = 34
+	dwmwcpDoNotRound       = 1
+	dwmwaColorNone         = 0xFFFFFFFE
 )
 
 type winPoint struct {
