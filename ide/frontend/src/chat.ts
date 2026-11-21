@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import { renderMarkdownLite } from "./markdown";
+import { renderMarkdownLite, renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, PermissionMode, RunMode } from "./types";
 import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
 import { refreshSessions } from "./boot";
@@ -401,10 +401,10 @@ function renderToolGroup(tools: Array<{ name: string; target: string }>, open: b
   return `<details class="stream-tool-group" ${open ? "open" : ""}><summary class="stream-tool-summary">${tools.length} ações</summary>${rows}</details>`;
 }
 
-function renderAssistantBody(text: string, streamOpen: boolean): string {
+function renderAssistantBody(text: string, streamOpen: boolean, msgId: string): string {
   const blocks = splitAssistantBlocks(text);
   return blocks.map((b, i) => {
-    if (b.kind === "md") return `<div class="md-prose">${renderMarkdownLite(b.text)}</div>`;
+    if (b.kind === "md") return `<div class="md-prose">${renderMarkdownStreamed(`${msgId}:md:${i}`, b.text)}</div>`;
     return renderToolGroup(b.tools, streamOpen && i === blocks.length - 1);
   }).join("");
 }
@@ -563,7 +563,7 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     const elapsedText = formatElapsedThinking(elapsedMs);
     const titleWord = m.active ? "Pensando" : "Pensou";
     const thoughtBody = m.text.trim()
-      ? renderMarkdownLite(m.text)
+      ? renderMarkdownStreamed(`${m.id}:think`, m.text)
       : `<div class="dim" style="font-size:11.5px">${m.active
           ? "Analisando contexto, arquivos e ferramentas disponíveis…"
           : `Concluído em ${escapeHtml(elapsedText)}${m.stepCount ? ` · ${m.stepCount} ação${m.stepCount === 1 ? "" : "es"}` : ""}.`
@@ -790,7 +790,7 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const laneNow = activeLane();
   const streamOpen = Boolean(laneNow?.running && laneNow.messages[laneNow.messages.length - 1]?.id === m.id);
   const bodyHtml = m.kind === "chief"
-    ? renderAssistantBody(m.text, streamOpen)
+    ? renderAssistantBody(m.text, streamOpen, m.id)
     : m.kind === "system"
       ? renderMarkdownLite(m.text)
       : escapeHtml(m.text);

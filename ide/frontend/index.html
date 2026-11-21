@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- CSP restritiva (Spec 07 §3.2.3): o runtime do Wails é injetado pelo
+         assetserver como <script src="/wails/..."> (mesmo origin), os assets do
+         Vite e as fontes @fontsource são bundlados em 'self', e os QRs/imagens
+         renderizados usam apenas data:. ws://localhost cobre o HMR do modo dev. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
     <title>HiveMind IDE</title>
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/brand/hivemind-icon.png" />

@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import { renderMarkdownLite } from "./markdown";
+import { renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorTabs } from "./editor";
@@ -39,7 +39,7 @@ function syncPolicyDraftsFromStatus(st: ResidentStatus | null): void {
   residentState.hostsDraft = Array.isArray(st.allowedHosts) ? st.allowedHosts.join(", ") : "";
 }
 
-function formatRiskBadge(tierRaw?: string): { tier: string; label: string; css: string } {
+export function formatRiskBadge(tierRaw?: string): { tier: string; label: string; css: string } {
   const t = (tierRaw || "").trim().toLowerCase();
   switch (t) {
     case "read":
@@ -65,7 +65,7 @@ export function openResidentTab(): void {
     state.editorTabs.push({
       kind: "resident",
       relPath: RESIDENT_TAB_KEY,
-      name: "Hive Residente",
+      name: "Agent Hive",
       content: "",
       dirty: false,
     });
@@ -157,7 +157,7 @@ export async function refreshResidentData(): Promise<void> {
       residentState.messages = sessionMsgs.map((m, idx) => ({
         id: `res-hist-${idx}`,
         kind: m.role === "user" ? "user" : "chief",
-        label: m.role === "user" ? "Você" : "Hive Residente",
+        label: m.role === "user" ? "Você" : "Agent Hive",
         text: m.text,
       }));
     }
@@ -190,34 +190,55 @@ export function updateResidentStatusChip(): void {
     ? `Sandbox: ${st.sandboxMechanism || "ativa"}`
     : "Sandbox: indisponível (falha fechada)";
   chip.title = st
-    ? `Hive Residente · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
-    : "Hive Residente — clique para abrir";
+    ? `Agent Hive · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
+    : "Agent Hive — clique para abrir";
 }
 
 function rerenderResidentIfOpen(): void {
-  if (state.activeEditorPath === RESIDENT_TAB_KEY) {
-    renderEditorBody();
+  if (state.activeEditorPath !== RESIDENT_TAB_KEY) {
+    return;
+  }
+  // Preserva o foco do composer quando eventos assíncronos (streaming,
+  // aprovações, refresh) re-renderizam a aba (Spec 007 H007).
+  const active = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+  const hadChatFocus = Boolean(active && (active.id === "res-chat-input" || active.id === "res-workstream-input"));
+  renderEditorBody();
+  if (hadChatFocus) {
+    const next = document.getElementById(active?.id || "");
+    next?.focus();
   }
 }
 
-export function handleResidentLaneEvent(payload: any): void {
+/** Shape mínimo do residentState usado por applyResidentLaneEvent (testável). */
+export interface ResidentEventTarget {
+  running: boolean;
+  status: { state?: string } | null;
+  messages: ChatMessage[];
+}
+
+/**
+ * applyResidentLaneEvent aplica um evento da lane "resident" (streaming,
+ * tool calls, aprovações, erros, finish) sobre o estado da conversa.
+ * Função pura sobre `target` — sem DOM nem runtime — para testes unitários.
+ */
+export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any): void {
   const ev = payload?.event;
   if (!ev) return;
 
   if (ev.kind === "stage") {
-    residentState.running = true;
-    if (residentState.status) residentState.status.state = ev.text || "pensando";
-    noteActivity({ laneId: "resident", kind: "stage", text: ev.text, label: ev.label });
+    target.running = true;
+    if (target.status) target.status.state = ev.text || "pensando";
   } else if (ev.kind === "user_message" && ev.text) {
-    residentState.messages.push({
+    const fromOrb = String(ev.origin || "") === "orb";
+    target.messages.push({
       id: `res-u-${Date.now()}`,
       kind: "user",
-      label: "Remoto",
+      label: fromOrb ? "Você" : String(ev.label || "Remoto"),
       text: String(ev.text),
     });
   } else if (ev.kind === "tool_call") {
     const risk = formatRiskBadge(String(ev.gate || ev.riskTier || ""));
-    residentState.messages.push({
+    target.messages.push({
       id: `res-tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       kind: "tool",
       label: risk.label,
@@ -227,82 +248,100 @@ export function handleResidentLaneEvent(payload: any): void {
       riskTier: risk.tier,
       active: true,
     });
-    noteActivity({ laneId: "resident", kind: "tool_call", toolName: String(ev.toolName || "") });
   } else if (ev.kind === "tool_result") {
-    for (let i = residentState.messages.length - 1; i >= 0; i--) {
-      const m = residentState.messages[i];
+    for (let i = target.messages.length - 1; i >= 0; i--) {
+      const m = target.messages[i];
       if (m.kind === "tool" && m.active) {
         m.active = false;
         break;
       }
     }
   } else if (ev.kind === "approval_required") {
-    if (residentState.status) residentState.status.state = "aguardando você";
+    if (target.status) target.status.state = "aguardando você";
     const tierRaw = String(ev.gate || ev.riskTier || "");
-    const apprId = `res-appr-${Date.now()}`;
-    residentState.messages.push({
-      id: apprId,
+    target.messages.push({
+      id: `res-appr-${Date.now()}`,
       kind: "approval",
-      label: String(ev.label || "Aprovação do Hive Residente"),
+      label: String(ev.label || "Aprovação do Agent Hive"),
       text: String(ev.text || ""),
       toolName: String(ev.toolName || ""),
       toolDetail: String(ev.detail || ""),
       riskTier: tierRaw,
       approvalId: String(ev.approvalId || ""),
     });
-    publishNotice(
-      { laneId: "resident", kind: "approval_required", toolName: String(ev.toolName || ""), text: String(ev.text || ""), label: String(ev.label || "") },
-      { surface: "resident", projectId: "", laneId: "resident", messageId: apprId },
-    );
   } else if (ev.kind === "approval_resolved") {
-    const target = residentState.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
-    if (target) {
-      target.resolved = /recusada|negada/i.test(String(ev.text || "")) ? "denied" : "approved";
+    const target1 = target.messages.find((m) => m.kind === "approval" && m.approvalId === ev.approvalId && !m.resolved);
+    if (target1) {
+      target1.resolved = /recusada|negada/i.test(String(ev.text || "")) ? "denied" : "approved";
     }
   } else if (ev.kind === "text" && !ev.thought && ev.text) {
-    const last = residentState.messages[residentState.messages.length - 1];
+    const last = target.messages[target.messages.length - 1];
+    const fromOrb = String(ev.origin || "") === "orb";
     if (last && last.kind === "chief" && ev.partial) {
       last.text += String(ev.text);
     } else if (last && last.kind === "chief" && !ev.partial) {
       last.text = String(ev.text);
     } else {
-      residentState.messages.push({
+      target.messages.push({
         id: `res-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         kind: "chief",
-        label: "Hive Residente",
+        label: fromOrb ? "Agent Hive" : String(ev.label || "Hive Residente"),
         text: String(ev.text),
       });
     }
   } else if (ev.kind === "error") {
-    residentState.running = false;
-    if (residentState.status) residentState.status.state = "ocioso";
-    const errId = `res-err-${Date.now()}`;
-    residentState.messages.push({
-      id: errId,
+    target.running = false;
+    if (target.status) target.status.state = "ocioso";
+    target.messages.push({
+      id: `res-err-${Date.now()}`,
       kind: "error",
       label: "Erro",
-      text: String(ev.text || "Erro no agente residente"),
+      text: String(ev.text || "Erro no Agent Hive"),
     });
-    publishNotice(
-      { laneId: "resident", kind: "error", text: String(ev.text || ""), label: "Erro", origin: String(ev.origin || "") },
-      { surface: "resident", projectId: "", laneId: "resident", messageId: errId },
-    );
   } else if (ev.kind === "finish") {
-    residentState.running = false;
-    if (residentState.status) residentState.status.state = "ocioso";
+    target.running = false;
+    if (target.status) target.status.state = "ocioso";
     if (String(ev.origin || "") === "routine") {
-      const doneId = `res-routine-${Date.now()}`;
-      residentState.messages.push({
-        id: doneId,
+      target.messages.push({
+        id: `res-routine-${Date.now()}`,
         kind: "system",
         label: "Rotina",
         text: String(ev.text || "Rotina concluída."),
       });
-      publishNotice(
-        { laneId: "resident", kind: "finish", origin: "routine", text: String(ev.text || "") },
-        { surface: "resident", projectId: "", laneId: "resident", messageId: doneId },
-      );
     }
+  }
+}
+
+export function handleResidentLaneEvent(payload: any): void {
+  const ev = payload?.event;
+  if (!ev) return;
+
+  applyResidentLaneEvent(residentState, payload);
+
+  if (ev.kind === "stage") {
+    noteActivity({ laneId: "resident", kind: "stage", text: ev.text, label: ev.label });
+  } else if (ev.kind === "tool_call") {
+    noteActivity({ laneId: "resident", kind: "tool_call", toolName: String(ev.toolName || "") });
+  } else if (ev.kind === "approval_required") {
+    const apprId = residentState.messages[residentState.messages.length - 1]?.id || "";
+    publishNotice(
+      { laneId: "resident", kind: "approval_required", toolName: String(ev.toolName || ""), text: String(ev.text || ""), label: String(ev.label || "") },
+      { surface: "resident", projectId: "", laneId: "resident", messageId: apprId },
+    );
+  } else if (ev.kind === "error") {
+    const errId = residentState.messages[residentState.messages.length - 1]?.id || "";
+    publishNotice(
+      { laneId: "resident", kind: "error", text: String(ev.text || ""), label: "Erro", origin: String(ev.origin || "") },
+      { surface: "resident", projectId: "", laneId: "resident", messageId: errId },
+    );
+  } else if (ev.kind === "finish" && String(ev.origin || "") === "routine") {
+    const doneId = residentState.messages[residentState.messages.length - 1]?.id || "";
+    publishNotice(
+      { laneId: "resident", kind: "finish", origin: "routine", text: String(ev.text || "") },
+      { surface: "resident", projectId: "", laneId: "resident", messageId: doneId },
+    );
+    void refreshResidentData();
+  } else if (ev.kind === "finish") {
     void refreshResidentData();
   }
 
@@ -330,7 +369,7 @@ export function renderResidentViewHtml(): string {
         <div class="resident-title-block">
           <div class="resident-title-row">
             ${icons.sparkle}
-            <h2>Hive Residente</h2>
+            <h2>Agent Hive</h2>
             <span class="resident-badge ${st?.experimentalUnisolated ? "risk-destructive" : "readonly"}">${st?.experimentalUnisolated ? "Sem isolamento (teste)" : "Sandbox obrigatória"}</span>
             <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}" title="${escapeHtml(st?.sandboxReason || sbText)}">${escapeHtml(sbText)}</span>
             <span class="resident-badge ${vaultOk ? "risk-read" : "risk-write"}" title="${escapeHtml(st?.vaultReason || "Cofre do SO")}">${vaultOk ? "Cofre SO: ativo" : "Cofre SO: indisponível"}</span>
@@ -374,7 +413,7 @@ function renderResidentChatHtml(): string {
     ? `
       <div class="chat-empty-state">
         <div class="chat-empty-icon">${icons.brandHero}</div>
-        <div class="chat-empty-title">Hive Residente pronto</div>
+        <div class="chat-empty-title">Agent Hive pronto</div>
         <div class="chat-empty-sub">Leitura local no workspace é direta e auditada. Escrita de arquivos, execução de binários na allowlist (sempre em sandbox com argv explícito, sem sh -c) e rede na allowlist exigem sua aprovação no cartão abaixo.</div>
       </div>
     `
@@ -415,7 +454,7 @@ function renderResidentChatHtml(): string {
             </div>
           `;
         }
-        const body = m.kind === "chief" ? renderMarkdownLite(m.text) : escapeHtml(m.text);
+        const body = m.kind === "chief" ? renderMarkdownStreamed(m.id, m.text) : escapeHtml(m.text);
         return `
           <div class="msg-card role-${m.kind}" data-msg-id="${escapeHtml(m.id)}">
             <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>

@@ -2,15 +2,30 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 
+	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/orb"
+	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// idecoreEventUserMessage builds the lane event that echoes an Orb-originated
+// message into the IDE Agent Hive tab with the correct "Você" authoring.
+func idecoreEventUserMessage(text string) orchestrator.Event {
+	return orchestrator.Event{
+		Kind:   "user_message",
+		Author: "orb",
+		Origin: "orb",
+		Label:  "Você",
+		Text:   text,
+	}
+}
 
 type orbHostState struct {
 	mu        sync.Mutex
@@ -32,9 +47,137 @@ func (a *App) startOrbHost() {
 	a.orb.mu.Lock()
 	a.orb.hub = hub
 	a.orb.mu.Unlock()
+	a.hookResidentLaneEvents()
 	if err := a.launchOrbWindow(); err != nil {
 		log.Printf("aviso: janela do Orb flutuante não iniciou: %v", err)
 	}
+	go a.orbSyncResidentSnapshot()
+}
+
+// hookResidentLaneEvents mirrors every idecore LaneEvent of lane "resident"
+// into the Orb Hub so the floating Agent Hive chats live with the very same
+// session used by the IDE tab (Spec 007 H003). The wrap happens once during
+// Wails startup, before any binding or scheduler is able to fire a resident
+// turn, so the swap of SessionManager.Emit is race-free in practice.
+func (a *App) hookResidentLaneEvents() {
+	if a.sessions == nil {
+		return
+	}
+	prev := a.sessions.Emit
+	a.sessions.Emit = func(ev idecore.LaneEvent) {
+		if prev != nil {
+			prev(ev)
+		}
+		a.orbMirrorResidentEvent(ev)
+	}
+}
+
+// orbMirrorResidentEvent converts one resident LaneEvent into the neutral
+// OrbResidentEvent shape applied on top of the mirrored Agent Hive state.
+func (a *App) orbMirrorResidentEvent(ev idecore.LaneEvent) {
+	if ev.LaneID != "resident" {
+		return
+	}
+	a.orb.mu.Lock()
+	hub := a.orb.hub
+	a.orb.mu.Unlock()
+	if hub == nil {
+		return
+	}
+	e := ev.Event
+	orbEv := orb.OrbResidentEvent{
+		Kind:       e.Kind,
+		Text:       e.Text,
+		Partial:    e.Partial,
+		Label:      e.Label,
+		ToolName:   e.ToolName,
+		ToolDetail: e.Detail,
+		RiskTier:   e.Gate,
+		ApprovalID: e.ApprovalID,
+	}
+	switch e.Kind {
+	case "approval_resolved":
+		low := strings.ToLower(e.Text)
+		orbEv.Approved = !strings.Contains(low, "recus") && !strings.Contains(low, "negad")
+		hub.ApplyResidentEvent(orbEv)
+	case "user_message", "text", "tool_call", "tool_result", "approval_required", "stage", "error", "finish":
+		hub.ApplyResidentEvent(orbEv)
+	}
+}
+
+// orbActiveWorkspace resolves the workspace the Agent Hive should operate on
+// when a turn is started from the floating Orb. It matches the active project
+// name (already pushed to the Orb by OpenProject via orbSetProject) against
+// the projects registered in the mobile bridge hub.
+func (a *App) orbActiveWorkspace() string {
+	var name string
+	if hub := a.orbHub(); hub != nil {
+		name = strings.TrimSpace(hub.Snapshot().ProjectName)
+	}
+	if a.mobile != nil && a.mobile.hub != nil {
+		projects := a.mobile.hub.Projects()
+		if name != "" {
+			for _, p := range projects {
+				if p.Name == name {
+					return p.Workspace
+				}
+			}
+		}
+		if len(projects) == 1 {
+			return projects[0].Workspace
+		}
+	}
+	if strings.TrimSpace(a.initialDir) != "" {
+		return a.initialDir
+	}
+	return ""
+}
+
+func (a *App) orbHub() *orb.Hub {
+	a.orb.mu.Lock()
+	defer a.orb.mu.Unlock()
+	return a.orb.hub
+}
+
+// orbSyncResidentSnapshot pushes a full snapshot of the Agent Hive state
+// (status, active workstream, recent session messages and resolved workspace)
+// to the floating Orb (Spec 007 H003).
+func (a *App) orbSyncResidentSnapshot() {
+	hub := a.orbHub()
+	if hub == nil || a.resident == nil {
+		return
+	}
+	st := a.resident.Status()
+	msgs, err := a.resident.SessionMessages(st.Workstream)
+	if err != nil {
+		msgs = nil
+	}
+	out := orb.OrbResidentState{
+		State:            st.State,
+		Workstream:       st.Workstream,
+		Workspace:        a.orbActiveWorkspace(),
+		Provider:         st.Provider,
+		Model:            st.Model,
+		SandboxAvailable: st.SandboxAvailable,
+		SandboxMechanism: st.SandboxMechanism,
+		Running:          st.State == "pensando",
+		Messages:         make([]orb.OrbResidentMessage, 0, len(msgs)),
+	}
+	for i := range msgs {
+		kind := "chief"
+		label := "Agent Hive"
+		if msgs[i].Role == "user" {
+			kind = "user"
+			label = "Você"
+		}
+		out.Messages = append(out.Messages, orb.OrbResidentMessage{
+			ID:    fmt.Sprintf("hist-%d", i),
+			Kind:  kind,
+			Label: label,
+			Text:  msgs[i].Text,
+		})
+	}
+	hub.SetResidentState(out)
 }
 
 func (a *App) launchOrbWindow() error {
@@ -111,7 +254,56 @@ func (a *App) handleOrbAction(act orb.OrbAction) {
 		}
 	case "quit_all":
 		a.QuitAll()
+	case "resident_send":
+		a.orbHandleResidentSend(act)
+	case "resident_cancel":
+		a.ResidentCancel()
+	case "resident_approve":
+		a.RespondApproval(act.ApprovalID, act.Approved)
+	case "resident_clear":
+		if err := a.ResidentClearSession(act.Workstream); err != nil {
+			log.Printf("aviso: orb resident_clear: %v", err)
+		}
+		go a.orbSyncResidentSnapshot()
+	case "open_resident":
+		a.bringIDEToFront()
+		a.orbSetIDEVisible(true)
+		if a.ctx != nil {
+			wailsrt.EventsEmit(a.ctx, "hivemind:open-resident")
+		}
 	}
+}
+
+// orbHandleResidentSend runs one Agent Hive turn started from the floating
+// Orb. It first echoes the user message on lane "resident" so both the Orb
+// timeline and the IDE Agent Hive tab show it immediately, then executes the
+// same sandboxed ResidentStartTurn path used by the IDE (no shortcuts).
+func (a *App) orbHandleResidentSend(act orb.OrbAction) {
+	text := strings.TrimSpace(act.Text)
+	if text == "" {
+		return
+	}
+	if a.sessions != nil && a.sessions.Emit != nil {
+		a.sessions.Emit(idecore.LaneEvent{
+			LaneID: "resident",
+			Event:  idecoreEventUserMessage(text),
+		})
+	}
+	go func() {
+		ws := strings.TrimSpace(act.Workstream)
+		if ws == "" {
+			if a.resident != nil {
+				ws = a.resident.Status().Workstream
+			}
+			if ws == "" {
+				ws = "geral"
+			}
+		}
+		if _, err := a.ResidentStartTurn(a.orbActiveWorkspace(), ws, text); err != nil {
+			log.Printf("aviso: turno do Agent Hive via Orb: %v", err)
+		}
+		a.orbSyncResidentSnapshot()
+	}()
 }
 
 func (a *App) orbSetIDEVisible(visible bool) {

@@ -27,23 +27,75 @@ type OrbNotice struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// OrbResidentMessage is one entry of the Agent Hive conversation timeline
+// mirrored inside the floating Orb window (Spec 007 — H001).
+type OrbResidentMessage struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"` // user | chief | tool | approval | error | system
+	Label      string `json:"label,omitempty"`
+	Text       string `json:"text"`
+	ToolName   string `json:"toolName,omitempty"`
+	ToolDetail string `json:"toolDetail,omitempty"`
+	RiskTier   string `json:"riskTier,omitempty"`
+	ApprovalID string `json:"approvalId,omitempty"`
+	Resolved   string `json:"resolved,omitempty"` // "" | approved | denied
+	Active     bool   `json:"active,omitempty"`
+}
+
+// OrbResidentState mirrors the live state of the IDE ResidentManager
+// (Agent Hive) so the floating Orb chats with the very same session.
+type OrbResidentState struct {
+	State            string               `json:"state"` // ocioso | pensando | aguardando você
+	Workstream       string               `json:"workstream"`
+	Workspace        string               `json:"workspace,omitempty"`
+	Provider         string               `json:"provider,omitempty"`
+	Model            string               `json:"model,omitempty"`
+	SandboxAvailable bool                 `json:"sandboxAvailable"`
+	SandboxMechanism string               `json:"sandboxMechanism,omitempty"`
+	Running          bool                 `json:"running"`
+	Messages         []OrbResidentMessage `json:"messages"`
+}
+
+// OrbResidentEvent is a single streaming update applied on top of the current
+// OrbResidentState (Spec 007 plan §1.1). The main process converts idecore
+// LaneEvents into this neutral shape so package orb stays decoupled.
+type OrbResidentEvent struct {
+	Kind       string // user_message | text | tool_call | tool_result | approval_required | approval_resolved | stage | error | finish
+	Text       string
+	Partial    bool
+	Label      string
+	ToolName   string
+	ToolDetail string
+	RiskTier   string
+	ApprovalID string
+	Approved   bool // only used by approval_resolved
+}
+
 // OrbSnapshot is the full normalized state streamed to the floating Orb window.
 type OrbSnapshot struct {
-	Mood         string      `json:"mood"`
-	IDEVisible   bool        `json:"ideVisible"`
-	ProjectName  string      `json:"projectName,omitempty"`
-	PendingCount int         `json:"pendingCount"`
-	Items        []OrbNotice `json:"items"`
-	UpdatedAt    string      `json:"updatedAt"`
+	Mood         string           `json:"mood"`
+	IDEVisible   bool             `json:"ideVisible"`
+	ProjectName  string           `json:"projectName,omitempty"`
+	PendingCount int              `json:"pendingCount"`
+	Items        []OrbNotice      `json:"items"`
+	Resident     OrbResidentState `json:"resident"`
+	UpdatedAt    string           `json:"updatedAt"`
 }
 
 // OrbAction is a command sent from the floating Orb back to the main IDE process.
 type OrbAction struct {
-	Action   string `json:"action"` // show_ide | open_notice | dismiss_notice | clear_notices | quit_all
-	NoticeID string `json:"noticeId,omitempty"`
+	Action     string `json:"action"` // show_ide | open_notice | dismiss_notice | clear_notices | quit_all | resident_send | resident_cancel | resident_approve | resident_clear | open_resident
+	NoticeID   string `json:"noticeId,omitempty"`
+	Text       string `json:"text,omitempty"`       // resident_send payload
+	Workstream string `json:"workstream,omitempty"` // resident_send / resident_clear target workstream
+	ApprovalID string `json:"approvalId,omitempty"` // resident_approve target
+	Approved   bool   `json:"approved,omitempty"`   // resident_approve decision
 }
 
-const maxOrbItems = 20
+const (
+	maxOrbItems            = 20
+	maxOrbResidentMessages = 40
+)
 
 // Hub serves live IDE status and notifications over a local-only loopback HTTP/SSE bridge
 // consumed by the independent floating Orb window (`hivemind-ide --orb`).
@@ -53,6 +105,8 @@ type Hub struct {
 	ideVisible  bool
 	projectName string
 	items       []OrbNotice
+	resident    OrbResidentState
+	residentSeq int
 	updatedAt   time.Time
 	token       string
 	onAction    func(OrbAction)
@@ -71,10 +125,15 @@ func NewHub(onAction func(OrbAction)) *Hub {
 	return &Hub{
 		mood:       "idle",
 		ideVisible: true,
-		updatedAt:  time.Now().UTC(),
-		token:      hex.EncodeToString(raw[:]),
-		onAction:   onAction,
-		subs:       make(map[chan []byte]struct{}),
+		resident: OrbResidentState{
+			State:      "ocioso",
+			Workstream: "geral",
+			Messages:   []OrbResidentMessage{},
+		},
+		updatedAt: time.Now().UTC(),
+		token:     hex.EncodeToString(raw[:]),
+		onAction:  onAction,
+		subs:      make(map[chan []byte]struct{}),
 	}
 }
 
@@ -147,14 +206,30 @@ func (h *Hub) Snapshot() OrbSnapshot {
 	defer h.mu.RUnlock()
 	items := make([]OrbNotice, len(h.items))
 	copy(items, h.items)
+	msgs := make([]OrbResidentMessage, len(h.resident.Messages))
+	copy(msgs, h.resident.Messages)
+	residentCp := h.resident
+	residentCp.Messages = msgs
 	return OrbSnapshot{
 		Mood:         h.mood,
 		IDEVisible:   h.ideVisible,
 		ProjectName:  h.projectName,
 		PendingCount: len(items),
 		Items:        items,
+		Resident:     residentCp,
 		UpdatedAt:    h.updatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+// Resident returns a thread-safe copy of the mirrored Agent Hive state.
+func (h *Hub) Resident() OrbResidentState {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	msgs := make([]OrbResidentMessage, len(h.resident.Messages))
+	copy(msgs, h.resident.Messages)
+	cp := h.resident
+	cp.Messages = msgs
+	return cp
 }
 
 // SetIDEVisible updates whether the main IDE window is currently visible.
@@ -276,6 +351,178 @@ func (h *Hub) ClearNotices() {
 	h.broadcast()
 }
 
+// SetResidentState replaces the mirrored Agent Hive snapshot (initial sync or
+// after a full refresh) and broadcasts it to the floating Orb (Spec 007 H001).
+func (h *Hub) SetResidentState(st OrbResidentState) {
+	st.State = strings.TrimSpace(st.State)
+	if st.State == "" {
+		st.State = "ocioso"
+	}
+	if st.Workstream == "" {
+		st.Workstream = "geral"
+	}
+	if st.Messages == nil {
+		st.Messages = []OrbResidentMessage{}
+	}
+	h.mu.Lock()
+	h.resident = st
+	if len(h.resident.Messages) > maxOrbResidentMessages {
+		h.resident.Messages = append([]OrbResidentMessage(nil), h.resident.Messages[len(h.resident.Messages)-maxOrbResidentMessages:]...)
+	}
+	h.updatedAt = time.Now().UTC()
+	h.mu.Unlock()
+	h.broadcast()
+}
+
+// ApplyResidentEvent applies one streaming update (text chunk, tool call,
+// approval request, ...) on top of the mirrored Agent Hive state and
+// broadcasts the updated snapshot (Spec 007 H001/H002).
+func (h *Hub) ApplyResidentEvent(ev OrbResidentEvent) {
+	ev.Kind = strings.TrimSpace(ev.Kind)
+	if ev.Kind == "" {
+		return
+	}
+	h.mu.Lock()
+	res := &h.resident
+	changed := true
+	switch ev.Kind {
+	case "user_message":
+		h.residentPushLocked(OrbResidentMessage{
+			Kind:  "user",
+			Label: firstNonEmpty(ev.Label, "Você"),
+			Text:  ev.Text,
+		})
+	case "text":
+		last := len(res.Messages) - 1
+		if last >= 0 && res.Messages[last].Kind == "chief" && ev.Partial {
+			res.Messages[last].Text += ev.Text
+		} else if last >= 0 && res.Messages[last].Kind == "chief" && !ev.Partial && res.Messages[last].Label == firstNonEmpty(ev.Label, "Agent Hive") {
+			res.Messages[last].Text = ev.Text
+		} else {
+			h.residentPushLocked(OrbResidentMessage{
+				Kind:  "chief",
+				Label: firstNonEmpty(ev.Label, "Agent Hive"),
+				Text:  ev.Text,
+			})
+		}
+	case "tool_call":
+		h.residentPushLocked(OrbResidentMessage{
+			Kind:       "tool",
+			Label:      firstNonEmpty(ev.RiskTier, "tool"),
+			ToolName:   ev.ToolName,
+			ToolDetail: ev.ToolDetail,
+			RiskTier:   ev.RiskTier,
+			Active:     true,
+		})
+	case "tool_result":
+		for i := len(res.Messages) - 1; i >= 0; i-- {
+			if res.Messages[i].Kind == "tool" && res.Messages[i].Active {
+				res.Messages[i].Active = false
+				break
+			}
+		}
+	case "approval_required":
+		res.State = "aguardando você"
+		res.Running = false
+		h.mood = "attention"
+		h.residentPushLocked(OrbResidentMessage{
+			Kind:       "approval",
+			Label:      firstNonEmpty(ev.Label, "Aprovação do Agent Hive"),
+			Text:       ev.Text,
+			ToolName:   ev.ToolName,
+			ToolDetail: ev.ToolDetail,
+			RiskTier:   ev.RiskTier,
+			ApprovalID: ev.ApprovalID,
+			Active:     true,
+		})
+	case "approval_resolved":
+		target := -1
+		for i := len(res.Messages) - 1; i >= 0; i-- {
+			m := res.Messages[i]
+			if m.Kind != "approval" || m.Resolved != "" {
+				continue
+			}
+			if ev.ApprovalID == "" || m.ApprovalID == ev.ApprovalID {
+				target = i
+				break
+			}
+		}
+		if target >= 0 {
+			if ev.Approved {
+				res.Messages[target].Resolved = "approved"
+			} else {
+				res.Messages[target].Resolved = "denied"
+			}
+			res.Messages[target].Active = false
+		}
+		if !h.hasPendingApprovalLocked() && (h.mood == "attention" || h.mood == "error") {
+			h.mood = "idle"
+		}
+	case "stage":
+		res.Running = true
+		res.State = "pensando"
+		if h.mood != "attention" {
+			h.mood = "working"
+		}
+	case "error":
+		res.Running = false
+		res.State = "ocioso"
+		h.mood = "error"
+		h.residentPushLocked(OrbResidentMessage{
+			Kind:  "error",
+			Label: "Erro",
+			Text:  firstNonEmpty(ev.Text, "Erro no Agent Hive"),
+		})
+	case "finish":
+		res.Running = false
+		res.State = "ocioso"
+		if h.mood != "attention" && h.mood != "error" {
+			h.mood = "idle"
+		}
+	default:
+		changed = false
+	}
+	if changed {
+		h.updatedAt = time.Now().UTC()
+	}
+	h.mu.Unlock()
+	if changed {
+		h.broadcast()
+	}
+}
+
+// residentPushLocked appends one message enforcing the timeline cap.
+// Callers must hold h.mu.
+func (h *Hub) residentPushLocked(m OrbResidentMessage) {
+	if strings.TrimSpace(m.Text) == "" && m.Kind != "approval" && m.Kind != "tool" {
+		return
+	}
+	h.residentSeq++
+	m.ID = fmt.Sprintf("res-%d", h.residentSeq)
+	h.resident.Messages = append(h.resident.Messages, m)
+	if len(h.resident.Messages) > maxOrbResidentMessages {
+		h.resident.Messages = append([]OrbResidentMessage(nil), h.resident.Messages[len(h.resident.Messages)-maxOrbResidentMessages:]...)
+	}
+}
+
+func (h *Hub) hasPendingApprovalLocked() bool {
+	for _, m := range h.resident.Messages {
+		if m.Kind == "approval" && m.Resolved == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (h *Hub) broadcast() {
 	data, err := json.Marshal(h.Snapshot())
 	if err != nil {
@@ -390,6 +637,18 @@ func (h *Hub) handleAction(w http.ResponseWriter, r *http.Request) {
 		h.ClearNotices()
 	case "open_notice":
 		h.DismissNotice(act.NoticeID)
+	case "resident_send":
+		if strings.TrimSpace(act.Text) == "" {
+			http.Error(w, "empty message", http.StatusBadRequest)
+			return
+		}
+	case "resident_approve":
+		if strings.TrimSpace(act.ApprovalID) == "" {
+			http.Error(w, "missing approvalId", http.StatusBadRequest)
+			return
+		}
+	case "resident_cancel", "resident_clear", "open_resident":
+		// dispatched to the host as-is
 	}
 	if h.onAction != nil {
 		h.onAction(act)

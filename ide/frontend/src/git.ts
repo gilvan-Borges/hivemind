@@ -6,6 +6,7 @@ import { openDiffInEditor, openFileInEditor, promptDiscardChanges, renderEditorB
 import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./explorer";
 import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
+import { renderGuard } from "./render-guard";
 import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
 
@@ -105,7 +106,7 @@ export function selectActiveGitRepo(repoRoot: string) {
     void api()?.GitHubStatus(target.root).then((gh) => {
       if (normalizePathKey(state.activeGitRepoRoot) === nextKey) {
         state.ghStatus = gh;
-        if (state.sidebarView === "git") renderLeftSidebar();
+        if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
       }
     }).catch(() => { /* ignore */ });
     if (state.sidebarView === "git") renderLeftSidebar();
@@ -270,7 +271,9 @@ export async function refreshDiffs() {
       renderEditorBody();
     }
     if (state.sidebarView === "git" && state.showLeftSidebar) {
-      renderLeftSidebar();
+      // Polling de fundo (watcher/equipe): nunca destruir a mensagem de commit
+      // que o usuário está digitando (W4-06).
+      renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     } else if (state.sidebarView === "explorer" && state.showLeftSidebar) {
       const treeBody = document.getElementById("explorer-tree-body");
       if (treeBody) {
@@ -1132,7 +1135,7 @@ export async function loadGitGraph() {
   const allBranches = targetGraph.allBranches;
   targetGraph.repoRoot = targetRoot;
   targetGraph.loading = true;
-  if (state.sidebarView === "git") renderLeftSidebar();
+  if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     const commits = (await withTimeout(backend.ListGitGraph(targetRoot, 60, allBranches), 20000, "carregar o Graph de commits")) || [];
     const currentRepoKey = normalizePathKey(state.activeGitRepoRoot || state.project?.root || "");
@@ -1149,7 +1152,7 @@ export async function loadGitGraph() {
   } finally {
     targetGraph.loading = false;
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
-      renderLeftSidebar();
+      renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
   }
 }
@@ -1310,7 +1313,7 @@ export async function loadGitHubPRs() {
   const projectKey = normalizePathKey(state.project.root);
   const targetPrs = state.prs;
   targetPrs.loading = true;
-  if (state.sidebarView === "git") renderLeftSidebar();
+  if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     targetPrs.list = (await withTimeout(backend.ListPullRequests(targetRoot), 20000, "buscar os Pull Requests")) || [];
     targetPrs.loadedOnce = true;
@@ -1321,7 +1324,7 @@ export async function loadGitHubPRs() {
   } finally {
     targetPrs.loading = false;
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
-      renderLeftSidebar();
+      renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
   }
 }
@@ -1333,7 +1336,7 @@ export async function loadProjectIssues() {
   const targetKey = normalizePathKey(targetRoot);
   const targetIssues = state.issues;
   targetIssues.loading = true;
-  if (state.sidebarView === "git") renderLeftSidebar();
+  if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     targetIssues.list = (await withTimeout(backend.ListIssues(targetRoot), 20000, "buscar as issues do GitHub")) || [];
     targetIssues.loadedOnce = true;
@@ -1344,7 +1347,7 @@ export async function loadProjectIssues() {
   } finally {
     targetIssues.loading = false;
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
-      renderLeftSidebar();
+      renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
   }
 }

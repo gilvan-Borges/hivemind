@@ -23,8 +23,8 @@ import (
 const (
 	orbCollapsedW = 152
 	orbCollapsedH = 152
-	orbExpandedW  = 356
-	orbExpandedH  = 430
+	orbExpandedW  = 396
+	orbExpandedH  = 540
 )
 
 // OrbApp is the Wails backend bound inside the independent floating Orb window (`--orb`).
@@ -209,7 +209,8 @@ func (o *OrbApp) GetOrbState() orb.OrbSnapshot {
 	return o.snap
 }
 
-// SetOrbExpanded resizes the floating Orb window while keeping its bottom-right anchor stable.
+// SetOrbExpanded resizes the floating Orb window while keeping its bottom-right
+// anchor stable and clamped inside the current monitor (Spec 007 H005).
 func (o *OrbApp) SetOrbExpanded(expanded bool) {
 	if o.ctx == nil {
 		return
@@ -229,14 +230,50 @@ func (o *OrbApp) SetOrbExpanded(expanded bool) {
 	}
 	nextX := curX + (curW - targetW)
 	nextY := curY + (curH - targetH)
-	if nextX < 0 {
-		nextX = 0
-	}
-	if nextY < 0 {
-		nextY = 0
-	}
+	nextX, nextY = o.clampToScreen(nextX, nextY, targetW, targetH)
 	wailsrt.WindowSetSize(o.ctx, targetW, targetH)
 	wailsrt.WindowSetPosition(o.ctx, nextX, nextY)
+}
+
+// clampToScreen keeps the expanded Orb panel fully inside the current monitor
+// so it never bleeds off-screen on small displays. Wails v2.17 screens do not
+// expose their origin, so clamping uses (0,0) plus the current screen size.
+func (o *OrbApp) clampToScreen(x, y, w, h int) (int, int) {
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	screens, err := wailsrt.ScreenGetAll(o.ctx)
+	if err != nil || len(screens) == 0 {
+		return x, y
+	}
+	target := screens[0]
+	for i := range screens {
+		if screens[i].IsCurrent {
+			target = screens[i]
+			break
+		}
+		if !target.IsPrimary && screens[i].IsPrimary {
+			target = screens[i]
+		}
+	}
+	maxX := target.Size.Width - w
+	maxY := target.Size.Height - h
+	if maxX < 0 {
+		maxX = 0
+	}
+	if maxY < 0 {
+		maxY = 0
+	}
+	if x > maxX {
+		x = maxX
+	}
+	if y > maxY {
+		y = maxY
+	}
+	return x, y
 }
 
 // StartOrbDrag initiates a native OS drag move on the floating Orb window.
@@ -247,6 +284,37 @@ func (o *OrbApp) StartOrbDrag() bool {
 // ShowIDE restores and focuses the main HiveMind IDE window.
 func (o *OrbApp) ShowIDE() error {
 	return o.postAction(orb.OrbAction{Action: "show_ide"})
+}
+
+// SendHiveMessage starts an Agent Hive turn from the floating Orb (Spec 007 H005).
+func (o *OrbApp) SendHiveMessage(text, workstream string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return o.postAction(orb.OrbAction{Action: "resident_send", Text: text, Workstream: workstream})
+}
+
+// CancelHiveTurn stops the running Agent Hive turn.
+func (o *OrbApp) CancelHiveTurn() error {
+	return o.postAction(orb.OrbAction{Action: "resident_cancel"})
+}
+
+// RespondHiveApproval answers a pending Agent Hive risk approval.
+func (o *OrbApp) RespondHiveApproval(approvalId string, approved bool) error {
+	if strings.TrimSpace(approvalId) == "" {
+		return nil
+	}
+	return o.postAction(orb.OrbAction{Action: "resident_approve", ApprovalID: approvalId, Approved: approved})
+}
+
+// ClearHiveChat wipes the short-term Agent Hive session for the workstream.
+func (o *OrbApp) ClearHiveChat(workstream string) error {
+	return o.postAction(orb.OrbAction{Action: "resident_clear", Workstream: workstream})
+}
+
+// OpenHiveInIDE brings the IDE to front focused on the Agent Hive tab.
+func (o *OrbApp) OpenHiveInIDE() error {
+	return o.postAction(orb.OrbAction{Action: "open_resident"})
 }
 
 // OpenNotice restores the IDE and navigates straight to the clicked notification target.
