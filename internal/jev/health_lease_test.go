@@ -21,8 +21,9 @@ func TestHalfOpenLeaseReleasesOnPolicyErrorAndCancel(t *testing.T) {
 	hs, _ := newTestHealthStore(t)
 	hs.nowFn = func() time.Time { return time.Now() }
 
-	// Open the provider circuit and let the window expire -> half-open.
-	hs.RecordFailure("provA", "", ErrClassRateLimit, time.Time{})
+	// Open the provider circuit (auth is provider-scoped) and let the window
+	// expire -> half-open.
+	hs.RecordFailure("provA", "", ErrClassAuth, time.Time{})
 	hs.mu.Lock()
 	rec := hs.state.Providers["prova"]
 	rec.Until = hs.nowFn().Add(-time.Second)
@@ -182,8 +183,11 @@ func TestSaveAdoptsUnknownDiskRecords(t *testing.T) {
 	if merged.Providers["foreignprov"] == nil || merged.Providers["foreignprov"].Circuit != CircuitOpen {
 		t.Fatal("foreign provider record was lost by our save")
 	}
-	if merged.Providers["ownprov"] == nil || merged.Providers["ownprov"].Circuit != CircuitOpen {
-		t.Fatal("own record missing after save")
+	if merged.Providers["ownprov"] == nil {
+		t.Fatal("own provider record missing after save")
+	}
+	if merged.Models[catalogKey("ownprov", "")] == nil || merged.Models[catalogKey("ownprov", "")].Circuit != CircuitOpen {
+		t.Fatal("own rate-limit model circuit missing after save")
 	}
 	if merged.Models[catalogKey("foreignprov", "m1")] == nil {
 		t.Fatal("foreign model record was lost by our save")
