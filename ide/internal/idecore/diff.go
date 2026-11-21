@@ -319,20 +319,33 @@ func buildUntrackedFileDiff(relSlash string, data []byte) FileDiff {
 var ErrWorkspaceDirty = errors.New("workspace tem alterações locais não commitadas")
 
 // SyncIntegrationToWorkspace copies added/modified/renamed/deleted files from the
-// hivemind/integracao worktree into the user's open workspace working tree without
-// switching branches or creating automatic commits on the user's branch.
-//
-// It is a no-op when the integration branch has nothing new. When the user's
-// working tree is not clean it returns ErrWorkspaceDirty and changes nothing.
+// default hivemind/integracao worktree into the user's open workspace working tree.
 func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, error) {
+	return SyncWorktreeToWorkspace(ctx, workspaceDir, "", "")
+}
+
+// SyncWorktreeToWorkspace copies added/modified/renamed/deleted files from a conversation
+// worktree (or _integracao fallback when wtDir/branchRef are empty) into the user's open
+// workspace working tree without switching branches or creating automatic commits.
+//
+// It is a no-op when the branch has nothing new. When the user's working tree is not
+// clean it returns ErrWorkspaceDirty and changes nothing.
+func SyncWorktreeToWorkspace(ctx context.Context, workspaceDir, wtDir, branchRef string) (int, error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspaceDir) || !g.HasCommit(ctx, workspaceDir) {
 		return 0, nil
 	}
-	if !g.BranchExists(ctx, workspaceDir, gitx.IntegrationBranch) {
+	branch := strings.TrimSpace(branchRef)
+	if branch == "" {
+		branch = gitx.IntegrationBranch
+	}
+	if !g.BranchExists(ctx, workspaceDir, branch) {
 		return 0, nil
 	}
-	intWT := workspace.WorktreePath(workspaceDir, "_integracao")
+	intWT := strings.TrimSpace(wtDir)
+	if intWT == "" {
+		intWT = workspace.WorktreePath(workspaceDir, "_integracao")
+	}
 	if info, err := os.Stat(intWT); err != nil || !info.IsDir() {
 		legacyWT := filepath.Join(workspaceDir, ".hivemind", "worktrees", "_integracao")
 		if lInfo, lErr := os.Stat(legacyWT); lErr == nil && lInfo.IsDir() {
@@ -348,7 +361,7 @@ func SyncIntegrationToWorkspace(ctx context.Context, workspaceDir string) (int, 
 	if strings.TrimSpace(status) != "" && hasUserChangesInWorkspace(ctx, workspaceDir, status) {
 		return 0, ErrWorkspaceDirty
 	}
-	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+gitx.IntegrationBranch)
+	raw, err := runGit(ctx, workspaceDir, "diff", "--name-status", "HEAD.."+branch)
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return 0, err
 	}

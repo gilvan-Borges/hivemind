@@ -87,28 +87,54 @@ func EnsureHiveIgnore(dir string) error {
 	return osWrite(path, []byte(b.String()))
 }
 
-// PrepareDeliveryWorktree ensures .hivemind/worktrees/_integracao exists and is checked out
-// on targetBranch (creating or updating it from repo HEAD unless preserveExisting is true).
-// Returns the worktree path and the effective branch name without touching the user's checkout.
+// PrepareDeliveryWorktree ensures the default delivery worktree (_integracao) exists
+// and is checked out on targetBranch. Returns the worktree path and effective branch
+// without touching the user's checkout.
 func PrepareDeliveryWorktree(ctx context.Context, g Git, repo, targetBranch string, preserveExisting bool) (string, string, error) {
+	return PrepareDeliveryWorktreeForSlot(ctx, g, repo, "_integracao", targetBranch, preserveExisting)
+}
+
+// PrepareDeliveryWorktreeForSlot ensures an isolated worktree at external worktrees/<slot>
+// exists and is checked out on targetBranch (creating or updating it from repo HEAD unless
+// preserveExisting is true). Concurrent conversations/lanes pass distinct slots so they never
+// contend for the same directory or scratch branch.
+func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targetBranch string, preserveExisting bool) (string, string, error) {
 	if !g.IsRepo(ctx, repo) || !g.HasCommit(ctx, repo) {
 		return "", "", nil
 	}
+	slot = strings.TrimSpace(slot)
+	if slot == "" {
+		slot = "_integracao"
+	}
 	branch := strings.TrimSpace(targetBranch)
 	if branch == "" {
-		branch = IntegrationBranch
+		if slot == "_integracao" {
+			branch = IntegrationBranch
+		} else {
+			branch = "hivemind/" + slot
+		}
 	}
 	if err := ValidateBranchName(branch); err != nil {
 		return "", "", err
 	}
-	// Avoid checking out a branch that is currently checked out in the main repo working tree.
+	// Avoid checking out a branch that is currently checked out in the main repo or another worktree.
 	if cur, err := g.CurrentBranch(ctx, repo); err == nil && cur != "" && cur == branch {
 		branch = branch + "-wt"
 	}
-	if !g.BranchExists(ctx, repo, IntegrationBranch) {
-		_, _ = g.Run(ctx, repo, "branch", IntegrationBranch, "HEAD")
+	if !preserveExisting && slot != "_integracao" && isBranchCheckedOutElsewhere(ctx, g, repo, branch, workspace.WorktreePath(repo, slot)) {
+		branch = branch + "-" + slot
 	}
-	wt, err := g.EnsureWorktree(ctx, repo, "_integracao", IntegrationBranch)
+
+	var wt string
+	var err error
+	if slot == "_integracao" {
+		if !g.BranchExists(ctx, repo, IntegrationBranch) {
+			_, _ = g.Run(ctx, repo, "branch", IntegrationBranch, "HEAD")
+		}
+		wt, err = g.EnsureWorktree(ctx, repo, slot, IntegrationBranch)
+	} else {
+		wt, err = g.EnsureWorktree(ctx, repo, slot, branch)
+	}
 	if err != nil {
 		return "", "", err
 	}
@@ -131,6 +157,29 @@ func PrepareDeliveryWorktree(ctx context.Context, g Git, repo, targetBranch stri
 	}
 	_, _ = g.Run(ctx, wt, "clean", "-fd")
 	return wt, branch, nil
+}
+
+func isBranchCheckedOutElsewhere(ctx context.Context, g Git, repo, branch, targetWT string) bool {
+	out, err := g.Run(ctx, repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	wantRef := "refs/heads/" + branch
+	targetClean := filepath.Clean(targetWT)
+	var curWT string
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			curWT = filepath.Clean(strings.TrimSpace(strings.TrimPrefix(line, "worktree ")))
+			continue
+		}
+		if strings.HasPrefix(line, "branch ") && strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == wantRef {
+			if curWT != "" && !strings.EqualFold(curWT, targetClean) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // AlignDeveloperWorktree resets or creates a developer worktree aligned to baseRef

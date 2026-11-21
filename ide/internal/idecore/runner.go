@@ -892,6 +892,7 @@ func (m *SessionManager) RunTurnWithOptions(
 
 	runner := &orchestrator.Runner{
 		Workspace:          workspaceDir,
+		LaneID:             laneID,
 		Project:            cfg,
 		Team:               selected,
 		Git:                g,
@@ -920,18 +921,27 @@ func (m *SessionManager) RunTurnWithOptions(
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
 		SessionID:   sessionID,
+		LaneID:      laneID,
 		RunMode:     normMode,
 		Attachments: attachments,
 	})
-	if runErr == nil && res.IntegrationBranch != "" && !res.PendingQA {
+	if runErr == nil && (res.IntegrationBranch != "" || res.DeliveryBranch != "") && !res.PendingQA {
 		// Never copy integration output over uncommitted user work. A dirty
-		// workspace makes SyncIntegrationToWorkspace return ErrWorkspaceDirty
+		// workspace makes SyncWorktreeToWorkspace return ErrWorkspaceDirty
 		// without touching a single file; the user is told what happened.
-		n, syncErr := SyncIntegrationToWorkspace(ctx, workspaceDir)
+		syncBranch := res.DeliveryBranch
+		if syncBranch == "" {
+			syncBranch = res.IntegrationBranch
+		}
+		n, syncErr := SyncWorktreeToWorkspace(ctx, workspaceDir, res.WorktreeDir, syncBranch)
 		if syncErr == nil {
 			// Once the delivery worktree is synced (or already pushed), clean up temporary worktrees.
 			if len(res.PullRequests) > 0 {
-				gitx.RemoveWorktree(ctx, g, workspaceDir, workspace.WorktreePath(workspaceDir, "_integracao"), "")
+				wtToRemove := res.WorktreeDir
+				if wtToRemove == "" {
+					wtToRemove = workspace.WorktreePath(workspaceDir, "_integracao")
+				}
+				gitx.RemoveWorktree(ctx, g, workspaceDir, wtToRemove, "")
 			}
 			gitx.CleanupMergedWorktrees(ctx, g, workspaceDir, cfg.Settings.BaseBranch)
 		}

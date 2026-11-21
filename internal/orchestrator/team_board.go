@@ -1,0 +1,415 @@
+package orchestrator
+
+import (
+	"encoding/json"
+	"fmt"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
+)
+
+// TeamNote is a structured contract or coordination signal published between developers
+// sharing the same conversation worktree.
+type TeamNote struct {
+	Author  string
+	Topic   string
+	Content string
+}
+
+// TeamBoard holds live in-memory team awareness for a single run:
+//   - which file/directory slices each developer owns
+//   - which files each developer actually modified (recorded automatically)
+//   - concise contract/interface notes published via share_team_note
+type TeamBoard struct {
+	mu      sync.RWMutex
+	order   []string
+	owners  map[string][]string
+	touched map[string][]string
+	notes   []TeamNote
+}
+
+func newTeamBoard() *TeamBoard {
+	return &TeamBoard{
+		owners:  make(map[string][]string),
+		touched: make(map[string][]string),
+	}
+}
+
+func (b *TeamBoard) RegisterOwner(agentName string, paths []string) {
+	if b == nil {
+		return
+	}
+	norm := NormalizeOwnedPaths(paths)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, seen := b.owners[agentName]; !seen {
+		b.order = append(b.order, agentName)
+	}
+	b.owners[agentName] = norm
+}
+
+func (b *TeamBoard) RecordTouch(agentName, relSlash string) {
+	if b == nil {
+		return
+	}
+	rel := normalizeRelPattern(relSlash)
+	if rel == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, existing := range b.touched[agentName] {
+		if existing == rel {
+			return
+		}
+	}
+	b.touched[agentName] = append(b.touched[agentName], rel)
+}
+
+func (b *TeamBoard) PublishNote(author, topic, content string) {
+	if b == nil {
+		return
+	}
+	author = strings.TrimSpace(author)
+	topic = strings.TrimSpace(topic)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	if topic == "" {
+		topic = "contrato"
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Update existing note with same author+topic so repeated publishes stay compact.
+	for i := range b.notes {
+		if b.notes[i].Author == author && strings.EqualFold(b.notes[i].Topic, topic) {
+			b.notes[i].Content = content
+			return
+		}
+	}
+	b.notes = append(b.notes, TeamNote{
+		Author:  author,
+		Topic:   topic,
+		Content: content,
+	})
+}
+
+// SummaryFor renders a compact shared-awareness block injected into sibling devs
+// and QA without dumping raw chat transcripts.
+func (b *TeamBoard) SummaryFor(currentAgent string) string {
+	if b == nil {
+		return ""
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if len(b.order) == 0 && len(b.touched) == 0 && len(b.notes) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	if len(b.order) > 0 {
+		var lines []string
+		for _, ag := range b.order {
+			paths := b.owners[ag]
+			touched := b.touched[ag]
+			if len(paths) == 0 && len(touched) == 0 {
+				continue
+			}
+			roleTag := ag
+			if ag == currentAgent {
+				roleTag += " (você)"
+			}
+			part := "- " + roleTag
+			if len(paths) > 0 {
+				part += ": dono de `" + strings.Join(paths, "`, `") + "`"
+			}
+			if len(touched) > 0 {
+				part += " · editou: `" + strings.Join(touched, "`, `") + "`"
+			}
+			lines = append(lines, part)
+		}
+		if len(lines) > 0 {
+			out.WriteString("[Memória Compartilhada do Time — Worktree Unificada]\n")
+			out.WriteString(strings.Join(lines, "\n"))
+		}
+	} else if len(b.touched) > 0 {
+		agents := make([]string, 0, len(b.touched))
+		for ag := range b.touched {
+			agents = append(agents, ag)
+		}
+		sort.Strings(agents)
+		out.WriteString("[Arquivos modificados pelo time nesta conversa]\n")
+		for _, ag := range agents {
+			fmt.Fprintf(&out, "- %s: `%s`\n", ag, strings.Join(b.touched[ag], "`, `"))
+		}
+	}
+
+	if len(b.notes) > 0 {
+		if out.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString("[Contratos & Notas Publicadas entre Devs]\n")
+		for _, n := range b.notes {
+			fmt.Fprintf(&out, "- [%s · %s]: %s\n", n.Author, n.Topic, n.Content)
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func normalizeRelPattern(raw string) string {
+	s := strings.TrimSpace(filepath.ToSlash(raw))
+	s = strings.TrimPrefix(s, "./")
+	s = strings.TrimLeft(s, "/")
+	s = path.Clean(s)
+	if s == "." || s == "" || s == ".." || strings.HasPrefix(s, "../") {
+		return ""
+	}
+	// Preserve trailing wildcard simplification e.g. "ide/frontend/**" -> "ide/frontend".
+	for strings.HasSuffix(s, "/**") || strings.HasSuffix(s, "/*") {
+		if strings.HasSuffix(s, "/**") {
+			s = strings.TrimSuffix(s, "/**")
+		} else {
+			s = strings.TrimSuffix(s, "/*")
+		}
+	}
+	return s
+}
+
+// NormalizeOwnedPaths cleans and deduplicates a slice of relative path prefixes/globs.
+func NormalizeOwnedPaths(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		p := normalizeRelPattern(r)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// DisjointOwnedPaths reports whether every developer (0..devCount-1) has at least
+// one explicit owned path and no two developers have overlapping paths.
+// Paths in separate services/subtrees return true so devs can safely share one worktree
+// with deterministic tool-layer write guards.
+func DisjointOwnedPaths(slices [][]string, devCount int) bool {
+	if devCount <= 1 {
+		return true
+	}
+	if len(slices) < devCount {
+		return false
+	}
+	normPerDev := make([][]string, devCount)
+	for i := 0; i < devCount; i++ {
+		norm := NormalizeOwnedPaths(slices[i])
+		if len(norm) == 0 {
+			return false
+		}
+		normPerDev[i] = norm
+	}
+	for i := 0; i < devCount; i++ {
+		for j := i + 1; j < devCount; j++ {
+			if pathsOverlap(normPerDev[i], normPerDev[j]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func pathsOverlap(aList, bList []string) bool {
+	for _, a := range aList {
+		for _, b := range bList {
+			al := strings.ToLower(a)
+			bl := strings.ToLower(b)
+			if al == bl ||
+				strings.HasPrefix(al, bl+"/") ||
+				strings.HasPrefix(bl, al+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// MatchesOwnedPaths reports whether relPath falls under one of owned paths (exact file,
+// directory prefix, or path.Match glob).
+func MatchesOwnedPaths(relPath string, owned []string) bool {
+	clean := normalizeRelPattern(relPath)
+	if clean == "" {
+		return false
+	}
+	cleanLower := strings.ToLower(clean)
+	for _, raw := range owned {
+		p := normalizeRelPattern(raw)
+		if p == "" {
+			continue
+		}
+		pLower := strings.ToLower(p)
+		if cleanLower == pLower || strings.HasPrefix(cleanLower, pLower+"/") {
+			return true
+		}
+		if strings.ContainsAny(pLower, "*?[") {
+			if ok, _ := path.Match(pLower, cleanLower); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolveToolRelPath(root, argPath string) string {
+	p := strings.TrimSpace(argPath)
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) && strings.TrimSpace(root) != "" {
+		if rel, err := filepath.Rel(root, p); err == nil {
+			p = rel
+		}
+	}
+	return normalizeRelPattern(p)
+}
+
+// newOwnedPathsGuardCallback deterministically prevents a developer from writing outside
+// its assigned owned_paths when multiple developers share one conversation worktree.
+func newOwnedPathsGuardCallback(root, agentName string, owned []string, board *TeamBoard) llmagent.BeforeToolCallback {
+	cleanOwned := NormalizeOwnedPaths(owned)
+	if len(cleanOwned) == 0 {
+		return nil
+	}
+	return func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
+		if tl == nil {
+			return nil, nil
+		}
+		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		if !devWriteTools[name] {
+			return nil, nil
+		}
+		rawPath, _ := args["path"].(string)
+		rel := resolveToolRelPath(root, rawPath)
+		if MatchesOwnedPaths(rel, cleanOwned) {
+			return nil, nil
+		}
+		ownerHint := ""
+		if board != nil {
+			board.mu.RLock()
+			for peer, peerPaths := range board.owners {
+				if peer == agentName || len(peerPaths) == 0 {
+					continue
+				}
+				if MatchesOwnedPaths(rel, peerPaths) {
+					ownerHint = fmt.Sprintf(" Esse caminho pertence a %s.", peer)
+					break
+				}
+			}
+			board.mu.RUnlock()
+		}
+		return map[string]any{
+			"blocked": true,
+			"error": fmt.Sprintf(
+				"posse de arquivo bloqueada: %q está fora do seu owned_paths (%s).%s Restrinja edições ao seu escopo ou publique um contrato via share_team_note.",
+				rawPath,
+				strings.Join(cleanOwned, ", "),
+				ownerHint,
+			),
+		}, nil
+	}
+}
+
+func newTeamBoardTouchCallback(root, agentName string, board *TeamBoard) llmagent.AfterToolCallback {
+	if board == nil {
+		return nil
+	}
+	return func(_ agent.Context, tl tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
+		if err != nil || tl == nil {
+			return nil, nil
+		}
+		if blocked, _ := result["blocked"].(bool); blocked {
+			return nil, nil
+		}
+		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		if !devWriteTools[name] {
+			return nil, nil
+		}
+		rawPath, _ := args["path"].(string)
+		if rel := resolveToolRelPath(root, rawPath); rel != "" {
+			board.RecordTouch(agentName, rel)
+		}
+		return nil, nil
+	}
+}
+
+func newShareTeamNoteTool(agentName string, board *TeamBoard) (tool.Tool, error) {
+	type shareArgs struct {
+		Topic   string `json:"topic" jsonschema:"Assunto curto (ex.: contrato-api, schema, tipos, aviso-build)."`
+		Content string `json:"content" jsonschema:"Nota concisa com assinatura, rota, tipo ou decisão que os outros devs precisam saber."`
+	}
+	type shareRes struct {
+		OK bool `json:"ok"`
+	}
+	return functiontool.New(functiontool.Config{
+		Name:        "share_team_note",
+		Description: "Publica uma nota curta ou contrato de interface na memória compartilhada em tempo real para os outros devs da mesma worktree.",
+	}, func(_ agent.Context, args shareArgs) (shareRes, error) {
+		if strings.TrimSpace(args.Content) == "" {
+			return shareRes{OK: false}, fmt.Errorf("informe content na nota")
+		}
+		board.PublishNote(agentName, args.Topic, args.Content)
+		return shareRes{OK: true}, nil
+	})
+}
+
+func alignOwnedPaths(raw [][]string, n int) [][]string {
+	if len(raw) == 0 || n <= 0 {
+		return nil
+	}
+	out := make([][]string, n)
+	for i := 0; i < n && i < len(raw); i++ {
+		out[i] = NormalizeOwnedPaths(raw[i])
+	}
+	return out
+}
+
+func marshalOwnedPaths(paths [][]string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(paths)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func unmarshalOwnedPaths(raw string) [][]string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out [][]string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func boolFlag(b bool) string {
+	if b {
+		return "1"
+	}
+	return ""
+}

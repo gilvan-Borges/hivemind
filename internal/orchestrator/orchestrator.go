@@ -103,7 +103,9 @@ type Runner struct {
 	EnableTriage       bool
 	EnableClosingChief bool
 	// ReviewRoot optionally isolates read/test tools during auto-review onto an ephemeral PR worktree.
-	ReviewRoot        string
+	ReviewRoot string
+	// LaneID scopes the conversation's isolated delivery worktree so concurrent tabs/lanes never collide.
+	LaneID            string
 	autoReviewMode    bool
 	integration       string
 	deliveryRoot      string
@@ -115,6 +117,10 @@ type Runner struct {
 	prBranch          string
 	prReviewers       []string
 	devSlices         []string
+	devOwnedPaths     [][]string
+	devSequential     bool
+	sharedDevWorktree bool
+	sharedBoard       *TeamBoard
 	chiefPlan         string
 	chiefContextBrief string
 	pauseForApproval  bool
@@ -229,6 +235,7 @@ type Request struct {
 	Objective   string
 	JiraKey     string
 	SessionID   string
+	LaneID      string
 	RunMode     string // "", "auto", "direct", "plan", "plan:sdd", "plan:sdd-jira", "squad"
 	Attachments []Attachment
 }
@@ -239,6 +246,8 @@ type Result struct {
 	Summary           string
 	Branches          []string
 	IntegrationBranch string `json:"integrationBranch,omitempty"`
+	DeliveryBranch    string `json:"deliveryBranch,omitempty"`
+	WorktreeDir       string `json:"worktreeDir,omitempty"`
 	PullRequests      []githubx.PullRequest
 	InputTokens       int64 `json:"inputTokens"`
 	OutputTokens      int64 `json:"outputTokens"`
@@ -249,10 +258,11 @@ type Result struct {
 }
 
 type devEnv struct {
-	Agent  team.Agent
-	ADK    string
-	Root   string
-	Branch string
+	Agent      team.Agent
+	ADK        string
+	Root       string
+	Branch     string
+	OwnedPaths []string
 }
 
 // Run builds the ADK pipeline and streams events until it finishes.
@@ -325,6 +335,9 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.integration = ""
 	r.deliveryRoot = ""
 	r.deliveryBranch = ""
+	if strings.TrimSpace(req.LaneID) != "" {
+		r.LaneID = strings.TrimSpace(req.LaneID)
+	}
 	r.issueKey = key
 	r.objectiveText = objective
 	r.reviewRequested = githubx.IsExplicitReviewObjective(objective)
@@ -332,6 +345,10 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.prBranch = ""
 	r.prReviewers = nil
 	r.devSlices = nil
+	r.devOwnedPaths = nil
+	r.devSequential = false
+	r.sharedDevWorktree = false
+	r.sharedBoard = newTeamBoard()
 	r.chiefPlan = ""
 	r.chiefContextBrief = ""
 	r.skills = skillx.Load(r.Workspace)
@@ -408,6 +425,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				"chief_plan":            planBody,
 				"chief_context_brief":   strings.TrimSpace(r.chiefContextBrief),
 				"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
+				"dev_owned_paths_json":  marshalOwnedPaths(r.devOwnedPaths),
+				"dev_sequential":        boolFlag(r.devSequential),
 				"pr_number":             strconv.Itoa(r.prNumber),
 				"pr_branch":             r.prBranch,
 				"pr_reviewers":          strings.Join(r.prReviewers, ","),
@@ -432,6 +451,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 					"chief_plan":            r.chiefPlan,
 					"chief_context_brief":   strings.TrimSpace(r.chiefContextBrief),
 					"dev_slices_joined":     strings.Join(r.devSlices, "\n|||\n"),
+					"dev_owned_paths_json":  marshalOwnedPaths(r.devOwnedPaths),
+					"dev_sequential":        boolFlag(r.devSequential),
 					"plan_pending_approval": "1",
 				})
 			}
@@ -643,6 +664,32 @@ func (r *Runner) resolveDynamicDevs() []team.Agent {
 	return out
 }
 
+func (r *Runner) conversationSlot() string {
+	raw := strings.TrimSpace(strings.ToLower(r.LaneID))
+	if raw == "" {
+		return "_integracao"
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, ch := range raw {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			b.WriteRune(ch)
+			lastDash = false
+		} else if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+		if b.Len() >= 32 {
+			break
+		}
+	}
+	clean := strings.Trim(b.String(), "-")
+	if clean == "" {
+		return "_integracao"
+	}
+	return "lane-" + clean
+}
+
 func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devEnv, error) {
 	agents := r.resolveDynamicDevs()
 	envs := make([]devEnv, 0, len(agents))
@@ -657,15 +704,16 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 
 	_ = gitx.EnsureHiveIgnore(r.Workspace)
 
+	slot := r.conversationSlot()
 	if repo {
 		targetBranch := strings.TrimSpace(r.prBranch)
 		preserveExisting := targetBranch != ""
 		if targetBranch == "" {
 			targetBranch = names.DeliveryBranch(key, objective)
 		}
-		delivWT, effBranch, err := gitx.PrepareDeliveryWorktree(ctx, r.Git, r.Workspace, targetBranch, preserveExisting)
+		delivWT, effBranch, err := gitx.PrepareDeliveryWorktreeForSlot(ctx, r.Git, r.Workspace, slot, targetBranch, preserveExisting)
 		if err != nil {
-			return nil, fmt.Errorf("worktree de entrega (%s): %w", targetBranch, err)
+			return nil, fmt.Errorf("worktree da conversa (%s): %w", targetBranch, err)
 		}
 		r.integration = delivWT
 		r.deliveryRoot = delivWT
@@ -674,19 +722,42 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 		r.deliveryRoot = r.Workspace
 	}
 
+	// Single conversation worktree model (Anthropic pattern):
+	//  - 1 dev: works directly inside the conversation worktree (zero extra dev_* clone).
+	//  - 2+ devs with sequential=true OR strictly disjoint owned_paths: share the
+	//    conversation worktree with deterministic tool-layer ownership enforcement and TeamBoard.
+	//  - 2+ devs without disjoint owned_paths and parallel: keep isolated fallback dev_* worktrees.
+	disjointOwned := DisjointOwnedPaths(r.devOwnedPaths, len(agents))
+	shareConversationWT := !repo || len(agents) <= 1 || r.devSequential || disjointOwned
+	r.sharedDevWorktree = shareConversationWT
+
+	if r.sharedBoard == nil {
+		r.sharedBoard = newTeamBoard()
+	}
+
 	devNames := make([]string, 0, len(agents))
-	for _, a := range agents {
+	for idx, a := range agents {
 		adkName := names.ADK(a.Name)
-		branch := names.Branch(key, a.Name, objective)
-		root := r.Workspace
-		if repo {
+		branch := r.deliveryBranch
+		root := r.deliveryRoot
+		var owned []string
+		if idx < len(r.devOwnedPaths) {
+			owned = NormalizeOwnedPaths(r.devOwnedPaths[idx])
+		}
+		if shareConversationWT && len(owned) > 0 {
+			r.sharedBoard.RegisterOwner(adkName, owned)
+		} else if len(agents) > 1 && shareConversationWT {
+			r.sharedBoard.RegisterOwner(adkName, nil)
+		}
+		if repo && !shareConversationWT {
+			branch = names.Branch(key, a.Name, objective)
 			wt, err := gitx.AlignDeveloperWorktree(ctx, r.Git, r.Workspace, adkName, branch, r.deliveryBranch)
 			if err != nil {
 				return nil, fmt.Errorf("worktree de %s: %w", a.Name, err)
 			}
 			root = wt
 		}
-		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch})
+		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch, OwnedPaths: owned})
 		devNames = append(devNames, a.Name)
 	}
 	if r.OnEvent != nil && len(devNames) > 0 {
@@ -769,41 +840,67 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 	}
 
-	var parallelSubs []agent.Agent
+	var devAgents []agent.Agent
 	var wtLines []string
 	devSkillGuide := r.guidanceForRole(team.SkillTargetDev, true)
 	for idx, dev := range devs {
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
 		stateKeys = append(stateKeys, report)
-		extra := fmt.Sprintf("Seu diretório de trabalho isolado é %s.\nSua branch de rascunho é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree de entrega após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+		scopeDesc := "worktree unificada da conversa"
+		if !r.sharedDevWorktree {
+			scopeDesc = "worktree isolada"
+		}
+		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 		if idx < len(r.devSlices) && strings.TrimSpace(r.devSlices[idx]) != "" {
 			extra += fmt.Sprintf("\n\n[Sua Subtarefa Exclusiva atribuída pelo Chefe]\n%s\nRestrinja suas edições aos arquivos desta subtarefa para evitar conflitos com outros desenvolvedores.", strings.TrimSpace(r.devSlices[idx]))
 		} else if len(devs) > 1 {
 			extra += fmt.Sprintf("\n\nVocê é o desenvolvedor %d de %d (%s). Respeite a divisão de arquivos do plano para não colidir com os demais desenvolvedores.", idx+1, len(devs), dev.Agent.Name)
 		}
+		if len(dev.OwnedPaths) > 0 {
+			extra += fmt.Sprintf("\n\n[Posse Exclusiva de Arquivos (travada pelo orquestrador)]\nVocê SÓ tem permissão para gravar/editar dentro de: `%s`. Use `share_team_note` se precisar publicar contratos de API/tipos para os colegas.", strings.Join(dev.OwnedPaths, "`, `"))
+		}
 		if devSkillGuide != "" {
 			extra += devSkillGuide
 		}
-		ag, err := r.llm(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true)
+		ag, err := r.llmCore(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true, dev.OwnedPaths)
 		if err != nil {
 			return nil, nil, err
 		}
 		labels[name] = roleLabel(dev.Agent.Role) + " · " + dev.Agent.Name
-		parallelSubs = append(parallelSubs, ag)
+		devAgents = append(devAgents, ag)
 		wtLines = append(wtLines, dev.ADK+": "+dev.Root+" ("+dev.Branch+")")
 	}
-	parallel, err := parallelagent.New(parallelagent.Config{AgentConfig: agent.Config{
-		Name:        "parallel_developers",
-		Description: "Desenvolvedores trabalhando em paralelo, cada um na sua worktree isolada.",
-		SubAgents:   parallelSubs,
-	}})
-	if err != nil {
-		return nil, nil, err
+
+	var devsRunner agent.Agent
+	var err error
+	if len(devAgents) == 1 {
+		devsRunner = devAgents[0]
+	} else if r.devSequential {
+		devsRunner, err = sequentialagent.New(sequentialagent.Config{AgentConfig: agent.Config{
+			Name:        "sequential_developers",
+			Description: "Desenvolvedores trabalhando em ondas sequenciais na mesma worktree da conversa.",
+			SubAgents:   devAgents,
+		}})
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		devsRunner, err = parallelagent.New(parallelagent.Config{AgentConfig: agent.Config{
+			Name:        "parallel_developers",
+			Description: "Desenvolvedores trabalhando em paralelo com isolamento de worktree ou posse disjunta de arquivos.",
+			SubAgents:   devAgents,
+		}})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	qaAgents := r.Team.ByRole(team.RoleQA)
-	qaExtra := "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
+	qaExtra := "Worktree da conversa: " + qaRoot
+	if !r.sharedDevWorktree {
+		qaExtra = "Worktrees dos devs:\n" + strings.Join(wtLines, "\n") + "\nAs alterações foram consolidadas na worktree separada de entrega: " + qaRoot
+	}
 	if qaSkillGuide := r.guidanceForRole(team.SkillTargetQA, true); qaSkillGuide != "" {
 		qaExtra += qaSkillGuide
 	}
@@ -839,16 +936,21 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	if loops <= 0 {
 		loops = 3
 	}
-	integrate, err := r.newIntegrateAgent(devs)
-	if err != nil {
-		return nil, nil, err
+	loopSubs := []agent.Agent{devsRunner}
+	if !r.sharedDevWorktree {
+		integrate, err := r.newIntegrateAgent(devs)
+		if err != nil {
+			return nil, nil, err
+		}
+		loopSubs = append(loopSubs, integrate)
 	}
+	loopSubs = append(loopSubs, qa)
 	loop, err := loopagent.New(loopagent.Config{
 		MaxIterations: uint(loops),
 		AgentConfig: agent.Config{
 			Name:        "loop_qa",
 			Description: "Desenvolvedores e QA se alternam até os testes passarem.",
-			SubAgents:   []agent.Agent{parallel, integrate, qa},
+			SubAgents:   loopSubs,
 		},
 	})
 	if err != nil {
@@ -893,6 +995,10 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 }
 
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
+	return r.llmCore(ctx, a, adkName, outputKey, root, extra, jiraKey, stateKeys, qa, disableGitWrite, nil)
+}
+
+func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool, ownedPaths []string) (agent.Agent, error) {
 	ctx = modelx.WithAgentDir(ctx, root)
 	label := roleLabel(a.Role) + " · " + a.Name
 	// Pipeline agents run with IncludeContentsNone, so their initial context is
@@ -960,6 +1066,19 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		newRepeatReadGuardCallback(),
 	}
 	var afterToolCBs []llmagent.AfterToolCallback
+	if a.Role == team.RoleDeveloper {
+		if guard := newOwnedPathsGuardCallback(root, adkName, ownedPaths, r.sharedBoard); guard != nil {
+			beforeToolCBs = append(beforeToolCBs, guard)
+		}
+		if r.sharedBoard != nil {
+			if noteTool, nErr := newShareTeamNoteTool(adkName, r.sharedBoard); nErr == nil {
+				roleTools = append(roleTools, noteTool)
+			}
+			if touchCB := newTeamBoardTouchCallback(root, adkName, r.sharedBoard); touchCB != nil {
+				afterToolCBs = append(afterToolCBs, touchCB)
+			}
+		}
+	}
 	if outputKey == "pm_plan" || outputKey == "tech_lead_plan" || outputKey == "architect_plan" {
 		beforeModelCBs = append(beforeModelCBs, newChiefToolStrippingModelCallback(defaultMaxTriageExploreCalls, 2, false))
 		triBefore, triAfter := newChiefTriageBudgetCallbacks(jiraKey, defaultMaxTriageExploreCalls)
@@ -1000,6 +1119,11 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 				}
 				fmt.Fprintf(&b, "\n\n[%s]\n%s", k, text)
 			}
+			if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
+				if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
+					fmt.Fprintf(&b, "\n\n%s", boardText)
+				}
+			}
 			return b.String(), nil
 		},
 	}
@@ -1018,7 +1142,7 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 		})
 	}
 	if qa {
-		cfg.AfterToolCallbacks = []llmagent.AfterToolCallback{
+		cfg.AfterToolCallbacks = append(cfg.AfterToolCallbacks,
 			func(ctx agent.Context, tl tool.Tool, args, result map[string]any, err error) (map[string]any, error) {
 				if err != nil || tl == nil || ctx.Actions() == nil {
 					return nil, nil
@@ -1042,7 +1166,7 @@ func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root
 				}
 				return nil, nil
 			},
-		}
+		)
 	}
 	return llmagent.New(cfg)
 }
@@ -1227,6 +1351,12 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 					r.devSlices = strings.Split(raw, "\n|||\n")
 				}
 			}
+			if prevOwned, err := got.Session.State().Get("dev_owned_paths_json"); err == nil && prevOwned != nil {
+				r.devOwnedPaths = unmarshalOwnedPaths(strings.TrimSpace(fmt.Sprint(prevOwned)))
+			}
+			if prevSeq, err := got.Session.State().Get("dev_sequential"); err == nil && prevSeq != nil {
+				r.devSequential = strings.TrimSpace(fmt.Sprint(prevSeq)) == "1"
+			}
 			if prevPR, err := got.Session.State().Get("pr_number"); err == nil && prevPR != nil {
 				r.prNumber, _ = strconv.Atoi(strings.TrimSpace(fmt.Sprint(prevPR)))
 			}
@@ -1287,6 +1417,8 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			resetMap["chief_plan"] = ""
 			resetMap["chief_context_brief"] = ""
 			resetMap["dev_slices_joined"] = ""
+			resetMap["dev_owned_paths_json"] = ""
+			resetMap["dev_sequential"] = ""
 			resetMap["pr_number"] = ""
 			resetMap["pr_branch"] = ""
 			resetMap["pr_reviewers"] = ""
@@ -1312,6 +1444,8 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			"chief_plan":            "",
 			"chief_context_brief":   "",
 			"dev_slices_joined":     "",
+			"dev_owned_paths_json":  "",
+			"dev_sequential":        "",
 			"pr_number":             "",
 			"pr_branch":             "",
 			"pr_reviewers":          "",
@@ -1328,7 +1462,13 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 
 func (r *Runner) finish(ctx context.Context, sess session.Session, result *Result, devs []devEnv, key, objective string) error {
 	if r.integration != "" {
-		result.IntegrationBranch = gitx.IntegrationBranch
+		result.WorktreeDir = r.deliveryRoot
+		result.DeliveryBranch = r.deliveryBranch
+		if r.conversationSlot() == "_integracao" {
+			result.IntegrationBranch = gitx.IntegrationBranch
+		} else {
+			result.IntegrationBranch = r.deliveryBranch
+		}
 	}
 	base := strings.TrimSpace(r.Project.Settings.BaseBranch)
 	if base == "" {
@@ -1983,10 +2123,12 @@ func (r *Runner) primaryChief() team.Agent {
 }
 
 type delegateArgs struct {
-	Plan             string   `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
-	ContextBrief     string   `json:"context_brief,omitempty" jsonschema:"Dossiê técnico com os pontos importantes que você JÁ leu (regras RN exatas, assinaturas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, rotas, caminhos de arquivos e faixas de linha) para o Dev e o QA consultarem direto sem reler spec.md/plan.md/tasks.md inteiros."`
-	DevTasks         []string `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos. Cada item dispara 1 desenvolvedor paralelo em worktree isolada (use 1 item para tarefas pequenas/focadas, ou 2 a 5 itens para entregas grandes e paralelizáveis)."`
-	PRNumber         int      `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
+	Plan             string     `json:"plan" jsonschema:"Plano técnico detalhado para a equipe executar."`
+	ContextBrief     string     `json:"context_brief,omitempty" jsonschema:"Dossiê técnico com os pontos importantes que você JÁ leu (regras RN exatas, assinaturas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, rotas, caminhos de arquivos e faixas de linha) para o Dev e o QA consultarem direto sem reler spec.md/plan.md/tasks.md inteiros."`
+	DevTasks         []string   `json:"dev_tasks" jsonschema:"Lista dinâmica de 1 até max_dynamic_devs subtarefas SEM sobreposição de arquivos (1 item para tarefas focadas; 2+ itens quando realmente paralelizáveis)."`
+	OwnedPaths       [][]string `json:"owned_paths,omitempty" jsonschema:"Opcional (recomendado para 2+ dev_tasks): lista de prefixos/pastas exclusivos para cada dev na mesma ordem de dev_tasks, ex.: [[\"internal/api/\"], [\"ide/frontend/\"]]. Quando disjuntos, todos os devs compartilham 1 única worktree da conversa com trava de posse e memória compartilhada."`
+	Sequential       bool       `json:"sequential,omitempty" jsonschema:"Use true quando 2+ dev_tasks precisarem editar o mesmo serviço/arquivos sem colisão (roda Wave 1 -> Wave 2 na mesma worktree da conversa)."`
+	PRNumber         int        `json:"pr_number,omitempty" jsonschema:"Número do PR existente quando a tarefa é corrigir mudanças solicitadas em revisão."`
 	PRBranch         string   `json:"pr_branch,omitempty" jsonschema:"Branch headRef do PR existente, quando houver."`
 	Reviewers        []string `json:"reviewers,omitempty" jsonschema:"Logins dos revisores para pedir nova revisão após corrigir (ex: quem pediu mudança)."`
 	Skills           []string `json:"skills,omitempty" jsonschema:"Opcional: nomes exatos das skills do catálogo .agents/skills do projeto que a equipe deve seguir (apenas as relevantes para a tarefa; vazio significa nenhuma)."`
@@ -2330,6 +2472,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				cleaned = append(cleaned[:maxDevs-1], tail)
 			}
 			r.devSlices = cleaned
+			r.devOwnedPaths = alignOwnedPaths(args.OwnedPaths, len(cleaned))
+			r.devSequential = args.Sequential
 			r.prNumber = args.PRNumber
 			r.prBranch = strings.TrimSpace(args.PRBranch)
 			r.prReviewers = append([]string(nil), args.Reviewers...)
@@ -2392,9 +2536,13 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			nativeNames := skillx.Names(r.selectedNative)
 			r.sealHandoff(sess.ID())
 			joinedSlices := strings.Join(r.devSlices, "\n|||\n")
+			ownedJSON := marshalOwnedPaths(r.devOwnedPaths)
+			seqFlag := boolFlag(r.devSequential)
 			_ = tctx.State().Set("chief_plan", r.chiefPlan)
 			_ = tctx.State().Set("chief_context_brief", r.chiefContextBrief)
 			_ = tctx.State().Set("dev_slices_joined", joinedSlices)
+			_ = tctx.State().Set("dev_owned_paths_json", ownedJSON)
+			_ = tctx.State().Set("dev_sequential", seqFlag)
 			_ = tctx.State().Set("pr_number", strconv.Itoa(r.prNumber))
 			_ = tctx.State().Set("pr_branch", r.prBranch)
 			_ = tctx.State().Set("pr_reviewers", strings.Join(r.prReviewers, ","))
@@ -2407,6 +2555,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				actions.StateDelta["chief_plan"] = r.chiefPlan
 				actions.StateDelta["chief_context_brief"] = r.chiefContextBrief
 				actions.StateDelta["dev_slices_joined"] = joinedSlices
+				actions.StateDelta["dev_owned_paths_json"] = ownedJSON
+				actions.StateDelta["dev_sequential"] = seqFlag
 				actions.StateDelta["pr_number"] = strconv.Itoa(r.prNumber)
 				actions.StateDelta["pr_branch"] = r.prBranch
 				actions.StateDelta["pr_reviewers"] = strings.Join(r.prReviewers, ",")
@@ -2417,6 +2567,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				"chief_plan":             r.chiefPlan,
 				"chief_context_brief":    r.chiefContextBrief,
 				"dev_slices_joined":      joinedSlices,
+				"dev_owned_paths_json":   ownedJSON,
+				"dev_sequential":         seqFlag,
 				"pr_number":              strconv.Itoa(r.prNumber),
 				"pr_branch":              r.prBranch,
 				"pr_reviewers":           strings.Join(r.prReviewers, ","),
@@ -2497,12 +2649,13 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		allTools = append(baseTools, delegateTool)
 	}
 
-	scaleGuidance := fmt.Sprintf(`ESCALA DINÂMICA DE DESENVOLVEDORES (1 até %d devs):
-- O time base tem 3 agentes (Chefe/Arquiteto, Dev e QA), sem quantidade fixa de devs.
+	scaleGuidance := fmt.Sprintf(`ESCALA DINÂMICA DE DESENVOLVEDORES & WORKTREE UNIFICADA POR CONVERSA (1 até %d devs):
+- A conversa usa UMA ÚNICA worktree isolada compartilhada entre Chefe, Dev(s) e QA (nunca clona worktrees redundantes à toa).
 - Você decide quantos desenvolvedores disparar passando de 1 até %d itens em "dev_tasks":
-  • Tarefa pequena/média ou concentrada nos mesmos arquivos: passe apenas 1 item em "dev_tasks" (dispara 1 dev, mais rápido e econômico).
-  • Tarefa grande com módulos/arquivos independentes: divida em 2, 3, 4 ou até %d itens em "dev_tasks" (cada item dispara um dev paralelo em sua própria worktree isolada, SEM sobreposição de arquivos).
-- CADA fatia deve caber em poucas edições: o dev tem orçamento rígido por rodada (%d chamadas e %d leituras/buscas antes da 1ª edição; estouro aborta a execução). Fatias ambíguas ou grandes demais fazem o dev girar em leitura sem editar e queimam milhões de tokens — prefira fatiar mais fino e listar os arquivos/caminhos exatos em cada dev_tasks.`, maxDevs, maxDevs, maxDevs, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+  • Tarefa pequena/média ou no mesmo serviço: passe 1 item em "dev_tasks" (1 dev na worktree da conversa, mais rápido e zero conflito).
+  • Tarefa grande em serviços/pastas independentes (ex.: backend Go vs frontend TS): divida em 2..%d itens em "dev_tasks" E preencha "owned_paths" com os prefixos exclusivos de cada dev (ex.: [["internal/relay/"], ["ide/frontend/"]]). Todos compartilham a mesma worktree da conversa com trava determinística de escrita e memória compartilhada via share_team_note.
+  • Tarefa multi-etapa tocando o mesmo módulo/build: passe sequential=true (onda sequencial na mesma worktree, zero conflito de build).
+- CADA fatia deve caber em poucas edições: o dev tem orçamento rígido por rodada (%d chamadas e %d leituras/buscas antes da 1ª edição; estouro aborta a execução). Prefira fatiar objetivo e listar os caminhos exatos.`, maxDevs, maxDevs, maxDevs, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 
 	govRules := `GOVERNANÇA GIT & PULL REQUESTS:
 - Toda alteração de código roda em worktree separada via delegate_to_squad; apenas Chefe ou Arquiteto comitam e abrem PR.
