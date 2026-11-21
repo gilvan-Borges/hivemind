@@ -4,12 +4,16 @@ param(
     [switch]$SkipTests,
     [switch]$RunCliTests,
     [switch]$SkipFrontendInstall,
-    [switch]$Clean
+    [switch]$Clean,
+    # Assina os artefatos com signtool.exe (Authenticode). Exige o binario no
+    # PATH (ou $env:HIVEMIND_SIGNTOOL) e um certificado via PFX ou thumbprint.
+    [switch]$Sign
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$VersionFile = Join-Path $RepoRoot "VERSION"
 $DistDir = Join-Path $RepoRoot "dist"
 $IdeDir = Join-Path $RepoRoot "ide"
 $FrontendDir = Join-Path $IdeDir "frontend"
@@ -43,16 +47,98 @@ function Find-Iscc {
     throw "Inno Setup 6 (ISCC.exe) nao encontrado. Instale via: winget install --id JRSoftware.InnoSetup -e"
 }
 
+function Find-SignTool {
+    $explicit = $env:HIVEMIND_SIGNTOOL
+    if ($explicit -and (Test-Path $explicit)) { return $explicit }
+    $cmd = Get-Command "signtool" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $kits = @(
+        "C:\Program Files (x86)\Windows Kits\10\bin",
+        "C:\Program Files\Windows Kits\10\bin"
+    )
+    foreach ($kit in $kits) {
+        if (-not (Test-Path $kit)) { continue }
+        # Pega a versao mais nova de x64 disponivel.
+        $newest = Get-ChildItem $kit -Directory | Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($newest) { return $newest }
+    }
+    return $null
+}
+
+# Versao unica de verdade: arquivo VERSION na raiz do repositorio
+# (docs/specs/10-mobile-companion-supply-chain-and-ci.md, secao 3.2.1).
 function Resolve-AppVersion([string]$Explicit) {
     if ($Explicit) { return $Explicit.TrimStart("v") }
-    $rootGo = Join-Path $RepoRoot "internal\cli\root.go"
-    if (Test-Path $rootGo) {
-        $match = Select-String -Path $rootGo -Pattern 'var Version = "([^"]+)"' | Select-Object -First 1
-        if ($match) {
-            return $match.Matches[0].Groups[1].Value
-        }
+    if (-not (Test-Path $VersionFile)) {
+        throw "Arquivo VERSION nao encontrado na raiz ($VersionFile). Ele e a fonte unica de versao."
     }
-    return "0.1.0"
+    $fromFile = (Get-Content $VersionFile -Raw).Trim()
+    if (-not $fromFile) { throw "Arquivo VERSION vazio." }
+    return $fromFile
+}
+
+function Get-CommitSha {
+    try {
+        return (git -C $RepoRoot rev-parse --short=8 HEAD).Trim()
+    } catch {
+        return "unknown"
+    }
+}
+
+function Get-FileSha256([string]$Path) {
+    return (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+# Injecao -ldflags compartilhada: os tres binarios reportam exatamente a mesma
+# versao/commit/data (internal/version e a fonte unica no Go).
+function VersionLdflags([string]$AppVersion) {
+    $pkg = "github.com/gilvan-Borges/HiveMind/internal/version"
+    $commit = Get-CommitSha
+    $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    return "-X ${pkg}.Version=$AppVersion -X ${pkg}.Commit=$commit -X ${pkg}.BuildDate=$date"
+}
+
+# O Inno Setup e o wails.json nao leem o VERSION: o script confere que estao em
+# sincronia antes de construir, para nao gerar instalador com versao errada.
+function Assert-WailsJsonVersion([string]$AppVersion) {
+    $wailsJson = Join-Path $IdeDir "wails.json"
+    if (-not (Test-Path $wailsJson)) { return }
+    $json = Get-Content $wailsJson -Raw | ConvertFrom-Json
+    if ($json.info.productVersion -and [string]$json.info.productVersion -ne $AppVersion) {
+        throw "ide/wails.json productVersion=[$($json.info.productVersion)] diverge do VERSION=[$AppVersion]. Atualize ide/wails.json antes de construir."
+    }
+}
+
+# Assinatura Authenticode condicional: so roda com -Sign; sem certificado
+# configurado o build falha em vez de assinar por engano (fail closed).
+function Invoke-SignTool([string]$SignToolExe, [string]$Target) {
+    $args = @("sign", "/fd", "SHA256", "/td", "SHA256")
+
+    $pfx = $env:HIVEMIND_SIGN_PFX
+    $pfxPassword = $env:HIVEMIND_SIGN_PFX_PASSWORD
+    $thumbprint = $env:HIVEMIND_SIGN_THUMBPRINT
+    if ($pfx) {
+        if (-not $pfxPassword) {
+            throw "HIVEMIND_SIGN_PFX definido sem HIVEMIND_SIGN_PFX_PASSWORD."
+        }
+        $args += @("/f", $pfx, "/p", $pfxPassword)
+    } elseif ($thumbprint) {
+        $args += @("/sha1", $thumbprint)
+    } else {
+        throw "Assinatura pedida (-Sign) sem certificado: defina HIVEMIND_SIGN_PFX+HIVEMIND_SIGN_PFX_PASSWORD ou HIVEMIND_SIGN_THUMBPRINT."
+    }
+
+    $timestamp = $env:HIVEMIND_TIMESTAMP_URL
+    if (-not $timestamp) { $timestamp = "http://timestamp.digicert.com" }
+    $args += @("/tr", $timestamp)
+    $args += $Target
+
+    & $SignToolExe @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool falhou ao assinar $Target (exit $LASTEXITCODE). O build nao continua sem assinatura valida."
+    }
 }
 
 Push-Location $RepoRoot
@@ -65,11 +151,14 @@ try {
     $isccExe = Find-Iscc
 
     $AppVersion = Resolve-AppVersion $Version
+    $Ldflags = VersionLdflags $AppVersion
+    Assert-WailsJsonVersion $AppVersion
+
     Write-Host "Go:         $(& $goExe version)"
     Write-Host "Node:       $(& $nodeExe --version)"
     Write-Host "Wails:      $wailsExe"
     Write-Host "Inno Setup: $isccExe"
-    Write-Host "Versao:     $AppVersion"
+    Write-Host "Versao:     $AppVersion (ldflags: $Ldflags)"
 
     if ($Clean) {
         Write-Step "Limpando artefatos anteriores"
@@ -100,7 +189,7 @@ try {
         $env:CGO_ENABLED = "0"
         $env:GOOS = "windows"
         $env:GOARCH = "amd64"
-        & $goExe build -trimpath -ldflags "-s -w -X github.com/gilvan-Borges/HiveMind/internal/cli.Version=$AppVersion" -o $cliExe .\cmd\hivemind
+        & $goExe build -trimpath -ldflags "-s -w $Ldflags" -o $cliExe .\cmd\hivemind
         if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar hivemind.exe" }
     }
     finally {
@@ -108,19 +197,24 @@ try {
         $env:GOOS = $prevGoos
         $env:GOARCH = $prevGoarch
     }
-    & $cliExe version
-    if ($LASTEXITCODE -ne 0) { throw "Smoke-check da CLI falhou" }
+    # Smoke-check: a versao impressa precisa ser a mesma do VERSION/ldflags.
+    $printed = (& $cliExe version) -join " "
+    Write-Host "hivemind version -> $printed"
+    if (-not $printed.Contains($AppVersion)) {
+        throw "hivemind version impresso [$printed] nao contem a versao $AppVersion; a injecao de ldflags falhou."
+    }
 
     Write-Step "Instalando dependencias do frontend da IDE (ide\frontend)"
     Push-Location $FrontendDir
     try {
         if (-not $SkipFrontendInstall) {
-            if (Test-Path "package-lock.json") {
-                & $npmExe ci
-            } else {
-                & $npmExe install
+            # npm ci e obrigatorio: builds reproduziveis a partir do lockfile.
+            # Sem package-lock.json o build falha em vez de resolver uma versao qualquer.
+            if (-not (Test-Path "package-lock.json")) {
+                throw "package-lock.json ausente em ide\frontend. Gere-o (npm install --package-lock-only) e comite; o build exige npm ci."
             }
-            if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar dependencias do frontend" }
+            & $npmExe ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci falhou no frontend da IDE" }
         }
     }
     finally {
@@ -147,7 +241,9 @@ try {
         if (Test-Path $logoIco) { Copy-Item $logoIco (Join-Path $wailsWinDir "icon.ico") -Force }
 
         Write-Step "Compilando HiveMind IDE com Wails (bindings + frontend + Go)"
-        & $wailsExe build -clean -trimpath -platform windows/amd64
+        # Destino unico: ide\build\bin\hivemind-ide.exe. Nao existe mais copia
+        # manual divergente em ide\build\ (Spec 10, secao 3.2.1).
+        & $wailsExe build -clean -trimpath -platform windows/amd64 -ldflags "-s -w $Ldflags"
         if ($LASTEXITCODE -ne 0) { throw "wails build falhou" }
 
         $ideExe = Join-Path $IdeDir "build\bin\hivemind-ide.exe"
@@ -158,6 +254,11 @@ try {
         Write-Step "Executando smoke-check da IDE"
         & $ideExe --smoke-check
         if ($LASTEXITCODE -ne 0) { throw "Smoke-check da IDE falhou" }
+        $ideVersion = (& $ideExe --version) -join " "
+        Write-Host "hivemind-ide --version -> $ideVersion"
+        if (-not $ideVersion.Contains($AppVersion)) {
+            throw "hivemind-ide --version impresso [$ideVersion] nao contem a versao $AppVersion."
+        }
     }
     finally {
         Pop-Location
@@ -167,6 +268,18 @@ try {
     $iconPath = Join-Path $IdeDir "build\windows\icon.ico"
     if (-not (Test-Path $iconPath)) {
         throw "Icone nao encontrado em $iconPath"
+    }
+
+    if ($Sign) {
+        Write-Step "Assinando binarios e instalador (signtool Authenticode)"
+        $signTool = Find-SignTool
+        if (-not $signTool) {
+            throw "-Sign pedido mas signtool.exe nao encontrado (PATH, Windows Kits ou HIVEMIND_SIGNTOOL)."
+        }
+        Invoke-SignTool $signTool $cliExe
+        Invoke-SignTool $signTool $ideExeFinal
+    } else {
+        Write-Host "Assinatura Authenticode desativada (use -Sign para assinar com signtool)." -ForegroundColor Yellow
     }
 
     Write-Step "Gerando instalador Windows (.exe) via Inno Setup"
@@ -185,11 +298,58 @@ try {
         throw "Instalador esperado nao foi gerado em $setupExe"
     }
 
+    if ($Sign) {
+        Invoke-SignTool (Find-SignTool) $setupExe
+    }
+
+    Write-Step "Gerando manifesto e checksums SHA-256 (dist\checksums.txt + dist\manifest.json)"
+    # manifest.json usa chaves semanticas (Role) para o updater pedir "installer"
+    # sem conhecer o nome de arquivo, que muda por versao/OS. checksums.txt usa
+    # o nome real de cada arquivo (formato sha256sum -c).
+    $artifactPaths = @(
+        @{ Role = "installer"; Name = "HiveMindSetup-x64.exe"; Path = $setupExe },
+        @{ Role = "cli-windows"; Name = "hivemind.exe"; Path = $cliExe },
+        @{ Role = "ide-windows"; Name = "hivemind-ide.exe"; Path = $ideExeFinal }
+    )
+    $checksumLines = New-Object System.Collections.Generic.List[string]
+    $checksumLines.Add("# HiveMind $AppVersion - SHA-256 por artefato (sha256sum -c compativel)")
+    $manifestArtifacts = @{}
+    foreach ($art in $artifactPaths) {
+        if (-not (Test-Path $art.Path)) { continue }
+        $hash = Get-FileSha256 $art.Path
+        $size = (Get-Item $art.Path).Length
+        $checksumLines.Add("$hash  $($art.Name)")
+        $manifestArtifacts[$art.Role] = @{
+            name = $art.Name
+            sha256 = $hash
+            size = $size
+        }
+    }
+    $checksumsPath = Join-Path $DistDir "checksums.txt"
+    Set-Content -Path $checksumsPath -Value $checksumLines -Encoding ascii
+
+    $manifestPath = Join-Path $DistDir "manifest.json"
+    $commit = Get-CommitSha
+    $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $manifest = @{
+        version = $AppVersion
+        commit = $commit
+        buildDate = $buildDate
+        generator = "scripts/build-installer.ps1"
+        artifacts = $manifestArtifacts
+    }
+    ($manifest | ConvertTo-Json -Depth 4) | Set-Content -Path $manifestPath -Encoding ascii
+
+    # O proprio VERSION acompanha o release: o updater e o instalador confiam nele.
+    Copy-Item $VersionFile (Join-Path $DistDir "VERSION") -Force
+
     $info = Get-Item $setupExe
     $hash = (Get-FileHash $setupExe -Algorithm SHA256).Hash
     Write-Step "Build concluido com sucesso!"
     Write-Host ("Instalador: {0} ({1:N2} MB)" -f $setupExe, ($info.Length / 1MB)) -ForegroundColor Green
-    Write-Host ("SHA-256:    {0}" -f $hash)
+    Write-Host ("SHA-256:    {0}" -f $hash) -ForegroundColor Green
+    Write-Host ("Checksums:  {0}" -f $checksumsPath) -ForegroundColor Green
+    Write-Host ("Manifesto:  {0}" -f $manifestPath) -ForegroundColor Green
     Write-Host ("CLI avulso: {0}" -f $cliExe)
     Write-Host ("IDE avulsa: {0}" -f $ideExeFinal)
 }

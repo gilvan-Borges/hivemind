@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/remote"
+	"github.com/gilvan-Borges/HiveMind/internal/version"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -20,41 +21,45 @@ var assets embed.FS
 func main() {
 	smokeCheck := false
 	serveBridge := false
+	showVersion := false
 	orbMode := false
 	orbAddr := ""
 	orbToken := ""
 	initialDir := ""
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
-		if arg == "--smoke-check" {
+		switch arg {
+		case "--version", "-version":
+			showVersion = true
+		case "--smoke-check":
 			smokeCheck = true
-			continue
-		}
-		if arg == "--serve-bridge" {
+		case "--serve-bridge":
 			serveBridge = true
-			continue
-		}
-		if arg == "--orb" {
+		case "--orb":
 			orbMode = true
-			continue
-		}
-		if arg == "--orb-addr" && i+1 < len(os.Args) {
-			i++
-			orbAddr = os.Args[i]
-			continue
-		}
-		if arg == "--orb-token" && i+1 < len(os.Args) {
-			i++
-			orbToken = os.Args[i]
-			continue
-		}
-		if initialDir == "" {
-			if abs, err := filepath.Abs(arg); err == nil {
-				if info, err := os.Stat(abs); err == nil && info.IsDir() {
-					initialDir = abs
+		case "--orb-addr":
+			if i+1 < len(os.Args) {
+				i++
+				orbAddr = os.Args[i]
+			}
+		case "--orb-token":
+			if i+1 < len(os.Args) {
+				i++
+				orbToken = os.Args[i]
+			}
+		default:
+			if initialDir == "" {
+				if abs, err := filepath.Abs(arg); err == nil {
+					if info, err := os.Stat(abs); err == nil && info.IsDir() {
+						initialDir = abs
+					}
 				}
 			}
 		}
+	}
+	if showVersion {
+		fmt.Println("hivemind-ide", version.String())
+		return
 	}
 	if orbMode {
 		if err := runOrbWindow(orbAddr, orbToken); err != nil {
@@ -84,7 +89,7 @@ func main() {
 	app := NewApp(initialDir, smokeCheck)
 	if smokeCheck {
 		state := app.GetInitialState()
-		fmt.Printf("HiveMind IDE smoke-check OK: workspace=%s stack=%s\n", state.InitialWorkspace, state.InitialProject.Stack.Summary)
+		fmt.Printf("HiveMind IDE smoke-check OK (%s): workspace=%s stack=%s\n", version.String(), state.InitialWorkspace, state.InitialProject.Stack.Summary)
 		return
 	}
 

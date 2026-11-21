@@ -11,10 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/version"
 )
 
-// Version is reported by GET /api/v1/health.
-const Version = "0.1.0"
+// Version is reported by GET /api/v1/health. O valor canônico vem de
+// internal/version (arquivo VERSION + -ldflags no build oficial).
+var Version = version.Version
 
 // Settings is the process configuration, normally filled from the environment.
 type Settings struct {
