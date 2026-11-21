@@ -182,6 +182,10 @@ export function GetRecentProjects() {
   return window['go']['main']['App']['GetRecentProjects']();
 }
 
+export function GetWorkspaceGitRepos(arg1) {
+  return window['go']['main']['App']['GetWorkspaceGitRepos'](arg1);
+}
+
 export function GitHubStatus(arg1) {
   return window['go']['main']['App']['GitHubStatus'](arg1);
 }

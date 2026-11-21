@@ -172,6 +172,15 @@ export interface FileDiff {
   lines: DiffLine[];
 }
 
+export interface WorkspaceGitRepo {
+  root: string;
+  name: string;
+  relPath: string;
+  branch: string;
+  isRoot: boolean;
+  diffs: FileDiff[];
+}
+
 export interface GitGraphCommit {
   hash: string;
   short: string;
@@ -287,6 +296,8 @@ export interface EditorTab {
   content: string;
   dirty: boolean;
   diff?: FileDiff;
+  repoRoot?: string;
+  workspaceRelPath?: string;
   commitDetail?: CommitDetail;
   mdView?: "preview" | "source";
 }
@@ -633,6 +644,10 @@ export interface ProjectWorkspaceContext {
   activeLaneId: string;
   runMode: RunMode;
   diffs: FileDiff[];
+  gitRepos?: WorkspaceGitRepo[];
+  activeGitRepoRoot?: string;
+  collapsedGitRepos?: Record<string, boolean>;
+  commitMsgByRepo?: Record<string, string>;
   ghStatus: GitHubStatus | null;
   textSearch: {
     query: string;
@@ -661,6 +676,7 @@ export interface ProjectWorkspaceContext {
     loadedOnce: boolean;
     allBranches: boolean;
     collapsed: boolean;
+    repoRoot?: string;
   };
   gitTab: GitSubTab;
   autoReview?: AutoReviewStatus | null;
@@ -1038,6 +1054,7 @@ export interface WailsBackendApp {
   RespondApproval(approvalID: string, approved: boolean): Promise<boolean>;
   EnsureTeamMemory(workspace: string): Promise<string>;
   GetDiff(workspace: string): Promise<FileDiff[]>;
+  GetWorkspaceGitRepos?(workspace: string): Promise<WorkspaceGitRepo[]>;
   CommitChanges(workspace: string, message: string, push: boolean): Promise<string>;
   OpenPR(workspace: string, title: string, body: string, baseBranch: string): Promise<string>;
   CommentJira(workspace: string, issueKey: string, comment: string): Promise<void>;

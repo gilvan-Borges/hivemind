@@ -41,18 +41,20 @@ export async function reloadCleanOpenTabs() {
   }
 }
 
-export function promptDiscardChanges() {
+export function promptDiscardChanges(targetRepoRoot?: string, targetRepoName?: string) {
   if (!state.project) return;
+  const repoRoot = targetRepoRoot || state.activeGitRepoRoot || state.project.root;
+  const suffix = targetRepoName ? ` em "${targetRepoName}"` : "";
   askConfirm({
-    title: "Descartar Todas as Alterações",
-    body: "Isso reverterá arquivos rastreados para HEAD e removerá arquivos novos não rastreados (mantendo .hivemind/). Deseja continuar?",
+    title: targetRepoName ? `Descartar Alterações (${targetRepoName})` : "Descartar Todas as Alterações",
+    body: `Isso reverterá arquivos rastreados${suffix} para HEAD e removerá arquivos novos não rastreados (mantendo .hivemind/). Deseja continuar?`,
     confirmLabel: "Descartar Alterações",
     danger: true,
     onConfirm: async () => {
       if (!state.project) return;
       try {
-        await api()?.DiscardChanges(state.project.root);
-        setStatus("Alterações descartadas.");
+        await api()?.DiscardChanges(repoRoot);
+        setStatus(targetRepoName ? `Alterações descartadas em ${targetRepoName}.` : "Alterações descartadas.");
         await refreshExplorerTree();
         await reloadCleanOpenTabs();
         await refreshDiffs();
@@ -143,11 +145,15 @@ export function sendEditorSelectionToChief() {
   setStatus(`Trecho de ${activeTab.name} anexado ao chat.`);
 }
 
-export function openDiffInEditor(diff: FileDiff) {
-  const key = `diff:${diff.path}`;
+export function openDiffInEditor(diff: FileDiff, repoRoot?: string, repoRelPath?: string) {
+  const effectiveRepoRoot = repoRoot || state.project?.root || "";
+  const workspaceRelPath = repoRelPath ? `${repoRelPath}/${diff.path}` : diff.path;
+  const key = `diff:${workspaceRelPath}`;
   const existing = state.editorTabs.find((t) => t.relPath === key);
   if (existing) {
     existing.diff = diff;
+    existing.repoRoot = effectiveRepoRoot;
+    existing.workspaceRelPath = workspaceRelPath;
     state.activeEditorPath = key;
     renderEditorTabs();
     renderEditorBody();
@@ -160,6 +166,8 @@ export function openDiffInEditor(diff: FileDiff) {
     content: "",
     dirty: false,
     diff,
+    repoRoot: effectiveRepoRoot,
+    workspaceRelPath,
   });
   state.activeEditorPath = key;
   renderEditorTabs();
@@ -702,11 +710,13 @@ export function renderEditorBody() {
 
   if (activeTab.kind === "diff" && activeTab.diff) {
     const diff = activeTab.diff;
+    const diffRepoRoot = activeTab.repoRoot || state.project?.root || "";
+    const diffWorkspacePath = activeTab.workspaceRelPath || diff.path;
     const { hunks } = parseDiffHunks(diff);
     const isSplit = state.diffViewMode === "split";
     body.innerHTML = `
       <div class="editor-breadcrumb">
-        <span class="dim">${escapeHtml(diff.path)}</span>
+        <span class="dim">${escapeHtml(diffWorkspacePath)}</span>
         <span style="color:var(--green)">+${diff.added}</span>
         <span style="color:var(--red)">-${diff.removed}</span>
         <div class="spacer"></div>
@@ -727,7 +737,7 @@ export function renderEditorBody() {
     });
     document.getElementById("btn-diff-open-file")?.addEventListener("click", () => {
       const name = diff.path.split("/").pop() || diff.path;
-      openFileInEditor(diff.path, name);
+      openFileInEditor(diffWorkspacePath, name);
     });
     document.getElementById("btn-diff-revert-file")?.addEventListener("click", () => {
       if (!state.project) return;
@@ -739,8 +749,8 @@ export function renderEditorBody() {
         onConfirm: async () => {
           if (!state.project) return;
           try {
-            await api()?.DiscardFile(state.project.root, diff.path);
-            setStatus(`Arquivo revertido: ${diff.path}`);
+            await api()?.DiscardFile(diffRepoRoot, diff.path);
+            setStatus(`Arquivo revertido: ${diffWorkspacePath}`);
             await refreshExplorerTree();
             await reloadCleanOpenTabs();
             await refreshDiffs();
@@ -758,7 +768,7 @@ export function renderEditorBody() {
         if (!h) return;
         try {
           await api()?.RevertHunk(
-            state.project.root,
+            diffRepoRoot,
             diff.path,
             h.header,
             h.lines.map((l) => l.text)

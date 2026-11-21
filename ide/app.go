@@ -805,6 +805,13 @@ func (a *App) GetDiff(workspace string) ([]idecore.FileDiff, error) {
 	return idecore.WorkspaceDiff(ctx, workspace)
 }
 
+// GetWorkspaceGitRepos discovers root and nested Git repositories inside workspace along with their diffs.
+func (a *App) GetWorkspaceGitRepos(workspace string) ([]idecore.WorkspaceGitRepo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.DiscoverGitRepos(ctx, workspace)
+}
+
 // CommitChanges commits (and optionally pushes) workspace changes.
 func (a *App) CommitChanges(workspace, message string, push bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

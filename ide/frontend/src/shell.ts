@@ -14,7 +14,7 @@ import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
 import { loadSettings, toggleCompanionEnabled } from "./companion/settings";
-import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
+import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { countProblems, refreshLSPStatus } from "./lsp";
 import { openProblemsPanel, renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
@@ -258,27 +258,35 @@ export function openSidebarView(view: SidebarView) {
   syncActivityButtons();
   syncLayoutVisibility();
   renderLeftSidebar();
-  if (view === "git" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
+  if (view === "git" && (state.project?.branch || state.gitRepos.length > 0) && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
     void loadGitGraph();
   }
 }
 
-export async function toggleBranchPopover(anchorTop: boolean) {
+export async function toggleBranchPopover(anchorTop: boolean, targetRepoRoot?: string) {
   if (!state.project) return;
-  if (!state.project.branch) {
+  const effectiveRoot = targetRepoRoot || state.activeGitRepoRoot || state.project.root;
+  const repo = state.gitRepos.find((r) => normalizePathKey(r.root) === normalizePathKey(effectiveRoot));
+  const effectiveBranch = repo?.branch || (normalizePathKey(effectiveRoot) === normalizePathKey(state.project.root) ? state.project.branch : "");
+  if (!effectiveBranch) {
     openSidebarView("git");
     return;
   }
-  if (state.branchPopover.open && state.branchPopover.anchorTop === anchorTop) {
+  if (
+    state.branchPopover.open &&
+    state.branchPopover.anchorTop === anchorTop &&
+    normalizePathKey(state.branchPopover.repoRoot || state.project.root) === normalizePathKey(effectiveRoot)
+  ) {
     state.branchPopover.open = false;
     renderBranchPopover();
     return;
   }
   try {
-    const branches = (await api()?.ListBranches(state.project.root)) || [];
+    const branches = (await api()?.ListBranches(effectiveRoot)) || [];
     state.branchPopover.branches = branches;
     state.branchPopover.newBranch = "";
     state.branchPopover.anchorTop = anchorTop;
+    state.branchPopover.repoRoot = effectiveRoot;
     state.branchPopover.open = true;
     renderBranchPopover();
   } catch (err: any) {
@@ -383,12 +391,12 @@ export function bindStaticShellEvents() {
       renderFileMenu();
     }
     if (state.branchPopover.open) {
-      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-header-vcs")) {
+      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-header-vcs") && !target.closest("#btn-scm-branch-switch")) {
         state.branchPopover.open = false;
         renderBranchPopover();
       }
     }
-    if ((state.gitMoreMenuOpen || state.commitMenuOpen) && !target.closest(".scm-dropdown") && !target.closest("#btn-scm-more") && !target.closest("#btn-commit-menu")) {
+    if ((state.gitMoreMenuOpen || state.commitMenuOpen) && !target.closest(".scm-dropdown") && !target.closest("#btn-scm-more") && !target.closest("[data-commit-menu-repo]")) {
       state.gitMoreMenuOpen = false;
       state.commitMenuOpen = false;
       if (state.sidebarView === "git") renderLeftSidebar();
@@ -583,14 +591,18 @@ export function renderBranchPopover() {
     layer.innerHTML = "";
     return;
   }
-  const cur = state.project.branch;
+  const targetRoot = state.branchPopover.repoRoot || state.project.root;
+  const targetRepo = state.gitRepos.find((r) => normalizePathKey(r.root) === normalizePathKey(targetRoot));
+  const isWorkspaceRoot = normalizePathKey(targetRoot) === normalizePathKey(state.project.root);
+  const cur = targetRepo?.branch || (isWorkspaceRoot ? state.project.branch : "");
+  const repoLabel = targetRepo && state.gitRepos.length > 1 ? ` · ${targetRepo.name}` : "";
   const posStyle = state.branchPopover.anchorTop
     ? "top:44px;bottom:auto;left:110px"
     : "bottom:30px;left:12px";
 
   layer.innerHTML = `
     <div class="branch-popover" style="${posStyle}">
-      <div class="eyebrow">${icons.gitSmall}<span>Branches Git</span></div>
+      <div class="eyebrow">${icons.gitSmall}<span>Branches Git${escapeHtml(repoLabel)}</span></div>
       <div style="max-height:170px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
         ${state.branchPopover.branches.length === 0
           ? `<div class="dim" style="padding:4px">Sem commits ainda (${escapeHtml(cur)})</div>`
@@ -613,7 +625,7 @@ export function renderBranchPopover() {
   layer.querySelectorAll("[data-switch-branch]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const targetBranch = (btn as HTMLElement).dataset.switchBranch!;
-      if (!state.project || targetBranch === state.project.branch) {
+      if (!state.project || targetBranch === cur) {
         state.branchPopover.open = false;
         renderBranchPopover();
         return;
@@ -621,13 +633,15 @@ export function renderBranchPopover() {
       const performSwitch = async () => {
         if (!state.project) return;
         try {
-          await api()?.CheckoutBranch(state.project.root, targetBranch, false);
-          state.project.branch = targetBranch;
+          await api()?.CheckoutBranch(targetRoot, targetBranch, false);
+          if (targetRepo) targetRepo.branch = targetBranch;
+          if (isWorkspaceRoot) state.project.branch = targetBranch;
           state.branchPopover.open = false;
           renderBranchPopover();
           renderProjectTabsBar();
           updateHeaderAndStatusBar();
           refreshDiffs();
+          void loadGitGraph();
           refreshExplorerTree();
           await reloadCleanOpenTabs();
           setStatus(`Branch alterada para ${targetBranch}.`);
@@ -666,13 +680,15 @@ export function renderBranchPopover() {
     }
     if (branchErr) branchErr.style.display = "none";
     try {
-      await api()?.CheckoutBranch(state.project.root, name, true);
-      state.project.branch = name;
+      await api()?.CheckoutBranch(targetRoot, name, true);
+      if (targetRepo) targetRepo.branch = name;
+      if (isWorkspaceRoot) state.project.branch = name;
       state.branchPopover.open = false;
       renderBranchPopover();
       renderProjectTabsBar();
       updateHeaderAndStatusBar();
       refreshDiffs();
+      void loadGitGraph();
       setStatus(`Branch "${name}" criada e ativada.`);
     } catch (err: any) {
       toastError(`criar a branch "${name}"`, err, () => { void doCreate(); });

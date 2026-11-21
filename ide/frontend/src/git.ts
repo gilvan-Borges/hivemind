@@ -1,5 +1,5 @@
 import { fileBadge, icons } from "./icons";
-import type { AutoReviewSettings, AutoReviewStatus, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane } from "./types";
+import type { AutoReviewSettings, AutoReviewStatus, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane, WorkspaceGitRepo } from "./types";
 import { escapeHtml, formatTokens } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, renderEditorBody, renderEditorTabs } from "./editor";
@@ -11,35 +11,130 @@ import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError 
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
+    const timer = globalThis.setTimeout(() => {
       reject(new Error(`Tempo limite (${Math.round(ms / 1000)}s) ao ${label}.`));
     }, ms);
     promise.then(
       (val) => {
-        window.clearTimeout(timer);
+        globalThis.clearTimeout(timer);
         resolve(val);
       },
       (err) => {
-        window.clearTimeout(timer);
+        globalThis.clearTimeout(timer);
         reject(err);
       }
     );
   });
 }
 
+export function getEffectiveGitRepos(): WorkspaceGitRepo[] {
+  if (state.gitRepos.length > 0) return state.gitRepos;
+  if (state.project?.branch) {
+    return [
+      {
+        root: state.project.root,
+        name: state.project.name,
+        relPath: "",
+        branch: state.project.branch,
+        isRoot: true,
+        diffs: state.diffs,
+      },
+    ];
+  }
+  return [];
+}
+
+export function getActiveGitRepo(): WorkspaceGitRepo | null {
+  const repos = getEffectiveGitRepos();
+  if (repos.length === 0) return null;
+  const activeKey = normalizePathKey(state.activeGitRepoRoot);
+  if (activeKey) {
+    const match = repos.find((r) => normalizePathKey(r.root) === activeKey);
+    if (match) return match;
+  }
+  return repos[0];
+}
+
+export function isMultiRepoMode(repos: WorkspaceGitRepo[]): boolean {
+  return repos.length > 1 || (repos.length === 1 && !repos[0].isRoot);
+}
+
+function getRepoCommitDraft(repoRoot: string): string {
+  const key = normalizePathKey(repoRoot);
+  if (Object.prototype.hasOwnProperty.call(state.commitMsgByRepo, key)) {
+    return state.commitMsgByRepo[key] || "";
+  }
+  const activeKey = normalizePathKey(getActiveGitRepo()?.root || state.project?.root || "");
+  return key === activeKey ? state.commitMsgInput : "";
+}
+
+function setRepoCommitDraft(repoRoot: string, value: string) {
+  const key = normalizePathKey(repoRoot);
+  state.commitMsgByRepo[key] = value;
+  const activeKey = normalizePathKey(getActiveGitRepo()?.root || state.project?.root || "");
+  if (key === activeKey) {
+    state.commitMsgInput = value;
+  }
+}
+
+export function selectActiveGitRepo(repoRoot: string) {
+  const repos = getEffectiveGitRepos();
+  const target = repos.find((r) => normalizePathKey(r.root) === normalizePathKey(repoRoot));
+  if (!target) return;
+  const prevKey = normalizePathKey(state.activeGitRepoRoot);
+  const nextKey = normalizePathKey(target.root);
+  state.activeGitRepoRoot = target.root;
+  state.diffs = target.diffs || [];
+  state.commitMsgInput = getRepoCommitDraft(target.root);
+  state.commitMenuOpen = false;
+  state.commitMenuRepoRoot = "";
+
+  const ctx = state.projectTabs.find((p) => p.id === state.activeProjectId);
+  if (ctx) {
+    ctx.activeGitRepoRoot = state.activeGitRepoRoot;
+    ctx.diffs = state.diffs;
+    ctx.commitMsgInput = state.commitMsgInput;
+  }
+
+  const graphOutdated = normalizePathKey(state.gitGraph.repoRoot || "") !== nextKey || !state.gitGraph.loadedOnce;
+  if (prevKey !== nextKey || graphOutdated) {
+    state.gitGraph.repoRoot = target.root;
+    state.gitGraph.commits = [];
+    state.gitGraph.loadedOnce = false;
+    state.gitGraph.loading = false;
+    void api()?.GitHubStatus(target.root).then((gh) => {
+      if (normalizePathKey(state.activeGitRepoRoot) === nextKey) {
+        state.ghStatus = gh;
+        if (state.sidebarView === "git") renderLeftSidebar();
+      }
+    }).catch(() => { /* ignore */ });
+    if (state.sidebarView === "git") renderLeftSidebar();
+    void loadGitGraph();
+  } else if (state.sidebarView === "git") {
+    renderLeftSidebar();
+  }
+}
+
 export async function refreshDiffsAndSummarize(lane: TeamLane) {
   await refreshDiffs();
-  if (state.diffs.length === 0) return;
+  const repos = getEffectiveGitRepos();
+  const allDiffs = repos.flatMap((r) =>
+    (r.diffs || []).map((d) => ({
+      ...d,
+      path: r.relPath ? `${r.relPath}/${d.path}` : d.path,
+    }))
+  );
+  if (allDiffs.length === 0) return;
   const last = lane.messages[lane.messages.length - 1];
   if (last && last.kind === "diff") return;
-  const totalAdd = state.diffs.reduce((s, d) => s + d.added, 0);
-  const totalRem = state.diffs.reduce((s, d) => s + d.removed, 0);
+  const totalAdd = allDiffs.reduce((s, d) => s + d.added, 0);
+  const totalRem = allDiffs.reduce((s, d) => s + d.removed, 0);
   lane.messages.push({
     id: `diff-${Date.now()}`,
     kind: "diff",
-    label: `${state.diffs.length} arquivo(s) alterado(s) (+${totalAdd} / -${totalRem})`,
+    label: `${allDiffs.length} arquivo(s) alterado(s) (+${totalAdd} / -${totalRem})`,
     text: "",
-    diffItems: state.diffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed })),
+    diffItems: allDiffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed })),
   });
   if (lane.id === activeLane()?.id) {
     scheduleChatFlush();
@@ -49,14 +144,19 @@ export async function refreshDiffsAndSummarize(lane: TeamLane) {
 export function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<string> } {
   const files = new Map<string, "M" | "U">();
   const dirs = new Set<string>();
-  for (const d of state.diffs) {
-    const p = (d.path || "").replace(/\\/g, "/");
-    if (!p) continue;
-    const isNew = d.lines.some((ln) => ln.kind === "header" && ln.text.startsWith("new file mode"));
-    files.set(p, isNew ? "U" : "M");
-    const parts = p.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      dirs.add(parts.slice(0, i).join("/"));
+  const repos = getEffectiveGitRepos();
+  for (const repo of repos) {
+    const prefix = repo.relPath ? repo.relPath.replace(/\\/g, "/").replace(/\/+$/, "") : "";
+    for (const d of (repo.diffs || [])) {
+      const raw = (d.path || "").replace(/\\/g, "/");
+      if (!raw) continue;
+      const p = prefix ? `${prefix}/${raw}` : raw;
+      const isNew = d.status === "U" || d.lines.some((ln) => ln.kind === "header" && ln.text.startsWith("new file mode"));
+      files.set(p, isNew ? "U" : "M");
+      const parts = p.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(parts.slice(0, i).join("/"));
+      }
     }
   }
   return { files, dirs };
@@ -65,8 +165,12 @@ export function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<st
 export function updateGitActivityBadge() {
   const diffBadge = document.getElementById("git-badge");
   if (diffBadge) {
-    diffBadge.textContent = String(state.diffs.length);
-    diffBadge.style.display = state.diffs.length > 0 ? "inline-block" : "none";
+    const repos = getEffectiveGitRepos();
+    const total = repos.length > 0
+      ? repos.reduce((sum, r) => sum + (r.diffs?.length || 0), 0)
+      : state.diffs.length;
+    diffBadge.textContent = String(total);
+    diffBadge.style.display = total > 0 ? "inline-block" : "none";
   }
   const ghBadge = document.getElementById("git-gh-badge");
   if (ghBadge) {
@@ -100,19 +204,56 @@ export async function refreshDiffs() {
   const targetRoot = state.project.root;
   const targetKey = normalizePathKey(targetRoot);
   try {
-    const diffs = (await backend.GetDiff(targetRoot)) || [];
+    let discoveredRepos: WorkspaceGitRepo[] | null = null;
+    if (backend.GetWorkspaceGitRepos) {
+      discoveredRepos = (await backend.GetWorkspaceGitRepos(targetRoot)) || [];
+    }
+    const diffs = discoveredRepos
+      ? (discoveredRepos[0]?.diffs || [])
+      : ((await backend.GetDiff(targetRoot)) || []);
+
     const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
-    if (ctx) ctx.diffs = diffs;
+    const activeCtxRepoRoot = ctx?.activeGitRepoRoot || state.activeGitRepoRoot;
+    let resolvedRepos: WorkspaceGitRepo[] = discoveredRepos || [];
+    if (!discoveredRepos && state.project.branch) {
+      resolvedRepos = [{
+        root: targetRoot,
+        name: state.project.name,
+        relPath: "",
+        branch: state.project.branch,
+        isRoot: true,
+        diffs,
+      }];
+    }
+
+    const activeMatch =
+      resolvedRepos.find((r) => normalizePathKey(r.root) === normalizePathKey(activeCtxRepoRoot))
+      || resolvedRepos.find((r) => (r.diffs?.length || 0) > 0)
+      || resolvedRepos[0];
+    const nextActiveRoot = activeMatch?.root || "";
+    const activeDiffs = activeMatch?.diffs || diffs;
+
+    if (ctx) {
+      ctx.gitRepos = resolvedRepos;
+      ctx.activeGitRepoRoot = nextActiveRoot;
+      ctx.diffs = activeDiffs;
+    }
     if (!state.project || normalizePathKey(state.project.root) !== targetKey) {
       return;
     }
-    state.diffs = diffs;
+    state.gitRepos = resolvedRepos;
+    state.activeGitRepoRoot = nextActiveRoot;
+    state.diffs = activeDiffs;
     updateGitActivityBadge();
-    // Sync any open diff tabs with updated diff objects
+
+    // Sync any open diff tabs with updated diff objects across all discovered repos
     let activeDiffChanged = false;
     for (const tab of [...state.editorTabs]) {
       if (tab.kind !== "diff" || !tab.diff) continue;
-      const updated = state.diffs.find((d) => d.path === tab.diff?.path);
+      const tabRepoKey = normalizePathKey(tab.repoRoot || state.project.root);
+      const repoMatch = resolvedRepos.find((r) => normalizePathKey(r.root) === tabRepoKey);
+      const pool = repoMatch ? (repoMatch.diffs || []) : state.diffs;
+      const updated = pool.find((d) => d.path === tab.diff?.path);
       if (updated) {
         tab.diff = updated;
         if (state.activeEditorPath === tab.relPath) activeDiffChanged = true;
@@ -310,23 +451,24 @@ export function renderGraphRefPillsHtml(refs?: string[]): string {
     .join("");
 }
 
-export function renderScmFileRowHtml(d: FileDiff): string {
+export function renderScmFileRowHtml(d: FileDiff, repoRoot = "", repoRelPath = ""): string {
   const parts = d.path.split("/");
   const fileName = parts.pop() || d.path;
   const dirPath = parts.join("\\");
   const st = (d.status || "M").toUpperCase();
   const stCls = st === "U" ? "untracked" : st === "A" ? "added" : st === "D" ? "deleted" : st === "R" ? "renamed" : "modified";
+  const workspaceRelPath = repoRelPath ? `${repoRelPath}/${d.path}` : d.path;
   return `
-    <div class="scm-file-row ${state.activeEditorPath === "diff:" + d.path ? "active" : ""}" data-open-diff="${escapeHtml(d.path)}" title="${escapeHtml(d.path)} (+${d.added} -${d.removed})">
+    <div class="scm-file-row ${state.activeEditorPath === "diff:" + workspaceRelPath ? "active" : ""}" data-open-diff="${escapeHtml(d.path)}" data-repo-root="${escapeHtml(repoRoot)}" data-repo-rel="${escapeHtml(repoRelPath)}" title="${escapeHtml(workspaceRelPath)} (+${d.added} -${d.removed})">
       <span class="scm-file-icon">${fileBadge(fileName)}</span>
       <span class="scm-file-name">${escapeHtml(fileName)}</span>
       ${dirPath ? `<span class="scm-file-dir">${escapeHtml(dirPath)}</span>` : `<span class="scm-file-dir"></span>`}
       <span class="scm-file-actions">
-        <button type="button" class="scm-row-btn" data-scm-open-file="${escapeHtml(d.path)}" title="Abrir arquivo">${icons.openInNew}</button>
-        <button type="button" class="scm-row-btn" data-scm-discard-file="${escapeHtml(d.path)}" title="Descartar alterações">${icons.undo}</button>
+        <button type="button" class="scm-row-btn" data-scm-open-file="${escapeHtml(workspaceRelPath)}" title="Abrir arquivo">${icons.openInNew}</button>
+        <button type="button" class="scm-row-btn" data-scm-discard-file="${escapeHtml(d.path)}" data-repo-root="${escapeHtml(repoRoot)}" title="Descartar alterações">${icons.undo}</button>
         ${d.staged
-          ? `<button type="button" class="scm-row-btn" data-scm-unstage="${escapeHtml(d.path)}" title="Remover do Stage (Unstage)">${icons.minus}</button>`
-          : `<button type="button" class="scm-row-btn" data-scm-stage="${escapeHtml(d.path)}" title="Preparar Alteração (Stage)">${icons.plus}</button>`
+          ? `<button type="button" class="scm-row-btn" data-scm-unstage="${escapeHtml(d.path)}" data-repo-root="${escapeHtml(repoRoot)}" title="Remover do Stage (Unstage)">${icons.minus}</button>`
+          : `<button type="button" class="scm-row-btn" data-scm-stage="${escapeHtml(d.path)}" data-repo-root="${escapeHtml(repoRoot)}" title="Preparar Alteração (Stage)">${icons.plus}</button>`
         }
       </span>
       <span class="scm-status-letter ${stCls}">${escapeHtml(st)}</span>
@@ -336,6 +478,10 @@ export function renderScmFileRowHtml(d: FileDiff): string {
 
 export function renderGitGraphSectionHtml(): string {
   const g = state.gitGraph;
+  const repos = getEffectiveGitRepos();
+  const activeRepo = getActiveGitRepo();
+  const showRepoBadge = isMultiRepoMode(repos) && Boolean(activeRepo);
+  const targetRepoRoot = g.repoRoot || activeRepo?.root || state.project?.root || "";
   const rowSvgs = g.commits.length > 0 ? buildGraphRowSvgs(g.commits) : [];
   return `
     <div class="scm-section">
@@ -344,6 +490,7 @@ export function renderGitGraphSectionHtml(): string {
           ${g.collapsed ? icons.chevronRight : icons.chevronDown}
           <span>Graph</span>
         </button>
+        ${showRepoBadge ? `<span class="scm-graph-repo-pill" title="${escapeHtml(activeRepo!.relPath || activeRepo!.name)}">${escapeHtml(activeRepo!.name)}</span>` : ""}
         <div class="spacer"></div>
         <button type="button" class="scm-mini-pill ${g.allBranches ? "active" : ""}" id="btn-graph-scope" title="${g.allBranches ? "Mostrando todas as branches (Auto)" : "Mostrando apenas a branch atual"}">
           ${icons.gitSmall}
@@ -361,7 +508,7 @@ export function renderGitGraphSectionHtml(): string {
             : g.commits.length === 0
               ? `<div class="dim" style="padding:8px 10px">Nenhum commit neste repositório ainda.</div>`
               : g.commits.map((c, i) => `
-                <div class="scm-graph-row ${state.activeEditorPath === "commit:" + c.hash ? "active" : ""}" data-open-commit="${escapeHtml(c.hash)}" title="${escapeHtml(c.short)} · ${escapeHtml(c.author)} · ${escapeHtml(c.date)}&#10;${escapeHtml(c.subject)}">
+                <div class="scm-graph-row ${state.activeEditorPath === "commit:" + c.hash ? "active" : ""}" data-open-commit="${escapeHtml(c.hash)}" data-repo-root="${escapeHtml(targetRepoRoot)}" title="${escapeHtml(c.short)} · ${escapeHtml(c.author)} · ${escapeHtml(c.date)}&#10;${escapeHtml(c.subject)}">
                   ${rowSvgs[i] || ""}
                   <span class="scm-graph-subject ${c.refs?.some((r) => r.includes("HEAD")) ? "is-head" : ""}">${escapeHtml(c.subject)}</span>
                   <span class="scm-graph-refs">${renderGraphRefPillsHtml(c.refs)}</span>
@@ -601,13 +748,109 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
   `;
 }
 
-export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
-  const gh = state.ghStatus;
-  const hasGit = Boolean(proj?.branch);
-  const diffs = state.diffs;
+function renderRepoCommitBoxHtml(repo: WorkspaceGitRepo, compact = false): string {
+  const hasDiffs = (repo.diffs?.length || 0) > 0;
+  const draft = getRepoCommitDraft(repo.root);
+  const menuOpenHere = state.commitMenuOpen && normalizePathKey(state.commitMenuRepoRoot || getActiveGitRepo()?.root || "") === normalizePathKey(repo.root);
+  return `
+    <div class="scm-commit-box ${compact ? "is-compact" : ""}">
+      <input data-commit-input-repo="${escapeHtml(repo.root)}" placeholder='Mensagem (Ctrl+Enter em "${escapeHtml(repo.branch)}")' value="${escapeHtml(draft)}" />
+      <div class="scm-split-btn">
+        <button type="button" class="primary scm-commit-main" data-commit-repo="${escapeHtml(repo.root)}" ${hasDiffs ? "" : "disabled"}>${icons.check}<span>Commit</span></button>
+        <button type="button" class="primary scm-commit-arrow" data-commit-menu-repo="${escapeHtml(repo.root)}" ${hasDiffs ? "" : "disabled"} title="Mais opções de Commit">${icons.chevronDown}</button>
+        ${menuOpenHere ? `
+          <div class="scm-dropdown" id="scm-commit-dropdown">
+            <button type="button" class="dropdown-item" data-commit-mode="commit" data-repo-root="${escapeHtml(repo.root)}">Commit</button>
+            <button type="button" class="dropdown-item" data-commit-mode="push" data-repo-root="${escapeHtml(repo.root)}">Commit & Push</button>
+            <button type="button" class="dropdown-item" data-commit-mode="sync" data-repo-root="${escapeHtml(repo.root)}">Commit & Sync (Pull + Push)</button>
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderRepoFileGroupsHtml(repo: WorkspaceGitRepo): string {
+  const diffs = repo.diffs || [];
+  if (diffs.length === 0) {
+    return `<div class="dim" style="padding:6px 10px">Nenhuma alteração pendente.</div>`;
+  }
   const stagedDiffs = diffs.filter((d) => d.staged);
   const unstagedDiffs = diffs.filter((d) => !d.staged);
-  const hasDiffs = diffs.length > 0;
+  return `
+    ${stagedDiffs.length > 0 ? `
+      <div class="scm-group-label">Preparadas (Staged) · ${stagedDiffs.length}</div>
+      ${stagedDiffs.map((d) => renderScmFileRowHtml(d, repo.root, repo.relPath)).join("")}
+    ` : ""}
+    ${unstagedDiffs.length > 0 ? `
+      ${stagedDiffs.length > 0 ? `<div class="scm-group-label">Alterações · ${unstagedDiffs.length}</div>` : ""}
+      ${unstagedDiffs.map((d) => renderScmFileRowHtml(d, repo.root, repo.relPath)).join("")}
+    ` : ""}
+  `;
+}
+
+function renderMultiRepoChangesHtml(repos: WorkspaceGitRepo[], activeRepo: WorkspaceGitRepo | null): string {
+  const totalDiffs = repos.reduce((sum, r) => sum + (r.diffs?.length || 0), 0);
+  const activeKey = normalizePathKey(activeRepo?.root || "");
+  return `
+    <div class="scm-section">
+      <div class="scm-section-head">
+        <button type="button" class="scm-collapse-btn" id="btn-toggle-changes">
+          ${state.changesCollapsed ? icons.chevronRight : icons.chevronDown}
+          <span>Alterações (${repos.length} repos)</span>
+        </button>
+        <div class="spacer"></div>
+        <span class="scm-count-pill">${totalDiffs}</span>
+      </div>
+      ${state.changesCollapsed ? "" : `
+        <div class="scm-repos-list">
+          ${repos.map((repo) => {
+            const key = normalizePathKey(repo.root);
+            const isSelected = key === activeKey;
+            const isCollapsed = Boolean(state.collapsedGitRepos[key]);
+            const diffCount = repo.diffs?.length || 0;
+            const relHint = repo.relPath && repo.relPath !== repo.name ? repo.relPath : "";
+            return `
+              <div class="scm-repo-card ${isSelected ? "is-active" : ""}" data-repo-card="${escapeHtml(repo.root)}">
+                <div class="scm-repo-head" data-select-repo="${escapeHtml(repo.root)}" title="Selecionar ${escapeHtml(repo.name)} (${escapeHtml(repo.branch)}) para visualizar o Graph">
+                  <button type="button" class="scm-repo-toggle" data-toggle-repo="${escapeHtml(repo.root)}" title="${isCollapsed ? "Expandir" : "Recolher"}">
+                    ${isCollapsed ? icons.chevronRight : icons.chevronDown}
+                  </button>
+                  ${icons.gitSmall}
+                  <span class="scm-repo-title">${escapeHtml(repo.name)}</span>
+                  ${relHint ? `<span class="scm-repo-rel">${escapeHtml(relHint)}</span>` : `<span class="scm-repo-rel"></span>`}
+                  <span class="scm-repo-branch-pill">${escapeHtml(repo.branch || "HEAD")}${diffCount > 0 ? "*" : ""}</span>
+                  <span class="scm-repo-actions">
+                    ${diffCount > 0 ? `<button type="button" class="scm-row-btn" data-discard-repo="${escapeHtml(repo.root)}" data-repo-name="${escapeHtml(repo.name)}" title="Descartar alterações de ${escapeHtml(repo.name)}">${icons.undo}</button>` : ""}
+                    <span class="scm-count-pill">${diffCount}</span>
+                  </span>
+                </div>
+                ${isCollapsed ? "" : `
+                  <div class="scm-repo-body">
+                    ${renderRepoCommitBoxHtml(repo, true)}
+                    ${renderRepoFileGroupsHtml(repo)}
+                  </div>
+                `}
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
+  const gh = state.ghStatus;
+  const repos = getEffectiveGitRepos();
+  const activeRepo = getActiveGitRepo();
+  const hasGit = repos.length > 0 || Boolean(proj?.branch);
+  const multiRepo = isMultiRepoMode(repos);
+  const totalDiffs = repos.length > 0
+    ? repos.reduce((sum, r) => sum + (r.diffs?.length || 0), 0)
+    : state.diffs.length;
+  const activeDiffs = activeRepo?.diffs || state.diffs;
+  const activeHasDiffs = activeDiffs.length > 0;
   const jiraOn = Boolean(proj?.teamConfig?.settings?.jira_enabled);
   const activeGitTab: GitSubTab = !hasGit && state.gitTab === "changes" ? "prs_issues" : state.gitTab;
 
@@ -626,51 +869,34 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 
   let tabContentHtml = "";
   if (activeGitTab === "changes" && hasGit) {
-    tabContentHtml = `
-      <div class="scm-commit-box">
-        <input id="commit-msg-input" placeholder='Mensagem (Ctrl+Enter em "${escapeHtml(proj!.branch)}")' value="${escapeHtml(state.commitMsgInput)}" />
-        <div class="scm-split-btn">
-          <button type="button" class="primary scm-commit-main" id="btn-commit" ${hasDiffs ? "" : "disabled"}>${icons.check}<span>Commit</span></button>
-          <button type="button" class="primary scm-commit-arrow" id="btn-commit-menu" ${hasDiffs ? "" : "disabled"} title="Mais opções de Commit">${icons.chevronDown}</button>
-          ${state.commitMenuOpen ? `
-            <div class="scm-dropdown" id="scm-commit-dropdown">
-              <button type="button" class="dropdown-item" id="btn-commit-only">Commit</button>
-              <button type="button" class="dropdown-item" id="btn-commit-push">Commit & Push</button>
-              <button type="button" class="dropdown-item" id="btn-commit-sync">Commit & Sync (Pull + Push)</button>
-            </div>
-          ` : ""}
-        </div>
-      </div>
-
-      <div class="scm-section">
-        <div class="scm-section-head">
-          <button type="button" class="scm-collapse-btn" id="btn-toggle-changes">
-            ${state.changesCollapsed ? icons.chevronRight : icons.chevronDown}
-            <span>Alterações</span>
-          </button>
-          <div class="spacer"></div>
-          ${hasDiffs ? `<button type="button" class="icon-btn" id="btn-discard" title="Descartar todas as alterações">${icons.undo}</button>` : ""}
-          <span class="scm-count-pill">${diffs.length}</span>
-        </div>
-        ${state.changesCollapsed ? "" : `
-          <div id="git-diff-files">
-            ${!hasDiffs
-              ? `<div class="dim" style="padding:6px 10px">Nenhuma alteração pendente.</div>`
-              : `${stagedDiffs.length > 0 ? `
-                  <div class="scm-group-label">Preparadas (Staged) · ${stagedDiffs.length}</div>
-                  ${stagedDiffs.map(renderScmFileRowHtml).join("")}
-                ` : ""}
-                ${unstagedDiffs.length > 0 ? `
-                  ${stagedDiffs.length > 0 ? `<div class="scm-group-label">Alterações · ${unstagedDiffs.length}</div>` : ""}
-                  ${unstagedDiffs.map(renderScmFileRowHtml).join("")}
-                ` : ""}`
-            }
+    if (multiRepo) {
+      tabContentHtml = `
+        ${renderMultiRepoChangesHtml(repos, activeRepo)}
+        ${renderGitGraphSectionHtml()}
+      `;
+    } else if (activeRepo) {
+      tabContentHtml = `
+        ${renderRepoCommitBoxHtml(activeRepo, false)}
+        <div class="scm-section">
+          <div class="scm-section-head">
+            <button type="button" class="scm-collapse-btn" id="btn-toggle-changes">
+              ${state.changesCollapsed ? icons.chevronRight : icons.chevronDown}
+              <span>Alterações</span>
+            </button>
+            <div class="spacer"></div>
+            ${activeHasDiffs ? `<button type="button" class="icon-btn" id="btn-discard" data-discard-repo="${escapeHtml(activeRepo.root)}" data-repo-name="${escapeHtml(activeRepo.name)}" title="Descartar todas as alterações">${icons.undo}</button>` : ""}
+            <span class="scm-count-pill">${activeDiffs.length}</span>
           </div>
-        `}
-      </div>
+          ${state.changesCollapsed ? "" : `
+            <div id="git-diff-files">
+              ${renderRepoFileGroupsHtml(activeRepo)}
+            </div>
+          `}
+        </div>
 
-      ${renderGitGraphSectionHtml()}
-    `;
+        ${renderGitGraphSectionHtml()}
+      `;
+    }
   } else if (activeGitTab === "prs_issues") {
     const loadingAny = state.prs.loading || state.issues.loading;
     tabContentHtml = `
@@ -844,7 +1070,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <span class="eyebrow">Controle de Código</span>
       <div class="spacer"></div>
       ${hasGit ? `
-        <button type="button" class="icon-btn" id="btn-header-commit" title="Commitar alterações" ${hasDiffs ? "" : "disabled"}>${icons.check}</button>
+        <button type="button" class="icon-btn" id="btn-header-commit" title="Commitar alterações (${escapeHtml(activeRepo?.name || proj?.name || "")})" ${activeHasDiffs ? "" : "disabled"}>${icons.check}</button>
         <button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>
         <div class="scm-more-wrap">
           <button type="button" class="icon-btn" id="btn-scm-more" title="Mais ações Git…" ${state.gitOp.running ? "disabled" : ""}>${icons.moreHoriz}</button>
@@ -863,16 +1089,20 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
               <button type="button" class="dropdown-item" id="menu-jira-connector">Conector Jira Nativo…</button>
               ${jiraOn ? `<button type="button" class="dropdown-item" id="menu-comment-jira">Comentar no Jira…</button>` : ""}
               <button type="button" class="dropdown-item" id="menu-switch-branch">Trocar / Criar Branch…</button>
-              ${hasDiffs ? `<div class="scm-menu-sep"></div><button type="button" class="dropdown-item danger" id="menu-discard-all">Descartar Todas as Alterações</button>` : ""}
+              ${activeHasDiffs ? `<div class="scm-menu-sep"></div><button type="button" class="dropdown-item danger" id="menu-discard-all">Descartar Todas as Alterações</button>` : ""}
             </div>
           ` : ""}
         </div>
-      ` : ""}
+      ` : `<button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>`}
     </div>
     <div class="sidebar-body scm-body">
       <div class="scm-repo-strip">
         <span class="gh-dot ${hasGit ? "ok" : "off"}"></span>
-        <span class="scm-branch-label">${state.gitOp.running ? icons.spinner : ""}<span id="scm-branch-git-label">${escapeHtml(state.gitOp.running ? (state.gitOp.label || (hasGit ? proj!.branch : "")) : (hasGit ? proj!.branch : "Sem repositório Git"))}</span></span>
+        ${hasGit ? `
+          <button type="button" class="scm-branch-switch" id="btn-scm-branch-switch" title="Trocar ou criar branch em ${escapeHtml(activeRepo?.name || proj?.name || "")}">
+            <span class="scm-branch-label">${state.gitOp.running ? icons.spinner : ""}<span id="scm-branch-git-label">${escapeHtml(state.gitOp.running ? (state.gitOp.label || activeRepo?.branch || proj?.branch || "") : (multiRepo && activeRepo ? `${activeRepo.name} · ${activeRepo.branch || "HEAD"}` : (activeRepo?.branch || proj?.branch || "")))}</span></span>
+          </button>
+        ` : `<span class="scm-branch-label"><span id="scm-branch-git-label">Sem repositório Git</span></span>`}
         <button type="button" class="scm-gh-pill ${gh?.loggedIn ? "ok" : "off"}" id="btn-github-connector" title="${escapeHtml([gh?.detail || "Configurar Conector GitHub Nativo", gh?.remote].filter(Boolean).join(" — "))}">
           ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : "Conectar GitHub"}
         </button>
@@ -881,7 +1111,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
 
       <div class="git-subtabs scm-tabs-pad">
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${diffs.length})</button>` : ""}
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
         <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
       </div>
@@ -894,32 +1124,42 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 export async function loadGitGraph() {
   const backend = api();
   if (!backend || !state.project || state.gitGraph.loading || !backend.ListGitGraph) return;
-  const targetRoot = state.project.root;
+  const activeRepo = getActiveGitRepo();
+  const targetRoot = activeRepo?.root || state.project.root;
   const targetKey = normalizePathKey(targetRoot);
+  const projectKey = normalizePathKey(state.project.root);
   const targetGraph = state.gitGraph;
   const allBranches = targetGraph.allBranches;
+  targetGraph.repoRoot = targetRoot;
   targetGraph.loading = true;
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
-    targetGraph.commits = (await withTimeout(backend.ListGitGraph(targetRoot, 60, allBranches), 20000, "carregar o Graph de commits")) || [];
+    const commits = (await withTimeout(backend.ListGitGraph(targetRoot, 60, allBranches), 20000, "carregar o Graph de commits")) || [];
+    const currentRepoKey = normalizePathKey(state.activeGitRepoRoot || state.project?.root || "");
+    if (!state.project || normalizePathKey(state.project.root) !== projectKey || currentRepoKey !== targetKey) {
+      return;
+    }
+    targetGraph.commits = commits;
     targetGraph.loadedOnce = true;
   } catch (err: any) {
-    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+    const currentRepoKey = normalizePathKey(state.activeGitRepoRoot || state.project?.root || "");
+    if (state.project && normalizePathKey(state.project.root) === projectKey && currentRepoKey === targetKey) {
       toastError("carregar o Graph de commits", err);
     }
   } finally {
     targetGraph.loading = false;
-    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
+    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
       renderLeftSidebar();
     }
   }
 }
 
-export async function openCommitInEditor(hash: string) {
+export async function openCommitInEditor(hash: string, repoRoot?: string) {
   const backend = api();
   if (!backend || !state.project || !backend.GetCommitDetail) return;
+  const targetRoot = repoRoot || getActiveGitRepo()?.root || state.project.root;
   try {
-    const detail = await backend.GetCommitDetail(state.project.root, hash);
+    const detail = await backend.GetCommitDetail(targetRoot, hash);
     const key = `commit:${detail.hash}`;
     const existing = state.editorTabs.find((t) => t.relPath === key);
     if (existing) {
@@ -963,10 +1203,13 @@ export function gitTimeoutSec(): number {
 }
 
 function gitTargetLabel(action: string): string {
-  const branch = state.project?.branch ? `origin/${state.project.branch}` : "origin";
+  const activeRepo = getActiveGitRepo();
+  const branchName = activeRepo?.branch || state.project?.branch || "";
+  const branch = branchName ? `origin/${branchName}` : "origin";
   const verb = GIT_OP_LABEL[action] || `Executando git ${action}`;
-  if (action === "stash" || action === "stash-pop") return `${verb}…`;
-  return `${verb} de ${branch}…`.replace("Enviando de ", "Enviando para ").replace("Sincronizando de ", "Sincronizando com ");
+  const repoPrefix = isMultiRepoMode(getEffectiveGitRepos()) && activeRepo ? `[${activeRepo.name}] ` : "";
+  if (action === "stash" || action === "stash-pop") return `${repoPrefix}${verb}…`;
+  return `${repoPrefix}${verb} de ${branch}…`.replace("Enviando de ", "Enviando para ").replace("Sincronizando de ", "Sincronizando com ");
 }
 
 function gitOpPanelHtml(): string {
@@ -1009,16 +1252,18 @@ export function appendGitProgress(label: string, line: string) {
 export async function cancelGitAction() {
   const backend = api();
   if (!backend?.CancelGitAction || !state.project) return;
+  const targetRoot = getActiveGitRepo()?.root || state.project.root;
   try {
-    await backend.CancelGitAction(state.project.root);
+    await backend.CancelGitAction(targetRoot);
   } catch (err: any) {
     toastError("cancelar o git", err);
   }
 }
 
-export async function runGitScmAction(action: string) {
+export async function runGitScmAction(action: string, repoRoot?: string) {
   const backend = api();
   if (!backend || !state.project || state.gitOp.running) return;
+  const targetRoot = repoRoot || getActiveGitRepo()?.root || state.project.root;
   const label = gitTargetLabel(action);
   state.gitMoreMenuOpen = false;
   state.gitOp = { running: true, action, label, log: "", result: "", error: "" };
@@ -1026,8 +1271,8 @@ export async function runGitScmAction(action: string) {
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
     const out = backend.RunGitActionTimeout
-      ? await backend.RunGitActionTimeout(state.project.root, action, gitTimeoutSec())
-      : await backend.RunGitAction(state.project.root, action);
+      ? await backend.RunGitActionTimeout(targetRoot, action, gitTimeoutSec())
+      : await backend.RunGitAction(targetRoot, action);
     const summary = out || `Git ${action} concluído.`;
     state.gitOp.running = false;
     state.gitOp.result = summary;
@@ -1061,8 +1306,8 @@ export async function runGitScmAction(action: string) {
 export async function loadGitHubPRs() {
   const backend = api();
   if (!backend || !state.project || state.prs.loading) return;
-  const targetRoot = state.project.root;
-  const targetKey = normalizePathKey(targetRoot);
+  const targetRoot = getActiveGitRepo()?.root || state.project.root;
+  const projectKey = normalizePathKey(state.project.root);
   const targetPrs = state.prs;
   targetPrs.loading = true;
   if (state.sidebarView === "git") renderLeftSidebar();
@@ -1070,12 +1315,12 @@ export async function loadGitHubPRs() {
     targetPrs.list = (await withTimeout(backend.ListPullRequests(targetRoot), 20000, "buscar os Pull Requests")) || [];
     targetPrs.loadedOnce = true;
   } catch (err: any) {
-    if (state.project && normalizePathKey(state.project.root) === targetKey) {
+    if (state.project && normalizePathKey(state.project.root) === projectKey) {
       toastError("buscar os Pull Requests do repositório", err);
     }
   } finally {
     targetPrs.loading = false;
-    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
+    if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
       renderLeftSidebar();
     }
   }
@@ -1105,17 +1350,30 @@ export async function loadProjectIssues() {
 }
 
 export function bindGitSidebarEvents() {
-  const doCommit = async (mode: "commit" | "push" | "sync") => {
+  const resolveRepoForRoot = (repoRoot?: string): WorkspaceGitRepo | null => {
+    const repos = getEffectiveGitRepos();
+    if (repoRoot) {
+      const m = repos.find((r) => normalizePathKey(r.root) === normalizePathKey(repoRoot));
+      if (m) return m;
+    }
+    return getActiveGitRepo();
+  };
+
+  const doCommit = async (mode: "commit" | "push" | "sync", repoRoot?: string) => {
     const backend = api();
     if (!backend || !state.project) return;
+    const targetRepo = resolveRepoForRoot(repoRoot);
+    const targetRoot = targetRepo?.root || state.project.root;
+    const message = getRepoCommitDraft(targetRoot);
     state.commitMenuOpen = false;
+    state.commitMenuRepoRoot = "";
     try {
-      const msg = await backend.CommitChanges(state.project.root, state.commitMsgInput, mode === "push");
-      state.commitMsgInput = "";
+      const msg = await backend.CommitChanges(targetRoot, message, mode === "push");
+      setRepoCommitDraft(targetRoot, "");
       if (mode === "sync") {
         setStatus(msg);
         toast(msg, "success");
-        await runGitScmAction("sync");
+        await runGitScmAction("sync", targetRoot);
       } else {
         setStatus(msg);
         toast(msg, "success");
@@ -1144,11 +1402,48 @@ export function bindGitSidebarEvents() {
     renderLeftSidebar();
   });
 
-  document.getElementById("btn-commit-menu")?.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    state.commitMenuOpen = !state.commitMenuOpen;
-    state.gitMoreMenuOpen = false;
-    renderLeftSidebar();
+  document.getElementById("btn-scm-branch-switch")?.addEventListener("click", () => {
+    const activeRoot = getActiveGitRepo()?.root || state.project?.root;
+    void toggleBranchPopover(true, activeRoot);
+  });
+
+  document.querySelectorAll("[data-select-repo]").forEach((head) => {
+    head.addEventListener("click", () => {
+      const repoRoot = (head as HTMLElement).dataset.selectRepo!;
+      selectActiveGitRepo(repoRoot);
+    });
+  });
+
+  document.querySelectorAll("[data-toggle-repo]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const repoRoot = (btn as HTMLElement).dataset.toggleRepo!;
+      const key = normalizePathKey(repoRoot);
+      state.collapsedGitRepos[key] = !state.collapsedGitRepos[key];
+      const ctx = state.projectTabs.find((p) => p.id === state.activeProjectId);
+      if (ctx) ctx.collapsedGitRepos = state.collapsedGitRepos;
+      renderLeftSidebar();
+    });
+  });
+
+  document.querySelectorAll("[data-discard-repo]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const el = btn as HTMLElement;
+      promptDiscardChanges(el.dataset.discardRepo, el.dataset.repoName);
+    });
+  });
+
+  document.querySelectorAll("[data-commit-menu-repo]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const repoRoot = (btn as HTMLElement).dataset.commitMenuRepo || "";
+      const sameRepo = normalizePathKey(state.commitMenuRepoRoot) === normalizePathKey(repoRoot);
+      state.commitMenuOpen = state.commitMenuOpen && sameRepo ? false : true;
+      state.commitMenuRepoRoot = state.commitMenuOpen ? repoRoot : "";
+      state.gitMoreMenuOpen = false;
+      renderLeftSidebar();
+    });
   });
 
   document.querySelectorAll("[data-git-tab]").forEach((btn) => {
@@ -1158,11 +1453,11 @@ export function bindGitSidebarEvents() {
       state.gitMoreMenuOpen = false;
       state.commitMenuOpen = false;
       renderLeftSidebar();
-      if (tab === "changes" && state.project?.branch && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
+      if (tab === "changes" && (getActiveGitRepo()?.branch || state.project?.branch) && !state.gitGraph.loadedOnce && !state.gitGraph.loading) {
         void loadGitGraph();
       }
       if (tab === "prs_issues") {
-        if (!state.prs.loadedOnce && !state.prs.loading && state.project?.branch) void loadGitHubPRs();
+        if (!state.prs.loadedOnce && !state.prs.loading && (getActiveGitRepo()?.branch || state.project?.branch)) void loadGitHubPRs();
         if (!state.issues.loadedOnce && !state.issues.loading) void loadProjectIssues();
       }
       if (tab === "flow") {
@@ -1222,11 +1517,12 @@ export function bindGitSidebarEvents() {
   document.getElementById("menu-switch-branch")?.addEventListener("click", () => {
     state.gitMoreMenuOpen = false;
     renderLeftSidebar();
-    void toggleBranchPopover(true);
+    void toggleBranchPopover(true, getActiveGitRepo()?.root);
   });
   document.getElementById("menu-discard-all")?.addEventListener("click", () => {
     state.gitMoreMenuOpen = false;
-    promptDiscardChanges();
+    const activeRepo = getActiveGitRepo();
+    promptDiscardChanges(activeRepo?.root, activeRepo?.name);
   });
 
   document.getElementById("btn-init-git")?.addEventListener("click", async () => {
@@ -1237,6 +1533,7 @@ export function bindGitSidebarEvents() {
       const updated = await backend.OpenProject(state.project.root);
       state.project.branch = updated.branch;
       state.ghStatus = await backend.GitHubStatus(state.project.root);
+      await refreshDiffs();
       updateHeaderAndStatusBar();
       renderLeftSidebar();
       setStatus("Repositório Git inicializado (branch main).");
@@ -1247,9 +1544,14 @@ export function bindGitSidebarEvents() {
 
   document.querySelectorAll("[data-open-diff]").forEach((el) => {
     el.addEventListener("click", () => {
-      const p = (el as HTMLElement).dataset.openDiff!;
-      const d = state.diffs.find((x) => x.path === p);
-      if (d) openDiffInEditor(d);
+      const ds = (el as HTMLElement).dataset;
+      const p = ds.openDiff!;
+      const repoRoot = ds.repoRoot || "";
+      const repoRel = ds.repoRel || "";
+      const targetRepo = resolveRepoForRoot(repoRoot);
+      const pool = targetRepo ? (targetRepo.diffs || []) : state.diffs;
+      const d = pool.find((x) => x.path === p);
+      if (d) openDiffInEditor(d, targetRepo?.root || repoRoot, repoRel);
     });
   });
 
@@ -1265,8 +1567,10 @@ export function bindGitSidebarEvents() {
   document.querySelectorAll("[data-scm-discard-file]").forEach((btn) => {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      const rel = (btn as HTMLElement).dataset.scmDiscardFile!;
-      if (!state.project) return;
+      const ds = (btn as HTMLElement).dataset;
+      const rel = ds.scmDiscardFile!;
+      const repoRoot = ds.repoRoot || getActiveGitRepo()?.root || state.project?.root || "";
+      if (!state.project || !repoRoot) return;
       askConfirm({
         title: `Descartar "${rel}"`,
         body: `As alterações locais em "${rel}" serão descartadas permanentemente.`,
@@ -1275,7 +1579,7 @@ export function bindGitSidebarEvents() {
         onConfirm: async () => {
           if (!state.project) return;
           try {
-            await api()?.DiscardFile(state.project.root, rel);
+            await api()?.DiscardFile(repoRoot, rel);
             await refreshDiffs();
             setStatus(`Alterações de ${rel} descartadas.`);
           } catch (err: any) {
@@ -1292,9 +1596,10 @@ export function bindGitSidebarEvents() {
       const el = btn as HTMLElement;
       const stage = Boolean(el.dataset.scmStage);
       const rel = el.dataset.scmStage || el.dataset.scmUnstage!;
-      if (!state.project || !api()?.StageFile) return;
+      const repoRoot = el.dataset.repoRoot || getActiveGitRepo()?.root || state.project?.root || "";
+      if (!state.project || !api()?.StageFile || !repoRoot) return;
       try {
-        await api()!.StageFile(state.project.root, rel, stage);
+        await api()!.StageFile(repoRoot, rel, stage);
         await refreshDiffs();
       } catch (err: any) {
         toastError(stage ? `preparar "${rel}"` : `remover "${rel}" do stage`, err);
@@ -1304,34 +1609,52 @@ export function bindGitSidebarEvents() {
 
   document.querySelectorAll("[data-open-commit]").forEach((row) => {
     row.addEventListener("click", () => {
-      const hash = (row as HTMLElement).dataset.openCommit!;
-      void openCommitInEditor(hash);
+      const ds = (row as HTMLElement).dataset;
+      void openCommitInEditor(ds.openCommit!, ds.repoRoot);
     });
   });
 
-  const commitIn = document.getElementById("commit-msg-input") as HTMLInputElement | null;
-  commitIn?.addEventListener("input", () => {
-    state.commitMsgInput = commitIn.value;
-  });
-  commitIn?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if (state.diffs.length > 0) void doCommit("commit");
-    }
+  document.querySelectorAll<HTMLInputElement>("[data-commit-input-repo]").forEach((inputEl) => {
+    const repoRoot = inputEl.dataset.commitInputRepo || "";
+    inputEl.addEventListener("input", () => {
+      setRepoCommitDraft(repoRoot, inputEl.value);
+    });
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        const repo = resolveRepoForRoot(repoRoot);
+        if ((repo?.diffs?.length || 0) > 0) void doCommit("commit", repoRoot);
+      }
+    });
   });
 
-  document.getElementById("btn-commit")?.addEventListener("click", () => void doCommit("commit"));
-  document.getElementById("btn-header-commit")?.addEventListener("click", () => void doCommit("commit"));
-  document.getElementById("btn-commit-only")?.addEventListener("click", () => void doCommit("commit"));
-  document.getElementById("btn-commit-push")?.addEventListener("click", () => void doCommit("push"));
-  document.getElementById("btn-commit-sync")?.addEventListener("click", () => void doCommit("sync"));
+  document.querySelectorAll("[data-commit-repo]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const repoRoot = (btn as HTMLElement).dataset.commitRepo || "";
+      void doCommit("commit", repoRoot);
+    });
+  });
+
+  document.querySelectorAll("[data-commit-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ds = (btn as HTMLElement).dataset;
+      const mode = (ds.commitMode || "commit") as "commit" | "push" | "sync";
+      void doCommit(mode, ds.repoRoot);
+    });
+  });
+
+  document.getElementById("btn-header-commit")?.addEventListener("click", () => {
+    void doCommit("commit", getActiveGitRepo()?.root);
+  });
 
   const openPrAction = async () => {
     const backend = api();
     if (!backend || !state.project) return;
+    const activeRepo = getActiveGitRepo();
+    const targetRoot = activeRepo?.root || state.project.root;
     state.gitMoreMenuOpen = false;
     try {
-      const url = await backend.OpenPR(state.project.root, state.commitMsgInput, "", state.project.teamConfig?.settings?.base_branch || "main");
+      const url = await backend.OpenPR(targetRoot, getRepoCommitDraft(targetRoot), "", state.project.teamConfig?.settings?.base_branch || "main");
       setStatus(`PR aberto: ${url}`);
       toast(`PR aberto: ${url}`, "success");
     } catch (err: any) {
@@ -1355,7 +1678,6 @@ export function bindGitSidebarEvents() {
   document.getElementById("btn-comment-jira")?.addEventListener("click", () => void commentJiraAction());
   document.getElementById("menu-comment-jira")?.addEventListener("click", () => void commentJiraAction());
 
-  document.getElementById("btn-discard")?.addEventListener("click", () => promptDiscardChanges());
   document.getElementById("btn-load-prs-issues")?.addEventListener("click", () => {
     if (state.project?.branch) void loadGitHubPRs();
     void loadProjectIssues();

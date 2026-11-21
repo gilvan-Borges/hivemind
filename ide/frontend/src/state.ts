@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, WailsBackendApp, WorkspaceGitRepo } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -22,7 +22,7 @@ declare global {
   }
 }
 
-export const api = () => window.go?.main?.App;
+export const api = () => (typeof window === "undefined" ? undefined : window.go?.main?.App);
 
 export const MISSION_TAB_KEY = "mission:swarm";
 
@@ -178,7 +178,12 @@ export const state = {
     loadedOnce: false,
     allBranches: true,
     collapsed: false,
-  },
+    repoRoot: "",
+  } as ProjectWorkspaceContext["gitGraph"],
+  gitRepos: [] as WorkspaceGitRepo[],
+  activeGitRepoRoot: "",
+  collapsedGitRepos: {} as Record<string, boolean>,
+  commitMsgByRepo: {} as Record<string, string>,
   changesCollapsed: false,
   gitMoreMenuOpen: false,
   gitOp: {
@@ -190,6 +195,7 @@ export const state = {
     error: "",
   },
   commitMenuOpen: false,
+  commitMenuRepoRoot: "",
   showFlowResponded: false,
   autoReview: null as AutoReviewStatus | null,
   autoReviewConfigOpen: false,
@@ -204,6 +210,7 @@ export const state = {
     anchorTop: false,
     branches: [] as string[],
     newBranch: "",
+    repoRoot: "",
   },
   mentionResults: [] as string[],
   draftObjective: "",
@@ -296,6 +303,10 @@ export function saveActiveToProjectContext() {
   ctx.activeLaneId = state.activeLaneId;
   ctx.runMode = state.runMode;
   ctx.diffs = state.diffs;
+  ctx.gitRepos = state.gitRepos;
+  ctx.activeGitRepoRoot = state.activeGitRepoRoot;
+  ctx.collapsedGitRepos = state.collapsedGitRepos;
+  ctx.commitMsgByRepo = state.commitMsgByRepo;
   ctx.ghStatus = state.ghStatus;
   ctx.textSearch = state.textSearch;
   ctx.sessionsSummary = state.sessionsSummary;
@@ -330,6 +341,12 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.activeLaneId = ctx.activeLaneId;
   state.runMode = ctx.runMode;
   state.diffs = ctx.diffs;
+  state.gitRepos = ctx.gitRepos ?? [];
+  state.activeGitRepoRoot = ctx.activeGitRepoRoot ?? "";
+  state.collapsedGitRepos = ctx.collapsedGitRepos ?? {};
+  state.commitMsgByRepo = ctx.commitMsgByRepo ?? {};
+  state.commitMenuOpen = false;
+  state.commitMenuRepoRoot = "";
   state.ghStatus = ctx.ghStatus;
   state.textSearch = ctx.textSearch;
   state.sessionsSummary = ctx.sessionsSummary;
