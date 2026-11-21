@@ -132,16 +132,16 @@ func TestJiraNativeCredentials(t *testing.T) {
 }
 
 func TestNormalizeBaseURLAndListProjects(t *testing.T) {
-	if got := NormalizeBaseURL("vibetex.atlassian.net"); got != "https://vibetex.atlassian.net" {
+	if got := NormalizeBaseURL("org-alpha.atlassian.net"); got != "https://org-alpha.atlassian.net" {
 		t.Fatalf("expected https scheme added, got %q", got)
 	}
-	if got := NormalizeBaseURL("https://vibetex.atlassian.net/jira/software/projects/IPG/boards/1"); got != "https://vibetex.atlassian.net" {
+	if got := NormalizeBaseURL("https://org-alpha.atlassian.net/jira/software/projects/ALPHA/boards/1"); got != "https://org-alpha.atlassian.net" {
 		t.Fatalf("expected path stripped to origin, got %q", got)
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/rest/api/3/project/search" {
-			_, _ = w.Write([]byte(`{"values":[{"key":"WEB","name":"Portal Web","projectTypeKey":"software"},{"key":"IPG","name":"IPG Core","projectTypeKey":"software"}]}`))
+			_, _ = w.Write([]byte(`{"values":[{"key":"WEB","name":"Portal Web","projectTypeKey":"software"},{"key":"ALPHA","name":"Alpha Core","projectTypeKey":"software"}]}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -153,8 +153,8 @@ func TestNormalizeBaseURLAndListProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProjects failed: %v", err)
 	}
-	if len(projs) != 2 || projs[0].Key != "IPG" || projs[1].Key != "WEB" {
-		t.Fatalf("expected sorted [IPG, WEB], got %+v", projs)
+	if len(projs) != 2 || projs[0].Key != "ALPHA" || projs[1].Key != "WEB" {
+		t.Fatalf("expected sorted [ALPHA, WEB], got %+v", projs)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestDetectMCPConfigParentDir(t *testing.T) {
 	}
 
 	parent := filepath.Join(tmp, "Projetos")
-	ws := filepath.Join(parent, "IPG")
+	ws := filepath.Join(parent, "ALPHA")
 	if err := os.MkdirAll(filepath.Join(parent, ".agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -208,18 +208,18 @@ func TestMultiOrgJiraIsolation(t *testing.T) {
 		return ws
 	}
 
-	wsVibetex := mkRepo("vibetex-ipg", "git@github.com:vibetex/ipg.git")
+	wsAlpha := mkRepo("org-alpha-core", "git@github.com:org-alpha/core.git")
 	wsEmpresaB := mkRepo("empresa-b-api", "https://github.com/empresab/api.git")
 	wsOrg3 := mkRepo("terceira-org-app", "https://github.com/org3/app.git")
 
 	if err := SaveProfile(JiraProfile{
-		ID:             "vibetex",
-		Name:           "Jira Vibetex",
-		BaseURL:        "https://vibetex.atlassian.net",
-		Email:          "gilvan@vibetex.com",
-		Token:          "tok-vibetex-1234",
-		DefaultProject: "IPG",
-		OrgPatterns:    []string{"vibetex"},
+		ID:             "org-alpha",
+		Name:           "Jira Org Alpha",
+		BaseURL:        "https://org-alpha.atlassian.net",
+		Email:          "dev@org-alpha.example",
+		Token:          "tok-alpha-1234",
+		DefaultProject: "ALPHA",
+		OrgPatterns:    []string{"org-alpha"},
 	}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestMultiOrgJiraIsolation(t *testing.T) {
 		ID:             "empresab",
 		Name:           "Jira Empresa B",
 		BaseURL:        "https://empresab.atlassian.net",
-		Email:          "gilvan@empresab.com",
+		Email:          "dev@empresab.example",
 		Token:          "tok-empb-5678",
 		DefaultProject: "EB",
 		OrgPatterns:    []string{"empresab"},
@@ -235,10 +235,10 @@ func TestMultiOrgJiraIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Org 1 -> Vibetex Jira
-	rV := ResolveForWorkspace(wsVibetex)
-	if rV.BaseURL != "https://vibetex.atlassian.net" || rV.DefaultProject != "IPG" || rV.MatchMode != "auto_org" {
-		t.Fatalf("expected vibetex auto_org, got %+v", rV)
+	// Org 1 -> Org Alpha Jira
+	rA := ResolveForWorkspace(wsAlpha)
+	if rA.BaseURL != "https://org-alpha.atlassian.net" || rA.DefaultProject != "ALPHA" || rA.MatchMode != "auto_org" {
+		t.Fatalf("expected org-alpha auto_org, got %+v", rA)
 	}
 
 	// Org 2 -> Empresa B Jira
@@ -247,31 +247,31 @@ func TestMultiOrgJiraIsolation(t *testing.T) {
 		t.Fatalf("expected empresab auto_org, got %+v", rB)
 	}
 
-	// Org 3 -> strictly isolated (no Jira configured, NEVER leaks Vibetex or Empresa B)
+	// Org 3 -> strictly isolated (no Jira configured, NEVER leaks Org Alpha or Empresa B)
 	r3 := ResolveForWorkspace(wsOrg3)
 	if r3.MatchMode != "isolated_none" || r3.BaseURL != "" || FromWorkspace(wsOrg3).Enabled() {
 		t.Fatalf("expected org3 isolated without Jira, got %+v", r3)
 	}
 
 	// Manual pin overrides isolation or switches Jira
-	if err := BindWorkspace(wsOrg3, "vibetex"); err != nil {
+	if err := BindWorkspace(wsOrg3, "org-alpha"); err != nil {
 		t.Fatal(err)
 	}
 	r3Pinned := ResolveForWorkspace(wsOrg3)
-	if r3Pinned.BaseURL != "https://vibetex.atlassian.net" || r3Pinned.MatchMode != "manual" {
-		t.Fatalf("expected manual pin to vibetex, got %+v", r3Pinned)
+	if r3Pinned.BaseURL != "https://org-alpha.atlassian.net" || r3Pinned.MatchMode != "manual" {
+		t.Fatalf("expected manual pin to org-alpha, got %+v", r3Pinned)
 	}
 
 	// Explicit "none" disables Jira even on a matched org
-	if err := BindWorkspace(wsVibetex, "none"); err != nil {
+	if err := BindWorkspace(wsAlpha, "none"); err != nil {
 		t.Fatal(err)
 	}
-	rVOff := ResolveForWorkspace(wsVibetex)
-	if rVOff.MatchMode != "isolated_none" || FromWorkspace(wsVibetex).Enabled() {
-		t.Fatalf("expected manual none to disable vibetex Jira, got %+v", rVOff)
+	rAOff := ResolveForWorkspace(wsAlpha)
+	if rAOff.MatchMode != "isolated_none" || FromWorkspace(wsAlpha).Enabled() {
+		t.Fatalf("expected manual none to disable org-alpha Jira, got %+v", rAOff)
 	}
-	for _, s := range rV.Profiles {
-		if strings.Contains(s.TokenMasked, "tok-vibetex") || strings.Contains(s.TokenMasked, "tok-empb") {
+	for _, s := range rA.Profiles {
+		if strings.Contains(s.TokenMasked, "tok-alpha") || strings.Contains(s.TokenMasked, "tok-empb") {
 			t.Fatalf("profile summary leaked a token: %+v", s)
 		}
 	}
@@ -293,11 +293,11 @@ func TestJiraIsolationIgnoresEnvLegacyAndDefault(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = https://github.com/org3/app.git\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wsV := filepath.Join(tmp, "vibetex-app")
-	if err := os.MkdirAll(filepath.Join(wsV, ".git"), 0o755); err != nil {
+	wsA := filepath.Join(tmp, "org-alpha-app")
+	if err := os.MkdirAll(filepath.Join(wsA, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(wsV, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:vibetex/app.git\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wsA, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:org-alpha/app.git\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,8 +308,8 @@ func TestJiraIsolationIgnoresEnvLegacyAndDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := SaveProfile(JiraProfile{
-		ID: "vibetex", Name: "Vibetex", BaseURL: "https://vibetex.atlassian.net",
-		Email: "a@vibetex.com", Token: "vibetex-token-zzzz", OrgPatterns: []string{"vibetex"},
+		ID: "org-alpha", Name: "Org Alpha", BaseURL: "https://org-alpha.atlassian.net",
+		Email: "a@org-alpha.example", Token: "alpha-token-zzzz", OrgPatterns: []string{"org-alpha"},
 	}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -322,15 +322,15 @@ func TestJiraIsolationIgnoresEnvLegacyAndDefault(t *testing.T) {
 	if got.MatchMode != "isolated_none" || got.Token != "" || got.Email != "" || FromWorkspace(wsOrg).Enabled() {
 		t.Fatalf("org3 got another org's Jira: %+v", got)
 	}
-	matched := ResolveForWorkspace(wsV)
-	if matched.Token != "vibetex-token-zzzz" || matched.Email != "a@vibetex.com" || matched.MatchMode != "auto_org" {
+	matched := ResolveForWorkspace(wsA)
+	if matched.Token != "alpha-token-zzzz" || matched.Email != "a@org-alpha.example" || matched.MatchMode != "auto_org" {
 		t.Fatalf("env mixed into the matched profile: %+v", matched)
 	}
-	if err := BindWorkspace(wsV, "none"); err != nil {
+	if err := BindWorkspace(wsA, "none"); err != nil {
 		t.Fatal(err)
 	}
-	off := ResolveForWorkspace(wsV)
-	if off.MatchMode != "isolated_none" || off.Token != "" || FromWorkspace(wsV).Enabled() {
+	off := ResolveForWorkspace(wsA)
+	if off.MatchMode != "isolated_none" || off.Token != "" || FromWorkspace(wsA).Enabled() {
 		t.Fatalf("none binding lost to env: %+v", off)
 	}
 

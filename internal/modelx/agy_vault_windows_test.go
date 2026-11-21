@@ -47,7 +47,7 @@ func TestAgyOAuthLoopbackAndManualCodeExchangeEndToEnd(t *testing.T) {
 		profilesFilePathFn = origProfilesPathFn
 	})
 
-	// Seed Conta #1 (havrus2026@gmail.com) in the live slot and sync it to profiles.
+	// Seed Conta #1 (conta1@example.com) in the live slot and sync it to profiles.
 	seed1 := agyKeyringSessionBlob{
 		Token: agyKeyringTokenPayload{
 			AccessToken:  "ya29.conta1-access",

@@ -1106,20 +1106,9 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 		cur := s
 		for changed := true; changed; {
 			changed = false
-			for _, pref := range []string{"app-", "app_", "hub-", "hub_", "auditoria-", "auditoria_", "vibetex-", "vibetex_", "projeto-", "projeto_"} {
+			for _, pref := range []string{"app-", "app_", "hub-", "hub_", "auditoria-", "auditoria_", "projeto-", "projeto_"} {
 				if strings.HasPrefix(cur, pref) && len(cur) > len(pref)+1 {
 					cur = strings.TrimPrefix(cur, pref)
-					add(cur)
-					changed = true
-				}
-			}
-			for _, camelPref := range []string{"auditoriavibe", "appvibe", "hubvibe", "vibetex"} {
-				if strings.HasPrefix(cur, camelPref) && len(cur) > len(camelPref)+1 {
-					rest := strings.TrimPrefix(cur, camelPref)
-					if strings.HasPrefix(camelPref, "auditoriavibe") || strings.HasPrefix(camelPref, "appvibe") || strings.HasPrefix(camelPref, "hubvibe") {
-						rest = "vibe" + rest
-					}
-					cur = rest
 					add(cur)
 					changed = true
 				}
@@ -1140,7 +1129,7 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 				"-back", "_back", "-backend", "_backend",
 				"-api", "_api", "api",
 				"-core", "_core", "-service", "_service", "-srv", "_srv",
-				"-demo", "_demo", "atualizado",
+				"-demo", "_demo",
 			} {
 				if strings.HasSuffix(cur, suf) && len(cur) > len(suf)+1 {
 					cur = strings.TrimSuffix(cur, suf)
@@ -1151,7 +1140,7 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 		}
 		if parts := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' }); len(parts) > 1 {
 			for _, pt := range parts {
-				if len(pt) >= 3 && pt != "app" && pt != "web" && pt != "mobile" && pt != "ios" && pt != "api" && pt != "vibe" && pt != "vibetex" {
+				if len(pt) >= 3 && pt != "app" && pt != "web" && pt != "mobile" && pt != "ios" && pt != "api" {
 					add(pt)
 				}
 			}
@@ -1178,7 +1167,7 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 		addSource(raw)
 	}
 
-	// 1. Exact key match (e.g., "ipg" / "ipg-mobile" -> "IPG").
+	// 1. Exact key match (e.g., "core" / "core-mobile" -> "CORE").
 	for _, cand := range candidates {
 		for _, p := range projs {
 			if strings.EqualFold(p.Key, cand) {
@@ -1187,16 +1176,15 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 		}
 	}
 
-	// 2. Normalized project Name match (e.g., "vibePromotor" / "vibepromotor-drops" -> "VibePromotor (DROPS)" [VPD],
-	// "AppSolBrilhante" -> "Sol Brilhante" [SB], "vibetexCedae" -> "Cedae" [CED], "suporte" -> "Vibe Suporte" [VS],
-	// "PraticoMuralWeb" -> "Mural de Troca" [MDT]).
+	// 2. Normalized project Name match (e.g., "drops" / "app-drops" -> "Portal (DROPS)",
+	// "appBilling" -> "Billing" [BIL], "acme-support" -> "Acme Support" [SUP]).
 	for _, cand := range candidates {
 		nc := normAlpha(cand)
-		if len(nc) < 3 || nc == "vibe" || nc == "vibetex" || nc == "geral" {
+		if len(nc) < 3 || nc == "geral" || nc == "main" || nc == "root" {
 			continue
 		}
 		for _, p := range projs {
-			// Split Jira project name into main title and parenthetical alias, e.g. "VibePromotor (DROPS)" -> ["vibepromotor", "drops"]
+			// Split Jira project name into main title and parenthetical alias, e.g. "Portal (DROPS)" -> ["portal", "drops"]
 			rawName := strings.ToLower(p.Name)
 			mainTitle := rawName
 			aliasTitle := ""
@@ -1208,13 +1196,17 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 			}
 			nm := normAlpha(mainTitle)
 			na := normAlpha(aliasTitle)
-			// Strip generic "vibe" prefix from Jira project name for matching (e.g. "Vibe Suporte" -> "suporte")
-			nmNoVibe := strings.TrimPrefix(nm, "vibe")
+			trailingToken := ""
+			if words := strings.Fields(mainTitle); len(words) >= 2 {
+				lastTok := normAlpha(words[len(words)-1])
+				if len(lastTok) >= 5 && lastTok != "geral" && lastTok != "mobile" && lastTok != "portal" && lastTok != "project" && lastTok != "projeto" {
+					trailingToken = lastTok
+				}
+			}
 
 			if (nm != "" && (nc == nm || strings.Contains(nc, nm))) ||
 				(na != "" && len(na) >= 3 && (nc == na || strings.Contains(nc, na))) ||
-				(len(nmNoVibe) >= 4 && (nc == nmNoVibe || strings.HasSuffix(nc, nmNoVibe))) ||
-				(strings.Contains(nc, "mural") && strings.Contains(nm, "mural")) {
+				(trailingToken != "" && (nc == trailingToken || strings.HasSuffix(nc, trailingToken))) {
 				return sanitizeJiraProjectKey(p.Key)
 			}
 		}
@@ -1223,10 +1215,9 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 }
 
 // inferJiraProjectKeyForWorkspace matches the current workspace/repository name
-// (e.g. "ipg", "ipg-mobile", "appVibePromotor-drops", "vibetexCedae", "PraticoMuralWeb", "suporte")
-// against the organization's Jira projects (e.g. IPG, VPD, CED, MDT, VS, VB, VBWHTS, VC, VOF, SB, RKSAM).
-// If the repository has no corresponding project in Jira yet (e.g. "vibe-saude", "trace-pharma", "vibeservice-ponto"),
-// it returns ("", true) when multiple Jira projects exist in the org so tasks from unrelated Jira projects are NEVER mixed in.
+// (e.g. "core", "core-mobile", "app-drops", "portal-web") against the
+// organization's Jira projects. When multiple Jira projects exist in the org and
+// none match, it returns ("", true) so tasks from unrelated projects are NEVER mixed in.
 func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (matchedKey string, hasMultipleOrgProjects bool) {
 	if strings.TrimSpace(workspaceDir) == "" {
 		return "", false
@@ -1254,7 +1245,7 @@ func inferJiraProjectKeyForWorkspace(ctx context.Context, workspaceDir string) (
 		return matched, true
 	}
 
-	// 3. Fallback: inspect recent git commit messages for an explicit Jira key prefix (e.g. "feat(IPG-123): ...").
+	// 3. Fallback: inspect recent git commit messages for an explicit Jira key prefix (e.g. "feat(PROJ-123): ...").
 	if g.IsRepo(ctx, workspaceDir) && g.HasCommit(ctx, workspaceDir) {
 		if logRaw, lErr := g.Run(ctx, workspaceDir, "log", "-n", "25", "--pretty=%s"); lErr == nil && logRaw != "" {
 			counts := map[string]int{}

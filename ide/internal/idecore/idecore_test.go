@@ -796,32 +796,32 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 	t2 := time.Date(2026, 11, 18, 11, 0, 0, 0, time.UTC)
 	t3 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
 
-	// Case 1 (exact PR #700 scenario): gilvan reproved at t1, joao commented after at t2 -> MUST return to "Para revisar" ("Nova resposta").
+	// Case 1: gilvan-Borges reproved at t1, reviewer commented after at t2 -> MUST return to "Para revisar" ("Nova resposta").
 	resp, need, reason := computePRFlowState(
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
-		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
+		[]prActivityComment{{Author: "reviewer", CreatedAt: t2}},
 		time.Time{},
 	)
 	if resp != "changes_requested" || !need || reason != "Nova resposta" {
-		t.Fatalf("expected PR #700 to bounce back with Nova resposta, got resp=%q need=%v reason=%q", resp, need, reason)
+		t.Fatalf("expected PR #100 to bounce back with Nova resposta, got resp=%q need=%v reason=%q", resp, need, reason)
 	}
 
-	// Case 2: gilvan replies at t3 (after joao's t2) -> goes back to "Já respondidos".
+	// Case 2: gilvan-Borges replies at t3 (after reviewer's t2) -> goes back to "Já respondidos".
 	resp, need, reason = computePRFlowState(
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
 		[]prActivityComment{
-			{Author: "joaomarqu3ss", CreatedAt: t2},
+			{Author: "reviewer", CreatedAt: t2},
 			{Author: "gilvan-Borges", CreatedAt: t3},
 		},
 		time.Time{},
 	)
 	if resp != "changes_requested" || need {
-		t.Fatalf("expected PR to return to Já respondidos after gilvan replied last, got resp=%q need=%v reason=%q", resp, need, reason)
+		t.Fatalf("expected PR to return to Já respondidos after user replied last, got resp=%q need=%v reason=%q", resp, need, reason)
 	}
 
-	// Case 3: bot comment after gilvan's review must NOT falsely bounce PR back.
+	// Case 3: bot comment after gilvan-Borges's review must NOT falsely bounce PR back.
 	_, need, _ = computePRFlowState(
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "CHANGES_REQUESTED", SubmittedAt: t1}},
@@ -847,7 +847,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 	resp, need, reason = computePRFlowState(
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1}},
-		[]prActivityComment{{Author: "joaomarqu3ss", CreatedAt: t2}},
+		[]prActivityComment{{Author: "reviewer", CreatedAt: t2}},
 		time.Time{},
 	)
 	if resp != "approved" || !need || reason != "Nova resposta" {
@@ -859,7 +859,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{
 			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
-			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+			{Author: "reviewer2", State: "CHANGES_REQUESTED", SubmittedAt: t2},
 		},
 		nil,
 		time.Time{},
@@ -873,7 +873,7 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		"gilvan-Borges", false, false, false,
 		[]prActivityReview{
 			{Author: "gilvan-Borges", State: "APPROVED", SubmittedAt: t1},
-			{Author: "marcusrdrigues", State: "CHANGES_REQUESTED", SubmittedAt: t2},
+			{Author: "reviewer2", State: "CHANGES_REQUESTED", SubmittedAt: t2},
 		},
 		[]prActivityComment{{Author: "gilvan-Borges", CreatedAt: t3}},
 		time.Time{},
@@ -892,23 +892,23 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		t.Fatalf("re-requested review after approval must return as Re-revisão, got resp=%q need=%v reason=%q", resp, need, reason)
 	}
 
-	// Case 6: own PR (#699) receives reviewer comment after author's last commit -> Nova resposta.
+	// Case 6: own PR receives reviewer comment after author's last commit -> Nova resposta.
 	_, need, reason = computePRFlowState(
 		"gilvan-Borges", true, false, false,
 		nil,
-		[]prActivityComment{{Author: "marcusrdrigues", CreatedAt: t2}},
+		[]prActivityComment{{Author: "reviewer2", CreatedAt: t2}},
 		t1,
 	)
 	if !need || reason != "Nova resposta" {
 		t.Fatalf("own PR with newer reviewer comment should flag Nova resposta, got need=%v reason=%q", need, reason)
 	}
 
-	// Case 7 (exact PR #699 waiting on Marcus): author committed & commented LAST -> leaves active Fluxo!
+	// Case 7: author committed & commented LAST -> leaves active Fluxo!
 	_, need, reason = computePRFlowState(
 		"gilvan-Borges", true, false, false,
 		nil,
 		[]prActivityComment{
-			{Author: "marcusrdrigues", CreatedAt: t1},
+			{Author: "reviewer2", CreatedAt: t1},
 			{Author: "gilvan-Borges", CreatedAt: t3},
 		},
 		t2,
@@ -917,10 +917,10 @@ func TestPRFlowNeedsAttentionChronology(t *testing.T) {
 		t.Fatalf("own PR where author replied last and is waiting for reviewer must leave active Fluxo, got need=%v reason=%q", need, reason)
 	}
 
-	// Case 8: own PR approved by Marcus with no pending re-review -> pops back as "Pronto p/ merge"!
+	// Case 8: own PR approved by reviewer with no pending re-review -> pops back as "Pronto p/ merge"!
 	_, need, reason = computePRFlowState(
 		"gilvan-Borges", true, false, false,
-		[]prActivityReview{{Author: "marcusrdrigues", State: "APPROVED", SubmittedAt: t3}},
+		[]prActivityReview{{Author: "reviewer2", State: "APPROVED", SubmittedAt: t3}},
 		[]prActivityComment{{Author: "gilvan-Borges", CreatedAt: t2}},
 		t1,
 	)
@@ -1178,20 +1178,18 @@ func TestBuildMyJiraIssuesJQL(t *testing.T) {
 	}
 }
 
-func TestMatchJiraProjectFromNamesVibetexRepos(t *testing.T) {
+func TestMatchJiraProjectFromNamesGenericRepos(t *testing.T) {
 	projs := []jirax.Project{
-		{Key: "CED", Name: "Cedae"},
+		{Key: "BIL", Name: "Billing"},
+		{Key: "CED", Name: "Acme Platform"},
+		{Key: "CORE", Name: "Core Engine (CORE)"},
+		{Key: "CTRL", Name: "Control"},
 		{Key: "GERAL", Name: "Geral"},
-		{Key: "IPG", Name: "VibeGas (IPG)"},
 		{Key: "MDT", Name: "Mural de Troca"},
-		{Key: "RKSAM", Name: "VibeTime"},
-		{Key: "SB", Name: "Sol Brilhante"},
-		{Key: "VB", Name: "VibeSmart"},
-		{Key: "VBWHTS", Name: "VibeWhats"},
-		{Key: "VC", Name: "Vibe Control"},
-		{Key: "VOF", Name: "VibeOffice"},
-		{Key: "VPD", Name: "VibePromotor (DROPS)"},
-		{Key: "VS", Name: "Vibe Suporte"},
+		{Key: "OFC", Name: "Office"},
+		{Key: "PRT", Name: "Portal (DROPS)"},
+		{Key: "SPT", Name: "Acme Support"},
+		{Key: "TM", Name: "TimeTrack"},
 	}
 
 	cases := []struct {
@@ -1199,39 +1197,30 @@ func TestMatchJiraProjectFromNamesVibetexRepos(t *testing.T) {
 		want string
 	}{
 		// Projects in Jira
-		{repo: "ipg", want: "IPG"},
-		{repo: "ipg-mobile", want: "IPG"},
-		{repo: "vibePromotor", want: "VPD"},
-		{repo: "vibepromotor-drops", want: "VPD"},
-		{repo: "appVibePromotor-drops", want: "VPD"},
-		{repo: "solbrilhante", want: "SB"},
-		{repo: "AppSolBrilhante", want: "SB"},
-		{repo: "VIBETIME", want: "RKSAM"},
-		{repo: "VibeOffice", want: "VOF"},
-		{repo: "vibeoffice-ios", want: "VOF"},
-		{repo: "VibeSmart", want: "VB"},
-		{repo: "HubVibesmart", want: "VB"},
-		{repo: "AuditoriaVibeSmart", want: "VB"},
-		{repo: "PraticoMural", want: "MDT"},
-		{repo: "PraticoMuralWeb", want: "MDT"},
-		{repo: "VibeWhats", want: "VBWHTS"},
-		{repo: "cedaeApp", want: "CED"},
-		{repo: "vibetexCedae", want: "CED"},
-		{repo: "vibeTexCedaeAPP", want: "CED"},
-		{repo: "vibeControl", want: "VC"},
-		{repo: "ControlAppApiAtualizado", want: "VC"},
-		{repo: "suporte", want: "VS"},
+		{repo: "core", want: "CORE"},
+		{repo: "core-mobile", want: "CORE"},
+		{repo: "drops", want: "PRT"},
+		{repo: "portal-drops", want: "PRT"},
+		{repo: "appPortal-drops", want: "PRT"},
+		{repo: "billing", want: "BIL"},
+		{repo: "AppBilling", want: "BIL"},
+		{repo: "TIMETRACK", want: "TM"},
+		{repo: "Office", want: "OFC"},
+		{repo: "office-ios", want: "OFC"},
+		{repo: "Control", want: "CTRL"},
+		{repo: "ControlAppApi", want: "CTRL"},
+		{repo: "support", want: "SPT"},
+		{repo: "acme-support", want: "SPT"},
+		{repo: "MuralDeTrocaWeb", want: "MDT"},
 
 		// Repos not in Jira yet -> must return "" so no unrelated Jira tasks are mixed in
-		{repo: "vibe-saude", want: ""},
-		{repo: "trace-pharma", want: ""},
-		{repo: "trace-pharma-demo", want: ""},
-		{repo: "vibeservice-ponto", want: ""},
-		{repo: "vibeservice-ponto-mobile", want: ""},
-		{repo: "vibeservice", want: ""},
-		{repo: "hubVibeTex", want: ""},
-		{repo: "vibetex-bi", want: ""},
-		{repo: "vibesyncApp", want: ""},
+		{repo: "analytics-web", want: ""},
+		{repo: "telemetry-ui", want: ""},
+		{repo: "telemetry-ui-demo", want: ""},
+		{repo: "attendance-service", want: ""},
+		{repo: "attendance-mobile", want: ""},
+		{repo: "hub-bi", want: ""},
+		{repo: "syncApp", want: ""},
 		{repo: "RustAgent", want: ""},
 	}
 

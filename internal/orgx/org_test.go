@@ -14,11 +14,11 @@ func TestParseGitRemote(t *testing.T) {
 		wantOrg  string
 		wantRepo string
 	}{
-		{"https://github.com/vibetex/ipg.git", "github.com", "vibetex", "ipg"},
-		{"git@github.com:vibetex/portal.git", "github.com", "vibetex", "portal"},
+		{"https://github.com/org-alpha/core.git", "github.com", "org-alpha", "core"},
+		{"git@github.com:org-alpha/portal.git", "github.com", "org-alpha", "portal"},
 		{"ssh://git@gitlab.com/MinhaOrg/subgrupo/api.git", "gitlab.com", "MinhaOrg", "api"},
-		{"https://user@dev.azure.com/VibetexOrg/IPG/_git/backend", "dev.azure.com", "VibetexOrg", "backend"},
-		{"git@ssh.dev.azure.com:v3/VibetexOrg/IPG/backend", "ssh.dev.azure.com", "VibetexOrg", "backend"},
+		{"https://user@dev.azure.com/OrgAlpha/CORE/_git/backend", "dev.azure.com", "OrgAlpha", "backend"},
+		{"git@ssh.dev.azure.com:v3/OrgAlpha/CORE/backend", "ssh.dev.azure.com", "OrgAlpha", "backend"},
 	}
 	for _, tc := range cases {
 		h, o, r := ParseGitRemote(tc.raw)
@@ -30,42 +30,42 @@ func TestParseGitRemote(t *testing.T) {
 
 func TestDetectAndMatchPatterns(t *testing.T) {
 	root := t.TempDir()
-	ws := filepath.Join(root, "projeto-vibetex", "ipg")
+	ws := filepath.Join(root, "projeto-alpha", "core")
 	gitDir := filepath.Join(ws, ".git")
 	if err := os.MkdirAll(gitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = git@github.com:vibetex/ipg.git\n"
+	cfg := "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = git@github.com:org-alpha/core.git\n"
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	id := Detect(ws)
-	if id.GitOrg != "vibetex" || id.GitRepo != "ipg" || id.GitHost != "github.com" {
+	if id.GitOrg != "org-alpha" || id.GitRepo != "core" || id.GitHost != "github.com" {
 		t.Fatalf("unexpected identity: %+v", id)
 	}
-	if ok, _ := MatchPatterns(id, []string{"outra-org", "vibetex"}); !ok {
-		t.Fatal("expected vibetex org to match")
+	if ok, _ := MatchPatterns(id, []string{"outra-org", "org-alpha"}); !ok {
+		t.Fatal("expected org-alpha org to match")
 	}
 	if ok, _ := MatchPatterns(id, []string{"outra-org"}); ok {
 		t.Fatal("did not expect outra-org to match")
 	}
-	if ok, _ := MatchPatterns(Identity{Workspace: ws}, []string{"vibetex"}); !ok {
-		t.Fatal("expected folder segment token vibetex to match even without remote")
+	if ok, _ := MatchPatterns(Identity{Workspace: ws}, []string{"alpha"}); !ok {
+		t.Fatal("expected folder segment token alpha to match even without remote")
 	}
-	// Avoid substring false positive like "bet" matching "vibetex".
-	if ok, _ := MatchPatterns(Identity{Workspace: ws}, []string{"bet"}); ok {
-		t.Fatal("did not expect substring token 'bet' to match 'projeto-vibetex'")
+	// Avoid substring false positive like "alp" matching "projeto-alpha".
+	if ok, _ := MatchPatterns(Identity{Workspace: ws}, []string{"alp"}); ok {
+		t.Fatal("did not expect substring token 'alp' to match 'projeto-alpha'")
 	}
 }
 
 func TestMatchPatternsGitOrgBeatsFolder(t *testing.T) {
-	ws := filepath.Join(string(filepath.Separator), "data", "vibetex", "acme-app")
-	id := Identity{Workspace: ws, GitOrg: "acme", GitHost: "github.com", WorkspaceLeaf: "acme-app", WorkspaceParent: "vibetex"}
-	if ok, _ := MatchPatterns(id, []string{"vibetex"}); ok {
-		t.Fatal("git org acme must not match pattern vibetex via a parent folder")
+	ws := filepath.Join(string(filepath.Separator), "data", "org-alpha", "acme-app")
+	id := Identity{Workspace: ws, GitOrg: "acme", GitHost: "github.com", WorkspaceLeaf: "acme-app", WorkspaceParent: "org-alpha"}
+	if ok, _ := MatchPatterns(id, []string{"org-alpha"}); ok {
+		t.Fatal("git org acme must not match pattern org-alpha via a parent folder")
 	}
-	if ok, _ := MatchPatterns(id, []string{"*vibetex*"}); ok {
+	if ok, _ := MatchPatterns(id, []string{"*org-alpha*"}); ok {
 		t.Fatal("wildcard must not scan the filesystem path when the git org is known")
 	}
 	if ok, _ := MatchPatterns(id, []string{"acm", "acme-corp", "*acme-corp*"}); ok {
@@ -93,9 +93,9 @@ func TestGitConfigRejectsEscapeAndSecrets(t *testing.T) {
 
 	t.Run("strips userinfo", func(t *testing.T) {
 		ws := filepath.Join(root, "quoted")
-		writeGitConfig(t, ws, "[remote \"origin\"]\n\turl = \"https://user:supersecret@github.com/vibetex/ipg.git\"\n")
+		writeGitConfig(t, ws, "[remote \"origin\"]\n\turl = \"https://user:supersecret@github.com/org-alpha/core.git\"\n")
 		id := Detect(ws)
-		if id.GitOrg != "vibetex" || id.GitRepo != "ipg" {
+		if id.GitOrg != "org-alpha" || id.GitRepo != "core" {
 			t.Fatalf("identity = %+v", id)
 		}
 		if strings.Contains(id.GitRemoteURL, "supersecret") || strings.Contains(id.GitRemoteURL, "user:") {
@@ -196,7 +196,7 @@ func TestGitConfigRejectsEscapeAndSecrets(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:vibetex/ipg.git\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:org-alpha/core.git\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(wtGit, "HEAD"), []byte("ref: refs/heads/feat\n"), 0o644); err != nil {
@@ -213,7 +213,7 @@ func TestGitConfigRejectsEscapeAndSecrets(t *testing.T) {
 			t.Fatal(err)
 		}
 		id := Detect(ws)
-		if id.GitOrg != "vibetex" || id.GitRepo != "ipg" {
+		if id.GitOrg != "org-alpha" || id.GitRepo != "core" {
 			t.Fatalf("worktree identity = %+v", id)
 		}
 	})

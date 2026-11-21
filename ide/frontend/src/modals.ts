@@ -1649,11 +1649,11 @@ export function renderModalLayer() {
 
             <div class="form-grid">
               <label for="jira-prof-name">Nome do Perfil:</label>
-              <input id="jira-prof-name" value="${escapeHtml(formName)}" placeholder="ex.: Vibetex ou Empresa B" />
+              <input id="jira-prof-name" value="${escapeHtml(formName)}" placeholder="ex.: Empresa A ou Empresa B" />
 
               <label for="jira-prof-orgs">Orgs Git / Pastas:</label>
               <div style="display:flex;gap:6px">
-                <input id="jira-prof-orgs" style="flex:1" value="${escapeHtml(formOrgs)}" placeholder="ex.: vibetex, projeto-vibetex (auto-detecção)" />
+                <input id="jira-prof-orgs" style="flex:1" value="${escapeHtml(formOrgs)}" placeholder="ex.: org-alpha, projeto-alpha (auto-detecção)" />
                 ${suggestedOrg ? `<button type="button" class="mini" id="jira-use-org">+ ${escapeHtml(suggestedOrg)}</button>` : ""}
               </div>
 

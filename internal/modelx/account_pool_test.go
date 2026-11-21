@@ -144,10 +144,10 @@ func TestAccountPoolNeverCrossesOrganizationBoundaries(t *testing.T) {
 	}
 	t.Cleanup(func() { profilesFilePathFn = prev })
 
-	wsVibetex := filepath.Join(tmp, "vibetex-web")
+	wsAlpha := filepath.Join(tmp, "org-alpha-web")
 	wsAcme := filepath.Join(tmp, "acme-api")
 	for _, pair := range [][2]string{
-		{wsVibetex, "git@github.com:vibetex/web.git"},
+		{wsAlpha, "git@github.com:org-alpha/web.git"},
 		{wsAcme, "git@github.com:acme-corp/api.git"},
 	} {
 		gitDir := filepath.Join(pair[0], ".git")
@@ -161,12 +161,12 @@ func TestAccountPoolNeverCrossesOrganizationBoundaries(t *testing.T) {
 
 	profiles := []SaveProfileRequest{
 		{
-			ID: "or-vibetex-1", Provider: "openrouter", Name: "Vibetex 1",
-			OrgPatterns: []string{"vibetex"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-vtx-1"},
+			ID: "or-alpha-1", Provider: "openrouter", Name: "Org Alpha 1",
+			OrgPatterns: []string{"org-alpha"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-alpha-1"},
 		},
 		{
-			ID: "or-vibetex-2", Provider: "openrouter", Name: "Vibetex 2",
-			OrgPatterns: []string{"vibetex"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-vtx-2"},
+			ID: "or-alpha-2", Provider: "openrouter", Name: "Org Alpha 2",
+			OrgPatterns: []string{"org-alpha"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-alpha-2"},
 		},
 		{
 			ID: "or-acme", Provider: "openrouter", Name: "Acme",
@@ -183,13 +183,13 @@ func TestAccountPoolNeverCrossesOrganizationBoundaries(t *testing.T) {
 		}
 	}
 
-	vPool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsVibetex), "openrouter", "")
-	var vIDs []string
-	for _, p := range vPool {
-		vIDs = append(vIDs, p.ID)
+	a1Pool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsAlpha), "openrouter", "")
+	var alphaIDs []string
+	for _, p := range a1Pool {
+		alphaIDs = append(alphaIDs, p.ID)
 	}
-	if strings.Join(vIDs, ",") != "or-vibetex-1,or-vibetex-2" {
-		t.Fatalf("vibetex pool leaked external accounts: %v", vIDs)
+	if strings.Join(alphaIDs, ",") != "or-alpha-1,or-alpha-2" {
+		t.Fatalf("org-alpha pool leaked external accounts: %v", alphaIDs)
 	}
 
 	aPool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsAcme), "openrouter", "")

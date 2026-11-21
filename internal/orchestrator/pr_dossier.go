@@ -371,7 +371,7 @@ func newPRReviewGuardCallbacks(preloadedPR int, allPatchesComplete bool, maxExpl
 	return before, after
 }
 
-// extractJiraKeyFromObjective finds an explicit Jira issue key (e.g. "IPG-874", "VPD-57")
+// extractJiraKeyFromObjective finds an explicit Jira issue key (e.g. "PROJ-874", "APP-57")
 // inside the user's objective text while ignoring spec/decision codes (RN-018, D-179, FT-232, T-042).
 func extractJiraKeyFromObjective(objective string) string {
 	text := strings.TrimSpace(objective)

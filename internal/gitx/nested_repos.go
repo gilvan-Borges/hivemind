@@ -30,7 +30,7 @@ var nestedRepoSkipDirs = map[string]bool{
 }
 
 // NestedRepo describes an independent Git repository nested inside a parent
-// workspace (e.g. ipg-mobile inside ipg, or HiveMind-App inside hivemind).
+// workspace (e.g. app-mobile inside monorepo, or HiveMind-App inside hivemind).
 type NestedRepo struct {
 	RepoDir    string
 	RelPath    string

@@ -280,7 +280,7 @@ func pathAnchored(normWS, normPat string) bool {
 	if normWS == normPat || strings.HasPrefix(normWS, normPat+"/") {
 		return true
 	}
-	// Segment sequence ("Clientes/Vibetex"), never a raw substring of one name.
+	// Segment sequence ("Clientes/Acme"), never a raw substring of one name.
 	return strings.Contains(normWS, "/"+normPat+"/") || strings.HasSuffix(normWS, "/"+normPat)
 }
 

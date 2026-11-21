@@ -51,12 +51,12 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	root := t.TempDir()
 	initNestedOrchestratorRepo(t, root, map[string]string{
-		".gitignore":    "ipg-mobile/\n",
+		".gitignore":     "app-mobile/\n",
 		"api/Order.java": "class Order {}\n",
 	})
-	mobileDir := filepath.Join(root, "ipg-mobile")
+	mobileDir := filepath.Join(root, "app-mobile")
 	initNestedOrchestratorRepo(t, mobileDir, map[string]string{
-		"lib/engineer_order_execution_page.dart": "class ExecutionPage {}\n",
+		"lib/order_execution_page.dart": "class ExecutionPage {}\n",
 	})
 
 	squad := team.FullSquadTeam("gov", "", "scripted", "gemini", 1)
@@ -90,7 +90,7 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
 				switch call {
 				case 1:
-					return modelx.FunctionCall("read_file", "rf1", map[string]any{"path": "ipg-mobile/lib/engineer_order_execution_page.dart"})
+					return modelx.FunctionCall("read_file", "rf1", map[string]any{"path": "app-mobile/lib/order_execution_page.dart"})
 				case 2:
 					for _, c := range req.Contents {
 						for _, p := range c.Parts {
@@ -100,30 +100,30 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 						}
 					}
 					return modelx.FunctionCall("write_file", "wf1", map[string]any{
-						"path":    "ipg-mobile/lib/engineer_order_execution_page.dart",
+						"path":    "app-mobile/lib/order_execution_page.dart",
 						"content": "class ExecutionPage { final bool fixed = true; }\n",
 					})
 				default:
-					return modelx.Text("ipg-mobile atualizado")
+					return modelx.Text("app-mobile atualizado")
 				}
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "ipg-mobile validado"})
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "app-mobile validado"})
 				}
 				return modelx.Text("aprovado")
 			}},
 		},
 	}
 
-	res, err := r.Run(context.Background(), Request{Objective: "atualizar engineer_order_execution_page.dart em ipg-mobile"})
+	res, err := r.Run(context.Background(), Request{Objective: "atualizar order_execution_page.dart em app-mobile"})
 	if err != nil {
 		t.Fatalf("Runner.Run failed: %v", err)
 	}
 	if !devSawMobile {
-		t.Fatal("expected dev inside conversation worktree to read ipg-mobile/lib/engineer_order_execution_page.dart")
+		t.Fatal("expected dev inside conversation worktree to read app-mobile/lib/order_execution_page.dart")
 	}
-	if len(res.NestedDeliveries) != 1 || res.NestedDeliveries[0].RelPath != "ipg-mobile" {
+	if len(res.NestedDeliveries) != 1 || res.NestedDeliveries[0].RelPath != "app-mobile" {
 		t.Fatalf("NestedDeliveries unexpected: %+v", res.NestedDeliveries)
 	}
 	if res.PendingQA {
@@ -131,17 +131,17 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 	}
 	g := gitx.Local{}
 	wtSt, _ := g.Run(context.Background(), res.NestedDeliveries[0].WorktreeDir, "status")
-	wtFile, _ := os.ReadFile(filepath.Join(res.NestedDeliveries[0].WorktreeDir, "lib", "engineer_order_execution_page.dart"))
+	wtFile, _ := os.ReadFile(filepath.Join(res.NestedDeliveries[0].WorktreeDir, "lib", "order_execution_page.dart"))
 	if !gitx.HasCommitsAhead(context.Background(), g, mobileDir, res.NestedDeliveries[0].Branch, "main") {
 		branches, _ := g.Run(context.Background(), mobileDir, "branch", "-a")
-		t.Fatalf("expected commit inside nested ipg-mobile branch %q (wtDir=%s wtSt=%q wtFile=%q mobileBranches=%q)", res.NestedDeliveries[0].Branch, res.NestedDeliveries[0].WorktreeDir, wtSt, string(wtFile), branches)
+		t.Fatalf("expected commit inside nested app-mobile branch %q (wtDir=%s wtSt=%q wtFile=%q mobileBranches=%q)", res.NestedDeliveries[0].Branch, res.NestedDeliveries[0].WorktreeDir, wtSt, string(wtFile), branches)
 	}
 	if gitx.HasCommitsAhead(context.Background(), g, root, res.DeliveryBranch, "main") {
-		t.Fatalf("root branch %q should remain clean without ipg-mobile files", res.DeliveryBranch)
+		t.Fatalf("root branch %q should remain clean without app-mobile files", res.DeliveryBranch)
 	}
 	// User's original nested repo working tree must remain untouched.
-	origBytes, err := os.ReadFile(filepath.Join(mobileDir, "lib", "engineer_order_execution_page.dart"))
+	origBytes, err := os.ReadFile(filepath.Join(mobileDir, "lib", "order_execution_page.dart"))
 	if err != nil || strings.Contains(string(origBytes), "fixed") {
-		t.Fatalf("original ipg-mobile checkout should stay clean, got %q (%v)", string(origBytes), err)
+		t.Fatalf("original app-mobile checkout should stay clean, got %q (%v)", string(origBytes), err)
 	}
 }

@@ -1,6 +1,7 @@
 # Plano Vivo de Implementação — HiveMind
 
-> **REGRA DE MANUTENÇÃO CONTÍNUA:** Este documento é a fonte única da verdade sobre o que **já foi entregue** e o que **falta implementar** no HiveMind (`c:\hivemind`) e no `HiveMind-App`.
+> **REGRA DE MANUTENÇÃO CONTÍNUA:** Este documento é a fonte única da verdade sobre o que **já foi entregue** e o que **falta implementar** no HiveMind (`hivemind`) e no `HiveMind-App`.
+> **REGRA DE REPOSITÓRIO PÚBLICO (`AGENTS.md` / D9):** Nunca registrar nomes de clientes/empresas privadas, domínios reais, e-mails pessoais reais, usernames de terceiros, segredos ou binários (`.exe`/`.apk`) em código, testes, specs ou commits — apenas os dados de autoria do mantenedor (`Gilvan Borges` / `gilvan-Borges`). Use sempre dados sintéticos (`org-alpha`, `acme`, `PROJ-123`, `app-mobile`, `@reviewer`, `example.com`).
 > Sempre que qualquer tarefa abaixo for concluída:
 > 1. Marque o checkbox como `[x]` com a data e o comando/teste de verificação.
 > 2. Atualize a coluna **Status** na tabela de Inventário de Specs abaixo e no cabeçalho da spec correspondente.
@@ -28,7 +29,7 @@
 | [`SPEC_AUTO_REVIEW_FLUXO.md`](../SPEC_AUTO_REVIEW_FLUXO.md) | Revisão automática de PRs sem merge em worktree efêmera | **Implementado** | `ide/internal/idecore/autoreview.go`, `internal/orchestrator/orchestrator.go` |
 | [`SPEC_RELAY.md`](../SPEC_RELAY.md) | Relay E2EE `hivemind-relay` + `relaywire` | **Base Implementada** | `cmd/hivemind-relay/`, `internal/relay/`, `relaywire/` *(hardening no Spec 09)* |
 | *Entrega 2026-11-21* | Provedor Oficial **TypeSafe AI** para decisão Jev (`/v1/systemone`) | **Implementado** | `internal/modelx/typesafe.go`, `internal/jev/score.go`, `ide/frontend/src/modals.ts` |
-| *Entrega 2026-11-21* | **Worktree Composta Multi-Repo** (`ipg` + `ipg-mobile`, `hivemind` + `HiveMind-App`) | **Implementado** | `internal/gitx/nested_repos.go`, `internal/orchestrator/orchestrator.go`, `ide/internal/idecore/runner.go` |
+| *Entrega 2026-11-21* | **Worktree Composta Multi-Repo** (`monorepo` + `app-mobile`, `hivemind` + `HiveMind-App`) | **Implementado** | `internal/gitx/nested_repos.go`, `internal/orchestrator/orchestrator.go`, `ide/internal/idecore/runner.go` |
 | *Entrega 2026-11-21* | Descoberta Multi-Repo no Source Control & Vault Lease Isolado | **Implementado** | `ide/internal/idecore/git_repos.go`, `internal/modelx/agy_vault_windows.go` |
 | [Spec 03](03-concurrency-races-and-persistence.md) | Concorrência, Eliminação de Data Races e Persistência Atômica | **Implementado (Onda 1)** | `internal/atomicx/`, `sessionx/store.go`, `resident/lock_windows.go`, `orchestrator/jev_wrapper.go` |
 | [Spec 04](04-tools-sandbox-and-pathsec.md) | Blindagem de Tools, `pathsec` e Sandbox OS | **Implementado (Onda 1)** | `internal/pathsec/sensitive.go`, `internal/sandboxx/`, `internal/tools/` (`fileReadTracker`, `.gitignore`, Head+Tail log) |

@@ -24,7 +24,7 @@ type Project struct {
 	ProjectType string `json:"projectType,omitempty"`
 }
 
-// JiraProfile defines one named Jira Cloud connection (e.g., Vibetex, Org B).
+// JiraProfile defines one named Jira Cloud connection (e.g., Org A, Org B).
 type JiraProfile struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`

@@ -1,6 +1,6 @@
 # Constituição de Design System (SDD) — HiveMind & HiveMind-App
 
-> Versão 1.0.0 · Base comparativa: estrutura SDD rastreável (`Vibetex/ipg` `.specify`) + fundação visual e conferidores automáticos (`Havruss/havrus`).
+> Versão 1.1.0 · Base comparativa: estrutura SDD rastreável (`.specify`) + fundação visual e conferidores automáticos (paleta **Havrus Obsidian & Brand Gold**).
 >
 > Este documento é a lei visual de **HiveMind IDE** (`ide/frontend/`) e **HiveMind-App** (`HiveMind-App/`). Toda spec de interface, plano, task e PR obedece a ela.
 
@@ -59,3 +59,7 @@ Toda view que carrega dados assíncronos precisa tratar:
 
 ### D8. Paridade entre HiveMind IDE e HiveMind-App
 - Toda mudança na paleta ou nos estados semânticos no `hivemind` precisa atualizar a tabela de paridade com o `HiveMind-App` (`Theme.kt`).
+
+### D9. Política de Privacidade de Repositório Público
+- Este é um repositório público no GitHub: **nunca** commite segredos, tokens, `.env`, keystores/certificados, bancos locais, binários compilados (`.exe`/`.apk`) ou dados reais de empresas/clientes privados (nomes, domínios, chaves reais de issues/PRs, caminhos locais privados, e-mails pessoais reais ou usernames de terceiros).
+- A **única** identificação pessoal permitida é a autoria do mantenedor (`Gilvan Borges` / `gilvan-Borges`) em metadados do projeto (`go.mod`, build, licença e commits). Em testes, exemplos e docs, use apenas dados sintéticos (`acme`, `org-alpha`, `example.com`, `PROJ-123`, `app-mobile`, `@reviewer`).

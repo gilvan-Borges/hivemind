@@ -13,14 +13,14 @@
    - `EnsureWorktree` (`git.go:86-90`) chama `_ = os.RemoveAll(wt)` sempre que `g.IsRepo(ctx, wt)` retorna `false`, podendo apagar worktree válida em caso de falha transitória (`ctx.Canceled`, lock temporário).
    - `SyncUncommittedToDelivery` (`integrate.go:220-276`, `copyBetweenTrees:379-401`) usa `os.WriteFile` não-atômico e descarta erros de cópia/remoção silenciosamente (`_ =`, `err == nil`), diferente de `idecore.SyncWorktreeToWorkspace` (`diff.go:369-449`).
    - `DiscardFileChanges` (`diff.go:759-761`) passa `relClean` cru sem `gitx.LiteralPathspec`, contrastando com `StageWorkspaceFile` (`266`) e `UnstagedFileDiff` (`824`).
-   - Embora a **Worktree Composta Multi-Repo** (`nested_repos.go`, commit/PR por sub-repositório no `finish` e sync no `idecore/runner.go`) tenha acabado de resolver a montagem de `ipg-mobile`/`HiveMind-App` dentro da worktree da conversa, o **cross-linking automático entre os 2 PRs abertos** (editar o corpo do PR A citando o PR B e vice-versa em tarefas full-stack) e o watcher automático do painel Git para worktrees compostas ainda não existem.
+   - Embora a **Worktree Composta Multi-Repo** (`nested_repos.go`, commit/PR por sub-repositório no `finish` e sync no `idecore/runner.go`) tenha acabado de resolver a montagem de `app-mobile`/`HiveMind-App` dentro da worktree da conversa, o **cross-linking automático entre os 2 PRs abertos** (editar o corpo do PR A citando o PR B e vice-versa em tarefas full-stack) e o watcher automático do painel Git para worktrees compostas ainda não existem.
 2. **`internal/githubx` e Acoplamento no `idecore`:**
    - `ParseRemote` (`githubx/github.go:1169-1190`) faz match hardcoded de `"github.com"`, quebrando **GitHub Enterprise Server (GHES)** apesar de `SaveCredentials` (`credentials.go:108`) e `REST.BaseURL` aceitarem URL base customizada.
    - `REST`, `CLI` (`github.go:487, 522, 555, 577, 704`) e `listPullRequestsGraphQL` (`diff.go:2162`) fixam `per_page=100` / `first:30` / `last:50` sem paginação (`Link` header / GraphQL `pageInfo.endCursor`), truncando silenciosamente PRs/arquivos/comentários em repos grandes.
    - `REST.client()` (`github.go:196-201`), `jirax.HTTP.client()` (`jira.go:100-105`) e `diff.go:1503, 2239, 2447` alocam novo `http.Client` por requisição quando `HTTP == nil`, e `diff.go` bypassa `githubx.Client` duplicando GraphQL/REST/`gh` CLI.
 3. **`internal/jirax` e `idecore` Jira Discovery:**
    - `idecore.ListProjectIssues` (`diff.go:1313-1317`) chama `EnableProjectJira(workspace, projKey)` ao inferir projeto, **mutando `.hivemind/team.yaml` durante uma chamada de leitura**.
-   - `matchJiraProjectFromNames` (`diff.go:1109-1144`) codifica prefixos/termos específicos de cliente/empresa (`vibetex-`, `auditoriavibe`, `mural`) diretamente no código-fonte da IDE.
+   - `matchJiraProjectFromNames` (`diff.go`) codifica prefixos/termos específicos de empresa diretamente no código-fonte da IDE.
 
 ---
 
