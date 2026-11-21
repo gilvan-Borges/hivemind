@@ -72,10 +72,10 @@ func TestScanAllProvidersAggregatesPoolGlobalEnvAndRedactsSecrets(t *testing.T) 
 	}
 
 	report := scanAllProvidersWithDeps(context.Background(), "", deps)
-	if report.TotalProviders != 7 {
-		t.Fatalf("TotalProviders = %d, want 7", report.TotalProviders)
+	if report.TotalProviders != 8 {
+		t.Fatalf("TotalProviders = %d, want 8", report.TotalProviders)
 	}
-	// Connected: agy, opencode, anthropic, openai, cursor (5); openrouter failed auth (Parcial); gemini disconnected.
+	// Connected: agy, opencode, anthropic, openai, cursor (5); openrouter failed auth (Parcial); gemini & typesafe disconnected.
 	if report.ConnectedProviders != 5 {
 		t.Fatalf("ConnectedProviders = %d, want 5 (%+v)", report.ConnectedProviders, report.Providers)
 	}
