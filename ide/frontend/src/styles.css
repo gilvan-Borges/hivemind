@@ -5880,7 +5880,9 @@ button.status-chip:hover,
   max-width: min(280px, calc(100vw - 24px));
   color: var(--text-primary);
 }
-.hm-companion[hidden] { display: none; }
+.hm-companion[hidden],
+.hm-bubble[hidden],
+.hm-settings[hidden] { display: none; }
 .hm-live {
   position: absolute;
   width: 1px;

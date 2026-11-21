@@ -228,9 +228,10 @@ export function mountCompanionView(handlers: {
       if (settings.x != null && settings.y != null) {
         place(settings.x, settings.y, false);
       } else if (!root.style.left) {
-        const w = 280;
-        const h = 88;
-        place(window.innerWidth - w - 18, window.innerHeight - h - 64, false);
+        root.style.left = "auto";
+        root.style.top = "auto";
+        root.style.right = "18px";
+        root.style.bottom = "44px";
       }
       syncChecks();
       paint();
