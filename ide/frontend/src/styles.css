@@ -6187,3 +6187,279 @@ button.status-chip:hover,
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* =========================================================
+ * HiveMind Orb — Janela Flutuante Independente (Always-on-top)
+ * ========================================================= */
+html.is-orb-mode,
+body.is-orb-mode {
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+}
+body.is-orb-mode #app {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+.orb-collapsed {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.orb-drag-ring {
+  position: absolute;
+  inset: 4px;
+  border-radius: 26px;
+  --wails-draggable: drag;
+}
+.orb-fab {
+  position: relative;
+  width: 68px;
+  height: 68px;
+  padding: 5px;
+  border-radius: 20px;
+  border: 1.5px solid var(--accent-border);
+  background: var(--surface-page);
+  color: var(--accent);
+  box-shadow: var(--island-shadow);
+  cursor: pointer;
+  --wails-draggable: no-drag;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+.orb-fab:hover {
+  transform: scale(1.05);
+  border-color: var(--accent-strong);
+}
+.orb-fab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.orb-collapsed[data-mood="error"] .orb-fab { border-color: var(--color-danger-border); color: var(--color-danger); }
+.orb-collapsed[data-mood="attention"] .orb-fab { border-color: var(--accent-strong); }
+.orb-collapsed[data-mood="success"] .orb-fab { border-color: var(--color-success-border); color: var(--accent-strong); }
+.orb-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--action-primary-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--island-shadow);
+}
+.orb-panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-emphasis);
+  box-shadow: var(--island-shadow);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.orb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border);
+  --wails-draggable: drag;
+}
+.orb-head-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.orb-mini-mascot {
+  width: 32px;
+  height: 32px;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--surface-page);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.orb-head-meta {
+  min-width: 0;
+}
+.orb-head-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orb-head-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orb-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  --wails-draggable: no-drag;
+  flex-shrink: 0;
+}
+.orb-btn-primary {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--action-primary);
+  color: var(--action-primary-text);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.orb-btn-primary:hover {
+  opacity: 0.92;
+}
+.orb-icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.orb-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.orb-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.orb-empty {
+  margin: auto 0;
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.orb-empty-sub {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+.orb-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+}
+.orb-item[data-mood="attention"] { border-color: var(--accent-border); }
+.orb-item[data-mood="error"] { border-color: var(--color-danger-border); }
+.orb-item[data-mood="success"] { border-color: var(--color-success-border); }
+.orb-item-main {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.orb-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.orb-item-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-strong);
+}
+.orb-item-time {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.orb-item-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+.orb-item-body {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.orb-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-card);
+  border-top: 1px solid var(--border);
+}
+.orb-foot-hint {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+.orb-foot-btn {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.orb-foot-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.orb-foot-btn.danger:hover {
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
