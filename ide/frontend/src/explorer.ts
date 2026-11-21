@@ -433,39 +433,74 @@ export function renderLeftSidebar() {
   if (state.sidebarView === "team") {
     const maxTok = proj?.teamConfig?.settings?.max_tokens || 0;
     const permMode = (proj?.teamConfig?.settings?.permission_mode || "governed") as PermissionMode;
+    const agents = lane?.agents || [];
+    const activeCount = agents.filter((a) => a.status === "running").length;
+    const maxDevs = proj?.teamConfig?.settings?.max_dynamic_devs || 5;
     sidebar.innerHTML = `
       <div class="sidebar-header">
-        <span class="eyebrow">Equipe (${lane?.agents.length || 0})</span>
+        <span class="eyebrow">Equipe (${agents.length})</span>
         <div class="spacer"></div>
         <button class="mini" id="btn-open-mission-sb" title="Abrir Quadro Multiagente">${icons.swarm}<span>Quadro</span></button>
         <button class="mini" id="btn-config-team" title="Configurar Equipe e Skills">${icons.settings}<span>Config</span></button>
       </div>
-      <div class="sidebar-body">
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-          <select id="team-select" style="flex:1" ${lane?.running ? "disabled" : ""}>
-            ${teams.map((t) => `<option value="${escapeHtml(t.name)}" ${t.name === lane?.teamName ? "selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}
-          </select>
-          <button class="mini" id="btn-new-team-sb">${icons.plus}<span>Novo</span></button>
-          ${teams.length > 0 ? `<button class="mini danger" id="btn-delete-team-sb" title="Excluir equipe selecionada e parar todos os serviços">${icons.trash}</button>` : ""}
+      <div class="sidebar-body team-sb-body">
+        <section class="team-sb-island" aria-label="Configuração da equipe">
+          <div class="team-sb-team-row">
+            <select id="team-select" class="team-sb-select team-sb-select-main" ${lane?.running ? "disabled" : ""} aria-label="Equipe ativa">
+              ${teams.map((t) => `<option value="${escapeHtml(t.name)}" ${t.name === lane?.teamName ? "selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}
+            </select>
+            <button class="mini team-sb-new-btn" id="btn-new-team-sb" title="Criar nova equipe">${icons.plus}<span>Novo</span></button>
+            ${teams.length > 0 ? `<button class="mini danger team-sb-del-btn" id="btn-delete-team-sb" title="Excluir equipe selecionada e parar todos os serviços">${icons.trash}</button>` : ""}
+          </div>
+
+          <div class="team-sb-field">
+            <div class="team-sb-field-head">
+              <label class="team-sb-label" for="sb-permission-select">Permissão & Autonomia</label>
+            </div>
+            <select id="sb-permission-select" class="team-sb-select">
+              <option value="governed" ${permMode === "governed" ? "selected" : ""}>Governado (Worktree + PR + Aprovação)</option>
+              <option value="auto_edit" ${permMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos livres)</option>
+              <option value="full_access" ${permMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
+            </select>
+            ${state.cursorCLI?.sandboxWarning ? `
+              <details class="team-sb-sandbox-note">
+                <summary title="Clique para ver detalhes sobre flags de sandbox do Cursor CLI no Windows">
+                  <span class="team-sb-warn-dot" aria-hidden="true"></span>
+                  <span>Cursor CLI sem sandbox no Windows</span>
+                  <span class="team-sb-warn-chev">${icons.chevronRight}</span>
+                </summary>
+                <div class="team-sb-sandbox-body">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>
+              </details>
+            ` : ""}
+          </div>
+
+          <div class="team-sb-utils">
+            <button type="button" class="team-sb-memory-btn" id="btn-team-memory" title="Abrir memória compartilhada (.hivemind/MEMORY.md)">
+              <span class="team-sb-memory-left">${icons.memory}<span>Memória do Time</span></span>
+              <span class="team-sb-memory-badge">MEMORY.md</span>
+            </button>
+            <div class="team-sb-flow-row" title="Fluxo de execução da equipe">
+              <span class="team-sb-flow-steps">
+                <span>Chefe</span>
+                <span class="team-sb-flow-sep">→</span>
+                <span>1..${maxDevs} Devs</span>
+                <span class="team-sb-flow-sep">→</span>
+                <span>QA</span>
+                <span class="team-sb-flow-sep">→</span>
+                <span>Fecho</span>
+              </span>
+              ${maxTok > 0 ? `<span class="team-sb-limit-pill">${exactTokens(maxTok)} tok</span>` : ""}
+            </div>
+          </div>
+        </section>
+
+        <div class="team-sb-section-head">
+          <span>Agentes</span>
+          ${activeCount > 0 ? `<span class="team-sb-active-badge">${activeCount} ativo${activeCount > 1 ? "s" : ""}</span>` : `<span class="team-sb-count-badge">${agents.length}</span>`}
         </div>
-        <div style="margin-bottom:8px">
-          <div class="dim" style="font-size:10.5px;margin-bottom:3px">Permissão & Autonomia (estilo Claude Code / GPT):</div>
-          <select id="sb-permission-select" style="width:100%;font-size:11.5px;padding:4px 6px">
-            <option value="governed" ${permMode === "governed" ? "selected" : ""}>Governado (Worktree + PR + Pede permissão p/ main)</option>
-            <option value="auto_edit" ${permMode === "auto_edit" ? "selected" : ""}>Auto-Edição (Edições e comandos locais livres)</option>
-            <option value="full_access" ${permMode === "full_access" ? "selected" : ""}>Full Acesso & Permissão Total</option>
-          </select>
-          ${state.cursorCLI?.sandboxWarning ? `<div class="dim" style="font-size:10.5px;margin-top:4px;line-height:1.4">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
-        </div>
-        <button class="mini" id="btn-team-memory" style="width:100%;margin-bottom:8px;justify-content:flex-start">
-          ${icons.memory}
-          <span>Memória do Time (.hivemind/MEMORY.md)</span>
-        </button>
-        <div class="dim" style="margin-bottom:8px">
-          Fluxo: Chefe → 1..${proj?.teamConfig?.settings?.max_dynamic_devs || 5} Devs dinâmicos (worktree) → QA → Fecho${maxTok > 0 ? ` · Limite: ${exactTokens(maxTok)} tok` : ""}
-        </div>
-        <div id="team-agents-list">
-          ${renderAgentCardsHtml(lane?.agents || [])}
+
+        <div id="team-agents-list" class="team-agents-list">
+          ${renderAgentCardsHtml(agents)}
         </div>
       </div>
     `;
@@ -694,28 +729,54 @@ export function renderExplorerTreeHtml(): string {
 
 export function renderAgentCardsHtml(agents: AgentRuntime[]): string {
   const lane = activeLane();
-  return agents.map((a) => `
-    <div class="agent-card" data-agent-card="${escapeHtml(a.name)}">
-      <div class="agent-card-top">
-        <div class="agent-name">${escapeHtml(roleLabelPt(a.role))} ${modelChipHtml(chipForAgent(a))}</div>
-        <span class="status-pill ${a.status}">${a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro"}</span>
+  if (!agents || agents.length === 0) {
+    return `<div class="team-sb-empty">Nenhum agente configurado nesta equipe. Clique em <strong>Config</strong> para adicionar.</div>`;
+  }
+  return agents.map((a) => {
+    const statusLabel = a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro";
+    const chip = modelChipHtml(chipForAgent(a));
+    const hasFooter = Boolean(a.routeModel || a.tool || a.tokens > 0);
+    return `
+      <div class="agent-card is-${escapeHtml(a.status)}" data-agent-card="${escapeHtml(a.name)}">
+        <div class="agent-card-top">
+          <div class="agent-name">${escapeHtml(roleLabelPt(a.role))}</div>
+          <span class="status-pill ${escapeHtml(a.status)}">
+            ${a.status === "running" ? `<span class="status-dot" aria-hidden="true"></span>` : ""}
+            <span>${statusLabel}</span>
+          </span>
+        </div>
+        ${chip ? `
+          <div class="agent-card-chip-row">
+            ${chip}
+            ${a.routeTier ? `<span class="agent-route-tier">${escapeHtml(a.routeTier)}</span>` : ""}
+          </div>
+        ` : ""}
+        <div class="agent-card-pickers">
+          ${renderModelPickerPairHtml({
+            pairKey: `sb-${a.name}`,
+            dataAttr: "data-sb-agent-model",
+            dataAttrVal: a.name,
+            currentModel: a.model,
+            disabled: Boolean(lane?.running),
+            compact: true,
+          })}
+        </div>
+        ${hasFooter ? `
+          <div class="agent-card-foot">
+            ${a.routeModel ? `<div class="agent-route-line">Jev: ${escapeHtml(a.routeModel)}${a.routeReasons?.length ? ` · ${escapeHtml(reasonPhrase(a.routeReasons))}` : ""}</div>` : ""}
+            ${a.tool ? `<div class="agent-tool-line">${icons.bolt}<span>${escapeHtml(a.tool)}</span></div>` : ""}
+            ${a.tokens > 0
+              ? `<div class="agent-token-row" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">
+                  <span class="agent-token-total">${icons.tokens}<span>${exactTokens(a.tokens)} tok</span></span>
+                  <span class="agent-token-split">↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x</span>
+                </div>`
+              : ""
+            }
+          </div>
+        ` : ""}
       </div>
-      ${renderModelPickerPairHtml({
-        pairKey: `sb-${a.name}`,
-        dataAttr: "data-sb-agent-model",
-        dataAttrVal: a.name,
-        currentModel: a.model,
-        disabled: Boolean(lane?.running),
-        compact: true,
-      })}
-      ${a.routeModel ? `<div class="agent-meta" style="color:var(--muted)">Jev: ${escapeHtml(a.routeModel)}${a.routeTier ? ` (${escapeHtml(a.routeTier)})` : ""}${a.routeReasons?.length ? ` · ${escapeHtml(reasonPhrase(a.routeReasons))}` : ""}</div>` : ""}
-      ${a.tool ? `<div class="agent-meta" style="color:var(--green)">Ferramenta: ${escapeHtml(a.tool)}</div>` : ""}
-      ${a.tokens > 0
-        ? `<div class="agent-meta" style="color:var(--accent);font-family:var(--mono)" title="Entrada: ${exactTokens(a.inTokens)} | Saída: ${exactTokens(a.outTokens)} | Chamadas: ${a.calls}">${exactTokens(a.tokens)} tok (↑${formatTokens(a.inTokens)} ↓${formatTokens(a.outTokens)} · ${a.calls}x)</div>`
-        : ""
-      }
-    </div>
-  `).join("");
+    `;
+  }).join("");
 }
 
 export function bindAgentModelSelects(container: ParentNode | null, attrName: string) {
