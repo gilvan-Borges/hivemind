@@ -20,12 +20,17 @@
 | **08** | [08-git-github-jira-and-multi-repo-delivery.md](08-git-github-jira-and-multi-repo-delivery.md) | `internal/gitx/`, `internal/githubx/`, `internal/jirax/`, `idecore/diff.go` | Média-Alta | `gitx.Local` sem env não-interativo completo; `ParseRemote` hardcoded `github.com` (sem GHES); zero paginação; `ListProjectIssues` muta `team.yaml`; evolução multi-repo no UI/PR linking. |
 | **09** | [09-relay-e2ee-mcpx-and-runtime-unification.md](09-relay-e2ee-mcpx-and-runtime-unification.md) | `internal/relay/`, `relayclient/`, `remote/`, `internal/mcpx/`, `cmd/`, `cli/`, `tui/` | Crítica | Relay `TypeRPC` sem anti-replay; `relay.json` em texto plano; rate limiter apaga mapa (`>4096`); LAN bridge com `os.WriteFile` por `GET`; `mcpx` vaza `os.Environ()` sem trust gate; 4 wirings divergentes de `Runner`. |
 | **10** | [10-mobile-companion-supply-chain-and-ci.md](10-mobile-companion-supply-chain-and-ci.md) | `HiveMind-App/`, `scripts/`, `.github/workflows/ci.yml`, `deploy/relay/` | Alta | `HiveMind-App` sem modos SDD/Resident nem cache offline (Room); `usesCleartextTraffic="true"` global; R8/signing debug; zero auto-update (drift IDE vs `AppData`); CI sem `./internal/remote`, `-race` ou Gradle. |
+| **11** | [11-external-workers-worktrees-and-ux.md](11-external-workers-worktrees-and-ux.md) | `internal/orchestrator/`, `internal/workerx/`, `internal/gitx/`, `internal/resident/`, `ide/` | Média-Alta | Workers CLI externos (Cursor), `.worktreeinclude` & checkpoints, `SOUL.md`/webhooks/Slack, custo USD, PTY+Split Panes, Design Mode CDP, Hybrid Skill Stubs e Race Mode. |
+| **12** | [12-skill-router-project-brain-and-kits.md](12-skill-router-project-brain-and-kits.md) | `internal/skillrouter/`, `internal/skillx/`, `internal/brain/`, `internal/resident/`, `internal/mcpx/`, `internal/modelx/`, `internal/jev/`, `internal/kits/`, `ide/` | Estratégica | Motor de Decisão (`Domínio × Intenção × Plataforma`), Slash Playbooks, Skill Security Gate (`NVIDIA/SkillSpector`), Mente Coletiva (`Graphify` + layer semântica local), `Obscura`/Agent Reach/`StrictNetworkGuard=false`, Jev Free-Tier e Kits Android/Kotlin & GameDev Studio. |
 
 ---
 
 ## Ordem Recomendada de Execução
 
-1. **Onda 1 — Segurança, Dados & Confiabilidade (Risco Crítico):** Specs **04**, **05**, **09**, **03**
-2. **Onda 2 — Economia de Tokens, Latência & Roteamento Jev:** Specs **02**, **06**
-3. **Onda 3 — Modularização Go, Delivery & IDE Reativa:** Specs **01**, **07**, **08**
-4. **Onda 4 — Mobile Offline/Paridade, Auto-Update & Supply Chain:** Spec **10**
+1. **Onda 1 — Segurança, Dados & Confiabilidade (Risco Crítico):** Specs **04**, **05**, **09**, **03** *(Concluída)*
+2. **Onda 2 — Economia de Tokens, Latência & Roteamento Jev:** Specs **02**, **06** *(Concluída)*
+3. **Onda 3 — Modularização Go, Runtime Único & VCS Delivery:** Specs **01**, **08**, **09** *(Concluída)*
+4. **Onda 4 — IDE Reativa, Lifecycle, Blame/Conflitos & WSB:** Spec **07** *(Concluída)*
+5. **Onda 5 — Mobile Offline/Paridade, Auto-Update & CI/Deploy:** Spec **10** *(Concluída)*
+6. **Onda 6 — Workers CLI Externos, Worktrees & UX Avançada:** Spec **11** *(Concluída)*
+7. **Ondas 7–10 — Motor de Decisão de Skills, Mente Coletiva (`Graphify`), Agent Hive Conectado, Jev Free-Tier & Kits Android/GameDev:** Spec **12** *(Planejada — executar Onda 7 → 8 → 9 → 10)*

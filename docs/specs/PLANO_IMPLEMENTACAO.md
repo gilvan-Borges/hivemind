@@ -54,7 +54,7 @@
 
 ### 1.3 Specs 100% Pendentes (Backlog Consolidado)
 
-- Nenhuma spec das Ondas 1–6 pendente no momento.
+- [Spec 12](12-skill-router-project-brain-and-kits.md) — **Motor de Decisão de Skills (`Domínio × Intenção × Plataforma`), Slash Playbooks (`/layout`, `/redesign`, `/sec`, `/mobile`, `/game`, `/audio`), Skill Security Gate (`Go` + `NVIDIA/SkillSpector`), Mente Coletiva por Projeto (`Graphify` oficial + layer semântica local), Agent Hive Conectado (`Obscura`, canais públicos + `StrictNetworkGuard=false`), Jev Free-Tier e Kits Android/Kotlin & GameDev Studio (`Godot`, `Unreal`, Web, `ACE-Step-1.5`)** (**Ondas 7 a 10**)
 
 ---
 
@@ -160,3 +160,54 @@
 - [x] **W6-07** `[Spec 11 — P7]` Implementar **Design Mode via CDP** reaproveitando o Chrome DevTools MCP (`mcpx/defaults.go`) conectado ao browser real do usuário (pick element → seletor + HTML + estilos computados direto no chat).
 - [x] **W6-08** `[Spec 11 — Extras]` Adicionar **Hybrid Skill Stubs** (`hivemind skills get <topic>` servido pelo binário version-matched) e preset **Race Mode** sobre `parallelagent` para comparar diffs/testes de N agentes na mesma task.
 - [x] **W6-09** `[Verificação Onda 6]` Validar execução ponta-a-ponta de um worker externo **Cursor CLI** respeitando `worker_done` + guard pós-hoc de `owned_paths`/`pathsec`, rollback via worktree checkpoint, exibição de custo USD e testes de webhook com `WrapUntrustedData`.
+
+---
+
+### Onda 7 — Motor de Decisão de Skills, Slash Playbooks, Skills Nativas & Skill Security Gate
+*Objetivo: rotear automaticamente Domínio × Intenção × Plataforma com mínimo gasto de tokens, entregar `/layout`..`/scan-skill` e blindar skills externas antes da ativação.*
+
+- [ ] **W7-01** `[Spec 12]` Criar detector e loader `.hivemind/project-profile.yaml` em `internal/skillrouter/profile.go` (`saas_product`, `finance_erp`, `services`, `sales_ecommerce`, `marketing_landing`, `mobile_android`, `game_*`, `backend_edge`).
+- [ ] **W7-02** `[Spec 12]` Implementar `SkillRouter` (`internal/skillrouter/router.go`) com heurística < 1 ms + fallback Jev opcional, aplicando direto em `full_access` (chip editável) e sugerindo confirmação rápida em `governed`/`auto_edit`.
+- [ ] **W7-03** `[Spec 12]` Criar Playbooks declarativos (`/layout`, `/redesign`, `/arch`, `/review`, `/sec`, `/mobile`, `/game`, `/audio`, `/brain`, `/scan-skill`) injetando até 2 *Hybrid Skill Stubs* sem invalidar KV-cache.
+- [ ] **W7-04** `[Spec 12]` Autorar skills nativas em `internal/skillx/seeds/` (`ui-craft-product`, `ui-art-direction`, `ui-redesign-audit`, `security-cloudflare`, `arch-clean`, `code-review-rigor`, `android-kotlin-compose`, `gamedev-core`) + [`NOTICE.md`](../../internal/skillx/seeds/NOTICE.md).
+- [ ] **W7-05** `[Spec 12]` Implementar **Skill Security Gate** nativo em `internal/skillx/scanner.go` (score `0–100`, prompt injection, exfiltração de cofre/env, `curl | sh`) integrado ao importador/editor de skills da IDE e CLI.
+- [ ] **W7-06** `[Spec 12]` Adicionar ponte opcional `NVIDIA/SkillSpector` (CLI/MCP + SARIF) e auditoria de skills no `.github/workflows/ci.yml`.
+- [ ] **W7-07** `[Spec 12]` Adicionar autocomplete `/playbooks` + chip da decisão no composer da IDE e relatório visual do scanner em Skills (Constitution `D1–D9`).
+- [ ] **W7-08** `[Verificação Onda 7]` Testes do roteador por domínio/intenção/permissão, testes do scanner bloqueando skills maliciosas, `check-design-tokens`, `tsc`, `npm test` e `go test`.
+
+---
+
+### Onda 8 — Mente Coletiva do Projeto (`ProjectBrain` + Graphify Oficial)
+*Objetivo: substituir a memória isolada por sessão por um grafo persistente do projeto compartilhado entre todas as equipes/lanes, testando Graphify oficial com fallback nativo Go/SQLite se ficar pesado.*
+
+- [ ] **W8-01** `[Spec 12]` Criar contrato `ProjectBrain` em `internal/brain/` (`EnsureIndexed`, `QueryContext`, `RecordLearnings`, `InvalidateStale`, `Stats`) com storage local fora do repo em `%LOCALAPPDATA%\HiveMind\brains\<project-hash>\`.
+- [ ] **W8-02** `[Spec 12]` Registrar `graphify` (`graphifyy[mcp]`) em `internal/mcpx/defaults.go` e implementar `GraphifyBrain` com telemetria de latência/RAM + invalidação incremental via `FileWatcher`.
+- [ ] **W8-03** `[Spec 12]` Implementar camada semântica local (`collective.db` SQLite: `Decision`, `DomainRule`, `Gotcha`, `DesignRule`, `Feature`) com proveniência (`commit`, `sessionID`, `fileHashes`) e invalidação automática por drift.
+- [ ] **W8-04** `[Spec 12]` Integrar `QueryContext` (com `TokenBudget` rígido) + extração pós-QA no `internal/orchestrator/` e adicionar UI **Mente do Projeto** + `/brain` na IDE *(sync via Git `.hivemind/brain/` reservado como atualização futura pós-Onda 10)*.
+- [ ] **W8-05** `[Spec 12]` Medir benchmark do Graphify em repo grande (> 15s index / > 500ms query p95 / > 400MB RAM) e acionar implementação nativa Go + SQLite FTS5 atrás de `ProjectBrain` caso exceda os limites.
+- [ ] **W8-06** `[Verificação Onda 8]` Validar compartilhamento de decisões/gotchas entre duas equipes/lanes independentes no mesmo projeto e invalidação após modificação de arquivo.
+
+---
+
+### Onda 9 — Agent Hive Conectado (`Obscura`, Canais Públicos & `StrictNetworkGuard`) + Jev Free-Tier
+*Objetivo: dar visão web leve e leitura pública ao Residente com bloqueio estrito de hosts desligado por padrão (mas mantendo SSRF/vault/robots/`WrapUntrustedData`), e ampliar provedores gratuitos/OpenAI-compatible no Jev.*
+
+- [ ] **W9-01** `[Spec 12]` Adicionar `StrictNetworkGuard bool` (`false` por padrão) em `internal/resident/` (`types.go`, `broker.go`, `netguard.go`) e `ide/` com toggle na UI, mantendo sempre anti-SSRF, zero acesso ao `secretx`, `--obey-robots` e `WrapUntrustedData`.
+- [ ] **W9-02** `[Spec 12]` Adicionar `obscura` (`h4ckf0r0day/obscura`) em `internal/mcpx/defaults.go` + abstração `HeadlessBrowserProvider` (exclusão mútua vs `playwright`/`chrome-devtools` + screenshots leves).
+- [ ] **W9-03** `[Spec 12]` Implementar canais públicos read-only estilo `Agent Reach` (`web_markdown`, `youtube_transcript`, `rss_feed`) + `ChannelDoctor()` na UI do Residente/Orb (vetando explicitamente extração de cookies do navegador pessoal).
+- [ ] **W9-04** `[Spec 12]` Adicionar provedores **Groq**, **Cerebras**, **NVIDIA NIM** e **Mistral** em `internal/modelx/` + preset `free_economy` com failover em 429 no `internal/jev/`.
+- [ ] **W9-05** `[Spec 12]` Adicionar provedor **Custom OpenAI-Compatible** na IDE (Ollama, LM Studio, LiteLLM, `freellmapi`) integrado ao cofre `secretx` e telemetria de tokens.
+- [ ] **W9-06** `[Verificação Onda 9]` Validar `StrictNetworkGuard=false` vs `true`, bloqueio SSRF/vault, `Obscura` mockado, canais públicos encapsulados em `WrapUntrustedData` e failover Jev `free_economy`.
+
+---
+
+### Onda 10 — Kits Especializados (Android/Kotlin Compose & GameDev Studio + Áudio Local)
+*Objetivo: equipar o orquestrador com ferramentas reais sob demanda para apps Android Kotlin/Compose e desenvolvimento gratuito/open-source de jogos (Godot, Unreal, Web e trilha local ACE-Step 1.5).*
+
+- [ ] **W10-01** `[Spec 12]` Implementar Kit **Android/Kotlin** em `internal/kits/android/` (`adb devices`, `logcat` bounded, `screencap`, `uiautomator dump` e runner `./gradlew testDebugUnitTest lintDebug` com parser estruturado).
+- [ ] **W10-02** `[Spec 12]` Integrar `/mobile` com inspeção visual do emulador Android Compose (screenshot + árvore de UI anexados antes da aprovação QA).
+- [ ] **W10-03** `[Spec 12]` Implementar `internal/kits/gamedev/` + preset de time `game-studio` no Wizard (inspirado em `Donchitos/Claude-Code-Game-Studios`).
+- [ ] **W10-04** `[Spec 12]` Registrar `godot-mcp` (`Coding-Solo/godot-mcp`) e `unreal-claude` (`Natfii/UnrealClaude`) em `internal/mcpx/defaults.go` (desligados por padrão) + runner headless para Godot e Web Games (**Phaser/Three.js/PixiJS/Bevy-WASM**).
+- [ ] **W10-05** `[Spec 12]` Implementar conector local opcional **`ace-step/ACE-Step-1.5`** (`/audio` parametrizado por BPM/tom/duração/tags, exportação segura em `assets/audio/`, licença MIT).
+- [ ] **W10-06** `[Spec 12]` Expor badges e configuração de Kits na IDE conforme `.specify/memory/constitution.md` (`D1–D9`).
+- [ ] **W10-07** `[Verificação Onda 10]` Suíte completa dos Kits Android (mocks ADB/Gradle) e GameDev (Godot/Web/`game-studio`/`ACE-Step-1.5`), `go vet`/`go test` raiz e IDE, `check-design-tokens`, `tsc`, `npm test` e `npm run build`.
