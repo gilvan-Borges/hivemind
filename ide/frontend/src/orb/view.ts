@@ -1,7 +1,7 @@
-import { mascotSVG } from "../companion/mascot";
 import type { Mood } from "../companion/logic";
 import { icons } from "../icons";
 import { escapeHtml } from "../utils";
+import { attachBeeLife, hiveBeeSVG, mapMoodToBeeState, type BeeLifeController, type HiveBeeTheme } from "./hivebee";
 
 export interface OrbNoticeItem {
   id: string;
@@ -36,6 +36,8 @@ export interface WailsOrbApp {
   CloseOrbOnly?(): Promise<void>;
 }
 
+const BEE_THEME_KEY = "hivemind:orb-bee-theme";
+
 const MOOD_STATUS: Record<string, string> = {
   idle: "Ocioso",
   thinking: "Pensando…",
@@ -59,6 +61,22 @@ export function isOrbRuntime(): boolean {
   }
 }
 
+function loadBeeTheme(): HiveBeeTheme {
+  try {
+    return localStorage.getItem(BEE_THEME_KEY) === "gold" ? "gold" : "honey";
+  } catch {
+    return "honey";
+  }
+}
+
+function saveBeeTheme(theme: HiveBeeTheme): void {
+  try {
+    localStorage.setItem(BEE_THEME_KEY, theme);
+  } catch {
+    /* ignore */
+  }
+}
+
 function surfaceLabel(surface?: string): string {
   if (surface === "github") return "GitHub";
   if (surface === "resident") return "Residente";
@@ -78,6 +96,8 @@ export function mountOrbWindow(): void {
 
   const host = document.getElementById("app") || document.body;
   let expanded = false;
+  let beeTheme: HiveBeeTheme = loadBeeTheme();
+  let beeLife: BeeLifeController | null = null;
   let snap: OrbSnapshot = {
     mood: "idle",
     ideVisible: true,
@@ -85,39 +105,59 @@ export function mountOrbWindow(): void {
     items: [],
   };
 
+  const cleanupLife = () => {
+    if (beeLife) {
+      beeLife.destroy();
+      beeLife = null;
+    }
+  };
+
   const render = () => {
+    cleanupLife();
     const mood = (snap.mood || "idle") as Mood;
     const count = snap.pendingCount || snap.items.length || 0;
+    const beeState = mapMoodToBeeState(mood, count);
     const badge = count > 0 ? `<span class="orb-badge">${count > 9 ? "9+" : count}</span>` : "";
 
     if (!expanded) {
       host.innerHTML = `
         <div class="orb-collapsed" data-mood="${escapeHtml(mood)}" title="HiveMind Orb — clique para abrir painel · duplo clique para abrir IDE">
-          <div class="orb-drag-ring" title="Arraste para mover o Orb"></div>
-          <button type="button" class="orb-fab" id="orb-toggle" aria-label="Abrir painel do HiveMind Orb">
-            ${mascotSVG()}
+          <div class="orb-drag-ring" title="Arraste pela borda para mover a abelha"></div>
+          <div id="hivemind-mascot" class="mascot-shell" data-state="${escapeHtml(beeState)}" data-theme="${escapeHtml(beeTheme)}" role="button" tabindex="0" aria-label="Abrir painel do HiveMind Orb">
+            ${hiveBeeSVG()}
             ${badge}
-          </button>
+          </div>
         </div>
       `;
-      const svg = host.querySelector<SVGElement>(".hm-svg");
-      if (svg) svg.dataset.mood = mood;
-
-      let clickTimer = 0;
-      host.querySelector("#orb-toggle")?.addEventListener("click", () => {
-        if (clickTimer) {
-          window.clearTimeout(clickTimer);
-          clickTimer = 0;
-          void orbApi()?.ShowIDE?.();
-          return;
-        }
-        clickTimer = window.setTimeout(() => {
-          clickTimer = 0;
-          expanded = true;
-          void orbApi()?.SetOrbExpanded?.(true);
-          render();
-        }, 210);
-      });
+      const mascotEl = host.querySelector<HTMLElement>("#hivemind-mascot");
+      if (mascotEl) {
+        beeLife = attachBeeLife(mascotEl);
+        let clickTimer = 0;
+        mascotEl.addEventListener("click", () => {
+          if (clickTimer) {
+            window.clearTimeout(clickTimer);
+            clickTimer = 0;
+            beeLife?.celebrateNow();
+            window.setTimeout(() => void orbApi()?.ShowIDE?.(), 180);
+            return;
+          }
+          beeLife?.waveNow();
+          clickTimer = window.setTimeout(() => {
+            clickTimer = 0;
+            expanded = true;
+            void orbApi()?.SetOrbExpanded?.(true);
+            render();
+          }, 220);
+        });
+        mascotEl.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            expanded = true;
+            void orbApi()?.SetOrbExpanded?.(true);
+            render();
+          }
+        });
+      }
       return;
     }
 
@@ -127,7 +167,9 @@ export function mountOrbWindow(): void {
       <section class="orb-panel" data-mood="${escapeHtml(mood)}" aria-label="HiveMind Orb">
         <header class="orb-head">
           <div class="orb-head-brand">
-            <span class="orb-mini-mascot">${mascotSVG()}</span>
+            <div class="mascot-shell is-mini" data-state="${escapeHtml(beeState)}" data-theme="${escapeHtml(beeTheme)}">
+              ${hiveBeeSVG()}
+            </div>
             <div class="orb-head-meta">
               <div class="orb-head-title">HiveMind${snap.projectName ? ` · ${escapeHtml(snap.projectName)}` : ""}</div>
               <div class="orb-head-sub">${escapeHtml(statusLine)}</div>
@@ -162,13 +204,14 @@ export function mountOrbWindow(): void {
         </div>
 
         <footer class="orb-foot">
-          ${items.length > 0 ? `<button type="button" class="orb-foot-btn" id="orb-clear">Limpar avisos</button>` : `<span class="orb-foot-hint">Arraste pelo topo</span>`}
+          <div style="display:flex;align-items:center;gap:6px">
+            <button type="button" class="orb-foot-btn" id="orb-theme-toggle" title="Alternar visual da abelha (Mel Vivo / Obsidian Gold)">${beeTheme === "honey" ? "Mel Vivo" : "Gold"}</button>
+            ${items.length > 0 ? `<button type="button" class="orb-foot-btn" id="orb-clear">Limpar</button>` : ""}
+          </div>
           <button type="button" class="orb-foot-btn danger" id="orb-quit-all" title="Encerrar a HiveMind IDE e o Orb completamente">Sair de vez</button>
         </footer>
       </section>
     `;
-    const svg = host.querySelector<SVGElement>(".hm-svg");
-    if (svg) svg.dataset.mood = mood;
 
     host.querySelector("#orb-collapse")?.addEventListener("click", () => {
       expanded = false;
@@ -177,6 +220,11 @@ export function mountOrbWindow(): void {
     });
     host.querySelector("#orb-open-ide")?.addEventListener("click", () => {
       void orbApi()?.ShowIDE?.();
+    });
+    host.querySelector("#orb-theme-toggle")?.addEventListener("click", () => {
+      beeTheme = beeTheme === "honey" ? "gold" : "honey";
+      saveBeeTheme(beeTheme);
+      render();
     });
     host.querySelector("#orb-clear")?.addEventListener("click", () => {
       void orbApi()?.ClearNotices?.();
@@ -210,7 +258,11 @@ export function mountOrbWindow(): void {
 
   window.runtime?.EventsOn?.("hivemind:orb-state", (next: OrbSnapshot) => {
     if (!next) return;
+    const prevMood = snap.mood;
     snap = next;
     render();
+    if (!expanded && next.mood === "success" && prevMood !== "success") {
+      beeLife?.celebrateNow();
+    }
   });
 }

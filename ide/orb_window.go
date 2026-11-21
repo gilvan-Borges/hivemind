@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	orbCollapsedW = 104
-	orbCollapsedH = 104
+	orbCollapsedW = 112
+	orbCollapsedH = 118
 	orbExpandedW  = 356
 	orbExpandedH  = 430
 )
