@@ -54,6 +54,12 @@ func BuildUserPrompt(req TurnRequest, mem *MemoryStore) (string, error) {
 	if strings.TrimSpace(req.Workspace) != "" {
 		fmt.Fprintf(&b, "Workspace ativo: %s\n", RedactTarget(req.Workspace))
 	}
+	if soul := strings.TrimSpace(RedactSecrets(req.Soul)); soul != "" {
+		soul = strx.TruncateBytes(soul, MaxSoulBytes, "\n…")
+		b.WriteString("\n[Preferências do Usuário (SOUL.md)]\n")
+		b.WriteString(soul)
+		b.WriteString("\n")
+	}
 
 	if mem != nil {
 		if ret, err := mem.Retrieve(ws, req.Message); err == nil {

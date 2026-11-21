@@ -214,7 +214,7 @@ export interface DiffSummaryItem {
   removed: number;
 }
 
-export type RunMode = "auto" | "direct" | "plan" | "plan:sdd" | "plan:sdd-jira" | "squad";
+export type RunMode = "auto" | "direct" | "plan" | "plan:sdd" | "plan:sdd-jira" | "squad" | "race";
 
 export interface ChatMessage {
   id: string;
@@ -258,6 +258,7 @@ export interface AgentRuntime {
   outTokens: number;
   tokens: number;
   calls: number;
+  costMicroUsd?: number;
 }
 
 export interface TeamLane {
@@ -278,6 +279,10 @@ export interface TeamLane {
   sessionInTokens: number;
   sessionOutTokens: number;
   sessionTotalTokens: number;
+  turnCostMicroUsd: number;
+  sessionCostMicroUsd: number;
+  costByRole: Record<string, number>;
+  viewMode?: "chat" | "pty";
 }
 
 export interface TerminalEntry {
@@ -567,7 +572,34 @@ export interface GitHubSyncEvent {
   syncedAt: string;
 }
 
-export type GitSubTab = "changes" | "prs_issues" | "flow";
+export type GitSubTab = "changes" | "prs_issues" | "flow" | "worktrees";
+
+export interface WorktreeInfo {
+  path: string;
+  branch?: string;
+  head?: string;
+  agent?: string;
+  sizeBytes: number;
+  isMain?: boolean;
+  detached?: boolean;
+  prunable?: boolean;
+  orphan?: boolean;
+  locked?: boolean;
+}
+
+export interface WorktreeCheckpoint {
+  id: string;
+  ref: string;
+  sha: string;
+  label?: string;
+  hasDiff?: boolean;
+  createdAt: string;
+}
+
+export interface WorktreePruneResult {
+  prunedRefs: number;
+  removedOrphans?: string[];
+}
 
 export interface CommandAction {
   id: string;
@@ -606,6 +638,7 @@ export interface RunResultPayload {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  costMicroUsd?: number;
 }
 
 export interface WizardInputPayload {
@@ -642,6 +675,7 @@ export interface ProjectWorkspaceContext {
   activeEditorPath: string;
   lanes: TeamLane[];
   activeLaneId: string;
+  splitLaneIds?: string[];
   runMode: RunMode;
   diffs: FileDiff[];
   gitRepos?: WorkspaceGitRepo[];
@@ -724,6 +758,7 @@ export interface UsageWindow {
   totalTokens: number;
   calls: number;
   oldestAt?: string;
+  costMicroUsd?: number;
 }
 
 export interface RemoteQuotaWindow {
@@ -784,12 +819,34 @@ export interface AgyAccountQuota {
   quota: AgyQuota;
 }
 
+export interface RoleUsageCost {
+  role: string;
+  calls: number;
+  totalTokens: number;
+  costMicroUsd: number;
+}
+
+export interface AgentUsageCost {
+  agent: string;
+  role?: string;
+  provider?: string;
+  model?: string;
+  calls: number;
+  totalTokens: number;
+  costMicroUsd: number;
+}
+
 export interface AIUsageReport {
   generatedAt: string;
   agyQuota?: AgyQuota;
   agyAccounts?: AgyAccountQuota[];
   openCodeQuota: OpenCodeQuota;
   providers: AIProviderUsage[];
+  costSummary5hMicroUsd?: number;
+  costSummaryWeeklyMicroUsd?: number;
+  costSummaryMonthlyMicroUsd?: number;
+  costByRole?: RoleUsageCost[];
+  costByAgent?: AgentUsageCost[];
 }
 
 export interface InlineAIStatus {
@@ -879,6 +936,24 @@ export interface PTYEvent {
   data?: string;
   exited?: boolean;
   exitCode?: number;
+}
+
+export interface DesignModePage {
+  index: number;
+  title?: string;
+  url: string;
+}
+
+export interface DesignModeElement {
+  url?: string;
+  selector: string;
+  tag?: string;
+  id?: string;
+  classes?: string[];
+  textSnippet?: string;
+  outerHtml?: string;
+  computedStyles?: Record<string, string>;
+  boundingBox?: Record<string, number>;
 }
 
 export type BottomDrawerTab = "terminal" | "problems";
@@ -1148,6 +1223,12 @@ export interface WailsBackendApp {
   DeletePath(workspace: string, relPath: string): Promise<void>;
   ListBranches(workspace: string): Promise<string[]>;
   CheckoutBranch(workspace: string, branch: string, create: boolean): Promise<void>;
+  ListWorktrees?(workspace: string): Promise<WorktreeInfo[]>;
+  CreateWorktreeAsync?(workspace: string, agent: string, branch: string): Promise<string>;
+  ArchiveWorktree?(workspace: string, wtPath: string): Promise<void>;
+  PruneWorktrees?(workspace: string): Promise<WorktreePruneResult>;
+  ListWorktreeCheckpoints?(workspace: string): Promise<WorktreeCheckpoint[]>;
+  RollbackWorktreeCheckpoint?(workspace: string, wtDir: string, checkpointID: string): Promise<void>;
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
   ListPullRequests(workspace: string): Promise<ProjectPullRequest[]>;
   CloseOwnGitHubItem(workspace: string, kind: "pr" | "issue", number: number): Promise<void>;
@@ -1184,6 +1265,8 @@ export interface WailsBackendApp {
   ResidentCancel?(): Promise<boolean>;
   ResidentSessionMessages?(workstream: string): Promise<ResidentLocalMessage[]>;
   ResidentClearSession?(workstream: string): Promise<void>;
+  ResidentGetSoul?(): Promise<string>;
+  ResidentSaveSoul?(content: string): Promise<void>;
   ResidentListMemory?(workstream: string): Promise<ResidentMemoryFact[]>;
   ResidentAddMemory?(workstream: string, text: string, pinned: boolean): Promise<ResidentMemoryFact>;
   ResidentDeleteMemory?(id: string): Promise<boolean>;
@@ -1207,6 +1290,9 @@ export interface WailsBackendApp {
     messageId: string
   ): Promise<void>;
   OrbDismissNotice?(id: string): Promise<void>;
+  StartLanePTY?(termID: string, workspace: string, sessionID: string, cols: number, rows: number): Promise<string>;
+  DesignModeListPages?(workspace: string): Promise<DesignModePage[]>;
+  DesignModePickElement?(workspace: string, pageIdx: number, selector: string): Promise<DesignModeElement>;
   QuitAll?(): Promise<void>;
 }
 

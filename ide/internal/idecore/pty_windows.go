@@ -51,6 +51,10 @@ func packCoord(cols, rows int) uintptr {
 }
 
 func startNativePTY(workspace string, cols, rows int) (*ptySession, error) {
+	return startNativePTYWithEnv(workspace, cols, rows, nil)
+}
+
+func startNativePTYWithEnv(workspace string, cols, rows int, extraEnv map[string]string) (*ptySession, error) {
 	if err := procCreatePseudoConsole.Find(); err != nil {
 		return nil, fmt.Errorf("Windows ConPTY indisponível nesta versão do sistema: %w", err)
 	}
@@ -135,7 +139,7 @@ func startNativePTY(workspace string, cols, rows int) (*ptySession, error) {
 		return nil, err
 	}
 
-	envBlock := buildPTYEnvBlock()
+	envBlock := buildPTYEnvBlock(extraEnv)
 	var envPtr *uint16
 	if len(envBlock) > 0 {
 		envPtr = &envBlock[0]
@@ -170,8 +174,23 @@ func startNativePTY(workspace string, cols, rows int) (*ptySession, error) {
 	}, nil
 }
 
-func buildPTYEnvBlock() []uint16 {
+func buildPTYEnvBlock(extraEnv map[string]string) []uint16 {
 	env := os.Environ()
+	for k, v := range extraEnv {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		prefix := strings.ToUpper(key) + "="
+		filtered := env[:0]
+		for _, kv := range env {
+			if strings.HasPrefix(strings.ToUpper(kv), prefix) {
+				continue
+			}
+			filtered = append(filtered, kv)
+		}
+		env = append(filtered, key+"="+v)
+	}
 	hasTerm := false
 	hasColorTerm := false
 	for _, kv := range env {

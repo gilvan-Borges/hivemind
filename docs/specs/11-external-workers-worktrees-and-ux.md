@@ -1,6 +1,6 @@
 # Spec 11 — Workers CLI Externos (Piloto Cursor), Ergonomia de Worktrees, Residente Event-Driven e UX Avançada
 
-> **Status:** Proposta de Implementação (Onda 6)
+> **Status:** Implementada (Onda 6)
 > **Alvos:** `internal/orchestrator/`, `internal/modelx/cursor.go`, `internal/gitx/`, `internal/workspace/`, `internal/resident/`, `internal/skillx/`, `ide/internal/idecore/`, `ide/frontend/src/`
 
 ---

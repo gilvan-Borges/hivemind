@@ -11,9 +11,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
 // UsageWindow summarizes real HiveMind token consumption in a rolling time window.
@@ -23,6 +26,7 @@ type UsageWindow struct {
 	TotalTokens  int64  `json:"totalTokens"`
 	Calls        int    `json:"calls"`
 	OldestAt     string `json:"oldestAt,omitempty"`
+	CostMicroUSD int64  `json:"costMicroUsd,omitempty"`
 }
 
 // RemoteQuotaWindow holds an official server-reported quota window (e.g. OpenCode Go 5h / weekly / monthly).
@@ -91,13 +95,37 @@ type AgyAccountQuota struct {
 	Quota     AgyQuota `json:"quota"`
 }
 
+// RoleUsageCost aggregates accumulated USD spend for a canonical squad role.
+type RoleUsageCost struct {
+	Role         string `json:"role"`
+	Calls        int    `json:"calls"`
+	TotalTokens  int64  `json:"totalTokens"`
+	CostMicroUSD int64  `json:"costMicroUsd"`
+}
+
+// AgentUsageCost aggregates accumulated USD spend for a specific agent/provider pair.
+type AgentUsageCost struct {
+	Agent        string `json:"agent"`
+	Role         string `json:"role,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Calls        int    `json:"calls"`
+	TotalTokens  int64  `json:"totalTokens"`
+	CostMicroUSD int64  `json:"costMicroUsd"`
+}
+
 // AIUsageReport is the full snapshot shown in the IDE's AI Usage & Limits page.
 type AIUsageReport struct {
-	GeneratedAt   string            `json:"generatedAt"`
-	AgyQuota      AgyQuota          `json:"agyQuota"`
-	AgyAccounts   []AgyAccountQuota `json:"agyAccounts,omitempty"`
-	OpenCodeQuota OpenCodeQuota     `json:"openCodeQuota"`
-	Providers     []AIProviderUsage `json:"providers"`
+	GeneratedAt               string            `json:"generatedAt"`
+	AgyQuota                  AgyQuota          `json:"agyQuota"`
+	AgyAccounts               []AgyAccountQuota `json:"agyAccounts,omitempty"`
+	OpenCodeQuota             OpenCodeQuota     `json:"openCodeQuota"`
+	Providers                 []AIProviderUsage `json:"providers"`
+	CostSummary5hMicroUSD     int64             `json:"costSummary5hMicroUsd,omitempty"`
+	CostSummaryWeeklyMicroUSD int64             `json:"costSummaryWeeklyMicroUsd,omitempty"`
+	CostSummaryMonthlyMicroUSD int64            `json:"costSummaryMonthlyMicroUsd,omitempty"`
+	CostByRole                []RoleUsageCost   `json:"costByRole,omitempty"`
+	CostByAgent               []AgentUsageCost  `json:"costByAgent,omitempty"`
 }
 
 type usageEvent struct {
@@ -110,9 +138,12 @@ type usageEvent struct {
 	// Telemetria de cache (Spec 06 §4): tokens lidos/escritos em cache de
 	// prompt e o desconto ativo — sem isso o custo real é superestimado em
 	// até 10x e promoções não aparecem na página de uso.
-	CachedReadTokens  int64 `json:"cachedRead,omitempty"`
-	CachedWriteTokens int64 `json:"cachedWrite,omitempty"`
-	DiscountPct       int   `json:"discountPct,omitempty"`
+	CachedReadTokens  int64  `json:"cachedRead,omitempty"`
+	CachedWriteTokens int64  `json:"cachedWrite,omitempty"`
+	DiscountPct       int    `json:"discountPct,omitempty"`
+	CostMicroUSD      int64  `json:"costMicroUsd,omitempty"`
+	Agent             string `json:"agent,omitempty"`
+	Role              string `json:"role,omitempty"`
 }
 
 // usageEventsMaxBytes rotates ai-usage.jsonl at 20 MiB, keeping a single
@@ -504,6 +535,12 @@ func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 // orchestrator calls it directly so CLI/TUI runs count exactly like IDE runs,
 // and prompt-cache tokens plus the active discount travel with the event.
 func RecordAIUsageDetailed(provider, modelSpec string, inTok, outTok, totTok, cachedReadTok, cachedWriteTok int64, discountPct int) {
+	RecordAIUsageDetailedWithMeta(provider, modelSpec, inTok, outTok, totTok, cachedReadTok, cachedWriteTok, discountPct, 0, "", "")
+}
+
+// RecordAIUsageDetailedWithMeta appends one completed LLM call with optional
+// precomputed microUSD cost and orchestrator agent/role attribution.
+func RecordAIUsageDetailedWithMeta(provider, modelSpec string, inTok, outTok, totTok, cachedReadTok, cachedWriteTok int64, discountPct int, costMicroUSD int64, agentName, role string) {
 	if totTok == 0 && (inTok > 0 || outTok > 0) {
 		totTok = inTok + outTok
 	}
@@ -511,6 +548,14 @@ func RecordAIUsageDetailed(provider, modelSpec string, inTok, outTok, totTok, ca
 		return
 	}
 	bucket := CanonicalUsageProvider(provider, modelSpec)
+	if costMicroUSD < 0 {
+		costMicroUSD = 0
+	}
+	if costMicroUSD == 0 {
+		if entry, ok := jev.DefaultStaticCatalog().Lookup(bucket, strings.TrimSpace(modelSpec)); ok {
+			costMicroUSD = jev.ComputeCostMicroUSD(entry, inTok, outTok, cachedReadTok, discountPct)
+		}
+	}
 	usageMu.Lock()
 	defer usageMu.Unlock()
 	if err := ensureUsageLocked(); err != nil || usageMemState == nil {
@@ -522,10 +567,13 @@ func RecordAIUsageDetailed(provider, modelSpec string, inTok, outTok, totTok, ca
 		Model:             strings.TrimSpace(modelSpec),
 		InputTokens:       inTok,
 		OutputTokens:      outTok,
-		TotalTokens:        totTok,
+		TotalTokens:       totTok,
 		CachedReadTokens:  cachedReadTok,
 		CachedWriteTokens: cachedWriteTok,
 		DiscountPct:       discountPct,
+		CostMicroUSD:      costMicroUSD,
+		Agent:             strings.TrimSpace(agentName),
+		Role:              strings.TrimSpace(role),
 	}
 	usageMemState.store.Events = append(usageMemState.store.Events, ev)
 	usageMemState.pending = append(usageMemState.pending, ev)
@@ -951,6 +999,10 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 
 	oldest5h := make(map[string]time.Time)
 	oldest7d := make(map[string]time.Time)
+	staticCat := jev.DefaultStaticCatalog()
+	roleCosts := make(map[string]*RoleUsageCost)
+	agentCosts := make(map[string]*AgentUsageCost)
+	var cost5h, cost7d, cost30d int64
 
 	for _, ev := range events {
 		bucket := CanonicalUsageProvider(ev.Provider, ev.Model)
@@ -960,17 +1012,55 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 			byProv[bucket] = dst
 			order = append(order, bucket)
 		}
+		evCost := ev.CostMicroUSD
+		if evCost <= 0 {
+			if entry, found := staticCat.Lookup(bucket, strings.TrimSpace(ev.Model)); found {
+				evCost = jev.ComputeCostMicroUSD(entry, ev.InputTokens, ev.OutputTokens, ev.CachedReadTokens, ev.DiscountPct)
+			}
+		}
 		if !ev.Timestamp.Before(cut30d) {
 			dst.WindowMonthly.InputTokens += ev.InputTokens
 			dst.WindowMonthly.OutputTokens += ev.OutputTokens
 			dst.WindowMonthly.TotalTokens += ev.TotalTokens
 			dst.WindowMonthly.Calls++
+			dst.WindowMonthly.CostMicroUSD += evCost
+			cost30d += evCost
+			if evCost > 0 || ev.Role != "" || ev.Agent != "" {
+				roleName := strings.TrimSpace(ev.Role)
+				if roleName == "" {
+					roleName = "Outro"
+				}
+				rc := roleCosts[roleName]
+				if rc == nil {
+					rc = &RoleUsageCost{Role: roleName}
+					roleCosts[roleName] = rc
+				}
+				rc.Calls++
+				rc.TotalTokens += ev.TotalTokens
+				rc.CostMicroUSD += evCost
+
+				agentName := strings.TrimSpace(ev.Agent)
+				if agentName == "" {
+					agentName = bucket
+				}
+				key := agentName + "|" + bucket + "|" + strings.TrimSpace(ev.Model)
+				ac := agentCosts[key]
+				if ac == nil {
+					ac = &AgentUsageCost{Agent: agentName, Role: roleName, Provider: bucket, Model: strings.TrimSpace(ev.Model)}
+					agentCosts[key] = ac
+				}
+				ac.Calls++
+				ac.TotalTokens += ev.TotalTokens
+				ac.CostMicroUSD += evCost
+			}
 		}
 		if !ev.Timestamp.Before(cut7d) {
 			dst.WindowWeekly.InputTokens += ev.InputTokens
 			dst.WindowWeekly.OutputTokens += ev.OutputTokens
 			dst.WindowWeekly.TotalTokens += ev.TotalTokens
 			dst.WindowWeekly.Calls++
+			dst.WindowWeekly.CostMicroUSD += evCost
+			cost7d += evCost
 			if prev, exists := oldest7d[bucket]; !exists || ev.Timestamp.Before(prev) {
 				oldest7d[bucket] = ev.Timestamp
 			}
@@ -980,6 +1070,8 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 			dst.Window5h.OutputTokens += ev.OutputTokens
 			dst.Window5h.TotalTokens += ev.TotalTokens
 			dst.Window5h.Calls++
+			dst.Window5h.CostMicroUSD += evCost
+			cost5h += evCost
 			if prev, exists := oldest5h[bucket]; !exists || ev.Timestamp.Before(prev) {
 				oldest5h[bucket] = ev.Timestamp
 			}
@@ -1018,11 +1110,42 @@ func GetAIUsageReport(ctx context.Context) AIUsageReport {
 		agyQ = agyAccounts[0].Quota
 	}
 
+	var sortedRoles []RoleUsageCost
+	for _, rc := range roleCosts {
+		if rc != nil {
+			sortedRoles = append(sortedRoles, *rc)
+		}
+	}
+	sort.Slice(sortedRoles, func(i, j int) bool {
+		if sortedRoles[i].CostMicroUSD != sortedRoles[j].CostMicroUSD {
+			return sortedRoles[i].CostMicroUSD > sortedRoles[j].CostMicroUSD
+		}
+		return sortedRoles[i].Role < sortedRoles[j].Role
+	})
+
+	var sortedAgents []AgentUsageCost
+	for _, ac := range agentCosts {
+		if ac != nil {
+			sortedAgents = append(sortedAgents, *ac)
+		}
+	}
+	sort.Slice(sortedAgents, func(i, j int) bool {
+		if sortedAgents[i].CostMicroUSD != sortedAgents[j].CostMicroUSD {
+			return sortedAgents[i].CostMicroUSD > sortedAgents[j].CostMicroUSD
+		}
+		return sortedAgents[i].Agent < sortedAgents[j].Agent
+	})
+
 	out := AIUsageReport{
-		GeneratedAt:   now.Format(time.RFC3339),
-		AgyQuota:      agyQ,
-		AgyAccounts:   agyAccounts,
-		OpenCodeQuota: ocQ,
+		GeneratedAt:                now.Format(time.RFC3339),
+		AgyQuota:                   agyQ,
+		AgyAccounts:                agyAccounts,
+		OpenCodeQuota:              ocQ,
+		CostSummary5hMicroUSD:      cost5h,
+		CostSummaryWeeklyMicroUSD:  cost7d,
+		CostSummaryMonthlyMicroUSD: cost30d,
+		CostByRole:                 sortedRoles,
+		CostByAgent:                sortedAgents,
 	}
 
 	ocKey, _, _ := LoadOpenCodeCredentials()

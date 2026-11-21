@@ -22,6 +22,8 @@ const (
 	OriginRemote   Origin = "remote"
 	OriginRoutine  Origin = "routine"
 	OriginSubagent Origin = "subagent"
+	OriginWebhook  Origin = "webhook"
+	OriginSlack    Origin = "slack"
 )
 
 // Tier classifies the privilege class of a tool call (§4, §12.4).
@@ -199,6 +201,7 @@ type TurnRequest struct {
 	Origin     Origin
 	AccountID  string
 	DeviceID   string
+	Soul       string
 }
 
 // TurnResult summarizes the completed turn.

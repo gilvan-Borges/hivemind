@@ -61,6 +61,14 @@ export function exactTokens(n: number | undefined | null): string {
   return Number(n || 0).toLocaleString("pt-BR");
 }
 
+export function formatMicroUsd(microUsd: number | undefined | null): string {
+  const val = Number(microUsd || 0);
+  if (!Number.isFinite(val) || val <= 0) return "$0.00";
+  const usd = val / 1_000_000;
+  if (usd < 1) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
 export function formatElapsedDuration(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSec / 3600);
@@ -113,6 +121,8 @@ export function runModeLabel(mode: RunMode): string {
       return "SDD · Backlog Jira";
     case "squad":
       return "Squad Completo";
+    case "race":
+      return "Race (Candidatos)";
     default:
       return "Auto (Triagem)";
   }

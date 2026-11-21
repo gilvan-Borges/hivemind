@@ -69,14 +69,17 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 	if d := Decide(readCall(OriginLocal)); !d.Allow || d.Ask {
 		t.Fatalf("local read_file = %+v, esperado Allow=true Ask=false", d)
 	}
-	for _, origin := range []Origin{OriginRemote, OriginRoutine, OriginSubagent} {
+	for _, origin := range []Origin{OriginRemote, OriginRoutine, OriginSubagent, OriginWebhook, OriginSlack} {
 		if d := Decide(readCall(origin)); d.Allow || !d.Ask {
 			t.Fatalf("%s read_file = %+v, esperado Allow=false Ask=true", origin, d)
+		}
+		if d := Decide(Call{Name: "write_file", Args: map[string]any{"path": "notes.md", "content": "x"}, Origin: origin}); d.Allow || !d.Ask {
+			t.Fatalf("%s write_file = %+v, esperado Allow=false Ask=true (HITL obrigatório)", origin, d)
 		}
 	}
 
 	// Unknown/empty origin MUST fail closed even for read_file.
-	for _, badOrigin := range []Origin{"", "webhook", "browser", "local "} {
+	for _, badOrigin := range []Origin{"", "unknown_origin", "browser", "local "} {
 		if d := Decide(readCall(badOrigin)); d.Allow || d.Ask {
 			t.Fatalf("origem inválida %q retornou %+v, esperado Allow=false Ask=false", badOrigin, d)
 		}

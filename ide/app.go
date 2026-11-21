@@ -59,6 +59,7 @@ type App struct {
 	mobile              *mobileBridge
 	relay               *relayclient.Client
 	resident            *idecore.ResidentManager
+	designMode          *idecore.DesignModeService
 	healthMonitorCancel context.CancelFunc
 	desk                *notify.Hub
 	orb                 orbHostState
@@ -246,6 +247,9 @@ func (a *App) shutdown(_ context.Context) {
 	}
 	if a.resident != nil {
 		a.resident.Cancel()
+	}
+	if a.designMode != nil {
+		a.designMode.Close()
 	}
 	a.CancelInlineAI()
 	a.termMu.Lock()
@@ -1399,6 +1403,59 @@ func (a *App) CheckoutBranch(workspace, branch string, create bool) error {
 	return idecore.CheckoutGitBranch(ctx, workspace, branch, create)
 }
 
+// ListWorktrees returns active and orphan worktrees managed under workspace.
+func (a *App) ListWorktrees(workspace string) ([]idecore.WorktreeInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return idecore.ListWorktrees(ctx, workspace)
+}
+
+// CreateWorktreeAsync creates and hydrates a worktree, emitting progress on "hivemind:worktree-progress".
+func (a *App) CreateWorktreeAsync(workspace, agent, branch string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return idecore.CreateWorktreeAsync(ctx, workspace, agent, branch, func(step string, pct int) {
+		if a.ctx == nil || a.smokeCheck {
+			return
+		}
+		wailsrt.EventsEmit(a.ctx, "hivemind:worktree-progress", map[string]any{
+			"workspace": workspace,
+			"agent":     agent,
+			"branch":    branch,
+			"step":      step,
+			"pct":       pct,
+		})
+	})
+}
+
+// ArchiveWorktree safely removes one managed HiveMind worktree.
+func (a *App) ArchiveWorktree(workspace, wtPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return idecore.ArchiveWorktree(ctx, workspace, wtPath)
+}
+
+// PruneWorktrees prunes stale worktree refs and deletes orphan directories.
+func (a *App) PruneWorktrees(workspace string) (idecore.WorktreePruneResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return idecore.PruneWorktrees(ctx, workspace)
+}
+
+// ListWorktreeCheckpoints lists recorded turn checkpoints for workspace.
+func (a *App) ListWorktreeCheckpoints(workspace string) ([]idecore.WorktreeCheckpoint, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return idecore.ListWorktreeCheckpoints(ctx, workspace)
+}
+
+// RollbackWorktreeCheckpoint restores wtDir (or workspace if empty) to checkpointID.
+func (a *App) RollbackWorktreeCheckpoint(workspace, wtDir, checkpointID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return idecore.RollbackWorktreeCheckpoint(ctx, workspace, wtDir, checkpointID)
+}
+
 // ListIssues fetches open Jira and/or GitHub issues for workspace.
 func (a *App) ListIssues(workspace string) ([]idecore.ProjectIssue, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1534,6 +1591,42 @@ func (a *App) StartPTY(termID, workspace string, cols, rows int) (string, error)
 		return "", fmt.Errorf("gerenciador PTY não inicializado")
 	}
 	return a.pty.Start(termID, workspace, cols, rows)
+}
+
+// StartLanePTY starts or attaches an interactive PTY bound to a team lane while
+// propagating HIVEMIND_SESSION_ID so CLI/TUI inherits the active lane session.
+func (a *App) StartLanePTY(termID, workspace, sessionID string, cols, rows int) (string, error) {
+	if a.pty == nil {
+		return "", fmt.Errorf("gerenciador PTY não inicializado")
+	}
+	var env map[string]string
+	if sid := strings.TrimSpace(sessionID); sid != "" {
+		env = map[string]string{"HIVEMIND_SESSION_ID": sid}
+	}
+	return a.pty.StartWithEnv(termID, workspace, cols, rows, env)
+}
+
+func (a *App) ensureDesignMode() *idecore.DesignModeService {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.designMode == nil {
+		a.designMode = idecore.NewDesignModeService()
+	}
+	return a.designMode
+}
+
+// DesignModeListPages lists open Chrome tabs via Chrome DevTools MCP for Design Mode.
+func (a *App) DesignModeListPages(workspace string) ([]idecore.DesignModePage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return a.ensureDesignMode().ListPages(ctx, workspace)
+}
+
+// DesignModePickElement captures selector/HTML/computed styles from Chrome DevTools MCP.
+func (a *App) DesignModePickElement(workspace string, pageIdx int, selector string) (idecore.DesignModeElement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return a.ensureDesignMode().PickElement(ctx, workspace, pageIdx, selector)
 }
 
 // WritePTY sends keystrokes, commands, or control bytes (e.g. Ctrl+C) to a running PTY session.
@@ -1830,4 +1923,20 @@ func (a *App) ResidentAuditLog(limit int) ([]resident.AuditEntry, error) {
 		return nil, nil
 	}
 	return a.resident.AuditLog(limit)
+}
+
+// ResidentGetSoul reads the resident's SOUL.md personality/preferences file.
+func (a *App) ResidentGetSoul() (string, error) {
+	if a.resident == nil {
+		return "", nil
+	}
+	return a.resident.GetSoul()
+}
+
+// ResidentSaveSoul updates the resident's bounded SOUL.md preferences file.
+func (a *App) ResidentSaveSoul(content string) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SaveSoul(content)
 }

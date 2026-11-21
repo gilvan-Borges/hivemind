@@ -40,6 +40,14 @@ type cursorNotice struct {
 	Failed   bool
 }
 
+// CursorNotice is the exported representation of one parsed Cursor CLI stream-json event.
+type CursorNotice = cursorNotice
+
+// ParseCursorStreamLine parses a single NDJSON line from Cursor CLI (`agent --output-format stream-json`).
+func ParseCursorStreamLine(line string) (CursorNotice, bool) {
+	return parseCursorStreamLine(line)
+}
+
 func parseCursorStreamLine(line string) (cursorNotice, bool) {
 	line = strings.TrimSpace(line)
 	if line == "" || !strings.HasPrefix(line, "{") {

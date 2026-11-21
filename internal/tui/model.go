@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
@@ -44,14 +45,15 @@ const (
 )
 
 type agentRow struct {
-	Name   string
-	Role   string
-	Title  string
-	Model  string
-	Status string
-	Tool   string
-	Tokens int
-	Start  time.Time
+	Name         string
+	Role         string
+	Title        string
+	Model        string
+	Status       string
+	Tool         string
+	Tokens       int
+	CostMicroUSD int64
+	Start        time.Time
 }
 
 type block struct {
@@ -98,6 +100,7 @@ type model struct {
 	persistedSession bool
 	started          time.Time
 	tokens           int
+	costMicroUSD     int64
 
 	ta      textarea.Model
 	vp      viewport.Model
@@ -476,8 +479,10 @@ func (m model) onStream(msg streamed) (tea.Model, tea.Cmd) {
 		}
 	case "usage":
 		m.tokens += int(ev.Tokens)
+		m.costMicroUSD += ev.CostMicroUSD
 		if row := m.matchAgent(ev.Author, ev.Label); row != nil {
 			row.Tokens += int(ev.Tokens)
+			row.CostMicroUSD += ev.CostMicroUSD
 		}
 	case "tool_call":
 		agName := m.agentKeyFor(ev.Author, ev.Label)
@@ -705,6 +710,9 @@ func (m model) agentPane(w, h int) string {
 		if a.Tokens > 0 {
 			line += fmt.Sprintf(" %dtok", a.Tokens)
 		}
+		if a.CostMicroUSD > 0 {
+			line += " " + jev.FormatMicroUSD(a.CostMicroUSD)
+		}
 		b.WriteString("  " + th.style(th.Yellow).Render(trimWidth(line, max(1, w-2))) + "\n")
 	}
 	return b.String()
@@ -736,8 +744,12 @@ func (m model) statusLine(w int) string {
 	if w < 120 {
 		session = ""
 	}
-	s := fmt.Sprintf(" %s%s · %s · %d tok · %s · %s · %s",
-		shortModel(m.activeModel()), session, time.Since(m.started).Truncate(time.Second), m.tokens, m.branch, flags, m.status)
+	costPart := ""
+	if m.costMicroUSD > 0 {
+		costPart = " · " + jev.FormatMicroUSD(m.costMicroUSD)
+	}
+	s := fmt.Sprintf(" %s%s · %s · %d tok%s · %s · %s · %s",
+		shortModel(m.activeModel()), session, time.Since(m.started).Truncate(time.Second), m.tokens, costPart, m.branch, flags, m.status)
 	hint := "enter envia · /ajuda · esc cancela "
 	gap := w - lipgloss.Width(s) - lipgloss.Width(hint)
 	if gap < 1 {

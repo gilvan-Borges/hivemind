@@ -9,6 +9,7 @@ import { openGitHubModal, openJiraModal } from "./modals";
 import { renderGuard } from "./render-guard";
 import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
+import { bindWorktreesTabEvents, refreshWorktreesPanel, renderWorktreesTabHtml } from "./worktrees";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -1004,6 +1005,8 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         })()}
       </div>
     `;
+  } else if (activeGitTab === "worktrees" && hasGit) {
+    tabContentHtml = renderWorktreesTabHtml();
   } else {
     tabContentHtml = `
       <div class="git-section" style="padding:10px">
@@ -1117,6 +1120,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
         <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
       </div>
 
       ${tabContentHtml}
@@ -1396,6 +1400,7 @@ export function bindGitSidebarEvents() {
       void loadProjectIssues();
     }
     if (state.gitTab === "flow") void loadGitHubPRs();
+    if (state.gitTab === "worktrees") void refreshWorktreesPanel(renderLeftSidebar);
   });
 
   document.getElementById("btn-scm-more")?.addEventListener("click", (ev) => {
@@ -1468,6 +1473,9 @@ export function bindGitSidebarEvents() {
         if (!state.prs.loadedOnce && !state.prs.loading) {
           void loadGitHubPRs();
         }
+      }
+      if (tab === "worktrees") {
+        void refreshWorktreesPanel(renderLeftSidebar);
       }
     });
   });
@@ -1893,6 +1901,9 @@ export function bindGitSidebarEvents() {
         targetLane.sessionInTokens = 0;
         targetLane.sessionOutTokens = 0;
         targetLane.sessionTotalTokens = 0;
+        targetLane.turnCostMicroUsd = 0;
+        targetLane.sessionCostMicroUsd = 0;
+        targetLane.costByRole = {};
         targetLane.messages = [];
       }
       renderLaneBarOnly();
@@ -1952,6 +1963,9 @@ export function bindGitSidebarEvents() {
       targetLane.sessionInTokens = 0;
       targetLane.sessionOutTokens = 0;
       targetLane.sessionTotalTokens = 0;
+      targetLane.turnCostMicroUsd = 0;
+      targetLane.sessionCostMicroUsd = 0;
+      targetLane.costByRole = {};
       targetLane.messages = [];
       renderLaneBarOnly();
       renderPipelineBar();
@@ -2001,4 +2015,6 @@ export function bindGitSidebarEvents() {
       );
     });
   });
+
+  bindWorktreesTabEvents(renderLeftSidebar);
 }

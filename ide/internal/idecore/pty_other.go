@@ -18,13 +18,26 @@ type ptySession struct {
 	closed bool
 }
 
-func startNativePTY(workspace string, _, _ int) (*ptySession, error) {
+func startNativePTY(workspace string, cols, rows int) (*ptySession, error) {
+	return startNativePTYWithEnv(workspace, cols, rows, nil)
+}
+
+func startNativePTYWithEnv(workspace string, _, _ int, extraEnv map[string]string) (*ptySession, error) {
 	absRoot, err := filepath.Abs(strings.TrimSpace(workspace))
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command("sh", "-i")
 	cmd.Dir = absRoot
+	if len(extraEnv) > 0 {
+		env := append([]string(nil), cmd.Environ()...)
+		for k, v := range extraEnv {
+			if strings.TrimSpace(k) != "" {
+				env = append(env, strings.TrimSpace(k)+"="+v)
+			}
+		}
+		cmd.Env = env
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

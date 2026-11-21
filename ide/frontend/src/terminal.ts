@@ -12,12 +12,14 @@ import { api, normalizePathKey, setStatus, state } from "./state";
 interface XtermInstance {
   termKey: string;
   workspace: string;
+  sessionId?: string;
   term: Terminal;
   fit: FitAddon;
   container: HTMLDivElement;
   started: boolean;
   starting: boolean;
   pendingWrites: string[];
+  laneObserver?: ResizeObserver;
 }
 
 const xtermSessions = new Map<string, XtermInstance>();
@@ -103,10 +105,13 @@ function activeTermKey(): string {
   return normalizePathKey(state.project?.root || "");
 }
 
-function getOrCreateXtermSession(workspace: string): XtermInstance {
-  const key = normalizePathKey(workspace);
+function getOrCreateXtermSession(workspace: string, customKey?: string, sessionId?: string): XtermInstance {
+  const key = normalizePathKey(customKey || workspace);
   const existing = xtermSessions.get(key);
-  if (existing) return existing;
+  if (existing) {
+    if (sessionId) existing.sessionId = sessionId;
+    return existing;
+  }
 
   const container = document.createElement("div");
   container.className = "xterm-host-inner";
@@ -151,6 +156,7 @@ function getOrCreateXtermSession(workspace: string): XtermInstance {
   const inst: XtermInstance = {
     termKey: key,
     workspace,
+    sessionId,
     term,
     fit,
     container,
@@ -186,7 +192,10 @@ async function ensurePTYStarted(inst: XtermInstance): Promise<void> {
     }
     const cols = Math.max(40, inst.term.cols || 100);
     const rows = Math.max(8, inst.term.rows || 18);
-    const scrollback = await backend.StartPTY(inst.termKey, inst.workspace, cols, rows);
+    const scrollback =
+      inst.sessionId && backend.StartLanePTY
+        ? await backend.StartLanePTY(inst.termKey, inst.workspace, inst.sessionId, cols, rows)
+        : await backend.StartPTY(inst.termKey, inst.workspace, cols, rows);
     inst.started = true;
     if (scrollback) {
       inst.term.write(scrollback);
@@ -216,6 +225,54 @@ export function handlePTYOutputEvent(ev: PTYEvent): void {
     inst.started = false;
     inst.term.writeln(`\r\n\x1b[90m[Shell encerrado (exit ${ev.exitCode ?? 0}) — pressione Enter ou clique em Reiniciar]\x1b[0m`);
   }
+}
+
+export function mountLanePTY(hostEl: HTMLElement, laneId: string, workspace: string, sessionId: string): void {
+  const key = `lane:${laneId}`;
+  const inst = getOrCreateXtermSession(workspace, key, sessionId || laneId);
+  hostEl.innerHTML = "";
+  hostEl.appendChild(inst.container);
+
+  const fitInst = () => {
+    try {
+      inst.fit.fit();
+      const cols = Math.max(40, inst.term.cols || 100);
+      const rows = Math.max(8, inst.term.rows || 18);
+      if (inst.started) {
+        void api()?.ResizePTY?.(inst.termKey, cols, rows).catch(() => {});
+      }
+    } catch {
+      // ignore hidden/layout race
+    }
+  };
+
+  if (inst.laneObserver) {
+    inst.laneObserver.disconnect();
+  }
+  inst.laneObserver = new ResizeObserver(() => fitInst());
+  inst.laneObserver.observe(hostEl);
+
+  requestAnimationFrame(() => {
+    fitInst();
+    void ensurePTYStarted(inst).then(() => {
+      fitInst();
+      inst.term.focus();
+    });
+  });
+}
+
+export function disposeLanePTY(laneId: string): void {
+  const key = normalizePathKey(`lane:${laneId}`);
+  const inst = xtermSessions.get(key);
+  if (!inst) return;
+  inst.laneObserver?.disconnect();
+  try {
+    inst.term.dispose();
+  } catch {
+    // ignore dispose race
+  }
+  xtermSessions.delete(key);
+  void api()?.ClosePTY?.(key)?.catch(() => {});
 }
 
 export function toggleTerminal(): void {

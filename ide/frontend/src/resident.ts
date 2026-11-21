@@ -24,6 +24,8 @@ export const residentState = {
   audit: [] as ResidentAuditEntry[],
   routines: [] as ResidentRoutine[],
   externalSessions: [] as ExternalSession[],
+  soulDraft: "",
+  soulDirty: false,
   auditFilter: "",
   binariesDraft: "",
   hostsDraft: "",
@@ -147,12 +149,16 @@ export async function refreshResidentData(): Promise<void> {
       residentState.workstream = st.workstream;
     }
     const ws = residentState.workstream || st.workstream || "geral";
-    const [sessionMsgs, memList, auditList, routines] = await Promise.all([
+    const [sessionMsgs, memList, auditList, routines, soulText] = await Promise.all([
       backend.ResidentSessionMessages?.(ws).catch(() => []) ?? Promise.resolve([]),
       backend.ResidentListMemory?.(ws).catch(() => []) ?? Promise.resolve([]),
       backend.ResidentAuditLog?.(80).catch(() => []) ?? Promise.resolve([]),
       backend.ResidentListRoutines?.().catch(() => []) ?? Promise.resolve([]),
+      backend.ResidentGetSoul?.().catch(() => "") ?? Promise.resolve(""),
     ]);
+    if (!residentState.soulDirty) {
+      residentState.soulDraft = String(soulText || "");
+    }
     if (!residentState.loadedOnce && residentState.messages.length === 0 && Array.isArray(sessionMsgs) && sessionMsgs.length > 0) {
       residentState.messages = sessionMsgs.map((m, idx) => ({
         id: `res-hist-${idx}`,
@@ -638,6 +644,16 @@ function renderResidentSecurityHtml(): string {
 function renderResidentMemoryHtml(accountId: string): string {
   return `
     <div class="resident-panel-body">
+      <div class="resident-row-card" style="margin-bottom:10px">
+        <div class="resident-row-head">
+          <strong>SOUL.md (Tom e Preferências do Residente)</strong>
+          <span class="dim">máx. 2 KiB</span>
+          <span class="spacer"></span>
+          <button type="button" class="primary mini" id="btn-res-soul-save">Salvar SOUL.md</button>
+        </div>
+        <div class="dim" style="margin-bottom:6px">Define tom, estilo de resposta e prioridades pessoais injetadas automaticamente nas sessões do residente.</div>
+        <textarea id="res-soul-input" rows="3" placeholder="Ex.: Seja direto em português, priorize análises objetivas e resumos de PR curtos…">${escapeHtml(residentState.soulDraft)}</textarea>
+      </div>
       <div class="dim" style="margin-bottom:10px">
         Memória pessoal salva apenas neste PC para a conta <code>${escapeHtml(accountId)}</code> (não atravessa o relay; <code>.hivemind/MEMORY.md</code> continua sendo a memória do time).
       </div>
@@ -1000,6 +1016,23 @@ export function bindResidentViewEvents(): void {
   auditFilter?.addEventListener("input", () => {
     residentState.auditFilter = auditFilter.value;
     rerenderResidentIfOpen();
+  });
+
+  const soulInput = document.getElementById("res-soul-input") as HTMLTextAreaElement | null;
+  soulInput?.addEventListener("input", () => {
+    residentState.soulDraft = soulInput.value;
+    residentState.soulDirty = true;
+  });
+  document.getElementById("btn-res-soul-save")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.ResidentSaveSoul) return;
+    try {
+      await backend.ResidentSaveSoul(residentState.soulDraft);
+      residentState.soulDirty = false;
+      toast("SOUL.md atualizado e injetado no agente residente.", "success");
+    } catch (err: any) {
+      toastError("salvar SOUL.md", err);
+    }
   });
 
   const scrollBox = document.getElementById("res-chat-scroll");

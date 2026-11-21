@@ -25,21 +25,32 @@ type Server struct {
 	hub  *Hub
 	deps Deps
 
-	mu         sync.Mutex
-	boxMu      sync.Mutex
-	cfg        Config
-	srv        *http.Server
-	port       int
-	urls       []string
-	host       string
-	version    string
-	configPath string
-	secrets    secretx.Vault
-	box        *relaywire.KeyPair
-	offer      *pendingOffer
-	redeems    *redeemLimiter
-	local      *localCap
-	now        func() time.Time
+	mu            sync.Mutex
+	boxMu         sync.Mutex
+	cfg           Config
+	srv           *http.Server
+	port          int
+	urls          []string
+	host          string
+	version       string
+	configPath    string
+	secrets       secretx.Vault
+	box           *relaywire.KeyPair
+	offer         *pendingOffer
+	redeems       *redeemLimiter
+	local         *localCap
+	now           func() time.Time
+	githubWebhook http.Handler
+	slackWebhook  http.Handler
+}
+
+// SetWebhookHandlers attaches optional event-driven webhook/Slack handlers
+// mounted under /api/v1/webhooks/* (authenticated via HMAC signatures).
+func (s *Server) SetWebhookHandlers(githubWebhook, slackWebhook http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.githubWebhook = githubWebhook
+	s.slackWebhook = slackWebhook
 }
 
 // NewServer builds the bridge (not yet listening).
@@ -194,9 +205,31 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "rota não permitida")
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	outer := http.NewServeMux()
+	outer.HandleFunc("POST /api/v1/webhooks/github", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		h := s.githubWebhook
+		s.mu.Unlock()
+		if h == nil {
+			writeErr(w, http.StatusServiceUnavailable, "webhook GitHub não configurado")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+	outer.HandleFunc("POST /api/v1/webhooks/slack", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		h := s.slackWebhook
+		s.mu.Unlock()
+		if h == nil {
+			writeErr(w, http.StatusServiceUnavailable, "webhook Slack não configurado")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+	outer.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		s.authorize(w, r, mux)
 	})
+	return outer
 }
 
 // Handler exposes the composed http.Handler (tests use httptest).

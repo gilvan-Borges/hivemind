@@ -20,9 +20,10 @@ import (
 )
 
 func newRunCmd() *cobra.Command {
-	var jiraKey, sessionID, permissionMode string
+	var jiraKey, sessionID, permissionMode, runMode string
 	var yes, fullAccess bool
 	var maxTokens int64
+	var raceCount int
 	cmd := &cobra.Command{
 		Use:   "run [objetivo]",
 		Short: "Executa um objetivo com o time, mostrando a saída de cada agente",
@@ -30,6 +31,7 @@ func newRunCmd() *cobra.Command {
   hivemind run --jira PROJ-123
   hivemind run --max-tokens 600000 "implementar o fluxo de login"
   hivemind run --full-access "corrigir revisão do PR #1"
+  hivemind run --race 3 "refatorar parser mantendo testes verdes"
   hivemind run "ajuste o texto" --jira PROJ-123 --session 1a2b3c4d5e6f`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			objective := strings.TrimSpace(strings.Join(args, " "))
@@ -37,7 +39,11 @@ func newRunCmd() *cobra.Command {
 			if fullAccess {
 				overrideMode = team.PermissionFullAccess
 			}
-			_, err := executeRunWithMode(cmd, objective, jiraKey, sessionID, yes, overrideMode, maxTokens)
+			effectiveMode := strings.TrimSpace(runMode)
+			if raceCount > 0 {
+				effectiveMode = fmt.Sprintf("race:%d", raceCount)
+			}
+			_, err := executeRunDetailed(cmd, objective, jiraKey, sessionID, yes, overrideMode, maxTokens, effectiveMode)
 			return err
 		},
 	}
@@ -46,6 +52,11 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirma comandos de shell perigosos e ações protegidas sem perguntar")
 	cmd.Flags().BoolVar(&fullAccess, "full-access", false, "Concede acesso e permissão total nesta execução (estilo Claude Code / Codex)")
 	cmd.Flags().StringVar(&permissionMode, "permission-mode", "", "Sobrescreve o modo de permissão nesta execução: governed, auto_edit ou full_access")
+	cmd.Flags().StringVar(&runMode, "mode", "", "Modo de execução: auto, direct, plan, squad ou race[:N]")
+	cmd.Flags().IntVar(&raceCount, "race", 0, "Executa N candidatos paralelos em worktrees isoladas (2..4, padrão 2)")
+	if fl := cmd.Flags().Lookup("race"); fl != nil {
+		fl.NoOptDefVal = "2"
+	}
 	cmd.Flags().Int64Var(&maxTokens, "max-tokens", -1, "Limite de tokens desta execução (0 = sem limite; -1 = usa settings.max_tokens do time)")
 	return cmd
 }
@@ -55,6 +66,10 @@ func executeRun(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bo
 }
 
 func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool, permissionOverride string, maxTokens int64) (orchestrator.Result, error) {
+	return executeRunDetailed(cmd, objective, jiraKey, sessionID, yes, permissionOverride, maxTokens, "")
+}
+
+func executeRunDetailed(cmd *cobra.Command, objective, jiraKey, sessionID string, yes bool, permissionOverride string, maxTokens int64, runMode string) (orchestrator.Result, error) {
 	dir, project, err := loadProject(cmd)
 	if err != nil {
 		return orchestrator.Result{}, err
@@ -110,6 +125,7 @@ func executeRunWithMode(cmd *cobra.Command, objective, jiraKey, sessionID string
 		Objective: objective,
 		JiraKey:   jiraKey,
 		SessionID: sessionID,
+		RunMode:   runMode,
 	})
 	return res, runErr
 }

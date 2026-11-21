@@ -116,6 +116,7 @@ type Settings struct {
 	JiraEnabled              bool               `yaml:"jira_enabled" json:"jira_enabled"`
 	JiraProject              string             `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
 	Worktrees                *bool              `yaml:"worktrees,omitempty" json:"worktrees,omitempty"`
+	SharedDirectories        []string           `yaml:"shared_directories,omitempty" json:"shared_directories,omitempty"`
 	AutoCommit               bool               `yaml:"auto_commit" json:"auto_commit"`
 	AutoPR                   bool               `yaml:"auto_pr" json:"auto_pr"`
 	HomologBranch            string             `yaml:"homolog_branch,omitempty" json:"homolog_branch,omitempty"`
@@ -372,6 +373,7 @@ type Agent struct {
 	Role         string `yaml:"role" json:"role"`
 	Provider     string `yaml:"provider" json:"provider"`
 	Model        string `yaml:"model" json:"model"`
+	Worker       string `yaml:"worker,omitempty" json:"worker,omitempty"`
 	Instructions string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 }
 
@@ -411,6 +413,7 @@ func (f *File) Normalize() {
 	if len(f.Settings.ShellAllowlist) == 0 {
 		f.Settings.ShellAllowlist = append([]string(nil), DefaultAllowlist...)
 	}
+	f.Settings.SharedDirectories = normalizeUniquePaths(f.Settings.SharedDirectories)
 	f.Settings.SkillAssignments = NormalizeSkillAssignments(f.Settings.SkillAssignments)
 	for i := range f.Teams {
 		f.Teams[i].Name = strings.TrimSpace(f.Teams[i].Name)
@@ -420,6 +423,7 @@ func (f *File) Normalize() {
 			a.Role = NormalizeRole(a.Role)
 			a.Provider = NormalizeProvider(a.Provider, a.Model)
 			a.Model = strings.TrimSpace(a.Model)
+			a.Worker = strings.ToLower(strings.TrimSpace(a.Worker))
 			if a.Provider == "jev" && (a.Model == "" || strings.EqualFold(a.Model, "jev") || strings.EqualFold(a.Model, "jev:auto") || strings.EqualFold(a.Model, "jev/auto")) {
 				a.Model = "auto"
 			}
@@ -697,8 +701,27 @@ func inferProvider(model string) string {
 	}
 }
 
-// DefaultAllowlist is the set of executables the shell tool may run without
-// being treated as unknown. Dangerous flag combinations still need confirmation.
+func normalizeUniquePaths(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(items))
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		clean := strings.Trim(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"), "/")
+		if clean == "" || clean == "." {
+			continue
+		}
+		key := strings.ToLower(clean)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, clean)
+	}
+	return out
+}
+
 var DefaultAllowlist = []string{
 	"git", "gh", "go", "gofmt", "python", "python3", "pytest", "pip",
 	"node", "npm", "npx", "pnpm", "yarn", "bun",

@@ -7624,6 +7624,294 @@ body.is-orb-mode #app {
 .orb-chat-list .md-code pre {
   max-width: 100%;
 }
+.cost-pill {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.aiu-cost-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.aiu-cost-stat {
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.aiu-cost-stat-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.aiu-cost-stat-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  margin-top: 2px;
+}
+.aiu-cost-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.aiu-cost-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-panel);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.aiu-cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.aiu-cost-table th,
+.aiu-cost-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.aiu-cost-table th {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+.wt-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wt-create-box {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wt-create-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.wt-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-input);
+  border: 1px solid var(--border-control);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 11.5px;
+}
+.wt-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.wt-progress-top {
+  display: flex;
+  justify-content: space-between;
+}
+.wt-progress-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-panel);
+  overflow: hidden;
+}
+.wt-progress-bar {
+  height: 100%;
+  background: var(--accent);
+}
+.wt-err-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+  color: var(--color-danger-text);
+  font-size: 11px;
+}
+.wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wt-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wt-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.wt-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wt-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+.wt-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+}
+.wt-badge.ok {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+}
+.wt-badge.warn {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 40%, transparent);
+}
+.wt-num {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+/* Lane Chat <-> Terminal & Split Panes (W6-06) + Design Mode (W6-07) */
+.lane-mode-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-panel);
+}
+.lane-mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.lane-mode-btn.active {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+.lane-pty-wrap {
+  flex: 1;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-page);
+  border-top: 1px solid var(--border);
+}
+.lane-pty-host {
+  flex: 1;
+  min-height: 200px;
+  padding: 4px;
+  overflow: hidden;
+}
+.lanes-split-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+.split-lane-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-card);
+  overflow: hidden;
+}
+.split-lane-col.active {
+  border-color: var(--accent-border);
+}
+.split-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-panel);
+  font-size: 11.5px;
+}
+.split-lane-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  margin: 4px 8px 0;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  font-size: 11.5px;
+}
+.dm-popover {
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dm-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
 } /* fim @layer components */
 
 /* =========================================================

@@ -144,6 +144,11 @@ func ProbeCursor() CursorStatus {
 	return st
 }
 
+// ResolveCursorAPIKey returns CURSOR_API_KEY from environment or saved profile.
+func ResolveCursorAPIKey(ctx context.Context) string {
+	return resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
+}
+
 // NewCursor builds the adapter. The key is read from the environment first,
 // then from api-keys.json. The model id "auto" lets the Cursor CLI choose.
 func NewCursor(ctx context.Context, modelName string) (model.LLM, error) {
@@ -385,16 +390,18 @@ func rejectForeignCursorModel(id string) error {
 }
 
 func cursorArgs(modelID, workspace, permissionMode string) []string {
-	return buildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS)
+	return BuildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS)
 }
 
-func buildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
+// BuildCursorArgs builds the CLI argument list for Cursor `agent` respecting
+// permissionMode (--trust --force only in full_access) and OS sandbox support.
+func BuildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--stream-partial-output",
 	}
-	if cursorTrustForce(permissionMode) {
+	if CursorTrustForce(permissionMode) {
 		args = append(args, "--trust", "--force")
 	}
 	args = append(args,
@@ -408,8 +415,17 @@ func buildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
 	return args
 }
 
-func cursorTrustForce(permissionMode string) bool {
+// CursorTrustForce reports whether permissionMode grants automatic trust/force flags.
+func CursorTrustForce(permissionMode string) bool {
 	return strings.EqualFold(strings.TrimSpace(permissionMode), "full_access")
+}
+
+func buildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
+	return BuildCursorArgs(modelID, workspace, permissionMode, goos)
+}
+
+func cursorTrustForce(permissionMode string) bool {
+	return CursorTrustForce(permissionMode)
 }
 
 type permissionModeKey struct{}
@@ -431,6 +447,11 @@ func permissionModeFrom(ctx context.Context) string {
 	return strings.TrimSpace(mode)
 }
 
+// CursorChildEnv returns a child environment with CURSOR_API_KEY set if non-empty.
+func CursorChildEnv(base []string, key string) []string {
+	return cursorChildEnv(base, key)
+}
+
 func cursorChildEnv(base []string, key string) []string {
 	out := make([]string, 0, len(base)+1)
 	for _, entry := range base {
@@ -440,7 +461,15 @@ func cursorChildEnv(base []string, key string) []string {
 		}
 		out = append(out, entry)
 	}
+	if strings.TrimSpace(key) == "" {
+		return out
+	}
 	return append(out, "CURSOR_API_KEY="+key)
+}
+
+// WriteCursorTask writes prompt into <dir>/.hivemind/cursor-task.md with mode 0600.
+func WriteCursorTask(dir, prompt string) (string, error) {
+	return writeCursorTask(dir, prompt)
 }
 
 func writeCursorTask(dir, prompt string) (string, error) {

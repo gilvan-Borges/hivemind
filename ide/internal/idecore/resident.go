@@ -262,6 +262,16 @@ func (m *ResidentManager) Status() resident.Status {
 	}
 }
 
+// GetSoul reads the bounded SOUL.md preferences file for the resident agent.
+func (m *ResidentManager) GetSoul() (string, error) {
+	return resident.LoadSoul(m.baseDir)
+}
+
+// SaveSoul writes SOUL.md atomically for the resident agent.
+func (m *ResidentManager) SaveSoul(content string) error {
+	return resident.SaveSoul(m.baseDir, content)
+}
+
 // SaveConfig persists local resident UI preferences (provider, model, active workstream).
 // Only invoked by local Wails UI bindings — never exposed via remote HTTP (§10, §11).
 func (m *ResidentManager) SaveConfig(provider, modelName, workstream string) (resident.Status, error) {
@@ -450,6 +460,7 @@ func (m *ResidentManager) runTurn(
 		},
 	}
 
+	soul, _ := resident.LoadSoul(m.baseDir)
 	res, runErr := runner.RunTurn(ctx, resident.TurnRequest{
 		Message:    message,
 		Workspace:  strings.TrimSpace(workspaceDir),
@@ -457,6 +468,7 @@ func (m *ResidentManager) runTurn(
 		Origin:     origin,
 		AccountID:  acct,
 		DeviceID:   devID,
+		Soul:       soul,
 	})
 	if runErr != nil {
 		m.mu.Lock()

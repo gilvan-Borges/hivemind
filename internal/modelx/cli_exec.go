@@ -17,6 +17,12 @@ import (
 // §3.1: agy.go, stream.go e cursor.go duplicavam o wrap .cmd/.bat e o leitor
 // NDJSON com EOF-antes-de-Wait).
 
+// CLICommand wraps .cmd/.bat scripts on Windows (they cannot be exec'd
+// directly) and returns the configured *exec.Cmd for every other binary.
+func CLICommand(ctx context.Context, bin string, args []string) *exec.Cmd {
+	return cliCommand(ctx, bin, args)
+}
+
 // cliCommand wraps .cmd/.bat scripts on Windows (they cannot be exec'd
 // directly) and returns the configured *exec.Cmd for every other binary.
 func cliCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
@@ -36,7 +42,15 @@ func cliCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
 
 const maxCLILine = 1024 * 1024
 
+// MaxCLILine caps the buffer per NDJSON stdout line from external CLIs.
+const MaxCLILine = maxCLILine
+
 var errStopCLIStream = errors.New("stream interrompido")
+
+// ReadCLIStream drains an external CLI NDJSON stream line-by-line until EOF.
+func ReadCLIStream(r io.Reader, max int, handle func(line string) bool) error {
+	return readCLIStream(r, max, handle)
+}
 
 // readCLIStream lê até o EOF, linha a linha, descartando linhas maiores que
 // max mas SEMPARAR de drenar o pipe (um tool_call com corpo de arquivo passa

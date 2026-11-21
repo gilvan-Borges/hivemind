@@ -1,15 +1,17 @@
 import { icons } from "./icons";
 import { renderMarkdownLite, renderMarkdownStreamed } from "./markdown";
-import type { ChatMessage, PermissionMode, RunMode } from "./types";
-import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
+import type { ChatMessage, PermissionMode, RunMode, TeamLane } from "./types";
+import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatMicroUsd, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
 import { refreshSessions } from "./boot";
+import { bindDesignModeEvents, formatDesignModeContext, loadDesignModePages, renderDesignModeChipHtml, renderDesignModePopoverHtml } from "./design-mode";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar, setProjectPermissionMode, updateTeamStatusPills } from "./explorer";
 import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
-import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar } from "./lanes";
+import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, toggleSplitLanes } from "./lanes";
 import { renderModalLayer } from "./modals";
 import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
 import { api, setStatus, state, toastError } from "./state";
+import { mountLanePTY } from "./terminal";
 import { openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
 
 export let chatFlushRaf = 0;
@@ -53,10 +55,67 @@ function waitForLaneIdle(laneId: string, timeoutMs = 3000): Promise<void> {
   });
 }
 
+function refreshDesignModeUI() {
+  const slot = document.getElementById("design-mode-popover-slot");
+  if (slot) slot.innerHTML = renderDesignModePopoverHtml();
+  const chip = document.getElementById("composer-design-chip");
+  if (chip) chip.innerHTML = renderDesignModeChipHtml();
+  document.getElementById("btn-design-mode")?.classList.toggle("active", Boolean(state.designMode.open));
+  bindDesignModeEvents(refreshDesignModeUI);
+}
+
+function renderSplitLanesGridHtml(splitLanes: TeamLane[]): string {
+  return `
+    <div class="lanes-split-grid" id="lanes-split-grid">
+      ${splitLanes
+        .map((sl) => {
+          const isPty = sl.viewMode === "pty";
+          const isAct = sl.id === state.activeLaneId;
+          const sid = escapeHtml(sl.id);
+          return `
+            <div class="split-lane-col ${isAct ? "active" : ""}" data-split-col="${sid}">
+              <div class="split-lane-head">
+                <strong>${escapeHtml(sl.label || sl.teamName)}</strong>
+                ${sl.turnCostMicroUsd > 0 ? `<span class="wt-badge wt-num">${formatMicroUsd(sl.turnCostMicroUsd)}</span>` : ""}
+                <div class="spacer"></div>
+                <div class="lane-mode-seg">
+                  <button type="button" class="lane-mode-btn ${!isPty ? "active" : ""}" data-split-mode-chat="${sid}" title="Chat">${icons.sparkle}</button>
+                  <button type="button" class="lane-mode-btn ${isPty ? "active" : ""}" data-split-mode-pty="${sid}" title="Terminal PTY compartilhado">${icons.terminal}</button>
+                </div>
+              </div>
+              ${
+                isPty
+                  ? `<div class="lane-pty-wrap"><div class="lane-pty-host" data-split-pty-lane="${sid}"></div></div>`
+                  : `<div class="split-lane-messages" data-split-lane-id="${sid}"></div>`
+              }
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
 export function renderRightPane() {
   const right = document.getElementById("right-pane");
   if (!right) return;
   const lane = activeLane();
+  const splitLanes = getVisibleSplitLanes(state.lanes, state.splitLaneIds);
+
+  // Preserva instâncias xterm ativas antes de reconstruir o DOM do painel.
+  right.querySelectorAll(".xterm-host-inner").forEach((node) => {
+    node.parentElement?.removeChild(node);
+  });
+
+  const bodyHtml =
+    splitLanes.length >= 2
+      ? renderSplitLanesGridHtml(splitLanes)
+      : lane?.viewMode === "pty"
+        ? `<div class="lane-pty-wrap"><div class="lane-pty-host" id="lane-pty-host"></div></div>`
+        : `<div class="chat-scroll-wrap">
+            <div class="chat-messages" id="chat-messages"></div>
+            <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
+          </div>`;
 
   right.innerHTML = `
     <div class="sidebar-header">
@@ -65,23 +124,24 @@ export function renderRightPane() {
       <button type="button" class="icon-btn" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}" aria-label="${state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA"}">${icons.expand}</button>
       <button class="mini ghost" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
       <button class="mini" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
+      <button type="button" class="mini ${splitLanes.length >= 2 ? "primary" : "ghost"}" id="btn-toggle-split-lanes" title="Dividir painel com 2 lanes lado a lado" aria-pressed="${splitLanes.length >= 2 ? "true" : "false"}">${icons.swarm}<span>Dividir</span></button>
     </div>
     <div class="lane-bar" id="lane-bar"></div>
     <div class="pipeline-bar" id="pipeline-bar"></div>
     <div class="token-bar" id="token-bar"></div>
-    <div class="chat-scroll-wrap">
-      <div class="chat-messages" id="chat-messages"></div>
-      <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
-    </div>
+    ${bodyHtml}
     <div class="composer-wrap">
+      <div id="design-mode-popover-slot">${renderDesignModePopoverHtml()}</div>
       <div class="chat-approval-dock" id="chat-approval-dock" hidden></div>
       <div class="mention-popup" id="mention-popup" style="display:none"></div>
       <div class="composer-box">
+        <div id="composer-design-chip">${renderDesignModeChipHtml()}</div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
         <textarea id="chat-input" rows="3" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
         <div class="composer-footer">
           <div class="composer-mode-bar" id="composer-mode-bar"></div>
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
+          <button type="button" class="composer-icon-btn ${state.designMode.open ? "active" : ""}" id="btn-design-mode" title="Design Mode — inspecionar elemento no Chrome via CDP" aria-label="Design Mode">${icons.target}</button>
           <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}</button>
           <input id="jira-key-input" class="composer-jira-input" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
           <span class="dim composer-lane-tag" id="composer-team-label"></span>
@@ -104,7 +164,54 @@ export function renderRightPane() {
   rebuildChatMessagesFull();
   renderChatApprovalDock();
   bindRightStaticEvents();
+  bindDesignModeEvents(refreshDesignModeUI);
   syncChatExpandLayout();
+
+  if (splitLanes.length >= 2 && state.project) {
+    splitLanes.forEach((sl) => {
+      if (sl.viewMode === "pty") {
+        const host = right.querySelector<HTMLElement>(`[data-split-pty-lane="${CSS.escape(sl.id)}"]`);
+        if (host) mountLanePTY(host, sl.id, state.project!.root, sl.sessionId || sl.id);
+      }
+    });
+    right.querySelectorAll<HTMLElement>("[data-split-col]").forEach((col) => {
+      col.addEventListener("click", (ev) => {
+        if ((ev.target as HTMLElement)?.closest(".lane-mode-btn")) return;
+        const id = col.dataset.splitCol || "";
+        if (id && state.activeLaneId !== id) {
+          state.activeLaneId = id;
+          renderLaneBarOnly();
+          renderPipelineBar();
+          renderTokenBar();
+          syncComposerButtons();
+          right.querySelectorAll<HTMLElement>("[data-split-col]").forEach((c) => {
+            c.classList.toggle("active", c.dataset.splitCol === id);
+          });
+        }
+      });
+    });
+    right.querySelectorAll<HTMLElement>("[data-split-mode-chat]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const l = state.lanes.find((x) => x.id === btn.dataset.splitModeChat);
+        if (l) {
+          l.viewMode = "chat";
+          renderRightPane();
+        }
+      });
+    });
+    right.querySelectorAll<HTMLElement>("[data-split-mode-pty]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const l = state.lanes.find((x) => x.id === btn.dataset.splitModePty);
+        if (l) {
+          l.viewMode = "pty";
+          renderRightPane();
+        }
+      });
+    });
+  } else if (lane?.viewMode === "pty" && state.project) {
+    const host = document.getElementById("lane-pty-host");
+    if (host) mountLanePTY(host, lane.id, state.project.root, lane.sessionId || lane.id);
+  }
 }
 
 export function renderComposerModeBar() {
@@ -136,6 +243,14 @@ export function renderComposerModeBar() {
       tag: "Paralelo",
       icon: icons.swarm,
       desc: "Pipeline completo em worktree: Chefe → Devs paralelos → QA → Fecho",
+    },
+    {
+      id: "race",
+      label: "Race",
+      shortLabel: "Race",
+      tag: "2-4×",
+      icon: icons.swarm,
+      desc: "Executa candidatos paralelos em worktrees isoladas e aplica o vencedor",
     },
   ];
 
@@ -299,7 +414,21 @@ export function renderTokenBar() {
   if (!bar || !lane) return;
   const maxTok = state.project?.teamConfig?.settings?.max_tokens || 0;
   const warnBudget = maxTok > 0 && lane.turnTotalTokens >= maxTok * 0.8;
+  const turnCost = Number(lane.turnCostMicroUsd || 0);
+  const sessCost = Number(lane.sessionCostMicroUsd || 0);
+  const roleParts = Object.entries(lane.costByRole || {})
+    .filter(([, v]) => v > 0)
+    .map(([k, v]) => `${k}: ${formatMicroUsd(v)}`)
+    .join(" | ");
+  const agentParts = lane.agents
+    .filter((a) => (a.costMicroUsd || 0) > 0)
+    .map((a) => `${a.name}: ${formatMicroUsd(a.costMicroUsd)}`)
+    .join(" · ");
+  const costTitle = [roleParts && `Por papel — ${roleParts}`, agentParts && `Por agente — ${agentParts}`]
+    .filter(Boolean)
+    .join("\n") || "Custo USD acumulado no turno e na sessão (catálogo Jev)";
 
+  const isPty = lane.viewMode === "pty";
   bar.innerHTML = `
     <span class="tok-pill" title="Turno atual — Entrada: ${exactTokens(lane.turnInTokens)} | Saída: ${exactTokens(lane.turnOutTokens)}">
       ${icons.bolt}
@@ -309,10 +438,32 @@ export function renderTokenBar() {
     <span class="tok-pill" title="Total desta sessão (${escapeHtml(lane.sessionId || "nova")}) — Entrada: ${exactTokens(lane.sessionInTokens)} | Saída: ${exactTokens(lane.sessionOutTokens)}">
       <span>Sessão: ${formatTokens(lane.sessionTotalTokens)} tok</span>
     </span>
+    ${
+      turnCost > 0 || sessCost > 0
+        ? `<span class="tok-pill cost-pill" title="${escapeHtml(costTitle)}">USD: ${formatMicroUsd(turnCost)}${sessCost > turnCost ? ` · ses ${formatMicroUsd(sessCost)}` : ""}</span>`
+        : ""
+    }
     ${maxTok > 0 ? `<span class="tok-pill ${warnBudget ? "warn" : ""}" title="Limite configurado em .hivemind/team.yaml">Limite: ${formatTokens(lane.turnTotalTokens)}/${formatTokens(maxTok)}</span>` : ""}
+    ${isPty ? `<span class="tok-pill dim" title="HIVEMIND_SESSION_ID compartilhado">PTY: ${escapeHtml(lane.sessionId || lane.id)}</span>` : ""}
     <div class="spacer"></div>
+    <div class="lane-mode-seg" role="group" aria-label="Visão da lane">
+      <button type="button" class="lane-mode-btn ${!isPty ? "active" : ""}" id="btn-lane-mode-chat" title="Conversa dos agentes">${icons.sparkle}<span>Chat</span></button>
+      <button type="button" class="lane-mode-btn ${isPty ? "active" : ""}" id="btn-lane-mode-pty" title="Terminal PTY compartilhado">${icons.terminal}<span>Terminal</span></button>
+    </div>
     <button class="ghost mini" id="btn-open-sessions-bar" style="padding:1px 6px;font-size:11px" title="Ver todas as sessões salvas e total do projeto">Histórico</button>
   `;
+  bar.querySelector("#btn-lane-mode-chat")?.addEventListener("click", () => {
+    if (lane.viewMode !== "chat") {
+      lane.viewMode = "chat";
+      renderRightPane();
+    }
+  });
+  bar.querySelector("#btn-lane-mode-pty")?.addEventListener("click", () => {
+    if (lane.viewMode !== "pty") {
+      lane.viewMode = "pty";
+      renderRightPane();
+    }
+  });
   bar.querySelector("#btn-open-sessions-bar")?.addEventListener("click", () => {
     openSidebarView("sessions");
     refreshSessions();
@@ -818,7 +969,39 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   });
 }
 
+function syncMessagesContainer(box: HTMLElement, lane: TeamLane) {
+  if (lane.messages.length > 0) {
+    box.querySelector(".chat-empty-state")?.remove();
+  }
+  for (const m of lane.messages) {
+    const existing = box.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(m.id)}"]`);
+    if (existing) {
+      updateMessageElement(existing, m);
+    } else {
+      box.appendChild(createMessageElement(m));
+    }
+  }
+}
+
 export function rebuildChatMessagesFull() {
+  const splitBoxes = document.querySelectorAll<HTMLElement>("[data-split-lane-id]");
+  if (splitBoxes.length > 0) {
+    splitBoxes.forEach((sb) => {
+      const targetLane = state.lanes.find((l) => l.id === sb.dataset.splitLaneId);
+      if (!targetLane) return;
+      sb.innerHTML = "";
+      if (targetLane.messages.length === 0) {
+        sb.innerHTML = `<div class="chat-empty-state dim" style="padding:18px">Aguardando mensagens desta lane…</div>`;
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const m of targetLane.messages) {
+        frag.appendChild(createMessageElement(m));
+      }
+      sb.appendChild(frag);
+    });
+  }
+
   const box = document.getElementById("chat-messages");
   const lane = activeLane();
   if (!box || !lane) return;
@@ -872,20 +1055,19 @@ export function scheduleChatFlush() {
 }
 
 export function flushChatUpdates() {
+  const splitBoxes = document.querySelectorAll<HTMLElement>("[data-split-lane-id]");
+  if (splitBoxes.length > 0) {
+    splitBoxes.forEach((sb) => {
+      const targetLane = state.lanes.find((l) => l.id === sb.dataset.splitLaneId);
+      if (targetLane) syncMessagesContainer(sb, targetLane);
+    });
+  }
   const box = document.getElementById("chat-messages");
   const lane = activeLane();
-  if (!box || !lane) return;
-
-  if (lane.messages.length > 0) {
-    box.querySelector(".chat-empty-state")?.remove();
-  }
-  for (const m of lane.messages) {
-    const existing = box.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(m.id)}"]`);
-    if (existing) {
-      updateMessageElement(existing, m);
-    } else {
-      box.appendChild(createMessageElement(m));
-    }
+  if (box && lane) {
+    syncMessagesContainer(box, lane);
+  } else if (splitBoxes.length === 0) {
+    return;
   }
   renderLaneBarOnly();
   renderPipelineBar();
@@ -1106,6 +1288,26 @@ export function bindRightStaticEvents() {
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
   });
 
+  document.getElementById("btn-toggle-split-lanes")?.addEventListener("click", () => {
+    const lane = activeLane();
+    if (state.splitLaneIds.length < 2 && state.lanes.length < 2) {
+      const teams = state.project?.teamConfig?.teams || [];
+      const nextTeam = teams.find((t) => t.name !== lane?.teamName)?.name || lane?.teamName || "principal";
+      state.lanes.push(createLane(nextTeam));
+    }
+    state.splitLaneIds = toggleSplitLanes(state.lanes, state.activeLaneId, state.splitLaneIds);
+    renderRightPane();
+    updateStatusBar();
+  });
+
+  document.getElementById("btn-design-mode")?.addEventListener("click", () => {
+    state.designMode.open = !state.designMode.open;
+    refreshDesignModeUI();
+    if (state.designMode.open) {
+      void loadDesignModePages(refreshDesignModeUI);
+    }
+  });
+
   document.getElementById("btn-new-session")?.addEventListener("click", () => {
     const lane = activeLane();
     if (!lane || lane.running) return;
@@ -1116,6 +1318,9 @@ export function bindRightStaticEvents() {
     lane.sessionInTokens = 0;
     lane.sessionOutTokens = 0;
     lane.sessionTotalTokens = 0;
+    lane.turnCostMicroUsd = 0;
+    lane.sessionCostMicroUsd = 0;
+    lane.costByRole = {};
     lane.agents = buildAgentRuntimes(lane.teamName);
     lane.messages = [];
     rebuildChatMessagesFull();
@@ -1254,10 +1459,17 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   const backend = api();
   if (!lane || !backend || !state.project) return;
   const isOverride = typeof overrideText === "string";
-  const text = (isOverride ? overrideText : state.draftObjective).trim();
+  const rawText = (isOverride ? overrideText : state.draftObjective).trim();
+  const dmSel = !isOverride ? state.designMode.selected : null;
+  const dmContext = dmSel ? formatDesignModeContext(dmSel) : "";
+  const text = dmContext ? (rawText ? `${dmContext}\n\n${rawText}` : dmContext) : rawText;
   const attached = isOverride ? [] : [...state.draftImages];
   const effectiveMode = overrideMode || state.runMode;
   if (!text && attached.length === 0) return;
+  if (!isOverride && dmSel) {
+    state.designMode.selected = null;
+    refreshDesignModeUI();
+  }
 
   if (lane.id === "lane-autoreview") {
     state.gitTab = "flow";
@@ -1334,6 +1546,8 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   lane.turnInTokens = 0;
   lane.turnOutTokens = 0;
   lane.turnTotalTokens = 0;
+  lane.turnCostMicroUsd = 0;
+  lane.costByRole = {};
   lane.agents.forEach((a) => {
     a.status = "idle";
     a.tool = "";

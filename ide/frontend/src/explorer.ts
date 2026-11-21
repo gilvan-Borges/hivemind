@@ -630,6 +630,8 @@ export function bindSessionsSidebarEvents() {
         lane.turnInTokens = 0;
         lane.turnOutTokens = 0;
         lane.turnTotalTokens = 0;
+        lane.turnCostMicroUsd = 0;
+        lane.costByRole = {};
         lane.sessionInTokens = Number(detail.inputTokens || 0);
         lane.sessionOutTokens = Number(detail.outputTokens || 0);
         lane.sessionTotalTokens = Number(detail.totalTokens || 0);

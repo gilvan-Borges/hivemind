@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime, RunMode } from "./types";
-import { chipForAgent, cursorToolPhrase, describeModelRoute, escapeHtml, exactTokens, formatElapsedDuration, formatTokens, reasonPhrase, runModeLabel, shouldExpandChat, splitAssistantBlocks, updateAgentRuntimeStatus } from "./utils";
+import { chipForAgent, cursorToolPhrase, describeModelRoute, escapeHtml, exactTokens, formatElapsedDuration, formatMicroUsd, formatTokens, reasonPhrase, runModeLabel, shouldExpandChat, splitAssistantBlocks, updateAgentRuntimeStatus } from "./utils";
 
 describe("reasonPhrase", () => {
   it("traduz os códigos de motivo do Jev", () => {
@@ -50,6 +50,16 @@ describe("runModeLabel", () => {
     // O branch default do switch é inacessível pelo tipo: o teste valida o
     // comportamento defensivo em runtime.
     expect(runModeLabel("modo-inexistente" as unknown as RunMode)).toContain("Triagem");
+  });
+});
+
+describe("formatMicroUsd", () => {
+  it("formata custos em microUSD com precisão adequada", () => {
+    expect(formatMicroUsd(0)).toBe("$0.00");
+    expect(formatMicroUsd(-5)).toBe("$0.00");
+    expect(formatMicroUsd(500)).toBe("$0.0005");
+    expect(formatMicroUsd(12345)).toBe("$0.0123");
+    expect(formatMicroUsd(1_250_000)).toBe("$1.25");
   });
 });
 
@@ -155,5 +165,11 @@ describe("shouldExpandChat", () => {
     expect(shouldExpandChat(true, 0)).toBe(true);
     expect(shouldExpandChat(true, 1)).toBe(false);
     expect(shouldExpandChat(false, 0)).toBe(false);
+  });
+});
+
+describe("runModeLabel", () => {
+  it("inclui modo race", () => {
+    expect(runModeLabel("race")).toBe("Race (Candidatos)");
   });
 });

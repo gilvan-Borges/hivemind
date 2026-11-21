@@ -7,6 +7,7 @@ import { renderLeftSidebar } from "./explorer";
 import { openSidebarView, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, nextLaneSeq, setStatus, state, toast, toastError } from "./state";
 import { buildDraftFromProject, updateMissionBoardIfOpen } from "./teamconfig";
+import { disposeLanePTY } from "./terminal";
 
 export function buildAgentRuntimes(teamName: string): AgentRuntime[] {
   const teams = state.project?.teamConfig?.teams || [];
@@ -21,6 +22,7 @@ export function buildAgentRuntimes(teamName: string): AgentRuntime[] {
     outTokens: 0,
     tokens: 0,
     calls: 0,
+    costMicroUsd: 0,
   }));
 }
 
@@ -40,6 +42,10 @@ export function createLane(teamName: string): TeamLane {
     sessionInTokens: 0,
     sessionOutTokens: 0,
     sessionTotalTokens: 0,
+    turnCostMicroUsd: 0,
+    sessionCostMicroUsd: 0,
+    costByRole: {},
+    viewMode: "chat",
     agents: buildAgentRuntimes(teamName),
     messages: [],
   };
@@ -53,6 +59,34 @@ export function laneDisplayName(lane?: TeamLane | null): string {
 
 export function activeLane(): TeamLane | undefined {
   return state.lanes.find((l) => l.id === state.activeLaneId) ?? state.lanes[0];
+}
+
+export function toggleSplitLanes(lanes: TeamLane[], activeId: string, currentSplit: string[]): string[] {
+  const validCurrent = getVisibleSplitLanes(lanes, currentSplit);
+  if (validCurrent.length >= 2) {
+    return [];
+  }
+  if (lanes.length < 2) {
+    return [];
+  }
+  const primary = lanes.find((l) => l.id === activeId) ?? lanes[0];
+  const secondary = lanes.find((l) => l.id !== primary.id);
+  if (!secondary) return [];
+  return [primary.id, secondary.id];
+}
+
+export function getVisibleSplitLanes(lanes: TeamLane[], splitIds: string[]): TeamLane[] {
+  if (!Array.isArray(splitIds) || splitIds.length < 2) return [];
+  const byId = new Map(lanes.map((l) => [l.id, l]));
+  const result: TeamLane[] = [];
+  for (const id of splitIds) {
+    const lane = byId.get(id);
+    if (lane && !result.some((x) => x.id === lane.id)) {
+      result.push(lane);
+    }
+    if (result.length >= 2) break;
+  }
+  return result.length >= 2 ? result : [];
 }
 
 let editingLaneId: string | null = null;
@@ -266,6 +300,8 @@ export function confirmCloseParallelLane(laneId: string) {
         // Ignore if already finished
       }
       target.running = false;
+      disposeLanePTY(laneId);
+      state.splitLaneIds = state.splitLaneIds.filter((id) => id !== laneId);
       if (state.lanes.length > 1) {
         const idx = state.lanes.findIndex((l) => l.id === laneId);
         state.lanes = state.lanes.filter((l) => l.id !== laneId);

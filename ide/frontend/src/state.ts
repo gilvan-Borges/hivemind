@@ -202,6 +202,18 @@ export const state = {
   githubUnreadCount: 0,
   githubLastSyncAt: "",
   gitTab: "changes" as GitSubTab,
+  worktrees: {
+    loading: false,
+    error: "",
+    loadedOnce: false,
+    list: [] as import("./types").WorktreeInfo[],
+    checkpoints: [] as import("./types").WorktreeCheckpoint[],
+    creating: false,
+    createError: "",
+    progress: null as null | { step: string; pct: number },
+    newAgent: "dev_1",
+    newBranch: "",
+  },
   skills: [] as SkillInfo[],
   mcpServers: [] as MCPServerInfo[],
   skillEditor: null as null | { mode: "create" | "edit"; name: string; body: string },
@@ -218,6 +230,17 @@ export const state = {
   imagePreviewUrl: "",
   jiraKeyInput: "",
   commitMsgInput: "",
+  splitLaneIds: [] as string[],
+  designMode: {
+    open: false,
+    loadingPages: false,
+    picking: false,
+    error: "",
+    pages: [] as import("./types").DesignModePage[],
+    pageIdx: -1,
+    selectorInput: "",
+    selected: null as import("./types").DesignModeElement | null,
+  },
   terminal: {
     open: false,
     running: false,
@@ -301,6 +324,7 @@ export function saveActiveToProjectContext() {
   ctx.activeEditorPath = state.activeEditorPath;
   ctx.lanes = state.lanes;
   ctx.activeLaneId = state.activeLaneId;
+  ctx.splitLaneIds = [...state.splitLaneIds];
   ctx.runMode = state.runMode;
   ctx.diffs = state.diffs;
   ctx.gitRepos = state.gitRepos;
@@ -339,6 +363,8 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.activeEditorPath = ctx.activeEditorPath;
   state.lanes = ctx.lanes;
   state.activeLaneId = ctx.activeLaneId;
+  state.splitLaneIds = Array.isArray(ctx.splitLaneIds) ? [...ctx.splitLaneIds] : [];
+  state.designMode.open = false;
   state.runMode = ctx.runMode;
   state.diffs = ctx.diffs;
   state.gitRepos = ctx.gitRepos ?? [];

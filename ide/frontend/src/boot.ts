@@ -1,6 +1,6 @@
 import type { AgentRuntime, ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext, TeamLane } from "./types";
-import { chipForAgent, describeModelRoute, exactTokens, matchAgentRuntime } from "./utils";
-import { renderRightPane, scheduleChatFlush } from "./chat";
+import { chipForAgent, describeModelRoute, exactTokens, formatMicroUsd, matchAgentRuntime } from "./utils";
+import { renderRightPane, renderTokenBar, scheduleChatFlush } from "./chat";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
 import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
@@ -119,12 +119,20 @@ export async function boot() {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);
       const totTok = Number(ev.tokens || inTok + outTok);
+      const costMicro = Number(ev.costMicroUsd || 0);
       lane.turnInTokens += inTok;
       lane.turnOutTokens += outTok;
       lane.turnTotalTokens += totTok;
       lane.sessionInTokens += inTok;
       lane.sessionOutTokens += outTok;
       lane.sessionTotalTokens += totTok;
+      lane.turnCostMicroUsd = (lane.turnCostMicroUsd || 0) + costMicro;
+      lane.sessionCostMicroUsd = (lane.sessionCostMicroUsd || 0) + costMicro;
+      if (costMicro > 0) {
+        const roleKey = String(ev.role || "Outro");
+        lane.costByRole = lane.costByRole || {};
+        lane.costByRole[roleKey] = (lane.costByRole[roleKey] || 0) + costMicro;
+      }
       targetSummary.projectInputTokens += inTok;
       targetSummary.projectOutputTokens += outTok;
       targetSummary.projectTotalTokens += totTok;
@@ -135,8 +143,12 @@ export async function boot() {
         ag.outTokens += outTok;
         ag.tokens += totTok;
         ag.calls += 1;
+        ag.costMicroUsd = (ag.costMicroUsd || 0) + costMicro;
       }
-      if (isActiveProject) updateStatusBar();
+      if (isActiveProject) {
+        updateStatusBar();
+        renderTokenBar();
+      }
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);
       markThinkingDone(lane);
@@ -362,7 +374,7 @@ export async function boot() {
       return;
     }
 
-    if (lane.id === activeLane()?.id) {
+    if (lane.id === activeLane()?.id || state.splitLaneIds.includes(lane.id)) {
       scheduleChatFlush();
       updateMissionBoardIfOpen();
     } else {
@@ -411,6 +423,18 @@ export async function boot() {
     const wsKey = normalizePathKey(payload?.workspace || "");
     if (!state.project || normalizePathKey(state.project.root) !== wsKey) return;
     appendGitProgress(String(payload?.label || ""), String(payload?.line || ""));
+  });
+
+  window.runtime?.EventsOn("hivemind:worktree-progress", (payload: any) => {
+    const wsKey = normalizePathKey(payload?.workspace || "");
+    if (!state.project || normalizePathKey(state.project.root) !== wsKey) return;
+    state.worktrees.progress = {
+      step: String(payload?.step || "processando"),
+      pct: Number(payload?.pct || 0),
+    };
+    if (state.sidebarView === "git" && state.gitTab === "worktrees") {
+      renderLeftSidebar();
+    }
   });
 
   window.runtime?.EventsOn("hivemind:pty-output", (payload: any) => {

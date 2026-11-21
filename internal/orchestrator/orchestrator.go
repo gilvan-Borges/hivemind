@@ -41,6 +41,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
+	"github.com/gilvan-Borges/HiveMind/internal/workerx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
@@ -61,6 +62,9 @@ type Event struct {
 	InputTokens       int32                    `json:"inputTokens,omitempty"`
 	OutputTokens      int32                    `json:"outputTokens,omitempty"`
 	Tokens            int32                    `json:"tokens,omitempty"`
+	CachedReadTokens  int32                    `json:"cachedReadTokens,omitempty"`
+	CostMicroUSD      int64                    `json:"costMicroUsd,omitempty"`
+	Role              string                   `json:"role,omitempty"`
 	Provider          string                   `json:"provider,omitempty"`
 	Model             string                   `json:"model,omitempty"`
 	FromProvider      string                   `json:"fromProvider,omitempty"`
@@ -101,7 +105,9 @@ type Runner struct {
 	Out                io.Writer
 	Err                io.Writer
 	Streaming          agent.StreamingMode
-	OnEvent            func(Event)
+	// ExternalWorkers registers CLI worker adapters (e.g. Cursor Worker Contract).
+	ExternalWorkers *workerx.AdapterRegistry
+	OnEvent         func(Event)
 	EnableTriage       bool
 	EnableClosingChief bool
 	// ReviewRoot optionally isolates read/test tools during auto-review onto an ephemeral PR worktree.
@@ -133,9 +139,15 @@ type Runner struct {
 	NativeSkills     []skillx.Skill
 	NativeSkillsRoot string
 	selectedNative   []skillx.Skill
+	Catalog          *jev.CatalogStore
+	RaceCandidateExec func(ctx context.Context, idx int, wtDir, objective string) (summary string, costMicroUSD int64, totalTokens int64, err error)
 	turnInputTokens  int64
 	turnOutputTokens int64
 	turnTotalTokens  int64
+	costMu           sync.Mutex
+	turnCostMicroUSD int64
+	agentCosts       map[string]*AgentCost
+	roleCosts        map[string]*RoleCost
 	qaLastStatus     string
 	qaStallCount     int
 	qaStallFired     bool
@@ -274,6 +286,9 @@ type Result struct {
 	InputTokens       int64            `json:"inputTokens"`
 	OutputTokens      int64            `json:"outputTokens"`
 	TotalTokens       int64            `json:"totalTokens"`
+	CostMicroUSD      int64            `json:"costMicroUsd,omitempty"`
+	CostByAgent       []AgentCost      `json:"costByAgent,omitempty"`
+	CostByRole        []RoleCost       `json:"costByRole,omitempty"`
 	// PendingQA reports that the run finished without an explicit QA approval, so
 	// no commit/push/PR was made on the delivery worktree (see finish).
 	PendingQA bool `json:"pendingQa,omitempty"`
@@ -402,6 +417,10 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	result.SessionID = sess.ID()
 	ctx = modelx.WithSessionID(ctx, sess.ID())
 
+	if raceCount, isRace := ParseRaceCount(runMode); isRace {
+		return r.runRace(ctx, req, sess, objective, key, raceCount)
+	}
+
 	mode := r.Streaming
 	if mode == "" {
 		mode = agent.StreamingModeSSE
@@ -433,9 +452,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	if useTriage {
 		delegated, summary, err := r.runTriageChief(ctx, sess, msg, key, mode, runMode)
-		result.InputTokens = r.turnInputTokens
-		result.OutputTokens = r.turnOutputTokens
-		result.TotalTokens = r.turnTotalTokens
+		r.populateUsageMetrics(&result)
 		if err != nil {
 			if r.OnEvent != nil {
 				r.OnEvent(Event{Kind: "error", Text: err.Error()})
@@ -467,6 +484,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 					InputTokens:  int32(r.turnInputTokens),
 					OutputTokens: int32(r.turnOutputTokens),
 					Tokens:       int32(r.turnTotalTokens),
+					CostMicroUSD: result.CostMicroUSD,
 				})
 			}
 			return result, nil
@@ -491,6 +509,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 					InputTokens:  int32(r.turnInputTokens),
 					OutputTokens: int32(r.turnOutputTokens),
 					Tokens:       int32(r.turnTotalTokens),
+					CostMicroUSD: result.CostMicroUSD,
 				})
 			}
 			return result, nil
@@ -498,6 +517,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		if (!delegated && runMode != "squad") || runMode == "direct" {
 			result.Summary = summary
 			fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
+			r.printUsageSummary(result, r.Out, "")
 			if r.OnEvent != nil {
 				r.OnEvent(Event{
 					Kind:         "finish",
@@ -506,6 +526,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 					InputTokens:  int32(r.turnInputTokens),
 					OutputTokens: int32(r.turnOutputTokens),
 					Tokens:       int32(r.turnTotalTokens),
+					CostMicroUSD: result.CostMicroUSD,
 				})
 			}
 			return result, nil
@@ -537,9 +558,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
 	}) {
 		if err != nil {
-			result.InputTokens = r.turnInputTokens
-			result.OutputTokens = r.turnOutputTokens
-			result.TotalTokens = r.turnTotalTokens
+			r.populateUsageMetrics(&result)
 			r.printUsageSummary(result, r.Err, "uso até o erro: ")
 			if r.OnEvent != nil {
 				r.OnEvent(Event{Kind: "error", Text: err.Error()})
@@ -553,9 +572,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				r.emitEvent(ev, labels)
 			}
 			if guardErr := r.checkDevGuard(ev, labels); guardErr != nil {
-				result.InputTokens = r.turnInputTokens
-				result.OutputTokens = r.turnOutputTokens
-				result.TotalTokens = r.turnTotalTokens
+				r.populateUsageMetrics(&result)
 				r.printUsageSummary(result, r.Err, "uso até a interrupção: ")
 				if r.OnEvent != nil {
 					r.OnEvent(Event{Kind: "error", Text: guardErr.Error()})
@@ -564,9 +581,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			}
 			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
 				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
-				result.InputTokens = r.turnInputTokens
-				result.OutputTokens = r.turnOutputTokens
-				result.TotalTokens = r.turnTotalTokens
+				r.populateUsageMetrics(&result)
 				r.printUsageSummary(result, r.Err, "uso até parar: ")
 				if r.OnEvent != nil {
 					r.OnEvent(Event{Kind: "error", Text: budgetErr.Error()})
@@ -584,9 +599,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		}
 	}
 
-	result.InputTokens = r.turnInputTokens
-	result.OutputTokens = r.turnOutputTokens
-	result.TotalTokens = r.turnTotalTokens
+	r.populateUsageMetrics(&result)
 
 	if err := r.finish(ctx, sess, &result, devs, key, objective); err != nil {
 		if r.OnEvent != nil {
@@ -611,6 +624,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			InputTokens:  int32(r.turnInputTokens),
 			OutputTokens: int32(r.turnOutputTokens),
 			Tokens:       int32(r.turnTotalTokens),
+			CostMicroUSD: result.CostMicroUSD,
 		})
 	}
 	return result, nil
@@ -745,6 +759,16 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 		} else {
 			r.nestedWorktrees = nested
 		}
+		if hydRep, hErr := gitx.HydrateWorktree(r.Workspace, delivWT, r.Project.Settings.SharedDirectories); hErr != nil {
+			fmt.Fprintf(r.Err, "aviso: hidratação de worktree: %v\n", hErr)
+		} else {
+			for _, w := range hydRep.Shared.Warnings {
+				fmt.Fprintf(r.Out, "aviso: %s\n", w)
+			}
+			for _, b := range hydRep.Includes.Blocked {
+				fmt.Fprintf(r.Err, "aviso: .worktreeinclude bloqueou %s\n", b)
+			}
+		}
 	} else {
 		r.deliveryRoot = r.Workspace
 		for _, nr := range gitx.DiscoverNestedRepos(ctx, r.Git, r.Workspace) {
@@ -762,7 +786,7 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 	//    conversation worktree with deterministic tool-layer ownership enforcement and TeamBoard.
 	//  - 2+ devs without disjoint owned_paths and parallel: keep isolated fallback dev_* worktrees.
 	disjointOwned := DisjointOwnedPaths(r.devOwnedPaths, len(agents))
-	shareConversationWT := !repo || len(agents) <= 1 || r.devSequential || disjointOwned
+	shareConversationWT := (!repo || len(agents) <= 1 || r.devSequential || disjointOwned) && !r.hasExternalWorkers(agents)
 	r.sharedDevWorktree = shareConversationWT
 
 	if r.sharedBoard == nil {
@@ -791,10 +815,21 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 				return nil, fmt.Errorf("worktree de %s: %w", a.Name, err)
 			}
 			root = wt
+			if _, hErr := gitx.HydrateWorktree(r.Workspace, wt, r.Project.Settings.SharedDirectories); hErr != nil {
+				fmt.Fprintf(r.Err, "aviso: hidratação da worktree de %s: %v\n", a.Name, hErr)
+			}
+			if cp, cpErr := gitx.CreateCheckpoint(ctx, r.Git, wt, key+"-"+adkName, "antes do dev "+a.Name); cpErr == nil && r.OnEvent != nil {
+				r.OnEvent(Event{Kind: "checkpoint_created", Stage: "dev", Author: a.Name, Detail: cp.ID})
+			}
 			if aligned, aErr := gitx.AlignNestedWorktrees(ctx, r.Git, wt, branch, r.nestedWorktrees); aErr == nil {
 				devNested = aligned
 			}
 		} else {
+			if idx == 0 && repo && r.deliveryRoot != "" {
+				if cp, cpErr := gitx.CreateCheckpoint(ctx, r.Git, r.deliveryRoot, key+"-shared", "antes do turno"); cpErr == nil && r.OnEvent != nil {
+					r.OnEvent(Event{Kind: "checkpoint_created", Stage: "dev", Author: a.Name, Detail: cp.ID})
+				}
+			}
 			devNested = r.nestedWorktrees
 		}
 		envs = append(envs, devEnv{Agent: a, ADK: adkName, Root: root, Branch: branch, OwnedPaths: owned, Nested: devNested})
@@ -911,7 +946,19 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		if devSkillGuide != "" {
 			extra += devSkillGuide
 		}
-		ag, err := r.llmCore(ctx, dev.Agent, name, report, dev.Root, extra, key, devStateKeys, false, true, dev.OwnedPaths)
+		var (
+			ag  agent.Agent
+			err error
+		)
+		if adapter, extOK := r.externalAdapterFor(dev.Agent); extOK {
+			sliceText := ""
+			if idx < len(r.devSlices) {
+				sliceText = r.devSlices[idx]
+			}
+			ag, err = r.externalWorkerAgent(dev, name, report, sliceText, adapter)
+		} else {
+			ag, err = r.llmCore(ctx, dev.Agent, name, report, dev.Root, extra, key, devStateKeys, false, true, dev.OwnedPaths)
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2048,10 +2095,18 @@ func (r *Runner) printUsageSummary(result Result, w io.Writer, prefix string) {
 // usageSummaryLine formats the per-run token usage printed by the CLI at the
 // end of a run (dogfooding achado #8: cost was invisible outside the IDE).
 func usageSummaryLine(result Result) string {
-	if result.TotalTokens <= 0 {
+	if result.TotalTokens <= 0 && result.CostMicroUSD <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("Tokens: ↑%d entrada · ↓%d saída · %d total", result.InputTokens, result.OutputTokens, result.TotalTokens)
+	base := fmt.Sprintf("Tokens: ↑%d entrada · ↓%d saída · %d total", result.InputTokens, result.OutputTokens, result.TotalTokens)
+	if result.CostMicroUSD <= 0 {
+		return base
+	}
+	line := base + " · Custo: " + jev.FormatMicroUSD(result.CostMicroUSD)
+	if breakdown := formatRoleCostBreakdown(result.CostByRole); breakdown != "" {
+		line += " (" + breakdown + ")"
+	}
+	return line
 }
 
 func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
@@ -2072,33 +2127,41 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	r.turnOutputTokens += int64(outTok)
 	r.turnTotalTokens += int64(totTok)
 
-	// Ledger central (Spec 06 §4): o ORQUESTRADOR registra o uso — CLI, TUI e
-	// IDE contam igual, com tokens de cache e desconto da rota.
+	label := labels[ev.Author]
+	if label == "" {
+		label = ev.Author
+	}
+
 	prov, mod := r.resolveAuthorRoute(ev.Author)
+	r.resolvedChoiceMu.Lock()
+	disc := r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))]
+	r.resolvedChoiceMu.Unlock()
+	var cachedRead int64
+	if u.CachedContentTokenCount > 0 {
+		cachedRead = int64(u.CachedContentTokenCount)
+	}
+	costMicro, costRole := r.recordCallCost(ev.Author, label, prov, mod, int64(inTok), int64(outTok), cachedRead, disc)
+
+	// Ledger central (Spec 06 §4): o ORQUESTRADOR registra o uso — CLI, TUI e
+	// IDE contam igual, com tokens de cache, desconto da rota e custo USD.
 	if prov != "" {
-		r.resolvedChoiceMu.Lock()
-		disc := r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))]
-		r.resolvedChoiceMu.Unlock()
-		var cachedRead int64
-		if u.CachedContentTokenCount > 0 {
-			cachedRead = int64(u.CachedContentTokenCount)
-		}
-		modelx.RecordAIUsageDetailed(prov, mod, int64(inTok), int64(outTok), int64(totTok), cachedRead, 0, disc)
+		modelx.RecordAIUsageDetailedWithMeta(prov, mod, int64(inTok), int64(outTok), int64(totTok), cachedRead, 0, disc, costMicro, ev.Author, costRole)
 	}
 
 	if r.OnEvent != nil {
-		label := labels[ev.Author]
-		if label == "" {
-			label = ev.Author
-		}
 		r.OnEvent(Event{
-			Kind:         "usage",
-			Stage:        inferStage(ev.Author, label),
-			Author:       ev.Author,
-			Label:        label,
-			InputTokens:  inTok,
-			OutputTokens: outTok,
-			Tokens:       totTok,
+			Kind:             "usage",
+			Stage:            inferStage(ev.Author, label),
+			Author:           ev.Author,
+			Label:            label,
+			Role:             costRole,
+			Provider:         prov,
+			Model:            mod,
+			InputTokens:      inTok,
+			OutputTokens:     outTok,
+			Tokens:           totTok,
+			CachedReadTokens: int32(cachedRead),
+			CostMicroUSD:     costMicro,
 		})
 	}
 }

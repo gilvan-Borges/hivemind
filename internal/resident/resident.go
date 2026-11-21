@@ -97,6 +97,11 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		ws = SanitizeWorkstream(r.Config.Workstream)
 	}
 	req.Workstream = ws
+	if strings.TrimSpace(req.Soul) == "" {
+		if soul, sErr := LoadSoul(baseDir); sErr == nil {
+			req.Soul = soul
+		}
+	}
 
 	mem := r.Memory
 	if mem == nil {

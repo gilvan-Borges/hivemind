@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import type { AgyAccountQuota, AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
-import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
+import { escapeHtml, formatMicroUsd, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
@@ -2519,6 +2519,77 @@ function renderAIUsageCardsHtml(rep: AIUsageReport | null, loading: boolean): st
   return cards.join("");
 }
 
+function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
+  if (!rep) return "";
+  const roles = Array.isArray(rep.costByRole) ? rep.costByRole : [];
+  const agents = Array.isArray(rep.costByAgent) ? rep.costByAgent : [];
+  const hasAny =
+    Number(rep.costSummary5hMicroUsd || 0) > 0 ||
+    Number(rep.costSummaryWeeklyMicroUsd || 0) > 0 ||
+    Number(rep.costSummaryMonthlyMicroUsd || 0) > 0 ||
+    roles.length > 0 ||
+    agents.length > 0;
+  if (!hasAny) {
+    return `
+      <div class="aiu-card">
+        <div class="aiu-card-head">
+          <div class="aiu-card-title">${icons.tokens} <strong>Custo USD Acumulado</strong></div>
+        </div>
+        <div class="dim" style="font-size:11.5px">Nenhum gasto pago registrado ainda nos últimos 30 dias (modelos gratuitos/assinatura contam apenas tokens).</div>
+      </div>
+    `;
+  }
+  const roleChips = roles
+    .map((r) => `<span class="aiu-cost-chip"><span>${escapeHtml(r.role)}</span><strong>${formatMicroUsd(r.costMicroUsd)}</strong><span class="dim">${formatTokens(r.totalTokens)} tok</span></span>`)
+    .join("");
+  const agentRows = agents
+    .slice(0, 10)
+    .map(
+      (a) => `
+        <tr>
+          <td>${escapeHtml(a.agent)}</td>
+          <td>${escapeHtml(a.role || "-")}</td>
+          <td class="dim">${escapeHtml(a.provider || "-")}${a.model ? ` / ${escapeHtml(a.model)}` : ""}</td>
+          <td>${a.calls}</td>
+          <td>${formatTokens(a.totalTokens)}</td>
+          <td><strong>${formatMicroUsd(a.costMicroUsd)}</strong></td>
+        </tr>
+      `
+    )
+    .join("");
+  return `
+    <div class="aiu-card">
+      <div class="aiu-card-head">
+        <div class="aiu-card-title">${icons.tokens} <strong>Custo USD Acumulado</strong></div>
+        <span class="dim" style="font-size:11px">Catálogo Jev com cache-read (10%)</span>
+      </div>
+      <div class="aiu-cost-grid">
+        <div class="aiu-cost-stat">
+          <div class="aiu-cost-stat-label">Janela 5h</div>
+          <div class="aiu-cost-stat-val">${formatMicroUsd(rep.costSummary5hMicroUsd)}</div>
+        </div>
+        <div class="aiu-cost-stat">
+          <div class="aiu-cost-stat-label">Últimos 7 dias</div>
+          <div class="aiu-cost-stat-val">${formatMicroUsd(rep.costSummaryWeeklyMicroUsd)}</div>
+        </div>
+        <div class="aiu-cost-stat">
+          <div class="aiu-cost-stat-label">Últimos 30 dias</div>
+          <div class="aiu-cost-stat-val">${formatMicroUsd(rep.costSummaryMonthlyMicroUsd)}</div>
+        </div>
+      </div>
+      ${roleChips ? `<div class="aiu-cost-chips">${roleChips}</div>` : ""}
+      ${
+        agentRows
+          ? `<table class="aiu-cost-table">
+              <thead><tr><th>Agente</th><th>Papel</th><th>Modelo</th><th>Chamadas</th><th>Tokens</th><th>Custo USD</th></tr></thead>
+              <tbody>${agentRows}</tbody>
+            </table>`
+          : ""
+      }
+    </div>
+  `;
+}
+
 export function renderAIUsagePageHtml(): string {
   const m = state.aiUsagePage;
   const rep = m.report;
@@ -2543,6 +2614,7 @@ export function renderAIUsagePageHtml(): string {
       <div class="aiu-cards-wrap">
         ${renderJevPolicyEditorHtml(jevPolicyDraft)}
         ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
+        ${renderCostBreakdownCardHtml(rep)}
         ${renderAIUsageCardsHtml(rep, m.loading)}
       </div>
 

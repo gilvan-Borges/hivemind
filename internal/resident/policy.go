@@ -246,7 +246,7 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 	}
 
 	switch call.Origin {
-	case OriginLocal, OriginRemote, OriginRoutine, OriginSubagent:
+	case OriginLocal, OriginRemote, OriginRoutine, OriginSubagent, OriginWebhook, OriginSlack:
 	default:
 		return Decision{
 			Allow:  false,

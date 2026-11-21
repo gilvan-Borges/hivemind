@@ -66,6 +66,11 @@ func normTermID(termID, workspace string) string {
 // Start ensures a live interactive PTY exists for termID in workspace, returning
 // any buffered scrollback if the session was already running.
 func (m *PTYManager) Start(termID, workspace string, cols, rows int) (string, error) {
+	return m.StartWithEnv(termID, workspace, cols, rows, nil)
+}
+
+// StartWithEnv starts (or resumes) an interactive PTY for termID with optional extra env vars.
+func (m *PTYManager) StartWithEnv(termID, workspace string, cols, rows int, extraEnv map[string]string) (string, error) {
 	key := normTermID(termID, workspace)
 	if key == "" {
 		return "", fmt.Errorf("workspace inválido para PTY")
@@ -80,7 +85,7 @@ func (m *PTYManager) Start(termID, workspace string, cols, rows int) (string, er
 	}
 	m.mu.Unlock()
 
-	sess, err := startNativePTY(workspace, cols, rows)
+	sess, err := startNativePTYWithEnv(workspace, cols, rows, extraEnv)
 	if err != nil {
 		return "", err
 	}
