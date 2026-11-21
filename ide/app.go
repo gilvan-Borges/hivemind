@@ -60,6 +60,7 @@ type App struct {
 	resident            *idecore.ResidentManager
 	healthMonitorCancel context.CancelFunc
 	desk                *notify.Hub
+	orb                 orbHostState
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -208,6 +209,7 @@ func (a *App) startup(ctx context.Context) {
 	if !a.smokeCheck {
 		a.startJevHealthMonitor(ctx)
 		a.startDesktopNotices()
+		a.startOrbHost()
 	}
 }
 
@@ -215,6 +217,7 @@ func (a *App) shutdown(_ context.Context) {
 	if a.desk != nil {
 		_ = a.desk.Close()
 	}
+	a.stopOrbHost()
 	if a.healthMonitorCancel != nil {
 		a.healthMonitorCancel()
 	}
@@ -284,11 +287,16 @@ func (a *App) ShowDesktopNotification(id, title, body string, sound bool) error 
 	return a.desk.Send(notify.Notice{ID: id, Title: title, Body: body, Sound: sound})
 }
 
-// WindowClose closes the IDE window.
+// WindowClose hides the IDE to background when the floating Orb is active,
+// or quits normally when the Orb is not running.
 func (a *App) WindowClose() {
-	if a.ctx != nil {
-		wailsrt.Quit(a.ctx)
+	if a.ctx == nil {
+		return
 	}
+	if a.beforeClose(a.ctx) {
+		return
+	}
+	wailsrt.Quit(a.ctx)
 }
 
 // WindowIsMaximized returns whether the window is currently maximized.
@@ -470,6 +478,7 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		}
 		a.githubMonitor.EnsureWatching(baseCtx, abs)
 	}
+	a.orbSetProject(proj.Name)
 	return proj, nil
 }
 

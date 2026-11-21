@@ -20,14 +20,32 @@ var assets embed.FS
 func main() {
 	smokeCheck := false
 	serveBridge := false
+	orbMode := false
+	orbAddr := ""
+	orbToken := ""
 	initialDir := ""
-	for _, arg := range os.Args[1:] {
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
 		if arg == "--smoke-check" {
 			smokeCheck = true
 			continue
 		}
 		if arg == "--serve-bridge" {
 			serveBridge = true
+			continue
+		}
+		if arg == "--orb" {
+			orbMode = true
+			continue
+		}
+		if arg == "--orb-addr" && i+1 < len(os.Args) {
+			i++
+			orbAddr = os.Args[i]
+			continue
+		}
+		if arg == "--orb-token" && i+1 < len(os.Args) {
+			i++
+			orbToken = os.Args[i]
 			continue
 		}
 		if initialDir == "" {
@@ -37,6 +55,13 @@ func main() {
 				}
 			}
 		}
+	}
+	if orbMode {
+		if err := runOrbWindow(orbAddr, orbToken); err != nil {
+			fmt.Fprintf(os.Stderr, "erro ao iniciar HiveMind Orb: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	if initialDir == "" {
 		if cwd, err := os.Getwd(); err == nil {
@@ -74,8 +99,9 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
+		OnStartup:     app.startup,
+		OnBeforeClose: app.beforeClose,
+		OnShutdown:    app.shutdown,
 		Bind: []any{
 			app,
 		},

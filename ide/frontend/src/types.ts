@@ -1171,6 +1171,21 @@ export interface WailsBackendApp {
   ResidentSetRoutineEnabled?(id: string, enabled: boolean): Promise<void>;
   ResidentDeleteRoutine?(id: string): Promise<void>;
   ResidentReviewSkill?(name: string): Promise<string>;
+  OrbShow?(): Promise<void>;
+  OrbRunning?(): Promise<boolean>;
+  OrbSetMood?(mood: string): Promise<void>;
+  OrbPushNotice?(
+    id: string,
+    title: string,
+    body: string,
+    mood: string,
+    surface: string,
+    projectId: string,
+    laneId: string,
+    messageId: string
+  ): Promise<void>;
+  OrbDismissNotice?(id: string): Promise<void>;
+  QuitAll?(): Promise<void>;
 }
 
 export interface ResidentRoutine {

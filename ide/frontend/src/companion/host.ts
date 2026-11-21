@@ -55,6 +55,7 @@ function openStored(id: string): void {
   const notice = stored.get(id);
   view?.dismiss(id);
   waitingFocus.delete(id);
+  void api()?.OrbDismissNotice?.(id);
   if (notice) openNoticeTarget(notice.target);
 }
 
@@ -110,6 +111,7 @@ export function noteActivity(signal: LaneSignal): void {
   if (!mood) return;
   if (mood === "thinking" || mood === "working") liveMood = mood;
   if (mood === "success" || mood === "error") liveMood = "idle";
+  void api()?.OrbSetMood?.(mood);
   if (!view.current()) view.setMood(mood, mood === "success" || mood === "error" || mood === "attention");
 }
 
@@ -124,6 +126,16 @@ function deliverDraft(draft: NoticeDraft, target: NoticeTarget): void {
     target,
   };
   remember(notice);
+  void api()?.OrbPushNotice?.(
+    notice.id,
+    draft.title,
+    draft.body,
+    draft.mood,
+    target.surface,
+    target.projectId,
+    target.laneId,
+    target.messageId
+  );
   const channel = channelFor({
     focused,
     companion: settings.enabled,

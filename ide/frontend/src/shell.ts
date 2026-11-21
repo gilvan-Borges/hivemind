@@ -784,6 +784,8 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-providers-pool">${icons.settings}<span>Provedores &amp; Contas (Pool)…</span></button>
     <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
     <button type="button" class="dropdown-item" id="menu-companion" aria-pressed="${loadSettings().enabled ? "true" : "false"}">${icons.sparkle}<span>${loadSettings().enabled ? "Companion ligado" : "Companion desligado"}</span></button>
+    <button type="button" class="dropdown-item" id="menu-orb-show">${icons.sparkle}<span>Mostrar Orb flutuante</span></button>
+    <button type="button" class="dropdown-item danger" id="menu-quit-all">${icons.closeSmall}<span>Sair completamente (IDE + Orb)</span></button>
     <div class="dim" style="padding:6px 10px 3px 10px;border-top:1px solid var(--border);margin-top:4px">Projetos Recentes (clique abre em Nova Aba)</div>
     ${state.recent.length === 0
       ? `<div class="dim" style="padding:6px 10px">Nenhum projeto recente</div>`
@@ -824,6 +826,16 @@ export function renderFileMenu() {
     toggleCompanionEnabled();
     state.showFileMenu = false;
     renderFileMenu();
+  });
+  menu.querySelector("#menu-orb-show")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    void api()?.OrbShow?.();
+  });
+  menu.querySelector("#menu-quit-all")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    void api()?.QuitAll?.();
   });
   menu.querySelectorAll("[data-recent]").forEach((el) => {
     el.addEventListener("click", () => openProjectPath((el as HTMLElement).dataset.recent!, true));
