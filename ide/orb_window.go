@@ -57,6 +57,7 @@ func (o *OrbApp) startup(ctx context.Context) {
 	o.positionBottomRight(orbCollapsedW, orbCollapsedH)
 	wailsrt.WindowSetAlwaysOnTop(o.ctx, true)
 	wailsrt.WindowShow(o.ctx)
+	go configureOrbNativeWindow("HiveMind Orb")
 	streamCtx, cancel := context.WithCancel(ctx)
 	o.mu.Lock()
 	o.cancel = cancel
@@ -294,9 +295,11 @@ func runOrbWindow(addr, token string) error {
 			orbApp,
 		},
 		Windows: &windows.Options{
-			WebviewIsTransparent: true,
-			WindowIsTranslucent:  false,
-			DisableWindowIcon:    true,
+			WebviewIsTransparent:              true,
+			WindowIsTranslucent:               true,
+			BackdropType:                      windows.None,
+			DisableWindowIcon:                 true,
+			DisableFramelessWindowDecorations: true,
 		},
 		Mac: &mac.Options{
 			WebviewIsTransparent: true,

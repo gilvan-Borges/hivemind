@@ -61,6 +61,7 @@ type App struct {
 	healthMonitorCancel context.CancelFunc
 	desk                *notify.Hub
 	orb                 orbHostState
+	tray                nativeTray
 }
 
 // AgyBootstrap carries the cached or freshly probed agy status and model list.
@@ -209,6 +210,7 @@ func (a *App) startup(ctx context.Context) {
 	if !a.smokeCheck {
 		a.startJevHealthMonitor(ctx)
 		a.startDesktopNotices()
+		a.startSystemTray()
 		a.startOrbHost()
 	}
 }
@@ -218,6 +220,7 @@ func (a *App) shutdown(_ context.Context) {
 		_ = a.desk.Close()
 	}
 	a.stopOrbHost()
+	a.stopSystemTray()
 	if a.healthMonitorCancel != nil {
 		a.healthMonitorCancel()
 	}

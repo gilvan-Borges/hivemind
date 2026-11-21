@@ -140,7 +140,10 @@ func (a *App) beforeClose(_ context.Context) bool {
 	running := a.orb.running
 	hub := a.orb.hub
 	a.orb.mu.Unlock()
-	if force || !running || a.ctx == nil {
+	if force || a.ctx == nil {
+		return false
+	}
+	if !running && !a.tray.isActive() {
 		return false
 	}
 	wailsrt.WindowHide(a.ctx)
