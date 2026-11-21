@@ -238,11 +238,6 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	if a.Bin == "" {
 		return nil, fmt.Errorf("não encontrei o comando agy no PATH. Instale o Google Antigravity CLI e entre com `agy`")
 	}
-	if a.ProfileID != "" {
-		if ok, _ := HasAgyVaultSession(a.ProfileID); ok {
-			_ = ActivateAgyProfileSession(a.ProfileID)
-		}
-	}
 	decls := toolDecls(req)
 	timeout := a.Timeout
 	if timeout <= 0 {
@@ -290,30 +285,41 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	defer os.Remove(schema)
 	args = append(args, "--json-schema", schema)
 
-	stdout, stderr, code, err := invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
-	if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
-		select {
-		case <-runCtx.Done():
-		case <-time.After(2 * time.Second):
-			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+	var (
+		stdout string
+		stderr string
+		code   int
+	)
+	leaseErr := WithAgyVaultLease(a.ProfileID, func() error {
+		stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+		if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
+			select {
+			case <-runCtx.Done():
+			case <-time.After(2 * time.Second):
+				stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+			}
 		}
-	}
-	// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
-	// envelope printed by agy carries "retryable":true (dogfooding achado #12) —
-	// back off and retry instead of killing the whole multi-agent run.
-	for attempt := 0; attempt < len(agyRetryDelays); attempt++ {
-		if runCtx.Err() != nil {
-			break
+		// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
+		// envelope printed by agy carries "retryable":true (dogfooding achado #12) —
+		// back off and retry instead of killing the whole multi-agent run.
+		for attempt := 0; attempt < len(agyRetryDelays); attempt++ {
+			if runCtx.Err() != nil {
+				break
+			}
+			transient := parseAgyError(stderr)
+			if transient == nil || !transient.Retryable {
+				break
+			}
+			select {
+			case <-runCtx.Done():
+			case <-time.After(agyRetryDelays[attempt]):
+				stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+			}
 		}
-		transient := parseAgyError(stderr)
-		if transient == nil || !transient.Retryable {
-			break
-		}
-		select {
-		case <-runCtx.Done():
-		case <-time.After(agyRetryDelays[attempt]):
-			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
-		}
+		return nil
+	})
+	if leaseErr != nil && err == nil {
+		err = leaseErr
 	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("agy excedeu o tempo (%s). Confira o login com `agy` ou aumente o contexto", formatAgyTimeout(timeout))

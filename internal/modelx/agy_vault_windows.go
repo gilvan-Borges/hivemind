@@ -249,14 +249,20 @@ func HasAgyVaultSession(profileID string) (bool, string) {
 	return true, ""
 }
 
-// SyncCurrentLiveAgyAccountToProfiles inspects the active Google account logged into `agy`
-// (via "gemini:antigravity" -> id_token_email), automatically registers or updates its
-// ProviderProfile identified by its email address, and backs up its OAuth session into
-// its isolated `%APPDATA%\HiveMind\agy-profiles\<id>\oauth-session.json` folder.
-func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
-	raw, email, err := ReadLiveAgyOAuthCredential()
-	if err != nil || len(raw) == 0 {
-		return nil, err
+// SaveAgyProfileSessionBlob persists an Antigravity Google OAuth session blob into its
+// isolated `%APPDATA%\HiveMind\agy-profiles\<id>\oauth-session.json` folder and registers or
+// updates the corresponding ProviderProfile in provider-profiles.json WITHOUT overwriting
+// Windows Credential Manager ("gemini:antigravity").
+func SaveAgyProfileSessionBlob(blob []byte, email string) (*ProviderProfile, error) {
+	if len(blob) == 0 {
+		return nil, fmt.Errorf("blob OAuth vazio")
+	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		var meta agyOAuthCredMeta
+		if json.Unmarshal(blob, &meta) == nil {
+			email = strings.TrimSpace(meta.IDTokenEmail)
+		}
 	}
 	if email == "" {
 		email = "conta-google-ativa"
@@ -291,7 +297,7 @@ func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
 	vaultPath, verr := AgyProfileVaultPath(profID)
 	if verr == nil && vaultPath != "" {
 		_ = os.MkdirAll(filepath.Dir(vaultPath), 0o700)
-		_ = writeSecretFile(vaultPath, raw)
+		_ = writeSecretFile(vaultPath, blob)
 	}
 
 	var resultProf ProviderProfile
@@ -322,6 +328,96 @@ func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
 	_ = saveProfilesLocked(doc)
 	profilesMu.Unlock()
 	return &resultProf, nil
+}
+
+// SyncCurrentLiveAgyAccountToProfiles inspects the active Google account logged into `agy`
+// (via "gemini:antigravity" -> id_token_email), automatically registers or updates its
+// ProviderProfile identified by its email address, and backs up its OAuth session into
+// its isolated `%APPDATA%\HiveMind\agy-profiles\<id>\oauth-session.json` folder.
+func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
+	raw, email, err := ReadLiveAgyOAuthCredential()
+	if err != nil || len(raw) == 0 {
+		return nil, err
+	}
+	return SaveAgyProfileSessionBlob(raw, email)
+}
+
+// AcquireAgyVaultGuard serializes temporary swaps of the Windows Credential Manager
+// "gemini:antigravity" slot across concurrent HiveMind goroutines.
+func AcquireAgyVaultGuard() func() {
+	agyVaultSwitchMu.Lock()
+	return func() { agyVaultSwitchMu.Unlock() }
+}
+
+// WithAgyVaultLease executes fn using profileID's isolated OAuth session while
+// protecting the user's active Antigravity account in Windows Credential Manager:
+//   - If profileID is empty/"__system__"/"__global__" or matches the account already active
+//     in "gemini:antigravity", fn runs directly without overwriting Credential Manager.
+//   - Otherwise, "gemini:antigravity" is temporarily leased under agyVaultSwitchMu, any
+//     refreshed token produced during fn is persisted back to profileID's isolated folder,
+//     and the user's original "gemini:antigravity" session is immediately restored on exit.
+func WithAgyVaultLease(profileID string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if runtime.GOOS != "windows" {
+		return fn()
+	}
+	pid := sanitizeSlug(profileID)
+	if pid == "" || pid == "__system__" || pid == "__global__" {
+		return fn()
+	}
+	vaultPath, err := AgyProfileVaultPath(pid)
+	if err != nil || vaultPath == "" {
+		return fn()
+	}
+	targetBlob, rerr := os.ReadFile(vaultPath)
+	if rerr != nil || len(targetBlob) == 0 {
+		return fn()
+	}
+	var targetMeta agyOAuthCredMeta
+	targetEmail := ""
+	if json.Unmarshal(targetBlob, &targetMeta) == nil {
+		targetEmail = strings.TrimSpace(targetMeta.IDTokenEmail)
+	}
+
+	agyVaultSwitchMu.Lock()
+	defer agyVaultSwitchMu.Unlock()
+
+	origRaw, origEmail, origErr := ReadLiveAgyOAuthCredential()
+	alreadyActive := origErr == nil && len(origRaw) > 0 && targetEmail != "" && strings.EqualFold(origEmail, targetEmail)
+	if alreadyActive {
+		// Still persist any refreshed token back into the vault after fn completes.
+		defer func() {
+			if curRaw, curEmail, cerr := ReadLiveAgyOAuthCredential(); cerr == nil && len(curRaw) > 0 {
+				if curEmail == "" || strings.EqualFold(curEmail, targetEmail) {
+					_ = writeSecretFile(vaultPath, curRaw)
+				}
+			}
+		}()
+		return fn()
+	}
+
+	// Backup the active Antigravity account into its own vault folder before leasing the slot.
+	if origErr == nil && len(origRaw) > 0 {
+		_, _ = SaveAgyProfileSessionBlob(origRaw, origEmail)
+	}
+
+	if werr := WriteLiveAgyOAuthCredential(targetBlob); werr != nil {
+		return werr
+	}
+	defer func() {
+		if curRaw, curEmail, cerr := ReadLiveAgyOAuthCredential(); cerr == nil && len(curRaw) > 0 {
+			if targetEmail == "" || strings.EqualFold(curEmail, targetEmail) {
+				_ = writeSecretFile(vaultPath, curRaw)
+			}
+		}
+		if origErr == nil && len(origRaw) > 0 {
+			_ = WriteLiveAgyOAuthCredential(origRaw)
+		}
+	}()
+
+	return fn()
 }
 
 // ActivateAgyProfileSession switches the active Antigravity Google OAuth session
@@ -617,10 +713,11 @@ func completeAgyOAuthCodeExchange(code, redirectURI, verifier string) (string, e
 	for _, cand := range candidates {
 		blob, email, err := exchangeAgyCodeWithCandidate(code, cand)
 		if err == nil && len(blob) > 0 {
-			if werr := WriteLiveAgyOAuthCredential(blob); werr != nil {
-				return "", werr
+			// Save strictly to the isolated HiveMind vault folder (`agy-profiles/<id>/oauth-session.json`)
+			// WITHOUT overwriting the user's active Antigravity account in Windows Credential Manager.
+			if _, serr := SaveAgyProfileSessionBlob(blob, email); serr != nil {
+				return "", serr
 			}
-			_, _ = SyncCurrentLiveAgyAccountToProfiles()
 			return email, nil
 		}
 		lastErr = err

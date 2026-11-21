@@ -723,7 +723,7 @@ func listAgyProfilesForUsage() []ProviderProfileSummary {
 }
 
 // fetchAllAgyAccountQuotas queries /usage for every Antigravity pool account.
-// It temporarily switches the live OAuth slot per vault and restores the previous session.
+// It serializes temporary slot swaps and always restores the user's active Antigravity session.
 func fetchAllAgyAccountQuotas(ctx context.Context) []AgyAccountQuota {
 	profiles := listAgyProfilesUsageFn()
 	if len(profiles) == 0 {
@@ -738,7 +738,10 @@ func fetchAllAgyAccountQuotas(ctx context.Context) []AgyAccountQuota {
 		}}
 	}
 
-	prevRaw, _, _ := readLiveAgyCredFn()
+	unlock := AcquireAgyVaultGuard()
+	defer unlock()
+
+	prevRaw, prevEmail, _ := readLiveAgyCredFn()
 	defer func() {
 		if len(prevRaw) > 0 {
 			_ = writeLiveAgyCredFn(prevRaw)
@@ -758,10 +761,12 @@ func fetchAllAgyAccountQuotas(ctx context.Context) []AgyAccountQuota {
 			email = strings.TrimSpace(em)
 		}
 		acc := AgyAccountQuota{ProfileID: p.ID, Name: name, Email: email}
-		if err := activateAgyProfileFn(p.ID); err != nil {
-			acc.Quota = AgyQuota{Available: false, Detail: err.Error()}
-			out = append(out, acc)
-			continue
+		if prevEmail == "" || email == "" || !strings.EqualFold(prevEmail, email) {
+			if err := activateAgyProfileFn(p.ID); err != nil {
+				acc.Quota = AgyQuota{Available: false, Detail: err.Error()}
+				out = append(out, acc)
+				continue
+			}
 		}
 		acc.Quota = fetchAgyUsageFn(ctx)
 		out = append(out, acc)

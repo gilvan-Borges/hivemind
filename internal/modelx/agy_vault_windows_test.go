@@ -154,4 +154,26 @@ func TestAgyOAuthLoopbackAndManualCodeExchangeEndToEnd(t *testing.T) {
 	if countAfterPaste != 3 {
 		t.Fatalf("expected 3 isolated AGY Google accounts after manual paste, got %d", countAfterPaste)
 	}
+
+	// 4. Live Windows Credential Manager ("gemini:antigravity") MUST still belong to Conta #1!
+	_, liveEmailAfterAdd, lerr := ReadLiveAgyOAuthCredential()
+	if lerr != nil || liveEmailAfterAdd != "conta1@empresa.com.br" {
+		t.Fatalf("adding new HiveMind accounts must not switch Antigravity live account; got %q (err=%v)", liveEmailAfterAdd, lerr)
+	}
+
+	// 5. WithAgyVaultLease switches temporarily inside fn and restores Conta #1 right after.
+	var emailInsideLease string
+	if err := WithAgyVaultLease("agy-conta2-particular-com-br", func() error {
+		_, emailInsideLease, _ = ReadLiveAgyOAuthCredential()
+		return nil
+	}); err != nil {
+		t.Fatalf("WithAgyVaultLease failed: %v", err)
+	}
+	if emailInsideLease != "conta2@particular.com.br" {
+		t.Fatalf("expected Conta #2 inside lease, got %q", emailInsideLease)
+	}
+	_, emailAfterLease, _ := ReadLiveAgyOAuthCredential()
+	if emailAfterLease != "conta1@empresa.com.br" {
+		t.Fatalf("expected Conta #1 restored after lease exit, got %q", emailAfterLease)
+	}
 }

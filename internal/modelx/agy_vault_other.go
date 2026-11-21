@@ -24,6 +24,21 @@ func HasAgyVaultSession(profileID string) (bool, string) {
 	return false, ""
 }
 
+func SaveAgyProfileSessionBlob(blob []byte, email string) (*ProviderProfile, error) {
+	return nil, fmt.Errorf("vault OAuth do agy disponível apenas no Windows")
+}
+
+func AcquireAgyVaultGuard() func() {
+	return func() {}
+}
+
+func WithAgyVaultLease(profileID string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
 func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
 	return nil, nil
 }

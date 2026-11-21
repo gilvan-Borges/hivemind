@@ -431,7 +431,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}
 				if healthStore != nil {
-					healthStore.RecordFailure(choice.Provider, choice.Model, buildClass, time.Time{})
+					healthStore.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
 				}
 				if attempt == 0 {
 					firstChoice = choice

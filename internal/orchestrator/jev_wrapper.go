@@ -91,7 +91,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		if w.health != nil {
-			w.health.RecordFailure(curChoice.Provider, curChoice.Model, errClass, time.Time{})
+			w.health.RecordFailure(curChoice.Provider, curChoice.Model, scopeJevFailureClass(ctx, curChoice, errClass), time.Time{})
 		}
 
 		// Do not repeat a GenerateContent call that already handed a tool call to ADK.
@@ -138,10 +138,20 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		retryClass := classifyUpstream(retryErr)
 		w.recordCall(nextChoice, false, retryClass, time.Since(retryStart), nil, true)
 		if retryClass != jev.ErrClassPolicy && ctx.Err() == nil && w.health != nil {
-			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, retryClass, time.Time{})
+			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, scopeJevFailureClass(ctx, nextChoice, retryClass), time.Time{})
 		}
 		yield(nil, fmt.Errorf("%s", w.explain(nextChoice, retryErr)))
 	}
+}
+
+// scopeJevFailureClass keeps quota failures on Antigravity (agy) scoped to the
+// individual model instead of tripping the entire provider circuit when a specific
+// model bucket runs out across pooled accounts while other AGY models still work.
+func scopeJevFailureClass(ctx context.Context, ch jev.Choice, class jev.ErrorClass) jev.ErrorClass {
+	if strings.EqualFold(ch.Provider, "agy") && class == jev.ErrClassQuota && strings.TrimSpace(ch.Model) != "" && !strings.EqualFold(strings.TrimSpace(ch.Model), "agy") {
+		return jev.ErrClassModel
+	}
+	return class
 }
 
 func (w *jevModelWrapper) explain(ch jev.Choice, err error) string {
@@ -275,7 +285,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 		if err != nil {
 			buildClass := classifyUpstream(err)
 			if buildClass != jev.ErrClassPolicy && w.health != nil {
-				w.health.RecordFailure(choice.Provider, choice.Model, buildClass, time.Time{})
+				w.health.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
 			}
 			exclude[pairKey(choice.Provider, choice.Model)] = true
 			continue
