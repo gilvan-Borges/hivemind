@@ -13,9 +13,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
-	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
@@ -590,144 +588,8 @@ func buildPreHydratedJiraDossier(parentCtx context.Context, jc jirax.Client, exp
 	return b.String(), key
 }
 
-// newChiefToolStrippingModelCallback returns a BeforeModelCallback that physically removes
-// exploration tools (read_file, search_text, find_files, list_dir, jira_get, jira_search,
-// github_pr_diff, github_get_pr, github_pr_files) from req.Config.Tools once the Chief has
-// already executed maxExploreCalls exploration tool calls (or maxExploreTurns model turns
-// with tool calls). This makes an 18-turn exploration spiral physically impossible across
-// every LLM provider (AGY, OpenRouter, Gemini, Claude, OpenAI): once exploration tools are
-// removed from the tool declarations, the model MUST either call delegate_to_squad /
-// github_review_pr or emit its final answer immediately.
-func newChiefToolStrippingModelCallback(maxExploreCalls, maxExploreTurns int, isReview bool) llmagent.BeforeModelCallback {
-	if maxExploreCalls <= 0 {
-		maxExploreCalls = 8
-	}
-	if maxExploreTurns <= 0 {
-		maxExploreTurns = 3
-	}
-	exploreNames := map[string]bool{
-		"read_file":             true,
-		"search_text":           true,
-		"find_files":            true,
-		"list_dir":              true,
-		"run_shell":             true,
-		"git_diff":              true,
-		"git_status":            true,
-		"jira_get":              true,
-		"jira_search":           true,
-		"github_get_pr":         true,
-		"github_pr_files":       true,
-		"github_pr_diff":        true,
-		"github_issue_comments": true,
-		"github_ci_status":      true,
-		"github_list_prs":       true,
-	}
-
-	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		if req == nil || req.Config == nil || len(req.Config.Tools) == 0 {
-			return nil, nil
-		}
-		// Count exploration calls made in the current turn (after the last plain-text user prompt).
-		startIdx := 0
-		for i := len(req.Contents) - 1; i >= 0; i-- {
-			c := req.Contents[i]
-			if c == nil || c.Role != "user" {
-				continue
-			}
-			hasText := false
-			hasFuncResp := false
-			for _, p := range c.Parts {
-				if p == nil {
-					continue
-				}
-				if p.FunctionResponse != nil {
-					hasFuncResp = true
-				}
-				if strings.TrimSpace(p.Text) != "" {
-					hasText = true
-				}
-			}
-			if hasText && !hasFuncResp {
-				startIdx = i
-				break
-			}
-		}
-
-		exploreCalls := 0
-		exploreTurns := 0
-		for i := startIdx; i < len(req.Contents); i++ {
-			c := req.Contents[i]
-			if c == nil {
-				continue
-			}
-			turnHadExplore := false
-			for _, p := range c.Parts {
-				if p != nil && p.FunctionCall != nil {
-					name := strings.ToLower(strings.TrimSpace(p.FunctionCall.Name))
-					if exploreNames[name] {
-						exploreCalls++
-						turnHadExplore = true
-					}
-				}
-			}
-			if turnHadExplore {
-				exploreTurns++
-			}
-		}
-
-		if exploreCalls < maxExploreCalls && exploreTurns < maxExploreTurns {
-			return nil, nil
-		}
-
-		// Physically strip exploration tools from req.Config.Tools so the LLM cannot make another read/search turn.
-		var filteredTools []*genai.Tool
-		for _, t := range req.Config.Tools {
-			if t == nil {
-				continue
-			}
-			var keptDecls []*genai.FunctionDeclaration
-			for _, d := range t.FunctionDeclarations {
-				if d == nil {
-					continue
-				}
-				if exploreNames[strings.ToLower(strings.TrimSpace(d.Name))] {
-					continue
-				}
-				keptDecls = append(keptDecls, d)
-			}
-			if len(keptDecls) > 0 {
-				tCopy := *t
-				tCopy.FunctionDeclarations = keptDecls
-				filteredTools = append(filteredTools, &tCopy)
-			} else if len(t.FunctionDeclarations) == 0 {
-				filteredTools = append(filteredTools, t)
-			}
-		}
-		cfgCopy := *req.Config
-		cfgCopy.Tools = filteredTools
-		if cfgCopy.SystemInstruction != nil && len(cfgCopy.SystemInstruction.Parts) > 0 {
-			directive := "\n\n[GATE DE EFICIÊNCIA ATIVO: orçamento de leitura/exploração da triagem concluído. As ferramentas read_file/search_text/find_files foram desligadas neste turno. Chame AGORA delegate_to_squad (preenchendo plan, context_brief e dev_tasks para criar a worktree e iniciar o Dev) ou conclua sua resposta imediatamente.]"
-			if isReview {
-				directive = "\n\n[GATE DE EFICIÊNCIA ATIVO: orçamento de leitura da revisão concluído. As ferramentas read_file/search_text/github_pr_diff foram desligadas neste turno. Chame AGORA github_review_pr com seu parecer técnico final e encerre.]"
-			}
-			sysParts := make([]*genai.Part, len(cfgCopy.SystemInstruction.Parts))
-			copy(sysParts, cfgCopy.SystemInstruction.Parts)
-			lastIdx := len(sysParts) - 1
-			if sysParts[lastIdx] != nil {
-				pCopy := *sysParts[lastIdx]
-				pCopy.Text += directive
-				sysParts[lastIdx] = &pCopy
-			}
-			cfgCopy.SystemInstruction = &genai.Content{
-				Role:  cfgCopy.SystemInstruction.Role,
-				Parts: sysParts,
-			}
-		}
-		req.Config = &cfgCopy
-		return nil, nil
-	}
-}
-// on the Triage Chief during implementation/planning runs:
+// newChiefTriageBudgetCallbacks keeps the Chief's exploration on a short leash
+// without ever touching the request schema (Spec 02 §3.2):
 // 1. Short-circuits redundant jira_get(preloadedJiraKey) calls when the Jira hierarchy dossier is already preloaded.
 // 2. Caps repository exploration calls (read_file, search_text, find_files, list_dir, jira_get, jira_search)
 //    at maxExploreCalls (default 6) so the Chief never loops for 17 minutes / 1.8M tokens without delegating.

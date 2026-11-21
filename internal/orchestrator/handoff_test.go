@@ -7,12 +7,48 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/adk/v2/model"
 
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
+
+// TestHandoffTruncationIsUTF8SafeAtBoundary pins the Spec 02 acceptance
+// criterion: PT-BR accents and emojis cut exactly at the limit never produce
+// an invalid UTF-8 sequence (which providers reject with HTTP 400).
+func TestHandoffTruncationIsUTF8SafeAtBoundary(t *testing.T) {
+	// "coração" ends with a 3-byte rune; make the cut land inside it.
+	base := strings.Repeat("ação com acentuação e emoji 🚀 ", 40)
+	for _, limit := range []int{handoffFactMax, handoffObjectiveMax} {
+		for delta := -1; delta <= 1; delta++ {
+			s := base + strings.Repeat("x", 200) + "ção🚀"
+			cut := strx.TruncateBytes(s, limit+delta, "")
+			if !utf8.ValidString(cut) {
+				t.Fatalf("limit=%d delta=%d produced invalid UTF-8", limit, delta)
+			}
+			if len(cut) > limit+delta {
+				t.Fatalf("limit=%d delta=%d exceeded budget: %d", limit, delta, len(cut))
+			}
+		}
+	}
+	// The handoff package itself must keep the guarantee at its own limits.
+	r := &Runner{
+		Workspace:      t.TempDir(),
+		chiefPlan:      base + strings.Repeat("x", 200) + "ção🚀",
+		chiefContextBrief: base,
+	}
+	t.Setenv("HIVEMIND_DATA_DIR", t.TempDir())
+	r.sealHandoff("run-utf8")
+	if !utf8.ValidString(r.chiefPlan) || !utf8.ValidString(strings.Join(r.devSlices, "\n")) {
+		t.Fatal("sealHandoff produced invalid UTF-8 after truncation")
+	}
+	if len(r.chiefPlan) > handoffObjectiveMax {
+		t.Fatalf("sealed objective exceeded 4 KiB: %d", len(r.chiefPlan))
+	}
+}
 
 func TestHandoffObjectiveIsCutAt4KiB(t *testing.T) {
 	// internal/orchestrator/handoff.go: objetivo maior que 4 KiB é cortado.
@@ -165,5 +201,28 @@ func TestExternalHandoffDropsShellAndCaps(t *testing.T) {
 	}
 	if strings.Contains(string(body), "sh -c") {
 		t.Fatalf("arquivo de handoff manteve shell: %s", body)
+	}
+}
+
+func TestHandoffTruncatesMultibyteUTF8Cleanly(t *testing.T) {
+	// Strings PT-BR com acentuação + emojis cruzando fronteiras de bytes não podem
+	// gerar sequências UTF-8 quebradas nem em objective (4 KiB) nem em facts (500 B).
+	chunk := "ação 🚀 verificação crítica "
+	longObjective := strings.Repeat(chunk, (handoffObjectiveMax/len(chunk))+10)
+	longFact := strings.Repeat(chunk, (handoffFactMax/len(chunk))+5)
+
+	pkg := ExternalHandoff("run-utf8", longObjective, []string{longFact})
+	if !utf8.ValidString(pkg.Objective) {
+		t.Fatalf("Objective cortado no meio de runa UTF-8")
+	}
+	if len(pkg.Objective) > handoffObjectiveMax {
+		t.Fatalf("Objective excedeu %d bytes: %d", handoffObjectiveMax, len(pkg.Objective))
+	}
+	if len(pkg.Facts) != 1 || !utf8.ValidString(pkg.Facts[0]) || len(pkg.Facts[0]) > handoffFactMax {
+		t.Fatalf("Fact inválido ou acima do limite: %#v", pkg.Facts)
+	}
+	slices := sanitizeSlices([]string{longFact})
+	if len(slices) != 1 || !utf8.ValidString(slices[0]) || len(slices[0]) > handoffFactMax {
+		t.Fatalf("sanitizeSlices produziu UTF-8 inválido: %#v", slices)
 	}
 }

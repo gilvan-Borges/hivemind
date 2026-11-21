@@ -26,6 +26,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
@@ -399,8 +400,6 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	if mode == "" {
 		mode = agent.StreamingModeSSE
 	}
-	msg := buildUserContent(objective+r.teamMemorySnippet(), req.Attachments)
-
 	useTriage := ((runMode == "" && r.EnableTriage) ||
 		runMode == "auto" ||
 		runMode == "direct" ||
@@ -410,6 +409,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		runMode == "plan:sdd-jira" ||
 		(runMode == "squad" && r.EnableTriage)) &&
 		(r.chiefPlan == "" || runMode == "plan" || runMode == "plan:sdd" || runMode == "plan:sdd-jira" || runMode == "direct" || runMode == "auto-review")
+	userObjective := objective
+	if useTriage {
+		userObjective += r.teamMemorySnippet()
+	}
+	msg := buildUserContent(userObjective, req.Attachments)
 	if !useTriage && r.chiefPlan != "" {
 		if r.OnEvent != nil {
 			r.OnEvent(Event{
@@ -504,11 +508,6 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
 	}
 
-	if mem := r.teamMemorySnippet(); mem != "" {
-		_ = sess.State().Set("team_memory", mem)
-	} else {
-		_ = sess.State().Set("team_memory", "")
-	}
 	devs, err := r.prepareDevs(ctx, key, objective)
 	if err != nil {
 		return result, err
@@ -819,7 +818,10 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		}
 		return fmt.Sprintf("%s_%d", base, n+1)
 	}
-	stateKeys := []string{"objective", "jira_key", "team_memory", "prior_session_context", "chief_plan", "chief_context_brief", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
+	// team_memory NÃO entra aqui (Spec 02 §3.1): a memória do time vive em um
+	// único lugar estável — a primeira mensagem user da sessão — e não é mais
+	// re-injetada no prefixo de cada subagente.
+	stateKeys := []string{"objective", "jira_key", "prior_session_context", "chief_plan", "chief_context_brief", "pm_plan", "tech_lead_plan", "architect_plan", "integrate_status", "qa_feedback", "qa_report", "qa_approval_note"}
 
 	qaRoot := r.Workspace
 	if r.deliveryRoot != "" {
@@ -877,11 +879,13 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 
 	var devAgents []agent.Agent
 	var wtLines []string
+	var devReports []string
 	devSkillGuide := r.guidanceForRole(team.SkillTargetDev, true)
 	for idx, dev := range devs {
 		name := unique(dev.Agent.Name)
 		report := "dev_" + name + "_report"
-		stateKeys = append(stateKeys, report)
+		devReports = append(devReports, report)
+		devStateKeys := append([]string(nil), stateKeys...)
 		scopeDesc := "worktree unificada da conversa"
 		if !r.sharedDevWorktree {
 			scopeDesc = "worktree isolada"
@@ -901,7 +905,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		if devSkillGuide != "" {
 			extra += devSkillGuide
 		}
-		ag, err := r.llmCore(ctx, dev.Agent, name, report, dev.Root, extra, key, stateKeys, false, true, dev.OwnedPaths)
+		ag, err := r.llmCore(ctx, dev.Agent, name, report, dev.Root, extra, key, devStateKeys, false, true, dev.OwnedPaths)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -909,6 +913,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		devAgents = append(devAgents, ag)
 		wtLines = append(wtLines, dev.ADK+": "+dev.Root+" ("+dev.Branch+")")
 	}
+	stateKeys = append(stateKeys, devReports...)
 
 	var devsRunner agent.Agent
 	var err error
@@ -1110,8 +1115,16 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		instruction += "\n\n" + extra
 	}
 	keys := append([]string(nil), stateKeys...)
+	// KV-cache-stable prefix (Spec 02 §3.1): the SystemInstruction is built once
+	// from static role data, and every per-call delta (state handoff keys, shared
+	// board, closing QA gate) rides a trailing <system-reminder> block appended
+	// to the LAST content instead of mutating the prefix.
 	beforeModelCBs := []llmagent.BeforeModelCallback{
-		newInTurnCompactionCallback(r.Project.Settings.EffectiveInTurnKeepToolResults()),
+		contextx.NewCompactionCallback(contextx.Budget{
+			ContextWindow: agentContextWindow(a),
+			KeepRecent:    r.Project.Settings.EffectiveInTurnKeepToolResults(),
+		}),
+		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}
 	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {
 		beforeModelCBs = append([]llmagent.BeforeModelCallback{r.handoffModelGuard(a.Role)}, beforeModelCBs...)
@@ -1134,7 +1147,9 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		}
 	}
 	if outputKey == "pm_plan" || outputKey == "tech_lead_plan" || outputKey == "architect_plan" {
-		beforeModelCBs = append(beforeModelCBs, newChiefToolStrippingModelCallback(defaultMaxTriageExploreCalls, 2, false))
+		// Orçamento de exploração guardado no handler da tool (BeforeToolCallback):
+		// o schema de Tools e o SystemInstruction permanecem idênticos no turno
+		// inteiro (Spec 02 §3.2 — sem tool stripping dinâmico quebrando o KV-cache).
 		triBefore, triAfter := newChiefTriageBudgetCallbacks(jiraKey, defaultMaxTriageExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, triAfter)
@@ -1156,29 +1171,14 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		BeforeModelCallbacks:     beforeModelCBs,
 		BeforeToolCallbacks:      beforeToolCBs,
 		AfterToolCallbacks:       afterToolCBs,
-		InstructionProvider: func(ctx agent.ReadonlyContext) (string, error) {
-			var b strings.Builder
-			b.WriteString(instruction)
-			if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
-				b.WriteString("\n\n[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.")
-			}
-			for _, k := range keys {
-				v, err := ctx.ReadonlyState().Get(k)
-				if err != nil || v == nil {
-					continue
-				}
-				text := strings.TrimSpace(fmt.Sprint(v))
-				if text == "" {
-					continue
-				}
-				fmt.Fprintf(&b, "\n\n[%s]\n%s", k, text)
-			}
-			if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
-				if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
-					fmt.Fprintf(&b, "\n\n%s", boardText)
-				}
-			}
-			return b.String(), nil
+		// InstructionProvider devolve APENAS o papel + governança + extra da
+		// subtarefa — constantes durante todo o turno — para o prefixo
+		// (SystemInstruction + Tools) ficar byte-idêntico entre chamadas e
+		// aproveitar o KV-cache do provedor (Spec 02 §3.1). Todo delta por
+		// chamada (state keys, board, gate de QA) vai no <system-reminder>
+		// anexado à cauda por newDynamicContextReminderCallback.
+		InstructionProvider: func(agent.ReadonlyContext) (string, error) {
+			return instruction, nil
 		},
 	}
 	if outputKey == "closing_summary" {
@@ -1223,6 +1223,76 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		)
 	}
 	return llmagent.New(cfg)
+}
+
+// newDynamicContextReminderCallback returns a BeforeModelCallback that appends
+// every per-call dynamic delta — state handoff keys, the TeamBoard summary and
+// the closing QA gate — as a trailing <system-reminder> block on the LAST
+// content of the request. The cacheable prefix (SystemInstruction + Tools)
+// stays byte-identical across the whole turn (Spec 02 §3.1): what changes
+// between sibling runs rides at the tail, where no provider prefix cache is
+// invalidated.
+func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent, qa bool, outputKey string, keys []string) llmagent.BeforeModelCallback {
+	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		if req == nil {
+			return nil, nil
+		}
+		var b strings.Builder
+		if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
+			b.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
+		}
+		for _, k := range keys {
+			v, err := ctx.ReadonlyState().Get(k)
+			if err != nil || v == nil {
+				continue
+			}
+			text := strings.TrimSpace(fmt.Sprint(v))
+			if text == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "[%s]\n%s\n\n", k, text)
+		}
+		if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
+			if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
+				fmt.Fprintf(&b, "%s\n\n", boardText)
+			}
+		}
+		reminder := strings.TrimSpace(b.String())
+		if reminder == "" {
+			return nil, nil
+		}
+		appendSystemReminder(req, reminder)
+		return nil, nil
+	}
+}
+
+// appendSystemReminder clones the trailing content and appends the reminder as
+// an extra text part, never mutating the session-owned structs in place.
+func appendSystemReminder(req *model.LLMRequest, reminder string) {
+	block := "<system-reminder>\n" + reminder + "\n</system-reminder>"
+	if len(req.Contents) == 0 {
+		req.Contents = []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: block}}},
+		}
+		return
+	}
+	lastIdx := len(req.Contents) - 1
+	orig := req.Contents[lastIdx]
+	if orig == nil {
+		req.Contents[lastIdx] = &genai.Content{
+			Role:  genai.RoleUser,
+			Parts: []*genai.Part{{Text: block}},
+		}
+		return
+	}
+	contentCopy := *orig
+	contentCopy.Parts = make([]*genai.Part, len(orig.Parts), len(orig.Parts)+1)
+	copy(contentCopy.Parts, orig.Parts)
+	contentCopy.Parts = append(contentCopy.Parts, &genai.Part{Text: block})
+	sliceCopy := make([]*genai.Content, len(req.Contents))
+	copy(sliceCopy, req.Contents)
+	sliceCopy[lastIdx] = &contentCopy
+	req.Contents = sliceCopy
 }
 
 func (r *Runner) nestedWorktreesPromptHint() string {
@@ -2433,7 +2503,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				preloadedPR = prNum
 				preloadedOwnPR = isOwn
 				preloadedAllDiffs = allComplete
-				_ = sessionx.CompactOldToolOutputs(sess, 2)
+				// Sem compactação destrutiva mid-run (Spec 02 §3.3): o prompt é
+				// bound pela projeção não-destrutiva do contextx em cada chamada;
+				// o histórico bruto em sessionx permanece intacto.
 				if msg != nil && len(msg.Parts) > 0 && msg.Parts[0] != nil {
 					clonedParts := make([]*genai.Part, len(msg.Parts))
 					copy(clonedParts, msg.Parts)
@@ -2452,7 +2524,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				jiraKey = resKey
 				r.issueKey = resKey
 			}
-			_ = sessionx.CompactOldToolOutputs(sess, 2)
+			// Sem compactação destrutiva mid-run (Spec 02 §3.3).
 			if msg != nil && len(msg.Parts) > 0 && msg.Parts[0] != nil {
 				clonedParts := make([]*genai.Part, len(msg.Parts))
 				copy(clonedParts, msg.Parts)
@@ -3006,12 +3078,13 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {
 		keepInTurn = 6
 	}
+	// Chefe de triagem: prefixo 100% estático (Instruction fixa, sem stripping
+	// dinâmico de tools) e compactação token-aware via contextx (Spec 02 §3.2).
 	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
-		newInTurnCompactionCallback(keepInTurn),
-	}
-	if !sddDocs && !sddJira {
-		triageBeforeModelCBs = append(triageBeforeModelCBs,
-			newChiefToolStrippingModelCallback(defaultMaxTriageExploreCalls, 2, r.reviewRequested || isAutoReview))
+		contextx.NewCompactionCallback(contextx.Budget{
+			ContextWindow: agentContextWindow(chief),
+			KeepRecent:    keepInTurn,
+		}),
 	}
 	triageAgent, err := llmagent.New(llmagent.Config{
 		Name:                     adkName,

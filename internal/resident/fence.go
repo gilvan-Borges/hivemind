@@ -7,6 +7,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 const (
@@ -71,10 +72,7 @@ func WrapUntrustedData(source, target, content string) string {
 func sanitizeHeaderToken(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.NewReplacer("\r", " ", "\n", " ", "[", "(", "]", ")").Replace(s)
-	if len(s) > 120 {
-		s = s[:120]
-	}
-	return s
+	return strx.TruncateBytes(s, 120, "")
 }
 
 var secretPatterns = []*regexp.Regexp{
@@ -107,10 +105,7 @@ func RedactSecrets(s string) string {
 func RedactTarget(raw string) string {
 	s := strings.TrimSpace(RedactSecrets(raw))
 	s = strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
-	if len(s) > 160 {
-		s = s[:160] + "…"
-	}
-	return s
+	return strx.TruncateBytes(s, 160, "…")
 }
 
 // IsSensitivePath reports whether relOrAbs points to a secret, credential store,

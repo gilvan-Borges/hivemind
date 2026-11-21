@@ -9,6 +9,12 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
+)
+
+const (
+	maxDirectMCPWrapperTools = 6
+	maxMCPSchemaDescBytes    = 240
 )
 
 func (d Deps) addMCP(out *[]tool.Tool) error {
@@ -17,9 +23,29 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 	}
 	listTool, err := functiontool.New(functiontool.Config{
 		Name:        "mcp_list_servers",
-		Description: "Lista os servidores MCP do HiveMind. Servidores desligados aparecem só com nome e descrição: o esquema das ferramentas deles não entra no contexto. Não liga nada.",
+		Description: "Lista os servidores MCP do HiveMind. Servidores desligados aparecem só com nome e descrição: o esquema das ferramentas deles não entra no contexto. Servidores já ligados mostram o esquema de cada ferramenta para uso em mcp_call. Não liga nada.",
 	}, func(agent.Context, struct{}) (textResult, error) {
-		return textResult{Text: formatMCPList(d.MCP.Snapshot())}, nil
+		exposed := d.MCP.ExposedTools()
+		text := formatMCPList(d.MCP.Snapshot())
+		// Catálogo sob demanda (Spec 02 §3.4): quando há mais de
+		// maxDirectMCPWrapperTools ferramentas externas nenhum wrapper direto é
+		// registrado; o modelo descobre o esquema por aqui e chama mcp_call.
+		if len(exposed) > maxDirectMCPWrapperTools {
+			var byServer = make(map[string]bool)
+			for _, rt := range exposed {
+				byServer[rt.Server] = true
+			}
+			var b strings.Builder
+			b.WriteString(text)
+			for server := range byServer {
+				if block := schemaBlock(exposed, server); block != "" {
+					b.WriteString("\n[esquemas das ferramentas ligadas de " + server + "]")
+					b.WriteString(block)
+				}
+			}
+			text = b.String()
+		}
+		return textResult{Text: text}, nil
 	})
 	if err != nil {
 		return err
@@ -74,12 +100,16 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 	}
 	*out = append(*out, listTool, enableTool, callTool)
 
-	for _, remote := range d.MCP.ExposedTools() {
+	exposedTools := d.MCP.ExposedTools()
+	if len(exposedTools) > maxDirectMCPWrapperTools {
+		return nil
+	}
+	for _, remote := range exposedTools {
 		remote := remote
 		toolName := mcpToolName(remote.Server, remote.Name)
 		desc := fmt.Sprintf("MCP %s · %s. %s", remote.Server, remote.Name, strings.TrimSpace(remote.Description))
 		if remote.Schema != "" {
-			desc += " Esquema: " + remote.Schema
+			desc += " Esquema: " + strx.TruncateBytes(remote.Schema, maxMCPSchemaDescBytes, "...")
 		}
 		exposed, err := functiontool.New(functiontool.Config{
 			Name:        toolName,
@@ -148,8 +178,5 @@ func mcpToolName(server, name string) string {
 		}
 	}
 	out := b.String()
-	if len(out) > 64 {
-		out = out[:64]
-	}
-	return out
+	return strx.TruncateBytes(out, 64, "")
 }

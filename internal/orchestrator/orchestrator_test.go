@@ -1635,7 +1635,7 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	}
 	project.Normalize()
 
-	var chiefInst, devInst, qaInst string
+	var chiefInst, chiefUserMsg, devInst, qaInst string
 	extractSystem := func(req *model.LLMRequest) string {
 		if req == nil || req.Config == nil || req.Config.SystemInstruction == nil {
 			return ""
@@ -1644,6 +1644,23 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 		for _, p := range req.Config.SystemInstruction.Parts {
 			if p != nil {
 				sb.WriteString(p.Text)
+			}
+		}
+		return sb.String()
+	}
+	extractUser := func(req *model.LLMRequest) string {
+		if req == nil {
+			return ""
+		}
+		var sb strings.Builder
+		for _, c := range req.Contents {
+			if c == nil || c.Role != genai.RoleUser {
+				continue
+			}
+			for _, p := range c.Parts {
+				if p != nil && p.FunctionResponse == nil {
+					sb.WriteString(p.Text)
+				}
 			}
 		}
 		return sb.String()
@@ -1665,6 +1682,7 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 			"chefe": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
 					chiefInst = extractSystem(req)
+					chiefUserMsg = extractUser(req)
 					return modelx.FunctionCall("delegate_to_squad", "d1", map[string]any{
 						"plan":      "Executar com skills por papel",
 						"dev_tasks": []any{"Alterar a.txt"},

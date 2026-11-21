@@ -945,9 +945,7 @@ func (d Deps) gitStatus() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "git_status",
 		Description: "Mostra o status curto do git no diretório de trabalho.",
-	}, func(ctx agent.Context, _ struct {
-		Unused string `json:"unused,omitempty" jsonschema:"Campo ignorado."`
-	}) (textResult, error) {
+	}, func(ctx agent.Context, _ struct{}) (textResult, error) {
 		out, err := d.Git.Status(ctx, d.Root)
 		return textResult{Text: out}, err
 	})
@@ -957,9 +955,7 @@ func (d Deps) gitDiff() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "git_diff",
 		Description: "Mostra o resumo do diff em relação ao HEAD (incluindo arquivos novos não rastreados).",
-	}, func(ctx agent.Context, _ struct {
-		Unused string `json:"unused,omitempty" jsonschema:"Campo ignorado."`
-	}) (textResult, error) {
+	}, func(ctx agent.Context, _ struct{}) (textResult, error) {
 		out, err := d.Git.Diff(ctx, d.Root)
 		if untracked, uErr := d.Git.Run(ctx, d.Root, "ls-files", "--others", "--exclude-standard"); uErr == nil && strings.TrimSpace(untracked) != "" {
 			if strings.TrimSpace(out) != "" {
@@ -994,9 +990,7 @@ func (d Deps) gitPush() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "git_push",
 		Description: "Exclusivo do Chefe/Arquiteto: envia a branch atual da worktree para origin (sem --force).",
-	}, func(ctx agent.Context, _ struct {
-		Unused string `json:"unused,omitempty" jsonschema:"Campo ignorado."`
-	}) (textResult, error) {
+	}, func(ctx agent.Context, _ struct{}) (textResult, error) {
 		branch, err := d.Git.Run(ctx, d.Root, "rev-parse", "--abbrev-ref", "HEAD")
 		if err != nil {
 			return textResult{}, err
@@ -1013,9 +1007,7 @@ func (d Deps) gitPull() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "git_pull",
 		Description: "Exclusivo do Chefe/Arquiteto: atualiza a branch atual com git pull --ff-only.",
-	}, func(ctx agent.Context, _ struct {
-		Unused string `json:"unused,omitempty" jsonschema:"Campo ignorado."`
-	}) (textResult, error) {
+	}, func(ctx agent.Context, _ struct{}) (textResult, error) {
 		out, err := d.Git.Run(ctx, d.Root, "pull", "--ff-only")
 		return textResult{Text: out}, err
 	})

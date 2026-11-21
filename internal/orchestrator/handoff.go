@@ -13,7 +13,9 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
@@ -76,9 +78,8 @@ func sanitizeSlices(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, sl := range in {
 		s := sanitizeHandoffText(sl)
-		if len(s) > handoffFactMax {
-			s = s[:handoffFactMax]
-		}
+		// Corte UTF-8 seguro: acentuação PT-BR nunca é fatiada no meio de um rune.
+		s = strx.TruncateBytes(s, handoffFactMax, "")
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
@@ -93,10 +94,8 @@ func (r *Runner) makeHandoffPackage(runID, from, to string) HandoffPackage {
 	if objective == "" {
 		objective = sanitizeHandoffText(r.objectiveText)
 	}
-	// O objetivo acima de 4 KiB é cortado, não recusado.
-	if len(objective) > handoffObjectiveMax {
-		objective = objective[:handoffObjectiveMax]
-	}
+	// O objetivo acima de 4 KiB é cortado, não recusado (UTF-8 seguro, Spec 02 §3.3).
+	objective = strx.TruncateBytes(objective, handoffObjectiveMax, "")
 	var facts []string
 	for _, src := range append([]string{r.chiefContextBrief}, r.devSlices...) {
 		for _, line := range strings.Split(sanitizeHandoffText(src), "\n") {
@@ -104,9 +103,7 @@ func (r *Runner) makeHandoffPackage(runID, from, to string) HandoffPackage {
 			if line == "" {
 				continue
 			}
-			if len(line) > handoffFactMax {
-				line = line[:handoffFactMax]
-			}
+			line = strx.TruncateBytes(line, handoffFactMax, "")
 			facts = append(facts, line)
 			if len(facts) == handoffFactsMax {
 				break
@@ -133,18 +130,14 @@ func (r *Runner) makeHandoffPackage(runID, from, to string) HandoffPackage {
 // work to the squad. Shell lines are dropped and the objective is capped.
 func ExternalHandoff(runID, objective string, facts []string) HandoffPackage {
 	objective = sanitizeHandoffText(objective)
-	if len(objective) > handoffObjectiveMax {
-		objective = objective[:handoffObjectiveMax]
-	}
+	objective = strx.TruncateBytes(objective, handoffObjectiveMax, "")
 	var clean []string
 	for _, fact := range facts {
 		line := strings.TrimSpace(sanitizeHandoffText(fact))
 		if line == "" {
 			continue
 		}
-		if len(line) > handoffFactMax {
-			line = line[:handoffFactMax]
-		}
+		line = strx.TruncateBytes(line, handoffFactMax, "")
 		clean = append(clean, line)
 		if len(clean) == handoffFactsMax {
 			break
@@ -259,7 +252,9 @@ func persistHandoff(workspaceRoot string, pkg HandoffPackage) error {
 }
 
 func writePrivate(path string, body []byte) error {
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	// Escrita atômica (temp + Sync + Rename): um crash nunca deixa um pacote de
+	// handoff meio escrito em .hivemind/handoff (W1-01 padrão, concluído aqui).
+	if err := atomicx.WriteFile(path, body, 0o600); err != nil {
 		return err
 	}
 	return os.Chmod(path, 0o600)

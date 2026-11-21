@@ -5,11 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/model"
-	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
@@ -21,10 +19,8 @@ const (
 	// MaxTeamMemoryBytes matches Runner.teamMemorySnippet in §2 & §6 (4 KiB).
 	MaxTeamMemoryBytes = 4096
 
-	// In-turn compaction parameters matching internal/orchestrator/context_guard.go (§2, §13).
-	residentKeepToolResults     = 8
-	residentCompactThreshold    = 600
-	residentCompactPreviewBytes = 240
+	// residentKeepToolResults matches internal/contextx defaults (§2, §13).
+	residentKeepToolResults = 8
 )
 
 // SystemPrompt returns the stable Phase 2 system instruction (strictly <= 2 KiB).
@@ -120,97 +116,12 @@ func loadFencedTeamMemory(workspaceRoot string) string {
 }
 
 // newInTurnCompactionCallback trims older large tool outputs inside the active
-// turn while keeping the most recent 8 results verbatim (§2, §5, §13).
+// turn using the SINGLE shared token-aware compactor (internal/contextx, Spec 02
+// §3.3) instead of a divergent local copy. The resident turn budget is
+// MaxInputTokensPerTurn, so the 55%/75% tiers scale against the real window.
 func newInTurnCompactionCallback(keepRecent int) llmagent.BeforeModelCallback {
-	if keepRecent <= 0 {
-		keepRecent = residentKeepToolResults
-	}
-	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		compactInTurnRequest(req, keepRecent)
-		return nil, nil
-	}
-}
-
-type respLoc struct {
-	ci int
-	pi int
-}
-
-func compactInTurnRequest(req *model.LLMRequest, keepRecent int) {
-	if req == nil || len(req.Contents) == 0 {
-		return
-	}
-	var locs []respLoc
-	lastCI := -1
-	for ci, content := range req.Contents {
-		if content == nil {
-			continue
-		}
-		for pi, part := range content.Parts {
-			if part != nil && part.FunctionResponse != nil {
-				locs = append(locs, respLoc{ci: ci, pi: pi})
-				lastCI = ci
-			}
-		}
-	}
-	if len(locs) <= keepRecent {
-		return
-	}
-	toCompact := make(map[int]map[int]bool)
-	for _, loc := range locs[:len(locs)-keepRecent] {
-		if loc.ci == lastCI {
-			continue
-		}
-		if toCompact[loc.ci] == nil {
-			toCompact[loc.ci] = make(map[int]bool)
-		}
-		toCompact[loc.ci][loc.pi] = true
-	}
-	if len(toCompact) == 0 {
-		return
-	}
-
-	next := make([]*genai.Content, len(req.Contents))
-	copy(next, req.Contents)
-	for ci, partSet := range toCompact {
-		orig := req.Contents[ci]
-		if orig == nil {
-			continue
-		}
-		parts := make([]*genai.Part, len(orig.Parts))
-		copy(parts, orig.Parts)
-		changed := false
-		for pi := range partSet {
-			p := parts[pi]
-			if p == nil || p.FunctionResponse == nil {
-				continue
-			}
-			raw, ok := p.FunctionResponse.Response["text"].(string)
-			if !ok || len(raw) <= residentCompactThreshold {
-				continue
-			}
-			preview := strx.TruncateBytes(strings.TrimSpace(raw), residentCompactPreviewBytes, "…")
-			compacted := fmt.Sprintf("%s\n[saída anterior de %s compactada: %d bytes]", preview, p.FunctionResponse.Name, len(raw))
-			if len(compacted) >= len(raw) {
-				continue
-			}
-			pCopy := *p
-			frCopy := *p.FunctionResponse
-			respCopy := make(map[string]any, len(frCopy.Response))
-			for k, v := range frCopy.Response {
-				respCopy[k] = v
-			}
-			respCopy["text"] = compacted
-			frCopy.Response = respCopy
-			pCopy.FunctionResponse = &frCopy
-			parts[pi] = &pCopy
-			changed = true
-		}
-		if changed {
-			cCopy := *orig
-			cCopy.Parts = parts
-			next[ci] = &cCopy
-		}
-	}
-	req.Contents = next
+	return contextx.NewCompactionCallback(contextx.Budget{
+		ContextWindow: MaxInputTokensPerTurn,
+		KeepRecent:    keepRecent,
+	})
 }

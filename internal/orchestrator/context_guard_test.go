@@ -1,13 +1,19 @@
 package orchestrator
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"iter"
 	"strings"
 	"testing"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -81,7 +87,7 @@ func TestInTurnCompactionTrimsOldReadsKeepsRecent(t *testing.T) {
 	origSnapshot := append([]*genai.Content(nil), origContents...)
 	req := &model.LLMRequest{Contents: origContents}
 
-	compacted, saved := compactLLMRequestInTurn(req, 4)
+	compacted, saved := contextx.CompactRequest(req, contextx.Budget{ContextWindow: 15_000, KeepRecent: 4})
 	if compacted != 8 {
 		t.Fatalf("expected 8 older read_file responses compacted, got %d", compacted)
 	}
@@ -225,7 +231,7 @@ func TestInTurnCompactionTrimsOldWriteAndEditArgs(t *testing.T) {
 	}
 
 	origWriteContent := req.Contents[0].Parts[0].FunctionCall.Args["content"].(string)
-	compacted, saved := compactLLMRequestInTurn(req, 1)
+	compacted, saved := contextx.CompactRequest(req, contextx.Budget{ContextWindow: 6_000, KeepRecent: 1})
 	if compacted != 2 || saved <= 0 {
 		t.Fatalf("expected 2 old call args compacted, got compacted=%d saved=%d", compacted, saved)
 	}
@@ -266,6 +272,7 @@ func TestInTurnCompactionNeverCompactsLatestParallelBatch(t *testing.T) {
 			},
 		})
 	}
+
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
 			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Implemente a task"}}},
@@ -273,7 +280,9 @@ func TestInTurnCompactionNeverCompactsLatestParallelBatch(t *testing.T) {
 		},
 	}
 
-	compacted, saved := compactLLMRequestInTurn(req, 4)
+	// Window small enough for the 55% gate to pass, so the assertion actually
+	// exercises the "never compact the latest parallel batch" guard.
+	compacted, saved := contextx.CompactRequest(req, contextx.Budget{ContextWindow: 3_500, KeepRecent: 4})
 	if compacted != 0 || saved != 0 {
 		t.Fatalf("latest parallel batch must NEVER be compacted, got compacted=%d saved=%d", compacted, saved)
 	}
@@ -416,5 +425,197 @@ func TestChiefTriageBudgetCallbacksAndJiraKeyExtract(t *testing.T) {
 	_, _ = after(nil, delegateTool, nil, map[string]any{"status": "ok"}, nil)
 	if res, _ := before(nil, readTool, map[string]any{"path": "f1.ts"}); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "delegate_to_squad já foi registrado") {
 		t.Fatalf("expected post-delegate tool block, got %v", res)
+	}
+}
+
+// fakeReminderState is a minimal session.ReadonlyState for callback tests.
+type fakeReminderState struct {
+	m map[string]any
+}
+
+func (s fakeReminderState) Get(k string) (any, error) {
+	if v, ok := s.m[k]; ok {
+		return v, nil
+	}
+	return nil, session.ErrStateKeyNotExist
+}
+
+func (s fakeReminderState) All() iter.Seq2[string, any] {
+	return func(yield func(string, any) bool) {
+		for k, v := range s.m {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
+}
+
+// reminderCtxFake answers only ReadonlyState, the single method the dynamic
+// reminder callback touches.
+type reminderCtxFake struct {
+	agent.StrictContextMock
+	state fakeReminderState
+}
+
+func (f *reminderCtxFake) ReadonlyState() session.ReadonlyState { return f.state }
+
+// TestSystemInstructionAndToolsStayInvariantAcrossTurns is the Spec 02
+// acceptance criterion: over 10 tool turns — with sibling state deltas and
+// TeamBoard notes landing mid-run — hash(SystemInstruction + Tools) must stay
+// byte-identical from turn 1 to turn 10, and the dynamic deltas must ride a
+// trailing <system-reminder> block.
+func TestSystemInstructionAndToolsStayInvariantAcrossTurns(t *testing.T) {
+	r := &Runner{sharedBoard: newTeamBoard()}
+	r.sharedBoard.RegisterOwner("dev_1", []string{"src/a.go"})
+	devAgent := team.Agent{Role: team.RoleDeveloper, Name: "dev_1", Provider: "agy", Model: "agy"}
+	keys := []string{"objective", "chief_plan", "dev_dev_2_report"}
+
+	state := fakeReminderState{m: map[string]any{
+		"objective":   "Implementar a tarefa 42",
+		"chief_plan":  "plano estável do chefe",
+	}}
+	ctxFake := &reminderCtxFake{state: state}
+
+	sysInstruction := &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: "Instrução estável do Desenvolvedor HiveMind."}},
+	}
+	toolsDecl := []*genai.Tool{{
+		FunctionDeclarations: []*genai.FunctionDeclaration{
+			{Name: "read_file", Description: "Lê arquivo"},
+			{Name: "delegate_to_squad", Description: "Delega ao squad"},
+		},
+	}}
+
+	hashPrefix := func(req *model.LLMRequest) string {
+		h := sha256.New()
+		for _, p := range req.Config.SystemInstruction.Parts {
+			h.Write([]byte(p.Text))
+		}
+		for _, tl := range req.Config.Tools {
+			for _, d := range tl.FunctionDeclarations {
+				h.Write([]byte(d.Name))
+			}
+		}
+		return hex.EncodeToString(h.Sum(nil))
+	}
+
+	compaction := contextx.NewCompactionCallback(contextx.Budget{ContextWindow: 128_000, KeepRecent: 8})
+	reminder := r.newDynamicContextReminderCallback("dev_1", devAgent, false, "dev_dev_1_report", keys)
+
+	var firstHash string
+	for turn := 1; turn <= 10; turn++ {
+		// Sibling report appears mid-run (turn 5) and a board note lands at
+		// turn 7: exactly the events that used to rewrite the SystemInstruction.
+		if turn == 5 {
+			state.m["dev_dev_2_report"] = "Dev 2 terminou a fatia de autenticação"
+		}
+		if turn == 7 {
+			r.sharedBoard.PublishNote("dev_1", "contrato API", "use POST /v1/items")
+		}
+
+		contents := []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Implemente X"}}},
+		}
+		for i := 1; i <= 3; i++ {
+			contents = append(contents,
+				&genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+					ID: fmt.Sprintf("t%d-c%d", turn, i), Name: "read_file", Args: map[string]any{"path": fmt.Sprintf("f%d.go", i)},
+				}}}},
+				&genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+					ID: fmt.Sprintf("t%d-c%d", turn, i), Name: "read_file", Response: map[string]any{"text": "conteúdo do arquivo " + fmt.Sprint(turn)},
+				}}}},
+			)
+		}
+		req := &model.LLMRequest{
+			Config: &genai.GenerateContentConfig{
+				SystemInstruction: sysInstruction,
+				Tools:             toolsDecl,
+			},
+			Contents: contents,
+		}
+
+		if _, err := compaction(ctxFake, req); err != nil {
+			t.Fatalf("turn %d: compaction error %v", turn, err)
+		}
+		if _, err := reminder(ctxFake, req); err != nil {
+			t.Fatalf("turn %d: reminder error %v", turn, err)
+		}
+
+		hash := hashPrefix(req)
+		if turn == 1 {
+			firstHash = hash
+		} else if hash != firstHash {
+			t.Fatalf("turn %d: KV-cache prefix hash changed (turn1=%s turn%d=%s)", turn, firstHash, turn, hash)
+		}
+		if req.Config.SystemInstruction != sysInstruction {
+			t.Fatalf("turn %d: SystemInstruction struct was replaced", turn)
+		}
+		if len(req.Config.Tools) != 1 || req.Config.Tools[0] != toolsDecl[0] {
+			t.Fatalf("turn %d: Tools struct was replaced", turn)
+		}
+		lastParts := req.Contents[len(req.Contents)-1].Parts
+		lastText := lastParts[len(lastParts)-1].Text
+		if !strings.Contains(lastText, "<system-reminder>") {
+			t.Fatalf("turn %d: expected trailing <system-reminder>, got %q", turn, lastText)
+		}
+		if turn >= 5 && !strings.Contains(lastText, "dev_dev_2_report") {
+			t.Fatalf("turn %d: sibling delta missing from reminder", turn)
+		}
+		if turn >= 7 && !strings.Contains(lastText, "use POST /v1/items") {
+			t.Fatalf("turn %d: board note missing from reminder", turn)
+		}
+	}
+}
+
+func TestSystemInstructionAndToolsStayInvariantAcrossTurns(t *testing.T) {
+	cb := newChiefToolStrippingModelCallback(2, 1, false)
+	sysContent := &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: "Instrução estável do Chefe."}},
+	}
+	toolDecl := &genai.Tool{
+		FunctionDeclarations: []*genai.FunctionDeclaration{
+			{Name: "read_file", Description: "Lê arquivo"},
+			{Name: "delegate_to_squad", Description: "Delega ao squad"},
+		},
+	}
+	req := &model.LLMRequest{
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: sysContent,
+			Tools:             []*genai.Tool{toolDecl},
+		},
+		Contents: []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Implemente X"}}},
+			{
+				Role: genai.RoleModel,
+				Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{ID: "r1", Name: "read_file", Args: map[string]any{"path": "a.go"}}},
+					{FunctionCall: &genai.FunctionCall{ID: "r2", Name: "read_file", Args: map[string]any{"path": "b.go"}}},
+				},
+			},
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{ID: "r1", Name: "read_file", Response: map[string]any{"text": "ok1"}}},
+					{FunctionResponse: &genai.FunctionResponse{ID: "r2", Name: "read_file", Response: map[string]any{"text": "ok2"}}},
+				},
+			},
+		},
+	}
+
+	if resp, err := cb(nil, req); err != nil || resp != nil {
+		t.Fatalf("unexpected callback result resp=%v err=%v", resp, err)
+	}
+	if req.Config.SystemInstruction != sysContent || req.Config.SystemInstruction.Parts[0].Text != "Instrução estável do Chefe." {
+		t.Fatal("SystemInstruction must stay 100% invariant when explore budget is reached")
+	}
+	if len(req.Config.Tools) != 1 || len(req.Config.Tools[0].FunctionDeclarations) != 2 {
+		t.Fatalf("Tools must stay 100%% invariant when explore budget is reached, got %+v", req.Config.Tools)
+	}
+	lastParts := req.Contents[len(req.Contents)-1].Parts
+	lastText := lastParts[len(lastParts)-1].Text
+	if !strings.Contains(lastText, "<system-reminder>") || !strings.Contains(lastText, "[GATE DE EFICIÊNCIA ATIVO:") {
+		t.Fatalf("expected efficiency gate <system-reminder> appended to last req.Contents, got %q", lastText)
 	}
 }
