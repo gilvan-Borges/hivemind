@@ -1092,7 +1092,7 @@ func matchJiraProjectFromNames(projs []jirax.Project, rawNames ...string) string
 				rawTokens = append(rawTokens, pt)
 			}
 		}
-		// camelCase humps (consecutive capitals stay together: "VIBETIME" is one token)
+		// camelCase humps (consecutive capitals stay together: "TIMETRACK" is one token)
 		for _, pt := range rawTokens {
 			var cur []rune
 			for i, r := range pt {

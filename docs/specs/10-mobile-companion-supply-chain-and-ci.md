@@ -1,6 +1,6 @@
 # Spec 10 — App Mobile (`HiveMind-App`), Cadeia de Suprimentos, Auto-Update e CI/CD
 
-> **Status:** Proposta de Melhoria & Paridade
+> **Status:** Implementado (Onda 5 — `HiveMind-App` offline Room/TOFU/R8/Theme, `VERSION` + `-ldflags`, `internal/updater`, `scripts/build-installer.ps1`, `.github/workflows/ci.yml` e hardening `deploy/relay/`)
 > **Alvos:** `HiveMind-App/`, `scripts/`, `.github/workflows/ci.yml`, `deploy/relay/`, `ide/wails.json`, `docs/SPEC_ATUALIZACAO.md`
 
 ---

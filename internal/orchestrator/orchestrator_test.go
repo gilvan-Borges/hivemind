@@ -134,7 +134,12 @@ func TestPipelineWithMocks(t *testing.T) {
 			case 2:
 				return modelx.Text("reprovado")
 			case 3:
-				return modelx.FunctionCall("qa_approve", "q2", map[string]any{"note": "ok"})
+				return modelx.FunctionCall("qa_approve", "q2", map[string]any{
+					"command":   "go test ./...",
+					"exit_code": 0,
+					"evidence":  "ok  all tests passed",
+					"note":      "ok",
+				})
 			default:
 				return modelx.Text("aprovado")
 			}
@@ -234,7 +239,12 @@ func TestPipelineWithMocks(t *testing.T) {
 			"dev_2":     &modelx.Scripted{Fn: text},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q3", map[string]any{"note": "ainda ok"})
+					return modelx.FunctionCall("qa_approve", "q3", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ainda ok",
+					})
 				}
 				return modelx.Text("aprovado de novo")
 			}},
@@ -524,7 +534,12 @@ func TestTriageDirectAnswerAndDelegationWithSlicesAndClosingChief(t *testing.T) 
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "testes verdes"})
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "testes verdes",
+					})
 				}
 				return modelx.Text("QA aprovado.")
 			}},
@@ -681,7 +696,12 @@ func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "aprovado"})
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "aprovado",
+					})
 				}
 				return modelx.Text("ok")
 			}},
@@ -885,7 +905,12 @@ func TestSDDGatesDocsThenJiraThenSquad(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "critérios de aceite verificados"})
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "critérios de aceite verificados",
+					})
 				}
 				return modelx.Text("ok")
 			}},
@@ -1011,7 +1036,12 @@ func TestAutoPauseForApprovalOnLargeTask(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "qa-ok", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("ok")
 			}},
@@ -1078,7 +1108,12 @@ func TestWorktreesSettingDisabledWritesDirectlyToWorkspace(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("ok")
 			}},
@@ -1361,7 +1396,12 @@ func TestPRReviewCycleHomologAutoMergeAndMainApprovalGate(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "testes ok"})
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "testes ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},
@@ -1569,7 +1609,12 @@ func TestLeanTeamDynamicDevScaling(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "3 módulos ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  3 modules passed",
+						"note":      "3 módulos ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},
@@ -1718,7 +1763,12 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 			"qa": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
 					qaInst = extractSystem(req)
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("qa ok")
 			}},
@@ -1989,7 +2039,12 @@ func TestResumedSessionPreservesPriorContext(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},
@@ -2043,7 +2098,12 @@ func TestResumedSessionPreservesPriorContext(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q2", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q2", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},

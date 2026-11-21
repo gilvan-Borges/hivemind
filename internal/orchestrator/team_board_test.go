@@ -94,7 +94,12 @@ func TestSingleDevSharesConversationWorktreePerLane(t *testing.T) {
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},
@@ -234,7 +239,12 @@ func TestParallelDevsShareWorktreeWithOwnedPathsAndTeamBoard(t *testing.T) {
 					}
 				}
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "q1", map[string]any{"note": "ok"})
+					return modelx.FunctionCall("qa_approve", "q1", map[string]any{
+						"command":   "go test ./...",
+						"exit_code": 0,
+						"evidence":  "ok  all tests passed",
+						"note":      "ok",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},

@@ -1,6 +1,6 @@
 # Spec 07 — Desacoplamento da IDE (`idecore`), Ciclo de Vida de Projetos e UI Reativa
 
-> **Status:** Proposta de Refatoração
+> **Status:** Parcialmente Implementado (Onda 4 concluiu `W4-06`/`W4-07`: render guards, markdown incremental, `safeImageSrc`, CSP, ARIA focus-trap e CSS `@layer`; pendentes `W4-01`, `W4-02`, `W4-05`, `W4-08`)
 > **Alvos:** `ide/app.go`, `ide/internal/idecore/`, `ide/frontend/src/`, `ide/frontend/index.html`
 
 ---

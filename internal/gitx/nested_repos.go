@@ -188,24 +188,39 @@ func containsExcludeLine(content, relSlash string) bool {
 	return false
 }
 
+func resolveNormalizedCommonDir(ctx context.Context, g Git, repoDir string) (string, bool) {
+	raw, err := g.Run(ctx, repoDir, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", false
+	}
+	c := strings.TrimSpace(raw)
+	if c == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(c) {
+		c = filepath.Join(repoDir, c)
+	}
+	c = filepath.Clean(c)
+	// Resolve Windows 8.3 short paths (e.g. RUNNER~1 vs runneradmin) and symlinks
+	// so os.TempDir() vs `git rev-parse` output compare equal reliably.
+	if resolved, rErr := filepath.EvalSymlinks(c); rErr == nil && resolved != "" {
+		c = filepath.Clean(resolved)
+	} else if abs, aErr := filepath.Abs(c); aErr == nil && abs != "" {
+		c = filepath.Clean(abs)
+	}
+	return c, true
+}
+
 func sameGitCommonDir(ctx context.Context, g Git, a, b string) bool {
 	if !g.IsRepo(ctx, a) || !g.IsRepo(ctx, b) {
 		return false
 	}
-	ra, errA := g.Run(ctx, a, "rev-parse", "--git-common-dir")
-	rb, errB := g.Run(ctx, b, "rev-parse", "--git-common-dir")
-	if errA != nil || errB != nil {
+	ca, okA := resolveNormalizedCommonDir(ctx, g, a)
+	cb, okB := resolveNormalizedCommonDir(ctx, g, b)
+	if !okA || !okB {
 		return false
 	}
-	ca := strings.TrimSpace(ra)
-	if !filepath.IsAbs(ca) {
-		ca = filepath.Join(a, ca)
-	}
-	cb := strings.TrimSpace(rb)
-	if !filepath.IsAbs(cb) {
-		cb = filepath.Join(b, cb)
-	}
-	return strings.EqualFold(filepath.Clean(ca), filepath.Clean(cb))
+	return strings.EqualFold(ca, cb)
 }
 
 func resolveUniqueNestedBranch(ctx context.Context, g Git, repoDir, desiredBranch, targetWT string) string {

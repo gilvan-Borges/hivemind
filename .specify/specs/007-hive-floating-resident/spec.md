@@ -1,6 +1,6 @@
 # Spec — Agent Hive (Agente Residente Flutuante na Área de Trabalho)
 
-> Status: Rascunho para Aprovação
+> Status: Implementado (Onda 4 — W4-03 / W4-04)
 > Identidade unificada: **Agent Hive** (mesmo cérebro, sessão e histórico do agente Residente dentro da IDE e flutuando fora dela)
 > Alvos: [x] HiveMind IDE (`ide/`) · [x] HiveMind Orb (`ide/frontend/src/orb/`) · [ ] HiveMind-App (paridade semântica de estado mantida)
 > Regras aplicáveis: D1–D8 (`.specify/memory/constitution.md`)

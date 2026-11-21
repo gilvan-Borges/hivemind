@@ -109,7 +109,12 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
-					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{"note": "app-mobile validado"})
+					return modelx.FunctionCall("qa_approve", "qa1", map[string]any{
+						"command":   "flutter test",
+						"exit_code": 0,
+						"evidence":  "All tests passed!",
+						"note":      "app-mobile validado",
+					})
 				}
 				return modelx.Text("aprovado")
 			}},

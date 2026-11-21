@@ -36,25 +36,25 @@
 | [Spec 03](03-concurrency-races-and-persistence.md) | Concorrência, Eliminação de Data Races e Persistência Atômica | **Implementado (Onda 1)** | `internal/atomicx/`, `sessionx/store.go`, `resident/lock_windows.go`, `orchestrator/jev_wrapper.go` |
 | [Spec 04](04-tools-sandbox-and-pathsec.md) | Blindagem de Tools, `pathsec` e Sandbox OS | **Implementado (Onda 1)** | `internal/pathsec/sensitive.go`, `internal/sandboxx/`, `internal/tools/` (`fileReadTracker`, `.gitignore`, Head+Tail log) |
 | [Spec 05](05-secrets-vault-and-multi-tenant-isolation.md) | Cofre Unificado (`secretx`), Isolamento AGY e Multi-Tenant Pool | **Implementado (Onda 1)** | `internal/secretx/vault_windows.go`, `internal/modelx/vault_store.go`, `agy_vault_windows.go`, `account_pool.go`, `relayclient/config.go` |
+| *Onda 4 (2026-11-21)* | [D-007 (.specify)](../../.specify/specs/007-hive-floating-resident/spec.md) — **Agent Hive Flutuante** (`W4-03`/`W4-04`) | **Implementado** | `ide/internal/orb/hub.go`, `ide/orb_host.go`, `ide/orb_window.go`, `ide/frontend/src/orb/view.ts`, `resident.ts` |
+| *Onda 5 (2026-11-21)* | [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, R8, versionamento `-ldflags`, auto-updater & CI | **Implementado** | `HiveMind-App/` (Room, `KeyTrust.kt`, `CleartextGuard.kt`, `Theme.kt`), `VERSION`, `internal/version/`, `internal/updater/`, `.github/workflows/ci.yml`, `deploy/relay/` |
 
 ### 1.2 Specs Parcialmente Concluídas
 
 | Documento | O que já foi feito | O que continua pendente | Onda Alvo |
 |---|---|---|---|
-| [`SPEC_ATUALIZACAO.md`](../SPEC_ATUALIZACAO.md) | Fases **1 a 7** + mutex Kernel `lock_windows.go` (`W1-04`) | **Fase 8** (dono único do núcleo IDE/serve/orb) · **Fase 9** (Releases, assinatura, manifest SHA-256, APK release) | Ondas 1, 4 e 5 |
-| [`SPEC_HIVE_AGENT.md`](../SPEC_HIVE_AGENT.md) | Fases **1, 2, 3 e 5** concluídas (Broker, sandbox `AppContainer`/`bwrap`, `secretx`, memória, `cron_add`, subagentes, hash de skill, workstream) | **Fase 4** (Browser e Desktop isolados em Windows Sandbox `.wsb` / container com gVisor, hoje desligados por padrão) | Onda 4 |
+| [`SPEC_ATUALIZACAO.md`](../SPEC_ATUALIZACAO.md) | Fases **1 a 7** + mutex Kernel `lock_windows.go` (`W1-04`) + **Fase 9** (`VERSION`/`-ldflags`, `internal/updater`, `checksums.txt`, R8 no `HiveMind-App`, `W5-04`/`W5-05`) | **Fase 8** (dono único do núcleo IDE/serve/orb) + plugar chamada de `internal/updater` em `ide/app.go` | Onda 4 |
+| [`SPEC_HIVE_AGENT.md`](../SPEC_HIVE_AGENT.md) | Fases **1, 2, 3 e 5** concluídas (Broker modularizado em `handlers_*.go`, sandbox `AppContainer`/`bwrap`, `secretx`, memória, `cron_add`, subagentes, hash de skill, workstream) | **Fase 4** (Browser e Desktop isolados em Windows Sandbox `.wsb` / container com gVisor, hoje desligados por padrão) | Onda 4 |
 | [`SPEC_JEV_ORQUESTRADOR.md`](../SPEC_JEV_ORQUESTRADOR.md) | Fases **1 a 5** + TypeSafe AI concluídas; **Onda 2** entregou Vertex AI em `models.ts` e failover Jev opcional em `resident/config.go` (`Config.JevFailover`) | — (spec concluída pela Onda 2) | ~~Onda 2~~ ✅ |
-| [`SPEC_APP_MOBILE_NATIVO.md`](../SPEC_APP_MOBILE_NATIVO.md) | App nativo refeito em Kotlin/Compose (`HiveMind-App`) com LAN v2 e Relay E2EE | Modos `plan:sdd`/`plan:sdd-jira`/`resident`, eventos `provider_health`/`relay_gap`/Jev, cache offline Room, tokens `Theme.kt` (`SurfacePanel`, fontes) | Onda 5 |
-| [`ROADMAP.md`](../ROADMAP.md) | Fases **0 a 4** concluídas (CLI, Shell IDE, CM6, Ghost Text, Ctrl+K, Inline Diff, `gopls`, ConPTY, Problemas); **streaming real do `agy`** entregue na Onda 2 (`cli_exec.go`) | **Fase 5 & Débitos:** QA com execução obrigatória de testes, `git blame`/merge conflicts, remoção de `ignore_io.go`, single-source allowlist, versão dinâmica | Ondas 3 e 5 |
+| [`SPEC_APP_MOBILE_NATIVO.md`](../SPEC_APP_MOBILE_NATIVO.md) | **100% Concluída (Onda 5):** Room cache offline, `peer_presence`, modos `plan:sdd`/`plan:sdd-jira`/`resident`, `provider_health`/`relay_gap`/Jev, TOFU, `network_security_config.xml`, R8 e tokens `Theme.kt` (`SurfacePanel`, `Inter`/`JetBrains Mono`) | — | ~~Onda 5~~ ✅ |
+| [`ROADMAP.md`](../ROADMAP.md) | Fases **0 a 4** + streaming real do `agy` + `qa_approve` com evidência (`W3-03`) + remoção de `ignore_io.go` (`W3-06`) + single-source allowlist (`W3-09`) + versão dinâmica (`W5-04`) | `git blame`/resolução de conflitos na IDE (`W4-08`) | Onda 4 |
+| [Spec 01](01-orchestrator-modular-harness.md) | `tools` fatiado em `policy/fs/shell/git/github/jira/qa.go` + `resident/broker.go` fatiado em `handlers_*.go` (`W3-02`) | Quebrar `internal/orchestrator/orchestrator.go` (`W3-01`) | Onda 3 |
+| [Spec 07](07-ide-architecture-services-and-reactive-ui.md) | Proteção de foco/input em `renderLeftSidebar`/`renderModalLayer` (`W4-06`), markdown incremental, `safeImageSrc`, CSP, ARIA focus-trap e CSS `@layer` (`W4-07`) | Quebrar `ide/app.go`/`diff.go` (`W4-01`), `CloseProject` (`W4-02`), bindings `wailsjs` (`W4-05`), `git blame` (`W4-08`) | Onda 4 |
+| [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) | `gitx.Local` non-interactive env + `EnsureWorktree` + `LiteralPathspec` (`W3-06`); `githubx` GHES + paginação `Link`/GraphQL (`W3-07`); heurísticas Jira genéricas + `ListProjectIssues` read-only + helper `githubx/crosslink.go` (`W3-08`) | Plugar `crosslink.go` no `orchestrator` pós-Onda 2 | Onda 3 |
+| [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) | Onda 1 + **Onda 3 (`W3-05`)**: `remote`/`relayclient` movidos para `internal/` e `hivemind serve` headless em `internal/cli/servehost.go` | `internal/runtime/bootstrap.go` unificando construção de Runner/Jev/mcpx entre CLI/TUI/IDE (`W3-04`) | Onda 3 |
 
 ### 1.3 Specs 100% Pendentes (Backlog Consolidado)
 
-- [D-007 (`.specify/specs/007-hive-floating-resident`)](../../.specify/specs/007-hive-floating-resident/spec.md) — **Agent Hive Flutuante** (14 tasks `H001`–`H011`, `D001`–`D003` -> **Onda 4**)
-- [Spec 01](01-orchestrator-modular-harness.md) — Modularização `orchestrator`, `tools`, `resident/broker` (**Onda 3**)
-- [Spec 07](07-ide-architecture-services-and-reactive-ui.md) — Serviços `idecore`, `CloseProject` e UI reativa sem perda de foco (**Onda 4**)
-- [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) — Git não-interativo, GHES, paginação e cross-link de PRs (**Onda 3**)
-- [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — **Parcial (Onda 1 concluída):** Anti-replay Relay, Limiters/QR SQLite e Trust Gate MCP entregues; Bootstrap único e desacoplamento do `serve` pendentes (**Onda 3**)
-- [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, auto-updater e CI/CD completo (**Onda 5**)
 - [Spec 11](11-external-workers-worktrees-and-ux.md) — Workers CLI externos (piloto Cursor CLI), ergonomia de worktrees, `SOUL.md`/webhooks/Slack, custo USD e UX avançada (**Onda 6**)
 
 ---
@@ -107,14 +107,14 @@
 *Objetivo: fatiar monólitos Go, equalizar CLI/TUI com IDE e completar suporte enterprise em Git/GitHub/Jira.*
 
 - [ ] **W3-01** `[Spec 01]` Quebrar `internal/orchestrator/orchestrator.go` (`3.114L`) em `runner.go`, `triage.go`, `pipeline.go` e `delivery.go`; parar criação implícita de `MEMORY.md` em `teamMemorySnippet()`, usar `ctx` do turno em `recordQAStall(ctx)` e checar erros de `State().Set` e `Audit.RecordOutcome`.
-- [ ] **W3-02** `[Spec 01]` Fatiar `internal/tools/tools.go` (`1.695L`) em `policy.go`, `fs.go`, `shell.go`, `git.go`, `github.go`, `jira.go`, `qa.go` e dividir `internal/resident/broker.go` (`1.028L`) em middleware + handlers por domínio.
-- [ ] **W3-03** `[ROADMAP F5]` Endurecer `qa_approve` em `internal/tools/qa.go` para exigir evidência estruturada de comando/teste executado (ou justificativa em tarefas pure-docs) quando aplicável.
+- [x] **W3-02** `[Spec 01]` Fatiar `internal/tools/tools.go` (`1.695L`) em `policy.go`, `fs.go`, `shell.go`, `git.go`, `github.go`, `jira.go`, `qa.go` e dividir `internal/resident/broker.go` (`1.028L`) em middleware + handlers por domínio.
+- [x] **W3-03** `[ROADMAP F5]` Endurecer `qa_approve` em `internal/tools/qa.go` para exigir evidência estruturada de comando/teste executado (ou justificativa em tarefas pure-docs) quando aplicável *(mocks em `internal/orchestrator/*_test.go` atualizados para o gate)*.
 - [ ] **W3-04** `[Spec 09]` Extrair `internal/runtime/bootstrap.go` unificando construção de `Runner`, `GitHub`, `Jira`, `Sessions`, `mcpx` (com pool persistente na IDE) e `NewJevModelFactory` entre CLI, TUI e IDE.
-- [ ] **W3-05** `[Spec 09]` Mover `ide/internal/remote` e `ide/internal/relayclient` para `internal/` permitindo `hivemind serve` headless sem depender de `hivemind-ide.exe`.
-- [ ] **W3-06** `[Spec 08 / ROADMAP]` Unificar env Git não-interativo (`GCM_INTERACTIVE=Never`, `GIT_ASKPASS=""`) em `gitx.Local.Run`, proteger `EnsureWorktree` contra remoção em falha transitória, usar `LiteralPathspec` em `DiscardFileChanges` e remover `internal/gitx/ignore_io.go`.
-- [ ] **W3-07** `[Spec 08]` Atualizar `githubx.ParseRemote` para suportar hosts **GitHub Enterprise Server (GHES)**, adicionar paginação (`Link` header + cursor GraphQL) e eliminar duplicação REST/GraphQL de `idecore/diff.go`.
-- [ ] **W3-08** `[Spec 08]` Remover termos específicos de cliente de `matchJiraProjectFromNames`, impedir mutação de `.hivemind/team.yaml` durante `ListProjectIssues` e implementar cross-linking automático entre múltiplos PRs abertos em entregas multi-repo.
-- [ ] **W3-09** `[ROADMAP]` Unificar fonte única para allowlist de shell (`internal/team` vs `examples/team.yaml`).
+- [x] **W3-05** `[Spec 09]` Mover `ide/internal/remote` e `ide/internal/relayclient` para `internal/` permitindo `hivemind serve` headless sem depender de `hivemind-ide.exe`.
+- [x] **W3-06** `[Spec 08 / ROADMAP]` Unificar env Git não-interativo (`GCM_INTERACTIVE=Never`, `GIT_ASKPASS=""`) em `gitx.Local.Run`, proteger `EnsureWorktree` contra remoção em falha transitória, usar `LiteralPathspec` em `DiscardFileChanges` e remover `internal/gitx/ignore_io.go`.
+- [x] **W3-07** `[Spec 08]` Atualizar `githubx.ParseRemote` para suportar hosts **GitHub Enterprise Server (GHES)**, adicionar paginação (`Link` header + cursor GraphQL) e eliminar duplicação REST/GraphQL de `idecore/diff.go`.
+- [ ] **W3-08** `[Spec 08]` Remover termos específicos de cliente de `matchJiraProjectFromNames`, impedir mutação de `.hivemind/team.yaml` durante `ListProjectIssues` e implementar cross-linking automático entre múltiplos PRs abertos em entregas multi-repo *(parcial: sanitização e helper `githubx/crosslink.go` prontos; falta plugar o cross-link no `orchestrator`)*.
+- [x] **W3-09** `[ROADMAP]` Unificar fonte única para allowlist de shell (`internal/team` vs `examples/team.yaml`).
 - [ ] **W3-10** `[Verificação Onda 3]` Validar `go test -race ./...` na raiz do módulo, nenhum arquivo Go > 600 linhas em `orchestrator`/`tools`/`resident` e testes de paginação + GHES verdes.
 
 ---
@@ -124,11 +124,11 @@
 
 - [ ] **W4-01** `[Spec 07]` Quebrar `ide/app.go` (`1.834L`) em serviços coesos e fatiar `ide/internal/idecore/diff.go` (`2.668L`) em `git_diff.go`, `worktree_sync.go`, `git_ops.go`, `jira_discovery.go`, `github_prs.go`.
 - [ ] **W4-02** `[Spec 07]` Implementar `CloseProject(workspace)` em `ide/app.go` chamado por `closeProjectTab()`, encerrando `FileWatcher`, `GitHubMonitor`, `AutoReviewManager` e `LSPManager`; unificar poller de PRs (60s/120s) e observar `.git/HEAD` + `.git/index` (incluindo sub-repos) no watcher.
-- [ ] **W4-03** `[Spec 007 — H001..H005]` Estender `ide/internal/orb/hub.go` e `ide/orb_host.go` / `orb_window.go` com `OrbResidentState`, streaming ao vivo do `ResidentManager`, ações `resident_*` e janela `396×540` com clamp no monitor.
-- [ ] **W4-04** `[Spec 007 — D001..D003, H006..H011]` Atualizar `ide/frontend/src/orb/view.ts`, `styles.css`, `boot.ts` e `resident.ts` com aba **Conversa** padrão, aprovação fixa acima do composer, preservação do rascunho no `<textarea>`, sincronia **Abrir IDE** e testes Vitest.
+- [x] **W4-03** `[Spec 007 — H001..H005]` Estender `ide/internal/orb/hub.go` e `ide/orb_host.go` / `orb_window.go` com `OrbResidentState`, streaming ao vivo do `ResidentManager`, ações `resident_*` e janela `396×540` com clamp no monitor.
+- [x] **W4-04** `[Spec 007 — D001..D003, H006..H011]` Atualizar `ide/frontend/src/orb/view.ts`, `styles.css`, `boot.ts` e `resident.ts` com aba **Conversa** padrão, aprovação fixa acima do composer, preservação do rascunho no `<textarea>`, sincronia **Abrir IDE** e testes Vitest.
 - [ ] **W4-05** `[Spec 07]` Adotar diretamente bindings tipados `wailsjs/go/main/App` em `ide/frontend/src/`, removendo duplicações manuais de `types.ts`.
-- [ ] **W4-06** `[Spec 07]` Bloquear re-renders totais de `renderLeftSidebar()` / `renderModalLayer()` sob eventos assíncronos enquanto houver input focado/sujo (preservando mensagens de commit e tokens sendo digitados).
-- [ ] **W4-07** `[Spec 07]` Implementar parser **incremental por blocos** em `markdown.ts` (fim do `O(N²)` no streaming do chat), aplicar `safeImageSrc` em `modals.ts:1162`, adicionar CSP em `index.html`, foco/teclado ARIA + focus trap nos modais e modularizar `styles.css` em `@layer`.
+- [x] **W4-06** `[Spec 07]` Bloquear re-renders totais de `renderLeftSidebar()` / `renderModalLayer()` sob eventos assíncronos enquanto houver input focado/sujo (preservando mensagens de commit e tokens sendo digitados).
+- [x] **W4-07** `[Spec 07]` Implementar parser **incremental por blocos** em `markdown.ts` (fim do `O(N²)` no streaming do chat), aplicar `safeImageSrc` em `modals.ts:1162`, adicionar CSP em `index.html`, foco/teclado ARIA + focus trap nos modais e modularizar `styles.css` em `@layer`.
 - [ ] **W4-08** `[ROADMAP F5]` Adicionar `git blame`, histórico por arquivo e resolução guiada de conflitos no painel Git da IDE.
 - [ ] **W4-09** `[SPEC_HIVE_AGENT F4]` Implementar provisão isolada real em Windows Sandbox (`.wsb` com `ProtectedClient`, rede filtrada e workspace read-only) para `browser_open` / `desktop_*`.
 - [ ] **W4-10** `[Verificação Onda 4]` Validar `check-design-tokens.mjs`, `npm test`, `npm run build`, `go test ./ide/...` e teste manual de abrir/fechar 10 abas + uso completo do Agent Hive flutuante com a IDE fechada na bandeja.
@@ -138,14 +138,14 @@
 ### Onda 5 — `HiveMind-App` Offline-First, Auto-Update Assinado & CI/CD
 *Objetivo: fechar paridade do app Android, eliminar drift entre código e binário instalado e blindar pipeline de release.*
 
-- [ ] **W5-01** `[Spec 10 / SPEC_APP_MOBILE]` Adicionar `plan:sdd`, `plan:sdd-jira` e `resident` em `ChatScreen.kt`; desserializar `provider_health`, `relay_gap` e metadados Jev (`provider`, `model`, `tier`, `cost`, `gate`) em `Models.kt`/`HubState.kt`.
-- [ ] **W5-02** `[Spec 10]` Implementar cache offline **Room/SQLite** em `HiveMind-App` (projetos, lanes, mensagens e diffs) + presença instantânea via evento `peer_presence`.
-- [ ] **W5-03** `[Spec 10]` Substituir `usesCleartextTraffic="true"` por `network_security_config.xml` (restrito a LAN/Tailscale), exigir confirmação na rotação de chave TOFU, habilitar R8 (`isMinifyEnabled = true`) + signing externo de release e corrigir `Theme.kt` (`SurfacePanel #0C0C0C`, remover alias `SteelBlue`, fontes `Inter`/`JetBrains Mono`).
-- [ ] **W5-04** `[Spec 10 / SPEC_ATUALIZACAO F9]` Criar fonte única de versão (`VERSION` + SHA commit via `-ldflags` em `hivemind`, `hivemind-ide`, `hivemind-relay`) e remover cópia redundante de binário em `ide/build/`.
-- [ ] **W5-05** `[Spec 10 / SPEC_ATUALIZACAO F9]` Atualizar `scripts/build-installer.ps1` (remover fallback `npm install`, gerar `checksums.txt` SHA-256, suportar `signtool.exe`) e implementar verificador/auto-updater in-app via GitHub Releases (resolvendo drift vs `AppData\Local\Programs\HiveMind`).
-- [ ] **W5-06** `[Spec 10]` Endurecer `.github/workflows/ci.yml`: incluir `go test -race ./internal/remote/...`, job Android (`./gradlew testDebugUnitTest lintDebug`) e `govulncheck ./...`.
-- [ ] **W5-07** `[Spec 10]` Endurecer `deploy/relay/`: fixar digest `@sha256` em `Dockerfile` + `HEALTHCHECK`, alinhar usuário `relay` entre Dockerfile e `hivemind-relay.service`, limites cgroup/seccomp e HSTS/CSP no `Caddyfile`.
-- [ ] **W5-08** `[Verificação Onda 5]` Validar CI verde ponta-a-ponta, `assembleRelease` do `HiveMind-App` com R8 ativo e upgrade simulado do instalador Windows com conferência SHA-256.
+- [x] **W5-01** `[Spec 10 / SPEC_APP_MOBILE]` Adicionar `plan:sdd`, `plan:sdd-jira` e `resident` em `ChatScreen.kt`; desserializar `provider_health`, `relay_gap` e metadados Jev (`provider`, `model`, `tier`, `cost`, `gate`) em `Models.kt`/`HubState.kt`.
+- [x] **W5-02** `[Spec 10]` Implementar cache offline **Room/SQLite** em `HiveMind-App` (projetos, lanes, mensagens e diffs) + presença instantânea via evento `peer_presence`.
+- [x] **W5-03** `[Spec 10]` Substituir `usesCleartextTraffic="true"` por `network_security_config.xml` (restrito a LAN/Tailscale), exigir confirmação na rotação de chave TOFU, habilitar R8 (`isMinifyEnabled = true`) + signing externo de release e corrigir `Theme.kt` (`SurfacePanel #0C0C0C`, remover alias `SteelBlue`, fontes `Inter`/`JetBrains Mono`).
+- [x] **W5-04** `[Spec 10 / SPEC_ATUALIZACAO F9]` Criar fonte única de versão (`VERSION` + SHA commit via `-ldflags` em `hivemind`, `hivemind-ide`, `hivemind-relay`) e remover cópia redundante de binário em `ide/build/`.
+- [x] **W5-05** `[Spec 10 / SPEC_ATUALIZACAO F9]` Atualizar `scripts/build-installer.ps1` (remover fallback `npm install`, gerar `checksums.txt` SHA-256, suportar `signtool.exe`) e implementar verificador/auto-updater in-app via GitHub Releases (resolvendo drift vs `AppData\Local\Programs\HiveMind`).
+- [x] **W5-06** `[Spec 10]` Endurecer `.github/workflows/ci.yml`: incluir `go test -race ./internal/remote/...`, job Android (`./gradlew testDebugUnitTest lintDebug`) e `govulncheck ./...`.
+- [x] **W5-07** `[Spec 10]` Endurecer `deploy/relay/`: fixar digest `@sha256` em `Dockerfile` + `HEALTHCHECK`, alinhar usuário `relay` entre Dockerfile e `hivemind-relay.service`, limites cgroup/seccomp e HSTS/CSP no `Caddyfile`.
+- [ ] **W5-08** `[Verificação Onda 5]` Validar CI verde ponta-a-ponta, `assembleRelease` do `HiveMind-App` com R8 ativo e upgrade simulado do instalador Windows com conferência SHA-256 *(parcial: `assembleRelease` R8 local validado e CI workflow corrigido; monitorando Actions pós-push; simulação do instalador Windows pendente)*.
 
 ---
 

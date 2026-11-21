@@ -1,6 +1,6 @@
 # Spec 01 — Modularização do Orquestrador, Ferramentas e Broker do Resident
 
-> **Status:** Proposta de Refatoração
+> **Status:** Em Progresso (Onda 3 parcial: `W3-02` e `W3-03` implementados — split de `internal/tools/`, `internal/resident/` e gate estruturado de `qa_approve`; `W3-01` split de `orchestrator.go` pendente)
 > **Alvos:** `internal/orchestrator/`, `internal/tools/`, `internal/resident/`
 
 ---

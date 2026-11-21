@@ -2,7 +2,6 @@ package modelx
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,23 +38,27 @@ func TestProbeProviderRecovery_AgySingleGroupExhaustedOrPoolHealthy(t *testing.T
 		t.Fatalf("expected agy circuit closed when Gemini group still has 85%% quota, got %+v", snap.Circuits["agy"])
 	}
 
-	// Now simulate ALL groups on the active account at 0%, but two healthy reserve vault profiles exist.
+	// Now simulate ALL groups on the active account at 0%, but two healthy reserve profiles exist.
+	// Use AuthMode="env" so the test is OS-independent (vault DPAPI is Windows-only).
+	accountPoolMu.Lock()
+	accountPoolLoaded = true
+	accountPoolState = accountPoolHealthFile{
+		Version: 1,
+		Slots:   map[string]accountModelSlotState{},
+	}
+	accountPoolMu.Unlock()
+
 	origProfilesPathFn := profilesFilePathFn
 	profilesFilePathFn = func() (string, error) {
 		return filepath.Join(tmp, "provider-profiles.json"), nil
 	}
 	t.Cleanup(func() { profilesFilePathFn = origProfilesPathFn })
 
-	for _, id := range []string{"agy-acc1", "agy-acc2"} {
-		vpath, _ := AgyProfileVaultPath(id)
-		_ = os.MkdirAll(filepath.Dir(vpath), 0o700)
-		_ = os.WriteFile(vpath, []byte(`{"id_token_email":"`+id+`@example.com"}`), 0o600)
-	}
 	profilesMu.Lock()
 	_ = saveProfilesLocked(storedProfilesFile{
 		Profiles: []ProviderProfile{
-			{ID: "agy-acc1", Provider: "agy", Name: "Conta 1", AuthMode: "vault", IsDefault: true},
-			{ID: "agy-acc2", Provider: "agy", Name: "Conta 2", AuthMode: "vault"},
+			{ID: "agy-acc1", Provider: "agy", Name: "Conta 1", AuthMode: "env", Env: map[string]string{"AGY_PROFILE": "acc1"}, IsDefault: true},
+			{ID: "agy-acc2", Provider: "agy", Name: "Conta 2", AuthMode: "env", Env: map[string]string{"AGY_PROFILE": "acc2"}},
 		},
 	})
 	profilesMu.Unlock()
