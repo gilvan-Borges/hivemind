@@ -105,7 +105,7 @@ func RedactSecrets(s string) string {
 func RedactTarget(raw string) string {
 	s := strings.TrimSpace(RedactSecrets(raw))
 	s = strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
-	return strx.TruncateBytes(s, 160, "…")
+	return strx.TruncateBytes(s, 157, "…")
 }
 
 // IsSensitivePath reports whether relOrAbs points to a secret, credential store,

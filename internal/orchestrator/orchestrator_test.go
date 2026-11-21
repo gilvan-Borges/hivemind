@@ -13,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
@@ -617,6 +618,31 @@ func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dev1SawPlan, dev1SawSlice, dev2SawSlice, architectReRan bool
+	// Spec 02 §3.1: o plano aprovado (state chief_plan) chega ao Dev pelo bloco
+	// <system-reminder> da cauda; a subtarefa exclusiva segue no corpo estático.
+	scanRequest := func(req *model.LLMRequest) string {
+		var sb strings.Builder
+		if req != nil && req.Config != nil && req.Config.SystemInstruction != nil {
+			for _, p := range req.Config.SystemInstruction.Parts {
+				if p != nil {
+					sb.WriteString(p.Text)
+				}
+			}
+		}
+		if req != nil {
+			for _, c := range req.Contents {
+				if c == nil {
+					continue
+				}
+				for _, p := range c.Parts {
+					if p != nil && p.Text != "" {
+						sb.WriteString(p.Text)
+					}
+				}
+			}
+		}
+		return sb.String()
+	}
 	squadRunner := &Runner{
 		Workspace:          dir,
 		Project:            project,
@@ -639,25 +665,17 @@ func TestPlanApprovalPreservesChiefPlanAndSlicesAcrossStores(t *testing.T) {
 				return modelx.Text("Guardrails ok.")
 			}},
 			"dev_1": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
-				if req.Config != nil && req.Config.SystemInstruction != nil {
-					for _, p := range req.Config.SystemInstruction.Parts {
-						if strings.Contains(p.Text, "Plano arquitetural aprovado pelo humano") {
-							dev1SawPlan = true
-						}
-						if strings.Contains(p.Text, "fatia exclusiva frontend.ts") {
-							dev1SawSlice = true
-						}
-					}
+				if strings.Contains(scanRequest(req), "Plano arquitetural aprovado pelo humano") {
+					dev1SawPlan = true
+				}
+				if strings.Contains(scanRequest(req), "fatia exclusiva frontend.ts") {
+					dev1SawSlice = true
 				}
 				return modelx.Text("frontend pronto")
 			}},
 			"dev_2": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
-				if req.Config != nil && req.Config.SystemInstruction != nil {
-					for _, p := range req.Config.SystemInstruction.Parts {
-						if strings.Contains(p.Text, "fatia exclusiva backend.go") {
-							dev2SawSlice = true
-						}
-					}
+				if strings.Contains(scanRequest(req), "fatia exclusiva backend.go") {
+					dev2SawSlice = true
 				}
 				return modelx.Text("backend pronto")
 			}},
@@ -1729,8 +1747,15 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") {
 		t.Fatalf("did not expect chief-only or dev-only in qa instruction")
 	}
-	if !strings.Contains(devInst, "MEMORIA_MARCADOR") || !strings.Contains(qaInst, "MEMORIA_MARCADOR") {
-		t.Fatalf("team memory should reach dev and QA through state, dev=%q qa=%q", devInst, qaInst)
+	// Spec 02 §3.1: a memória do time vive em UM único lugar estável — a
+	// primeira mensagem user da sessão (vista pelo Chefe) — e não é mais
+	// duplicada no prompt de cada subagente.
+	if !strings.Contains(chiefUserMsg, "MEMORIA_MARCADOR") {
+		t.Fatalf("team memory should reach the Chief via the session's first user message, got: %q", chiefUserMsg)
+	}
+	if strings.Contains(chiefInst, "MEMORIA_MARCADOR") || strings.Contains(devInst, "MEMORIA_MARCADOR") || strings.Contains(qaInst, "MEMORIA_MARCADOR") {
+		t.Fatalf("team memory must NOT be duplicated into agent system instructions (chief=%v dev=%v qa=%v)",
+			strings.Contains(chiefInst, "MEMORIA_MARCADOR"), strings.Contains(devInst, "MEMORIA_MARCADOR"), strings.Contains(qaInst, "MEMORIA_MARCADOR"))
 	}
 }
 
@@ -1975,7 +2000,28 @@ func TestResumedSessionPreservesPriorContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// O contexto retomado (prior_session_context) agora viaja no bloco
+	// <system-reminder> da cauda (Spec 02 §3.1), nunca no SystemInstruction —
+	// que fica byte-idêntico entre turnos para preservar o KV-cache.
+	extractAll := func(req *model.LLMRequest) string {
+		var sb strings.Builder
+		sb.WriteString(extractSystem(req))
+		if req != nil {
+			for _, c := range req.Contents {
+				if c == nil {
+					continue
+				}
+				for _, p := range c.Parts {
+					if p != nil && p.Text != "" {
+						sb.WriteString(p.Text)
+					}
+				}
+			}
+		}
+		return sb.String()
+	}
 	var devTurn2System string
+	var devTurn2Tail string
 	r2 := &Runner{
 		Workspace: repo,
 		Project:   project,
@@ -1992,6 +2038,7 @@ func TestResumedSessionPreservesPriorContext(t *testing.T) {
 			}},
 			"dev": &modelx.Scripted{Fn: func(req *model.LLMRequest, _ int) *model.LLMResponse {
 				devTurn2System = extractSystem(req)
+				devTurn2Tail = extractAll(req)
 				return modelx.Text("dev turno 2 ok")
 			}},
 			"qa": &modelx.Scripted{Fn: func(_ *model.LLMRequest, call int) *model.LLMResponse {
@@ -2005,7 +2052,13 @@ func TestResumedSessionPreservesPriorContext(t *testing.T) {
 	if _, err := r2.Run(ctx, Request{SessionID: res1.SessionID, Objective: "aplique o mesmo padrão no segundo endpoint"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(devTurn2System, "[prior_session_context]") || !strings.Contains(devTurn2System, "DECISAO_TURNO_1") {
-		t.Fatalf("expected resumed dev to receive prior_session_context with turn 1 decision, got: %q", devTurn2System)
+	if !strings.Contains(devTurn2Tail, "[prior_session_context]") || !strings.Contains(devTurn2Tail, "DECISAO_TURNO_1") {
+		t.Fatalf("expected resumed dev to receive prior_session_context with turn 1 decision, got: %q", devTurn2Tail)
+	}
+	if strings.Contains(devTurn2System, "[prior_session_context]") {
+		t.Fatal("prior_session_context must ride the trailing <system-reminder>, not the SystemInstruction (KV-cache stable prefix)")
+	}
+	if !strings.Contains(devTurn2Tail, "<system-reminder>") {
+		t.Fatal("expected trailing <system-reminder> block in resumed dev request")
 	}
 }

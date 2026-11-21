@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/fslockx"
 )
 
 // ErrorClass identifies the failure mode of a model call after provider-level retries.
@@ -154,9 +156,17 @@ type circuitRecord struct {
 	ConsecutiveOutages int             `json:"consecutiveOutages,omitempty"`
 	OpenedAt           time.Time       `json:"openedAt,omitempty"`
 	Until              time.Time       `json:"until,omitempty"`
-	HalfOpenInFlight   bool            `json:"-"`
+	// HalfOpenLeaseUntil holds the TTL lease of the single half-open probe slot
+	// (Spec 06 §3). Replaces the old HalfOpenInFlight boolean that leaked
+	// forever when a probe died without a classifiable outcome.
+	HalfOpenLeaseUntil time.Time       `json:"halfOpenLeaseUntil,omitempty"`
 	Recent             []outcomeSample `json:"recent,omitempty"`
 }
+
+// halfOpenLeaseTTL bounds how long a claimed probe slot stays reserved when
+// the probe never reports (panic, cancel, ErrClassPolicy early exit). The
+// circuit self-heals after the TTL instead of staying wedged.
+const halfOpenLeaseTTL = 2 * time.Minute
 
 type providerStateRecord struct {
 	circuitRecord
@@ -183,7 +193,16 @@ type HealthStore struct {
 	cooldown CooldownConfig
 	nowFn    func() time.Time
 	onChange func(opened bool, allClosed bool)
+
+	// Spend write debounce (Spec 06 §3): the ledger is monotone, so it only
+	// hits the disk once per recordSpendDebounce window; any circuit-changing
+	// save flushes the pending delta immediately.
+	lastSpendSave time.Time
+	spendDirty   bool
 }
+
+// recordSpendDebounce bounds health.json rewrites caused by spend accounting.
+const recordSpendDebounce = 2 * time.Second
 
 // HealthPath returns the default user-level health.json path.
 func HealthPath() (string, error) {
@@ -289,7 +308,7 @@ func (h *HealthStore) SyncCredentialFingerprints(fps map[string]string) {
 			rec.Reason = ""
 			rec.Until = time.Time{}
 			rec.FailureCount = 0
-			rec.HalfOpenInFlight = false
+			rec.HalfOpenLeaseUntil = time.Time{}
 			changed = true
 		}
 		rec.CredFingerprint = fp
@@ -306,7 +325,9 @@ func (h *HealthStore) SyncCredentialFingerprints(fps map[string]string) {
 }
 
 // TryAcquireHalfOpen atomically claims the single probe slot for a half-open
-// provider or model so concurrent devs do not stampede recovery probes.
+// provider or model so concurrent devs do not stampede recovery probes. The
+// claim is a TTL lease: a probe that dies without calling RecordSuccess or
+// RecordFailure (cancel, 400, panic) self-releases after halfOpenLeaseTTL.
 func (h *HealthStore) TryAcquireHalfOpen(provider, model string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -317,31 +338,51 @@ func (h *HealthStore) TryAcquireHalfOpen(provider, model string) bool {
 		return false
 	}
 	if pr.Circuit == CircuitHalfOpen {
-		if pr.HalfOpenInFlight {
+		if !leaseFree(pr.HalfOpenLeaseUntil, now) {
 			return false
 		}
-		pr.HalfOpenInFlight = true
+		pr.HalfOpenLeaseUntil = now.Add(halfOpenLeaseTTL)
 	}
 	if strings.TrimSpace(model) != "" {
 		mr := h.ensureModelLocked(provider, model)
 		advanceLazyState(mr, now)
 		if mr.Circuit == CircuitOpen {
 			if pr.Circuit == CircuitHalfOpen {
-				pr.HalfOpenInFlight = false
+				pr.HalfOpenLeaseUntil = time.Time{}
 			}
 			return false
 		}
 		if mr.Circuit == CircuitHalfOpen {
-			if mr.HalfOpenInFlight {
+			if !leaseFree(mr.HalfOpenLeaseUntil, now) {
 				if pr.Circuit == CircuitHalfOpen {
-					pr.HalfOpenInFlight = false
+					pr.HalfOpenLeaseUntil = time.Time{}
 				}
 				return false
 			}
-			mr.HalfOpenInFlight = true
+			mr.HalfOpenLeaseUntil = now.Add(halfOpenLeaseTTL)
 		}
 	}
 	return true
+}
+
+// ReleaseHalfOpen frees the probe slot claimed by TryAcquireHalfOpen without
+// changing the circuit state (Spec 06 §3: "liberação garantida via defer caso o
+// probe não conclua com sucesso/falha classificável").
+func (h *HealthStore) ReleaseHalfOpen(provider, model string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if rec, ok := h.state.Providers[strings.ToLower(strings.TrimSpace(provider))]; ok && rec != nil {
+		rec.HalfOpenLeaseUntil = time.Time{}
+	}
+	if strings.TrimSpace(model) != "" {
+		if rec, ok := h.state.Models[catalogKey(provider, model)]; ok && rec != nil {
+			rec.HalfOpenLeaseUntil = time.Time{}
+		}
+	}
+}
+
+func leaseFree(until, now time.Time) bool {
+	return until.IsZero() || !now.Before(until)
 }
 
 // RecordSuccess closes any open/half-open circuits on provider+model and records a clean outcome.
@@ -355,7 +396,7 @@ func (h *HealthStore) RecordSuccess(provider, model string) {
 	pr.Until = time.Time{}
 	pr.FailureCount = 0
 	pr.ConsecutiveOutages = 0
-	pr.HalfOpenInFlight = false
+	pr.HalfOpenLeaseUntil = time.Time{}
 
 	if strings.TrimSpace(model) != "" {
 		mr := h.ensureModelLocked(provider, model)
@@ -366,7 +407,7 @@ func (h *HealthStore) RecordSuccess(provider, model string) {
 		mr.Reason = ""
 		mr.Until = time.Time{}
 		mr.FailureCount = 0
-		mr.HalfOpenInFlight = false
+		mr.HalfOpenLeaseUntil = time.Time{}
 		mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: true})
 	}
 	allClosed := h.allClosedLocked(now)
@@ -381,6 +422,8 @@ func (h *HealthStore) RecordSuccess(provider, model string) {
 }
 
 // RecordSpend adds estimated/actual microUSD spend to provider for the current UTC day.
+// Disk writes are debounced: the counter is monotone, so it persists at most
+// once per recordSpendDebounce (circuit events flush it sooner).
 func (h *HealthStore) RecordSpend(provider string, microUSD int64) {
 	if microUSD <= 0 {
 		return
@@ -389,7 +432,12 @@ func (h *HealthStore) RecordSpend(provider string, microUSD int64) {
 	now := h.nowFn()
 	pr := h.ensureProviderLocked(provider, now)
 	pr.DailySpentMicro += microUSD
-	h.saveLocked()
+	if h.spendDirty || now.Sub(h.lastSpendSave) >= recordSpendDebounce {
+		h.saveLocked()
+		h.lastSpendSave = now
+	} else {
+		h.spendDirty = true
+	}
 	h.mu.Unlock()
 }
 
@@ -403,8 +451,8 @@ func (h *HealthStore) RecordFailure(provider, model string, class ErrorClass, re
 	now := h.nowFn()
 	pr := h.ensureProviderLocked(provider, now)
 	mr := h.ensureModelLocked(provider, model)
-	pr.HalfOpenInFlight = false
-	mr.HalfOpenInFlight = false
+	pr.HalfOpenLeaseUntil = time.Time{}
+	mr.HalfOpenLeaseUntil = time.Time{}
 	mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: false})
 
 	opened := false
@@ -537,7 +585,7 @@ func (h *HealthStore) UpdateQuotaProbe(provider string, remainingPct float64, re
 			pr.Reason = ""
 			pr.Until = time.Time{}
 			pr.FailureCount = 0
-			pr.HalfOpenInFlight = false
+			pr.HalfOpenLeaseUntil = time.Time{}
 			changed = true
 		}
 	}
@@ -573,7 +621,7 @@ func (h *HealthStore) Snapshot(creds map[string]bool, excludePairs map[string]bo
 		}
 		advanceLazyState(&pr.circuitRecord, now)
 		slots := 0
-		if pr.Circuit == CircuitHalfOpen && !pr.HalfOpenInFlight {
+		if pr.Circuit == CircuitHalfOpen && leaseFree(pr.HalfOpenLeaseUntil, now) {
 			slots = 1
 		}
 		snap.Circuits[prov] = ProviderHealth{
@@ -590,7 +638,7 @@ func (h *HealthStore) Snapshot(creds map[string]bool, excludePairs map[string]bo
 	for key, mr := range h.state.Models {
 		advanceLazyState(mr, now)
 		slots := 0
-		if mr.Circuit == CircuitHalfOpen && !mr.HalfOpenInFlight {
+		if mr.Circuit == CircuitHalfOpen && leaseFree(mr.HalfOpenLeaseUntil, now) {
 			slots = 1
 		}
 		snap.ModelCircuits[key] = ProviderHealth{
@@ -629,29 +677,43 @@ func (h *HealthStore) Summary(policy Policy, creds map[string]bool) []ProviderHe
 
 	out := make([]ProviderHealthView, 0, len(provs))
 	for _, p := range provs {
-		pr := h.ensureProviderLocked(p, now)
-		advanceLazyState(&pr.circuitRecord, now)
+		// Read-only (Spec 06 §2/§3): Summary must never INSERT provider records
+		// into the shared state. Unknown providers render a closed default view.
+		view := providerStateRecord{
+			circuitRecord:     circuitRecord{Circuit: CircuitClosed},
+			QuotaRemainingPct: -1,
+			DailyDate:         now.UTC().Format("2006-01-02"),
+		}
+		if pr, ok := h.state.Providers[p]; ok && pr != nil {
+			view = *pr
+		}
+		today := now.UTC().Format("2006-01-02")
+		if view.DailyDate != today {
+			view.DailyDate = today
+			view.DailySpentMicro = 0
+		}
+		advanceLazyState(&view.circuitRecord, now)
 		untilStr := ""
-		if !pr.Until.IsZero() && pr.Circuit != CircuitClosed {
-			untilStr = pr.Until.UTC().Format(time.RFC3339)
+		if !view.Until.IsZero() && view.Circuit != CircuitClosed {
+			untilStr = view.Until.UTC().Format(time.RFC3339)
 		}
 		var capMicro int64
 		if dailyUSD, ok := policy.DailyUSD[p]; ok && dailyUSD > 0 {
 			capMicro = int64(dailyUSD * 1_000_000)
 		}
 		var remPct float64
-		if pr.QuotaRemainingPct >= 0 {
-			remPct = pr.QuotaRemainingPct
+		if view.QuotaRemainingPct >= 0 {
+			remPct = view.QuotaRemainingPct
 		}
 		out = append(out, ProviderHealthView{
 			Provider:          p,
-			State:             string(pr.Circuit),
-			Reason:            pr.Reason,
+			State:             string(view.Circuit),
+			Reason:            view.Reason,
 			Until:             untilStr,
-			DailySpentMicro:   pr.DailySpentMicro,
+			DailySpentMicro:   view.DailySpentMicro,
 			DailyCapMicro:     capMicro,
 			QuotaRemainingPct: remPct,
-			QuotaStale:        pr.QuotaStale,
+			QuotaStale:        view.QuotaStale,
 			HasCredential:     creds[p],
 		})
 	}
@@ -677,7 +739,7 @@ func (h *HealthStore) allClosedLocked(now time.Time) bool {
 func advanceLazyState(rec *circuitRecord, now time.Time) {
 	if rec.Circuit == CircuitOpen && !rec.Until.IsZero() && !now.Before(rec.Until) {
 		rec.Circuit = CircuitHalfOpen
-		rec.HalfOpenInFlight = false
+		rec.HalfOpenLeaseUntil = time.Time{}
 	}
 }
 
@@ -745,6 +807,20 @@ func (h *HealthStore) saveLocked() {
 	if h.path == "" {
 		return
 	}
+	h.spendDirty = false
+	// Cross-process contract (Spec 06 §3): hold the OS file lock and adopt
+	// records another process (CLI / IDE / serve) wrote and we never saw, so
+	// the last writer never erases the others' circuit state. Shared records
+	// keep OUR in-memory view; daily spend merges as max (monotone counter).
+	if release, err := fslockx.Lock(h.path, 5*time.Second); err == nil && release != nil {
+		defer release()
+		if data, rerr := os.ReadFile(h.path); rerr == nil {
+			var disk healthFile
+			if json.Unmarshal(data, &disk) == nil {
+				h.mergeDiskStateLocked(disk)
+			}
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
 		return
 	}
@@ -759,5 +835,32 @@ func (h *HealthStore) saveLocked() {
 	if err := os.Rename(tmp, h.path); err != nil {
 		_ = os.Remove(tmp)
 		_ = os.WriteFile(h.path, data, 0o600)
+	}
+}
+
+// mergeDiskStateLocked folds records that exist only on disk into memory.
+func (h *HealthStore) mergeDiskStateLocked(disk healthFile) {
+	for k, rec := range disk.Providers {
+		if rec == nil {
+			continue
+		}
+		own, ok := h.state.Providers[k]
+		if !ok {
+			cp := *rec
+			h.state.Providers[k] = &cp
+			continue
+		}
+		if rec.DailySpentMicro > own.DailySpentMicro {
+			own.DailySpentMicro = rec.DailySpentMicro
+		}
+	}
+	for k, rec := range disk.Models {
+		if rec == nil {
+			continue
+		}
+		if _, ok := h.state.Models[k]; !ok {
+			cp := *rec
+			h.state.Models[k] = &cp
+		}
 	}
 }

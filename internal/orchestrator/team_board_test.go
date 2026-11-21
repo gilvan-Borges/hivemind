@@ -210,12 +210,26 @@ func TestParallelDevsShareWorktreeWithOwnedPathsAndTeamBoard(t *testing.T) {
 				return modelx.Text("frontend pronto")
 			}},
 			"qa": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
-				if call == 1 && req.Config != nil && req.Config.SystemInstruction != nil {
-					for _, p := range req.Config.SystemInstruction.Parts {
-						if p != nil && strings.Contains(p.Text, "Memória Compartilhada do Time") && strings.Contains(p.Text, "GET /health -> 200 OK") {
-							mu.Lock()
-							qaSawBoard = true
-							mu.Unlock()
+				if call == 1 && req != nil {
+					if req.Config != nil && req.Config.SystemInstruction != nil {
+						for _, p := range req.Config.SystemInstruction.Parts {
+							if p != nil && strings.Contains(p.Text, "Memória Compartilhada do Time") {
+								t.Errorf("TeamBoard dynamic summary must ride trailing <system-reminder>, not SystemInstruction")
+							}
+						}
+					}
+					for _, c := range req.Contents {
+						if c == nil {
+							continue
+						}
+						for _, p := range c.Parts {
+							if p != nil && strings.Contains(p.Text, "<system-reminder>") &&
+								strings.Contains(p.Text, "Memória Compartilhada do Time") &&
+								strings.Contains(p.Text, "GET /health -> 200 OK") {
+								mu.Lock()
+								qaSawBoard = true
+								mu.Unlock()
+							}
 						}
 					}
 				}
