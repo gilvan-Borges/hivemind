@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -152,31 +154,50 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 
 	var (
 		initOnce    sync.Once
+		policyMu    sync.Mutex
 		policy      jev.Policy
 		repoPol     jev.RepoPolicy
 		catalog     *jev.CatalogStore
 		healthStore *jev.HealthStore
 		credsFn     func() map[string]bool
 		outcomes    *jev.OutcomeLog
+		// Policy hot-reload bookkeeping (Spec 06 §4: policy.json e
+		// .hivemind/jev.yaml recarregados por mtime; o initOnce congela só
+		// as stores, nunca a policy).
+		policyMod   time.Time
+		policyPath  string
+		repoPolPath string
+		repoPolMod  time.Time
 	)
 	init := func(workspace string) {
 		initOnce.Do(func() {
 			if opts.Policy != nil {
 				policy = *opts.Policy
 			} else {
-				loaded, err := jev.LoadPolicy()
+				p, err := jev.LoadPolicy()
 				if err != nil {
-					policy = jev.DefaultPolicy()
-				} else {
-					policy = loaded
+					p = jev.DefaultPolicy()
+				}
+				policy = p
+				if pp, perr := jev.PolicyPath(); perr == nil {
+					policyPath = pp
+					if st, serr := os.Stat(pp); serr == nil {
+						policyMod = st.ModTime()
+					}
 				}
 			}
 			ws := strings.TrimSpace(workspace)
 			if ws == "" {
 				ws = strings.TrimSpace(opts.Workspace)
 			}
+			policyMu.Lock()
 			rp, _, _ := jev.LoadRepoPolicy(ws)
 			repoPol = rp
+			repoPolPath = filepath.Join(ws, ".hivemind", "jev.yaml")
+			if st, serr := os.Stat(repoPolPath); serr == nil {
+				repoPolMod = st.ModTime()
+			}
+			policyMu.Unlock()
 			if opts.Catalog != nil {
 				catalog = opts.Catalog
 			} else {
@@ -202,6 +223,39 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		})
 	}
 
+	// reloadPolicyIfChanged re-reads policy.json / .hivemind/jev.yaml when their
+	// mtime moved, so a policy edit lands on the next route instead of requiring
+	// a process restart (Spec 06 §4).
+	reloadPolicyIfChanged := func(workspace string) {
+		if opts.Policy != nil {
+			return // injected policy is authoritative for the whole run
+		}
+		policyMu.Lock()
+		defer policyMu.Unlock()
+		if policyPath != "" {
+			if st, err := os.Stat(policyPath); err == nil && !st.ModTime().Equal(policyMod) {
+				if loaded, err := jev.LoadPolicy(); err == nil {
+					policy = loaded
+				}
+				policyMod = st.ModTime()
+			}
+		}
+		ws := strings.TrimSpace(workspace)
+		if ws == "" {
+			ws = strings.TrimSpace(opts.Workspace)
+		}
+		rpPath := filepath.Join(ws, ".hivemind", "jev.yaml")
+		if rpPath != repoPolPath {
+			repoPolPath = rpPath
+			repoPolMod = time.Time{}
+		}
+		if st, err := os.Stat(rpPath); err == nil && !st.ModTime().Equal(repoPolMod) {
+			rp, _, _ := jev.LoadRepoPolicy(ws)
+			repoPol = rp
+			repoPolMod = st.ModTime()
+		}
+	}
+
 	return func(ctx context.Context, a team.Agent) (model.LLM, error) {
 		hint, _ := jevRouteHintFrom(ctx)
 		ws := hint.Workspace
@@ -209,6 +263,13 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			ws = opts.Workspace
 		}
 		init(ws)
+		reloadPolicyIfChanged(ws)
+		// Snapshot under the lock: parallel devs may route while another
+		// goroutine just hot-reloaded the policy.
+		policyMu.Lock()
+		pol, repoPolSnap := policy, repoPol
+		policyMu.Unlock()
+		repoPol := repoPolSnap
 
 		provNorm := team.NormalizeProvider(a.Provider, a.Model)
 		lowMod := strings.ToLower(strings.TrimSpace(a.Model))
@@ -361,6 +422,11 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			firstErr    jev.ErrorClass
 			llm         model.LLM
 			buildFails  int
+			// releaseLease frees the half-open probe slot claimed for the final
+			// choice. The wrapper defers it for the whole GenerateContent so a
+			// 400/cancel that skips RecordSuccess/RecordFailure still frees the
+			// circuit (Spec 06 §3 — fim do leak de HalfOpenInFlight).
+			releaseLease func()
 		)
 		for iter := 0; iter < 16 && buildFails < 3; iter++ {
 			healthFn := opts.Health
@@ -387,7 +453,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 
 			router := &jev.Router{
 				Catalog:  catalog,
-				Policy:   policy,
+				Policy:   pol,
 				Health:   healthFn,
 				Outcomes: outcomes,
 			}
@@ -405,7 +471,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					ref.Need.Provider,
 					ref.Need.Model,
 					float64(ref.Need.EstimatedMicroUSD)/1_000_000.0,
-					policy.AutoEscalateUSD,
+					pol.AutoEscalateUSD,
 				)
 				if !approveFn("budget", prompt) {
 					return nil, fmt.Errorf("roteamento Jev bloqueado pelo teto de orçamento: %s", jev.RedactSecrets(ref.Reason, opts.ExtraSecrets...))
@@ -416,7 +482,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				if (iter > 0 || buildFails > 0) && onEvent != nil {
 					var sum []jev.ProviderHealthView
 					if healthStore != nil {
-						sum = healthStore.Summary(policy, credsFn())
+						sum = healthStore.Summary(pol, credsFn())
 					}
 					onEvent(Event{
 						Kind:   "provider_exhausted",
@@ -435,11 +501,21 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				agentPin = jev.AgentPin{}
 				continue
 			}
+			if healthStore != nil {
+				prov, mod := choice.Provider, choice.Model
+				releaseLease = func() { healthStore.ReleaseHalfOpen(prov, mod) }
+			}
 
 			built, err := buildModel(ctx, choice.Provider, choice.Model)
 			if err != nil {
 				buildClass := classifyUpstream(err)
 				if buildClass == jev.ErrClassPolicy || ctx.Err() != nil {
+					// Policy/cancel: nada é registrado no health store — o lease
+					// precisa ser devolvido aqui mesmo, senão o half_open trava.
+					if releaseLease != nil {
+						releaseLease()
+						releaseLease = nil
+					}
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}
 				if healthStore != nil {
@@ -467,7 +543,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			if onEvent != nil {
 				var sum []jev.ProviderHealthView
 				if healthStore != nil {
-					sum = healthStore.Summary(policy, credsFn())
+					sum = healthStore.Summary(pol, credsFn())
 				}
 				onEvent(Event{
 					Kind:   "provider_exhausted",
@@ -485,7 +561,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			if firstChoice.Provider != "" {
 				var sum []jev.ProviderHealthView
 				if healthStore != nil {
-					sum = healthStore.Summary(policy, credsFn())
+					sum = healthStore.Summary(pol, credsFn())
 				}
 				failText := fmt.Sprintf("%s respondeu %s em %s. Seguindo em %s/%s.", firstChoice.Provider, firstErr, firstChoice.Model, choice.Provider, choice.Model)
 				onEvent(Event{
@@ -522,6 +598,11 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 		}
 
 		if opts.DisableWrap || healthStore == nil {
+			// Sem wrapper não há quem registre o desfecho da sonda: devolvemos o
+			// lease na saída para não depender só do TTL.
+			if releaseLease != nil {
+				releaseLease()
+			}
 			return llm, nil
 		}
 
@@ -529,7 +610,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			current:      llm,
 			choice:       choice,
 			taskBase:     task,
-			policy:       policy,
+			policy:       pol,
 			repoPol:      repoPol,
 			catalog:      catalog,
 			health:       healthStore,
@@ -544,6 +625,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			label:        label,
 			stage:        stage,
 			extraSecrets: opts.ExtraSecrets,
+			releaseLease: releaseLease,
 		}, nil
 	}
 }

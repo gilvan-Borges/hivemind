@@ -309,8 +309,11 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 		t.Fatalf("expected Jev to fall back to agy or cursor when OpenRouter <= $1.00, got %+v", fallbackChoice)
 	}
 
-	// Safety net: when agy/cursor/opencode are down and dailyUsd was exceeded, Jev MUST NOT
-	// stop the task when OpenRouter still has real credits above the reserve (e.g. $1.59).
+	// Budget guard (Spec 06 §4): com agy em circuito aberto, cursor/opencode sem
+	// credencial e o cap diário do OpenRouter já excedido ($1.20 gasto > $1.00),
+	// Jev NÃO pode gastar os $1.59 de crédito silenciosamente. O Score recusa
+	// com Code "budget" + Need (o candidato mais barato) e o orquestrador
+	// direciona ao fluxo approveFn("budget") — o resgate exige aprovação humana.
 	exhaustedOthersHealth := HealthSnapshot{
 		Credentials:            map[string]bool{"openrouter": true, "agy": true, "cursor": false, "opencode": false},
 		Circuits:               map[string]ProviderHealth{"agy": {Circuit: CircuitOpen, Reason: "quota"}},
@@ -319,11 +322,14 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 		OpenRouterBalanceKnown: true,
 	}
 	rescueChoice, rescueRef := Score(medTask, cat, pol, exhaustedOthersHealth, AgentPin{}, RepoPolicy{})
-	if rescueRef.Code != "" {
-		t.Fatalf("expected Jev to use available $1.59 OpenRouter credits instead of failing, got %+v", rescueRef)
+	if rescueRef.Code != "budget" || rescueRef.Need == nil {
+		t.Fatalf("expected budget refusal with Need when every candidate exceeds the daily cap, got %+v", rescueRef)
 	}
-	if rescueChoice.Provider != "openrouter" {
-		t.Fatalf("expected openrouter rescue choice, got %+v", rescueChoice)
+	if rescueRef.Need.Provider != "openrouter" {
+		t.Fatalf("expected the cheapest over-budget candidate as Need, got %+v", rescueRef.Need)
+	}
+	if rescueChoice.Provider != "" {
+		t.Fatalf("no silent rescue choice may be returned, got %+v", rescueChoice)
 	}
 
 	// When TypeSafe AI (Jev official API) handles Jev decisions, OpenRouter's $1.00 reserve lock

@@ -8,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
 const (
@@ -17,6 +20,21 @@ const (
 	// DefaultTypeSafeModel is the flagship Jev decision model served by TypeSafe AI.
 	DefaultTypeSafeModel = "jev-latest"
 )
+
+// typesafeHTTPClient is the package-level TypeSafe client: per-request
+// timeout via reqCtx, connection pooling via sharedHTTPTransport (Spec 06
+// §3.1: um &http.Client{} por chamada não reusa conexões nem HTTP/2).
+var (
+	typesafeClientOnce sync.Once
+	typesafeClientInst *http.Client
+)
+
+func typesafeHTTPClient() *http.Client {
+	typesafeClientOnce.Do(func() {
+		typesafeClientInst = &http.Client{Transport: sharedHTTPTransport()}
+	})
+	return typesafeClientInst
+}
 
 // ResolveTypeSafeConfig resolves the TypeSafe API key and base URL from context/profile,
 // environment variables (TYPESAFE_API_KEY / TYPESAFE_BASE_URL), or IDE api-keys.json.
@@ -169,7 +187,9 @@ func ClassifyWithTypeSafeJev(ctx context.Context, objective string) (string, err
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
+	// Client compartilhado sobre o pool único (Spec 06 §1: um &http.Client{}
+	// por chamada não reusa conexões nem HTTP/2).
+	resp, err := typesafeHTTPClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("TypeSafe System One falhou: %w", err)
 	}
@@ -177,7 +197,8 @@ func ClassifyWithTypeSafeJev(ctx context.Context, objective string) (string, err
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("TypeSafe System One retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		// Corpo cru pode ecoar chaves (Spec 06 §3.2): redigir na borda.
+		return "", fmt.Errorf("TypeSafe System One retornou HTTP %d: %s", resp.StatusCode, jev.RedactSecrets(strings.TrimSpace(string(body))))
 	}
 
 	var parsed struct {

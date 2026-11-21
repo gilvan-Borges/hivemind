@@ -61,8 +61,9 @@ func JevCredentialFingerprintsForContext(ctx context.Context) map[string]string 
 		return hex.EncodeToString(sum[:8])
 	}
 	ocKey, ocBase, _ := LoadOpenCodeCredentialsForContext(ctx)
-	agyBin, _ := LookAgy()
-	curBin, _ := LookCursor()
+	// Hot-path (Spec 06 §3.1): fingerprint usa as variantes com cache de PATH.
+	agyBin, _ := LookAgyCached()
+	curBin, _ := LookCursorCached()
 	return map[string]string{
 		"typesafe":         hashVal(resolveEnvForContext(ctx, "typesafe", "TYPESAFE_API_KEY"), resolveEnvForContext(ctx, "typesafe", "TYPESAFE_BASE_URL")),
 		"agy":              hashVal(agyBin),

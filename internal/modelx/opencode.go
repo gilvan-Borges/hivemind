@@ -63,7 +63,10 @@ func newOpenCodeHTTPClient(fallbackSessionID, authToken string) *http.Client {
 	}
 	return &http.Client{
 		Transport: &openCodeTransport{
-			base:      newRetryTransport(nil),
+			// Pipeline completo sobre o pool compartilhado: session headers ->
+			// prompt-cache injection -> retry -> keep-alive HTTP/2 (Spec 06 §3.1:
+			// "newOpenCodeHTTPClient omite promptCacheTransport").
+			base:      newPromptCacheTransport(newRetryTransport(sharedHTTPTransport())),
 			fallback:  fallbackSessionID,
 			authToken: authToken,
 		},
@@ -361,7 +364,13 @@ func fallbackOpenCodeRoute(tier, modelID, zenBaseURL string) openCodeRoute {
 }
 
 func lookupOpenCodeRoute(ctx context.Context, tier, modelID, apiKey, zenBaseURL string) openCodeRoute {
-	cacheKey := tier + ":" + strings.ToLower(strings.TrimSpace(modelID))
+	catURL := zenBaseURL
+	if tier == "go" {
+		catURL = resolveGoCatalogURL(zenBaseURL)
+	}
+	// Spec 06 §1: a chave de cache precisa incluir a baseURL por perfil —
+	// profiles com OPENCODE_BASE_URL distintos não podem compartilhar rotas.
+	cacheKey := tier + ":" + strings.ToLower(strings.TrimSpace(modelID)) + "@" + strings.TrimRight(catURL, "/")
 	ocRouteMu.RLock()
 	rt, ok := ocRouteCache[cacheKey]
 	ocRouteMu.RUnlock()
@@ -369,11 +378,8 @@ func lookupOpenCodeRoute(ctx context.Context, tier, modelID, apiKey, zenBaseURL 
 		return rt
 	}
 
-	// Cold start (e.g. CLI run): fetch the tier's /models catalog once to discover exact protocol + base_url.
-	catURL := zenBaseURL
-	if tier == "go" {
-		catURL = resolveGoCatalogURL(zenBaseURL)
-	}
+	// Cold start (e.g. CLI run): fetch the tier's /models catalog once to
+	// discover exact protocol + base_url.
 	_, _ = fetchOpenCodeCatalog(ctx, tier, catURL, apiKey)
 
 	ocRouteMu.RLock()
@@ -492,7 +498,23 @@ type openCodeModelsResp struct {
 	} `json:"data"`
 }
 
+// ocCatalogCache dedups concurrent catalog fetches and backs off 60s after a
+// failure so a cold-start offline network does not hang every model build
+// (Spec 06 §1: "NewOpenCode bloqueia em lookupOpenCodeRoute ... no cold-start").
+var ocCatalogCache = newSWRCache[[]AgyModel](5*time.Minute, 60*time.Second)
+
 func fetchOpenCodeCatalog(ctx context.Context, tier, catalogBaseURL, apiKey string) ([]AgyModel, error) {
+	key := tier + "@" + strings.TrimRight(catalogBaseURL, "/") + "@" + strings.TrimSpace(apiKey)
+	models, err := ocCatalogCache.fetch(ctx, key, func(c context.Context) ([]AgyModel, error) {
+		return fetchOpenCodeCatalogOnce(c, tier, catalogBaseURL, apiKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func fetchOpenCodeCatalogOnce(ctx context.Context, tier, catalogBaseURL, apiKey string) ([]AgyModel, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
@@ -550,7 +572,7 @@ func fetchOpenCodeCatalog(ctx context.Context, tier, catalogBaseURL, apiKey stri
 
 		for _, proto := range protoOrder {
 			if cfg, ok := item.API[proto]; ok && strings.TrimSpace(cfg.BaseURL) != "" {
-				routes[tier+":"+strings.ToLower(id)] = openCodeRoute{
+				routes[tier+":"+strings.ToLower(id)+"@"+strings.TrimRight(catalogBaseURL, "/")] = openCodeRoute{
 					Protocol: proto,
 					BaseURL:  strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
 				}
@@ -596,11 +618,11 @@ func ProbeAndListOpenCode(ctx context.Context) (OpenCodeStatus, []AgyModel, []Ag
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		goModels, goErr = fetchOpenCodeCatalog(ctx, "go", goBaseURL, apiKey)
+		goModels, goErr = fetchOpenCodeCatalogOnce(ctx, "go", goBaseURL, apiKey)
 	}()
 	go func() {
 		defer wg.Done()
-		zenModels, zenErr = fetchOpenCodeCatalog(ctx, "zen", zenBaseURL, apiKey)
+		zenModels, zenErr = fetchOpenCodeCatalogOnce(ctx, "zen", zenBaseURL, apiKey)
 	}()
 	wg.Wait()
 

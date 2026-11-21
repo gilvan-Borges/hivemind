@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"google.golang.org/genai"
@@ -16,11 +15,6 @@ import (
 	"google.golang.org/adk/v2/model/anthropicmodel"
 	"google.golang.org/adk/v2/model/gemini"
 	"google.golang.org/adk/v2/model/openaimodel"
-)
-
-var (
-	orAuthMu sync.Mutex
-	orAuthOK map[string]time.Time
 )
 
 // New returns the ADK model for a provider id produced by team.NormalizeProvider.
@@ -160,10 +154,13 @@ func newAnthropic(ctx context.Context, modelName string) (model.LLM, error) {
 		if location == "" {
 			location = "us-central1"
 		}
+		// Vertex Claude usa o mesmo pipeline de retry/prompt-cache dos demais
+		// provedores (Spec 06 §1: "newAnthropic Vertex omite retryHTTPClient()").
 		return anthropicmodel.NewModel(ctx, modelName, anthropicmodel.ClientConfig{
-			Backend:  anthropicmodel.BackendVertex,
-			Project:  project,
-			Location: location,
+			Backend:    anthropicmodel.BackendVertex,
+			Project:    project,
+			Location:   location,
+			HTTPClient: retryHTTPClient(),
 		})
 	}
 	key := resolveEnvForContext(ctx, "anthropic", "ANTHROPIC_API_KEY")
@@ -208,17 +205,22 @@ func ProbeOpenRouterAuth(ctx context.Context) error {
 	return openRouterCheckAuth(ctx, key, base)
 }
 
+// orAuthCache backs the OpenRouter key preflight: a valid key is remembered
+// for 10 minutes, a failure backoffs for 60 seconds so an offline network
+// doesn't re-run a 12s timeout on every model build (Spec 06 §1).
+var orAuthCache = newSWRCache[struct{}](10*time.Minute, 60*time.Second)
+
 // openRouterCheckAuth preflights the API key against GET /key so a bad/revoked
 // key fails immediately with a clear message instead of a raw 401 mid-run.
-// Successful checks are cached in memory for a few minutes per key.
+// Concurrent builds share one in-flight probe (singleflight).
 func openRouterCheckAuth(ctx context.Context, key, base string) error {
-	orAuthMu.Lock()
-	if t, ok := orAuthOK[key]; ok && time.Since(t) < 10*time.Minute {
-		orAuthMu.Unlock()
-		return nil
-	}
-	orAuthMu.Unlock()
+	_, err := orAuthCache.fetch(ctx, key+"@"+strings.TrimRight(base, "/"), func(c context.Context) (struct{}, error) {
+		return struct{}{}, openRouterCheckAuthOnce(c, key, base)
+	})
+	return err
+}
 
+func openRouterCheckAuthOnce(ctx context.Context, key, base string) error {
 	reqCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	url := strings.TrimRight(base, "/") + "/key"
@@ -234,12 +236,6 @@ func openRouterCheckAuth(ctx context.Context, key, base string) error {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		orAuthMu.Lock()
-		if orAuthOK == nil {
-			orAuthOK = map[string]time.Time{}
-		}
-		orAuthOK[key] = time.Now()
-		orAuthMu.Unlock()
 		return nil
 	case http.StatusUnauthorized:
 		hint := "confira OPENROUTER_API_KEY em https://openrouter.ai/keys — a chave salva na IDE pode estar antiga/revogada; abra o menu do app → Chaves de API e salve a chave atual"

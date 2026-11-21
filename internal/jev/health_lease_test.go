@@ -48,6 +48,9 @@ func TestHalfOpenLeaseReleasesOnPolicyErrorAndCancel(t *testing.T) {
 	if !hs.TryAcquireHalfOpen("provA", "") {
 		t.Fatal("slot must be free after ReleaseHalfOpen on a policy-class failure")
 	}
+	// Return the slot before the model-scoped section (the model probe claims
+	// the provider lease first).
+	hs.ReleaseHalfOpen("provA", "")
 
 	// The same guarantee must hold for the model-scoped slot.
 	hs.mu.Lock()

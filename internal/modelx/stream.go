@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
 // StreamEvent is one headless agy event. Deltas arrive before the final result.
@@ -193,11 +195,13 @@ func parseStreamLine(line []byte) (StreamEvent, bool) {
 }
 
 func errAuth(code int, detail string) error {
-	return errExit(code, "não autenticado. Rode `agy` e entre com a conta Google Pro. "+detail)
+	return errExit(code, "não autenticado. Rode `agy` e entre com a conta Google Pro. "+jev.RedactSecrets(detail))
 }
 
 func errExit(code int, detail string) error {
-	return &streamError{code: code, detail: truncateText(detail, 500)}
+	// Redação única na borda do CLI (Spec 06 §3.2): stderr do processo filho
+	// pode carregar tokens ya29./oc_ que o envelope JSON não mascara.
+	return &streamError{code: code, detail: truncateText(jev.RedactSecrets(detail), 500)}
 }
 
 type streamError struct {

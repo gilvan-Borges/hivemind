@@ -40,6 +40,8 @@ type jevModelWrapper struct {
 	label        string
 	stage        string
 	extraSecrets []string
+	// releaseLease devolve o slot half_open da rota original (Spec 06 §3).
+	releaseLease func()
 }
 
 func (w *jevModelWrapper) Name() string {
@@ -58,6 +60,12 @@ func (w *jevModelWrapper) Name() string {
 
 func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
+		// O lease da rota original vale pela sonda inteira: cancelamento,
+		// 400 de política ou panic saem por aqui com o slot liberado, mesmo
+		// sem passar por RecordSuccess/RecordFailure (Spec 06 §3).
+		if w.releaseLease != nil {
+			defer w.releaseLease()
+		}
 		w.mu.Lock()
 		curLLM := w.current
 		curChoice := w.choice
@@ -117,10 +125,18 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		exclude[pairKey(curChoice.Provider, curChoice.Model)] = true
-		nextChoice, nextLLM, failErr := w.selectAndBuildFailover(ctx, req, curChoice, errClass, exclude)
+		nextChoice, nextLLM, nextRelease, failErr := w.selectAndBuildFailover(ctx, req, curChoice, errClass, exclude)
 		if failErr != nil {
+			if nextRelease != nil {
+				nextRelease()
+			}
 			yield(nil, failErr)
 			return
+		}
+		// A sonda do failover também tem lease: garantido por defer para cobrir
+		// o path de política/cancelamento que não registra desfecho.
+		if nextRelease != nil {
+			defer nextRelease()
 		}
 
 		w.mu.Lock()
@@ -226,7 +242,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	from jev.Choice,
 	errClass jev.ErrorClass,
 	exclude map[string]bool,
-) (jev.Choice, model.LLM, error) {
+) (jev.Choice, model.LLM, func(), error) {
 	task := w.taskBase
 	task.OnlyProvider = "" // Failover is never locked to a single failed/exhausted provider.
 	task.InStep = true     // Cursor stays out of mid-step failover (Spec §9 / Fase 2).
@@ -272,19 +288,24 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 			if w.approve == nil || !w.approve("budget", prompt) {
 				msg := "Todos os provedores dentro do orçamento estão indisponíveis e a escalada acima do teto não foi aprovada."
 				w.emitExhausted(msg)
-				return jev.Choice{}, nil, fmt.Errorf("%s", msg)
+				return jev.Choice{}, nil, nil, fmt.Errorf("%s", msg)
 			}
 			choice = *ref.Need
 			choice.Reasons = []string{"budget_approved", "circuit_open"}
 		} else if ref.Code != "" {
 			msg := fmt.Sprintf("Todos os provedores estão esgotados ou indisponíveis (%s): %s", ref.Code, jev.RedactSecrets(ref.Reason, w.extraSecrets...))
 			w.emitExhausted(msg)
-			return jev.Choice{}, nil, fmt.Errorf("%s", msg)
+			return jev.Choice{}, nil, nil, fmt.Errorf("%s", msg)
 		}
 
-		if w.health != nil && !w.health.TryAcquireHalfOpen(choice.Provider, choice.Model) {
-			exclude[pairKey(choice.Provider, choice.Model)] = true
-			continue
+		var releaseLease func()
+		if w.health != nil {
+			if !w.health.TryAcquireHalfOpen(choice.Provider, choice.Model) {
+				exclude[pairKey(choice.Provider, choice.Model)] = true
+				continue
+			}
+			prov, mod := choice.Provider, choice.Model
+			releaseLease = func() { w.health.ReleaseHalfOpen(prov, mod) }
 		}
 
 		llm, err := w.buildModel(ctx, choice.Provider, choice.Model)
@@ -292,18 +313,23 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 			buildClass := classifyUpstream(err)
 			if buildClass != jev.ErrClassPolicy && w.health != nil {
 				w.health.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
+			} else if releaseLease != nil {
+				// 400/cancel no build do failover não passa pelo RecordFailure:
+				// devolve o lease aqui mesmo.
+				releaseLease()
+				releaseLease = nil
 			}
 			exclude[pairKey(choice.Provider, choice.Model)] = true
 			continue
 		}
 
 		w.emitFailover(from, choice, errClass)
-		return choice, llm, nil
+		return choice, llm, releaseLease, nil
 	}
 
 	msg := "Todos os provedores elegíveis falharam durante o failover."
 	w.emitExhausted(msg)
-	return jev.Choice{}, nil, fmt.Errorf("%s", msg)
+	return jev.Choice{}, nil, nil, fmt.Errorf("%s", msg)
 }
 
 func (w *jevModelWrapper) recordCall(ch jev.Choice, ok bool, fail jev.ErrorClass, latency time.Duration, resp *model.LLMResponse, failover bool) {
@@ -326,6 +352,7 @@ func (w *jevModelWrapper) recordCall(ch jev.Choice, ok bool, fail jev.ErrorClass
 	}
 	_ = w.outcomes.Append(jev.Outcome{
 		RepoKey:           w.taskBase.RepoKey,
+		Lane:              w.taskBase.Step,
 		Role:              w.taskBase.Role,
 		Class:             w.taskBase.Class,
 		Complexity:        w.taskBase.Complexity,
@@ -363,7 +390,7 @@ func (w *jevModelWrapper) noteQA(resp *model.LLMResponse) {
 	if !saw {
 		return
 	}
-	_ = w.outcomes.NoteQA(w.taskBase.RepoKey, approved)
+	_ = w.outcomes.NoteQA(w.taskBase.RepoKey, "", approved)
 }
 
 func (w *jevModelWrapper) recordSuccessAndSpend(ch jev.Choice, resp *model.LLMResponse) {

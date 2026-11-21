@@ -37,6 +37,7 @@ const (
 type Outcome struct {
 	At                time.Time  `json:"at"`
 	RepoKey           string     `json:"repoKey,omitempty"`
+	Lane              string     `json:"lane,omitempty"`
 	Role              string     `json:"role,omitempty"`
 	Class             Class      `json:"class,omitempty"`
 	Complexity        Complexity `json:"complexity,omitempty"`
@@ -91,6 +92,7 @@ type streakState struct {
 
 type workRef struct {
 	repo       string
+	lane       string
 	role       string
 	class      Class
 	complexity Complexity
@@ -153,17 +155,36 @@ func (l *OutcomeLog) Append(in Outcome) error {
 	return nil
 }
 
-// NoteQA attributes a QA verdict to the last successful non-QA task in repo.
-// shortcut: um último dev por repo; separar por autor quando devs paralelos precisarem de faixas distintas.
-func (l *OutcomeLog) NoteQA(repo string, approved bool) error {
+// NoteQA attributes a QA verdict to the last successful non-QA work in repo.
+//
+// lane semantics (Spec 06 §4: "chavear OutcomeLog.NoteQA por (repo, laneID)"):
+//   - lane == "" — o QA revisou a ENTREGA consolidada: o veredito é atribuído a
+//     CADA lane (dev paralelo) que registrou trabalho pendente no repo, sem
+//     misturar os pares (provider, model) de lanes diferentes;
+//   - lane != "" — o veredito aponta só para a lane específica (step do agente).
+func (l *OutcomeLog) NoteQA(repo, lane string, approved bool) error {
 	if l == nil {
 		return nil
 	}
-	key := sanitizeRepo(repo)
+	repo = sanitizeRepo(repo)
+	lane = sanitizeCode(lane)
+	if repo == "" {
+		return nil
+	}
 	l.mu.Lock()
-	w, ok := l.lastWork[key]
+	var targets []workRef
+	prefix := repo + "\x00"
+	for k, w := range l.lastWork {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		if lane != "" && strings.TrimPrefix(k, prefix) != lane {
+			continue
+		}
+		targets = append(targets, w)
+	}
 	l.mu.Unlock()
-	if !ok {
+	if len(targets) == 0 {
 		return nil
 	}
 	reason := "qa_request_changes"
@@ -172,18 +193,24 @@ func (l *OutcomeLog) NoteQA(repo string, approved bool) error {
 		reason = "qa_approve"
 		qa = QAApprove
 	}
-	return l.Append(Outcome{
-		RepoKey:    w.repo,
-		Role:       w.role,
-		Class:      w.class,
-		Complexity: w.complexity,
-		Provider:   w.provider,
-		Model:      w.model,
-		Tier:       w.tier,
-		OK:         approved,
-		QA:         qa,
-		Reason:     reason,
-	})
+	for _, w := range targets {
+		if err := l.Append(Outcome{
+			RepoKey:    w.repo,
+			Lane:       w.lane,
+			Role:       w.role,
+			Class:      w.class,
+			Complexity: w.complexity,
+			Provider:   w.provider,
+			Model:      w.model,
+			Tier:       w.tier,
+			OK:         approved,
+			QA:         qa,
+			Reason:     reason,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Snapshot copies the prior for repo. Nil means nothing would change Score.
@@ -343,8 +370,10 @@ func (l *OutcomeLog) absorbLocked(o Outcome) {
 	}
 	ps.items = append(ps.items, sample{at: at.UnixNano(), ok: o.OK})
 	if o.QA == "" && !o.PlanningOK && o.OK && o.Class != "" && o.Class != ClassQA {
-		l.lastWork[o.RepoKey] = workRef{
+		// (repo, lane) — lanes paralelas não se sobrescrevem (Spec 06 §4).
+		l.lastWork[o.RepoKey+"\x00"+o.Lane] = workRef{
 			repo:       o.RepoKey,
+			lane:       o.Lane,
 			role:       o.Role,
 			class:      o.Class,
 			complexity: o.Complexity,
@@ -473,6 +502,7 @@ func sanitizeOutcome(o Outcome, now time.Time) Outcome {
 		o.At = o.At.UTC()
 	}
 	o.RepoKey = sanitizeRepo(o.RepoKey)
+	o.Lane = sanitizeCode(o.Lane)
 	o.Role = sanitizeCode(o.Role)
 	o.Class = knownClass(o.Class)
 	o.Complexity = knownComplexity(o.Complexity)

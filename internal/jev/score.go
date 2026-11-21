@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -167,24 +168,20 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 			}
 		}
 	}
-	// Safety net: if all free/CLI and within-daily-cap providers failed or were tripped,
-	// do NOT abort the task while OpenRouter still holds real credits above the reserve
-	// (or above $0.05 as last resort). AutoEscalateUSD per-call ceiling still holds.
-	if best == nil && refusal.Code != "allowlist" {
+	// Budget guard (Spec 06 §4): o cap diário é INVIOLÁVEL sem aprovação
+	// explícita. O bypass silencioso `ignoreDailyBudget: true` foi removido:
+	// quando todos os candidatos excedem o teto, o Refusal "budget" sobe com o
+	// Need mais barato e o chamador direciona ao fluxo approveFn("budget").
+	// Restra só ao caso de reserva: OpenRouter ainda com créditos reais acima
+	// de $0.05 é liberado IGNORANDO APENAS a reserva de $1 (nunca o cap).
+	if best == nil && refusal.Code != "allowlist" && (!health.OpenRouterBalanceKnown || health.OpenRouterBalanceUSD > 0.05) && isOpenRouterReserveLocked(policy, health) {
 		openTask := task
 		openTask.OnlyProvider = ""
-		if rb, re, rr := selectTierWithOpts(openTask, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{ignoreDailyBudget: true}); rb != nil {
+		if rb, re, rr := selectTierWithOpts(openTask, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{ignoreOpenRouterReserve: true}); rb != nil {
 			best = rb
 			estMicro = re
 			refusal = rr
-			crossProviderFallbackReason = "daily_cap_bypass_credit_ok"
-		} else if (!health.OpenRouterBalanceKnown || health.OpenRouterBalanceUSD > 0.05) && isOpenRouterReserveLocked(policy, health) {
-			if rb2, re2, rr2 := selectTierWithOpts(openTask, catalog, policy, health, repoPolicy, targetTier, tierSelectOpts{ignoreDailyBudget: true, ignoreOpenRouterReserve: true}); rb2 != nil {
-				best = rb2
-				estMicro = re2
-				refusal = rr2
-				crossProviderFallbackReason = "openrouter_last_resort"
-			}
+			crossProviderFallbackReason = "openrouter_last_resort"
 		}
 	}
 	if best == nil {
@@ -362,7 +359,6 @@ func selectBestInTierWithOpts(
 ) (*ModelEntry, int64, Refusal) {
 	var sawAllowlist, sawCircuit, sawContext bool
 	var overBudgetNeed *Choice
-	var eligibleCount int
 	var maxCost, maxLat float64
 
 	autoCapMicroUSD := int64(math.Round(policy.AutoEscalateUSD * 1_000_000))
@@ -376,10 +372,25 @@ func selectBestInTierWithOpts(
 	hasExcludes := len(health.ExcludePairs) > 0
 	hasModelCircuits := len(health.ModelCircuits) > 0
 
-	// Pass 1: filter & compute normalization maxima with zero slice allocation.
+	// Pass Único de filtragem (Spec 06 §4): Pass 1/Pass 2 duplicavam ~100
+	// linhas de filtros que podiam divergir; agora a filtragem roda UMA vez e
+	// coleta os elegíveis num slice reutilizável (sync.Pool) que a pontuação
+	// percorre.
 	onlyProv := strings.ToLower(strings.TrimSpace(task.OnlyProvider))
 	orReserveLocked := !opts.ignoreOpenRouterReserve && isOpenRouterReserveLocked(policy, health)
 	checkBlockedInline := len(catalog.Entries) <= 64
+
+	candidates := tierCandidatePool.Get().(*[]tierCandidate)
+	buf := *candidates
+	if cap(buf) < len(catalog.Entries) {
+		buf = make([]tierCandidate, 0, len(catalog.Entries))
+	}
+	buf = buf[:0]
+	defer func() {
+		*candidates = buf[:0]
+		tierCandidatePool.Put(candidates)
+	}()
+
 	for i := range catalog.Entries {
 		e := &catalog.Entries[i]
 		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
@@ -453,7 +464,10 @@ func selectBestInTierWithOpts(
 					cp := Choice{
 						Provider:          e.Provider,
 						Model:             e.Model,
+						DisplayName:       e.DisplayName,
 						Tier:              tierForEst,
+						Complexity:        task.Complexity,
+						DiscountPct:       e.DiscountPct,
 						Reasons:           []string{"budget_wait"},
 						EstimatedMicroUSD: estMicro,
 					}
@@ -488,16 +502,16 @@ func selectBestInTierWithOpts(
 		if lat <= 0 {
 			lat = 1200
 		}
-		eligibleCount++
 		if estExact > maxCost {
 			maxCost = estExact
 		}
 		if lat > maxLat {
 			maxLat = lat
 		}
+		buf = append(buf, tierCandidate{entry: e, estMicro: estMicro, estExact: estExact, lat: lat})
 	}
 
-	if eligibleCount == 0 {
+	if len(buf) == 0 {
 		if overBudgetNeed != nil {
 			return nil, 0, Refusal{
 				Code:   "budget",
@@ -517,87 +531,21 @@ func selectBestInTierWithOpts(
 		return nil, 0, Refusal{Code: "none_fit", Reason: "nenhum modelo elegível com credencial ativa"}
 	}
 
-	// Pass 2: score eligible entries and pick the winner with zero allocations.
+	// Pontuação: percorre apenas os elegíveis coletados acima.
 	w := weightsForTask(policy, task)
-	bestIdx := -1
+	var best *tierCandidate
 	bestScore := math.Inf(-1)
-	var bestCost, bestLat float64
-	var bestEstMicro int64
 
-	for i := range catalog.Entries {
-		e := &catalog.Entries[i]
-		if onlyProv != "" && !strings.EqualFold(e.Provider, onlyProv) {
-			continue
-		}
-		if orReserveLocked && strings.EqualFold(e.Provider, "openrouter") {
-			continue
-		}
-		if checkBlockedInline && strings.EqualFold(e.Provider, "openrouter") && isBlockedOpenRouterEndpoint(e.Model) {
-			continue
-		}
-		if e.Tier != "" && e.Tier != targetTier {
-			if !(task.Complexity == ComplexityHigh && targetTier == TierMid && e.Tier == TierStrong && e.DiscountPct > 0) {
-				continue
-			}
-		}
-		if e.Tier == TierStrong && !(task.Complexity == ComplexityHigh && e.DiscountPct > 0) {
-			continue
-		}
-		if (hasCreds && !isCredentialed(e.Provider, e.Free, health)) || (hasCircuits && !isEntryCircuitEligible(*e, health)) {
-			continue
-		}
-		if hasModelCircuits && !isModelCircuitOnlyEligible(e.Provider, e.Model, health) {
-			continue
-		}
-		if hasExcludes && health.ExcludePairs[catalogKey(e.Provider, e.Model)] {
-			continue
-		}
-		if !isEntryAllowedByPolicy(*e, task.RepoKey, policy, repoPolicy) {
-			continue
-		}
-		if task.InputTokens > 0 && e.ContextLength > 0 && e.ContextLength < minContext {
-			continue
-		}
-		if task.NeedsVision && !e.Capabilities.Vision {
-			continue
-		}
-		if task.NeedsTools && !e.Capabilities.Tools && !e.Capabilities.WorkspaceAgent {
-			continue
-		}
-		if (task.HasPendingToolCall || task.InStep) && e.Capabilities.WorkspaceAgent {
-			continue
-		}
-		if checkAgyQuota && strings.EqualFold(e.Provider, "agy") && hasPaidHTTP {
-			continue
-		}
-
-		tierForEst := e.Tier
-		if tierForEst == "" {
-			tierForEst = targetTier
-		}
-		estMicro, estExact := estimateCallCost(task.InputTokens, *e, tierForEst)
-		if !opts.ignoreDailyBudget && checkDailyBudget(e.Provider, estMicro, policy, health) != nil {
-			continue
-		}
-		effectiveAutoCap := autoCapMicroUSD
-		if effectiveAutoCap > 0 && e.DiscountPct > 0 {
-			effectiveAutoCap = int64(float64(effectiveAutoCap) * (1.0 + float64(e.DiscountPct)/25.0))
-		}
-		if effectiveAutoCap > 0 && estMicro > effectiveAutoCap {
-			continue
-		}
-
-		lat := float64(e.LatencyP50Ms)
-		if lat <= 0 {
-			lat = 1200
-		}
+	for i := range buf {
+		c := &buf[i]
+		e := c.entry
 		costNorm := 0.0
 		if maxCost > 0 {
-			costNorm = estExact / maxCost
+			costNorm = c.estExact / maxCost
 		}
 		latNorm := 0.0
 		if maxLat > 0 {
-			latNorm = lat / maxLat
+			latNorm = c.lat / maxLat
 		}
 		promoBonus := 0.0
 		if e.DiscountPct > 0 {
@@ -610,17 +558,31 @@ func selectBestInTierWithOpts(
 			q = task.Learn.Quality(e.Provider, e.Model, q)
 		}
 		score := w.Quality*q - w.Cost*costNorm - w.Latency*latNorm + promoBonus
-		if bestIdx < 0 || score > bestScore+1e-12 ||
-			(math.Abs(score-bestScore) <= 1e-12 && (estExact < bestCost || (estExact == bestCost && lat < bestLat))) {
-			bestIdx = i
+		if best == nil || score > bestScore+1e-12 ||
+			(math.Abs(score-bestScore) <= 1e-12 && (c.estExact < best.estExact || (c.estExact == best.estExact && c.lat < best.lat))) {
+			best = c
 			bestScore = score
-			bestCost = estExact
-			bestLat = lat
-			bestEstMicro = estMicro
 		}
 	}
 
-	return &catalog.Entries[bestIdx], bestEstMicro, Refusal{}
+	return best.entry, best.estMicro, Refusal{}
+}
+
+// tierCandidate is one entry that passed the single filter pass.
+type tierCandidate struct {
+	entry    *ModelEntry
+	estMicro int64
+	estExact float64
+	lat      float64
+}
+
+// tierCandidatePool reuses the candidate slice across Score calls so the hot
+// path does not allocate per routing decision.
+var tierCandidatePool = sync.Pool{
+	New: func() any {
+		s := make([]tierCandidate, 0, 64)
+		return &s
+	},
 }
 
 func hasAlternativeCheapHTTP(

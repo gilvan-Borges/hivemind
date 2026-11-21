@@ -54,6 +54,7 @@
 - [Spec 08](08-git-github-jira-and-multi-repo-delivery.md) — Git não-interativo, GHES, paginação e cross-link de PRs (**Onda 3**)
 - [Spec 09](09-relay-e2ee-mcpx-and-runtime-unification.md) — **Parcial (Onda 1 concluída):** Anti-replay Relay, Limiters/QR SQLite e Trust Gate MCP entregues; Bootstrap único e desacoplamento do `serve` pendentes (**Onda 3**)
 - [Spec 10](10-mobile-companion-supply-chain-and-ci.md) — `HiveMind-App` offline Room, auto-updater e CI/CD completo (**Onda 5**)
+- [Spec 11](11-external-workers-worktrees-and-ux.md) — Workers CLI externos (piloto Cursor CLI), ergonomia de worktrees, `SOUL.md`/webhooks/Slack, custo USD e UX avançada (**Onda 6**)
 
 ---
 
@@ -143,3 +144,18 @@
 - [ ] **W5-06** `[Spec 10]` Endurecer `.github/workflows/ci.yml`: incluir `go test -race ./internal/remote/...`, job Android (`./gradlew testDebugUnitTest lintDebug`) e `govulncheck ./...`.
 - [ ] **W5-07** `[Spec 10]` Endurecer `deploy/relay/`: fixar digest `@sha256` em `Dockerfile` + `HEALTHCHECK`, alinhar usuário `relay` entre Dockerfile e `hivemind-relay.service`, limites cgroup/seccomp e HSTS/CSP no `Caddyfile`.
 - [ ] **W5-08** `[Verificação Onda 5]` Validar CI verde ponta-a-ponta, `assembleRelease` do `HiveMind-App` com R8 ativo e upgrade simulado do instalador Windows com conferência SHA-256.
+
+---
+
+### Onda 6 — Workers CLI Externos (Piloto Cursor), Ergonomia de Worktrees, Residente Event-Driven & UX Avançada
+*Objetivo: abrir o squad para workers CLI externos sob contrato governado (começando pelo Cursor CLI), eliminar fricção diária em worktrees, adicionar custo USD por run e evoluir o residente e a UX da IDE.*
+
+- [ ] **W6-01** `[Spec 11 — P4]` Calcular e exibir **custo USD acumulado por run, agente e papel** (`Chefe`, `Dev`, `QA`) usando preços do catálogo Jev (`PromptMicroUSD`, `CompletionMicroUSD`, `CachedContentTokenCount`, `DiscountPct`) no resumo CLI/TUI, cabeçalho da lane na IDE e página Uso & Limites.
+- [ ] **W6-02** `[Spec 11 — P2]` Implementar `.worktreeinclude` (caminhos literais gitignored filtrados por `pathsec.IsSensitivePath`, bloqueando `.env`/chaves), `sharedDirectories` via symlink/junction para caches grandes (`node_modules`, `.gradle`, `.cache`), criação assíncrona com progresso/Retry e **worktree checkpoints** (`git stash create`/ref interna) para rollback de turno.
+- [ ] **W6-03** `[Spec 11 — P2]` Criar painel de administração de worktrees na IDE (listar worktrees ativas/órfãs, branch/tamanho, `archive` e `prune`).
+- [ ] **W6-04** `[Spec 11 — P1]` Definir o **Worker Contract** (`dispatch`, `heartbeat`, `ask` bloqueante via HITL e `worker_done` idempotente por `dispatchId`) + validação pós-hoc de `git diff` contra `owned_paths` e `pathsec`, com adaptador piloto para o **Cursor CLI (`agent`)** reusando `internal/modelx/cursor.go` (`WithAgentDir`, `cursor_stream.go`, política `--trust`/`--force`) e interface extensível para OpenCode/outros CLIs.
+- [ ] **W6-05** `[Spec 11 — P3]` Adicionar `SOUL.md` editável ao lado de `MEMORY.md` no residente, receptor de **Webhooks event-driven** (`standard-webhooks` + HMAC para eventos GitHub) e conector **Slack** opcional, todos encapsulados em `WrapUntrustedData` com aprovação HITL obrigatória antes de escrita/PR.
+- [ ] **W6-06** `[Spec 11 — P5/P6]` Implementar toggle **Chat ↔ Terminal (PTY)** na IDE compartilhando o mesmo `sessionID` e **Split Panes de Lanes** lado a lado para acompanhar múltiplos agentes simultaneamente.
+- [ ] **W6-07** `[Spec 11 — P7]` Implementar **Design Mode via CDP** reaproveitando o Chrome DevTools MCP (`mcpx/defaults.go`) conectado ao browser real do usuário (pick element → seletor + HTML + estilos computados direto no chat).
+- [ ] **W6-08** `[Spec 11 — Extras]` Adicionar **Hybrid Skill Stubs** (`hivemind skills get <topic>` servido pelo binário version-matched) e preset **Race Mode** sobre `parallelagent` para comparar diffs/testes de N agentes na mesma task.
+- [ ] **W6-09** `[Verificação Onda 6]` Validar execução ponta-a-ponta de um worker externo **Cursor CLI** respeitando `worker_done` + guard pós-hoc de `owned_paths`/`pathsec`, rollback via worktree checkpoint, exibição de custo USD e testes de webhook com `WrapUntrustedData`.

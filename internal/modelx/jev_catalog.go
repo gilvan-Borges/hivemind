@@ -23,9 +23,11 @@ func JevCredentialPresenceForContext(ctx context.Context) map[string]bool {
 	}
 	hasWS := WorkspaceFromContext(ctx) != ""
 	ocKey, _, _ := LoadOpenCodeCredentialsForContext(ctx)
-	_, cursorErr := LookCursor()
+	// Hot-path (Spec 06 §3.1): LookCursor/LookAgy viram variantes com cache —
+	// a varredura de PATH sai do loop de roteamento.
+	_, cursorErr := LookCursorCached()
 	cursorKey := strings.TrimSpace(resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")) != ""
-	agyOK := AgyAvailable() && (!hasWS || !CredentialIsolated(ctx, "agy"))
+	agyOK := AgyAvailableCached() && (!hasWS || !CredentialIsolated(ctx, "agy"))
 
 	return map[string]bool{
 		"typesafe":         strings.TrimSpace(resolveEnvForContext(ctx, "typesafe", "TYPESAFE_API_KEY")) != "",

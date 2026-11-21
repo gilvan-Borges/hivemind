@@ -35,9 +35,10 @@ func newRetryTransport(base http.RoundTripper) http.RoundTripper {
 }
 
 // retryHTTPClient returns an *http.Client with Prompt Caching injection and
-// transient-failure retry built in, for ADK SDK client configs (Gemini, Anthropic, OpenAI, OpenRouter, OpenCode).
+// transient-failure retry built in over the SINGLE shared pooled transport
+// (keep-alive + HTTP/2, Spec 06 §3.1), for ADK SDK client configs.
 func retryHTTPClient() *http.Client {
-	return &http.Client{Transport: newPromptCacheTransport(newRetryTransport(nil))}
+	return &http.Client{Transport: newPromptCacheTransport(newRetryTransport(sharedHTTPTransport()))}
 }
 
 type retryTransport struct {

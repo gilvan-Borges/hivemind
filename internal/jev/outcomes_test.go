@@ -275,7 +275,7 @@ func TestDeescalateAfterTwoQAApprovals(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := log.NoteQA(repo, true); err != nil {
+	if err := log.NoteQA(repo, "", true); err != nil {
 		t.Fatal(err)
 	}
 	task.Learn = log.Snapshot(repo)
@@ -283,7 +283,7 @@ func TestDeescalateAfterTwoQAApprovals(t *testing.T) {
 		t.Fatalf("one QA approval must stay on mid, got %s", choice.Model)
 	}
 
-	if err := log.NoteQA(repo, true); err != nil {
+	if err := log.NoteQA(repo, "", true); err != nil {
 		t.Fatal(err)
 	}
 	task.Learn = log.Snapshot(repo)
@@ -292,7 +292,7 @@ func TestDeescalateAfterTwoQAApprovals(t *testing.T) {
 		t.Fatalf("two QA approvals must birth the next task on cheap, got %+v", choice)
 	}
 
-	if err := log.NoteQA(repo, false); err != nil {
+	if err := log.NoteQA(repo, "", false); err != nil {
 		t.Fatal(err)
 	}
 	task.Learn = log.Snapshot(repo)
@@ -306,7 +306,7 @@ func TestDeescalateAfterTwoQAApprovals(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cheap.NoteQA(repo, true); err != nil || cheap.NoteQA(repo, true) != nil {
+	if err := cheap.NoteQA(repo, "", true); err != nil || cheap.NoteQA(repo, "", true) != nil {
 		t.Fatal("note qa")
 	}
 	task.Learn = cheap.Snapshot(repo)

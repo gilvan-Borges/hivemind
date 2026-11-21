@@ -33,40 +33,57 @@ type OpenRouterModel struct {
 const openRouterModelsTTL = 30 * time.Minute
 
 var (
-	orModelsMu        sync.Mutex
-	orModelsCache     []OpenRouterModel
-	orModelsCachedAt  time.Time
-	orBalanceMu       sync.Mutex
-	orBalanceUSD      float64
-	orBalanceKnown    bool
-	orBalanceCachedAt time.Time
+	orModelsMu       sync.Mutex
+	orModelsCache    []OpenRouterModel
+	orModelsCachedAt time.Time
 )
 
 const openRouterBalanceTTL = 2 * time.Minute
 
-// GetOpenRouterBalanceUSD queries OpenRouter's /credits (and /key) endpoint to check
-// the remaining account balance in USD, caching the result for 2 minutes.
-// When known is true and balanceUSD <= 1.00, Jev preserves that $1.00 reserve and
-// routes work to other active providers (agy, cursor, opencode, gemini).
+// orBalanceCache serves the Jev hot path: reads NEVER wait on network I/O
+// (Spec 06 §4: "Roteamento Jev com rede offline retorna em < 5ms sem esperar
+// múltiplos timeouts HTTP síncronos"). A cold or stale entry is refreshed by
+// a single background flight while the router uses the last known value.
+var orBalanceCache = newSWRCache[float64](openRouterBalanceTTL, 60*time.Second)
+
+// GetOpenRouterBalanceUSD reports the remaining OpenRouter balance in USD.
+// When known is true and balanceUSD <= 1.00, Jev preserves that $1.00 reserve
+// and routes work to other active providers (agy, cursor, opencode, gemini).
+// This call is hot-path safe: it never blocks; the value converges over the
+// next routing passes via the background refresh.
 func GetOpenRouterBalanceUSD(ctx context.Context) (balanceUSD float64, known bool) {
 	key := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_API_KEY"))
 	if key == "" {
 		return 0, false
 	}
-	orBalanceMu.Lock()
-	if orBalanceKnown && time.Since(orBalanceCachedAt) < openRouterBalanceTTL {
-		b, k := orBalanceUSD, orBalanceKnown
-		orBalanceMu.Unlock()
-		return b, k
-	}
-	orBalanceMu.Unlock()
-
 	base := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_BASE_URL"))
 	if base == "" {
 		base = "https://openrouter.ai/api/v1"
 	}
-	base = strings.TrimRight(base, "/")
+	cacheKey := key + "@" + strings.TrimRight(base, "/")
 
+	if val, err, ok := orBalanceCache.peek(cacheKey); ok {
+		if err == nil {
+			return val, true
+		}
+		// Negative entry: the last probe failed (offline / rate-limited).
+		return 0, false
+	}
+	// Cold: kick a non-blocking refresh; report unknown for THIS pass.
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		_, _ = orBalanceCache.fetch(bgCtx, cacheKey, func(c context.Context) (float64, error) {
+			return probeOpenRouterBalance(c, key, base)
+		})
+	}()
+	return 0, false
+}
+
+// probeOpenRouterBalance queries GET /credits (account-wide total_credits -
+// total_usage) and falls back to GET /key (key-scoped limit_remaining).
+func probeOpenRouterBalance(ctx context.Context, key, base string) (float64, error) {
+	base = strings.TrimRight(base, "/")
 	reqCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 4 * time.Second}
@@ -92,12 +109,7 @@ func GetOpenRouterBalanceUSD(ctx context.Context) (balanceUSD float64, known boo
 				if rem < 0 {
 					rem = 0
 				}
-				orBalanceMu.Lock()
-				orBalanceUSD = rem
-				orBalanceKnown = true
-				orBalanceCachedAt = time.Now()
-				orBalanceMu.Unlock()
-				return rem, true
+				return rem, nil
 			}
 		}
 	}
@@ -118,17 +130,11 @@ func GetOpenRouterBalanceUSD(ctx context.Context) (balanceUSD float64, known boo
 				if rem < 0 {
 					rem = 0
 				}
-				orBalanceMu.Lock()
-				orBalanceUSD = rem
-				orBalanceKnown = true
-				orBalanceCachedAt = time.Now()
-				orBalanceMu.Unlock()
-				return rem, true
+				return rem, nil
 			}
 		}
 	}
-
-	return 0, false
+	return 0, fmt.Errorf("saldo OpenRouter indisponível")
 }
 
 // OpenRouterModels lists every model available on OpenRouter (GET /models).
@@ -261,6 +267,34 @@ func orDailyDiscountCachePath() (string, error) {
 	return filepath.Join(dir, "openrouter-discounts.json"), nil
 }
 
+// orDiscountProbeBackoff evita re-probar os endpoints de desconto em toda
+// chamada de OpenRouterModels quando a rede está fora: uma falha bloqueia
+// novas sondas por 1h (Spec 06 §1: até 21 chamadas síncronas por listagem).
+var orDiscountProbeBackoff untilTime
+
+type untilTime struct {
+	mu     sync.Mutex
+	until  time.Time
+}
+
+func (u *untilTime) blocked() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return time.Now().Before(u.until)
+}
+
+func (u *untilTime) markFailure(d time.Duration) {
+	u.mu.Lock()
+	u.until = time.Now().Add(d)
+	u.mu.Unlock()
+}
+
+func (u *untilTime) clear() {
+	u.mu.Lock()
+	u.until = time.Time{}
+	u.mu.Unlock()
+}
+
 // enrichOpenRouterDailyDiscounts checks OpenRouter's per-model endpoints API once per day
 // for the curated catalog models to detect active daily promotions (e.g. Google Carbon -50%)
 // and applies the discount percentage + promotional pricing.
@@ -279,7 +313,7 @@ func enrichOpenRouterDailyDiscounts(ctx context.Context, baseURL string, models 
 		}
 	}
 
-	if !cacheFresh {
+	if !cacheFresh && !orDiscountProbeBackoff.blocked() {
 		// Probe OpenRouter endpoints for curated models to detect active daily discounts.
 		type probeTarget struct {
 			id          string
@@ -302,6 +336,7 @@ func enrichOpenRouterDailyDiscounts(ctx context.Context, baseURL string, models 
 			}
 			var mu sync.Mutex
 			discovered := make(map[string]orDiscountItem, len(targets))
+			probesOK := 0
 			sem := make(chan struct{}, 6)
 			var wg sync.WaitGroup
 			client := &http.Client{Timeout: 5 * time.Second}
@@ -332,6 +367,9 @@ func enrichOpenRouterDailyDiscounts(ctx context.Context, baseURL string, models 
 					if resp.StatusCode != http.StatusOK {
 						return
 					}
+					mu.Lock()
+					probesOK++
+					mu.Unlock()
 					var payload struct {
 						Data struct {
 							Endpoints []struct {
@@ -374,6 +412,13 @@ func enrichOpenRouterDailyDiscounts(ctx context.Context, baseURL string, models 
 				}(tgt)
 			}
 			wg.Wait()
+			if probesOK == 0 {
+				// Nenhuma sonda respondeu (rede fora / rate limit): backoff de
+				// 1h em vez de repetir N chamadas em toda listagem.
+				orDiscountProbeBackoff.markFailure(time.Hour)
+			} else {
+				orDiscountProbeBackoff.clear()
+			}
 			if len(discovered) > 0 {
 				cached = orDailyDiscountFile{
 					UpdatedAt: time.Now().UTC(),
