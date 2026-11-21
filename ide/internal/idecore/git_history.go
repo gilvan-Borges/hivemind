@@ -56,9 +56,15 @@ func resolveGitRelativePath(workspaceDir, relPath string) (absFile, relSlash str
 	if err != nil {
 		return "", "", err
 	}
+	if realWS, sErr := filepath.EvalSymlinks(absWS); sErr == nil {
+		absWS = realWS
+	}
 	absFile, err = workspace.Resolve(absWS, relPath)
 	if err != nil {
 		return "", "", err
+	}
+	if realFile, sErr := filepath.EvalSymlinks(absFile); sErr == nil {
+		absFile = realFile
 	}
 	rel, err := filepath.Rel(absWS, absFile)
 	if err != nil {

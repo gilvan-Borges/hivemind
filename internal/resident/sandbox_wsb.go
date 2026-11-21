@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -141,8 +142,8 @@ func writeXMLTag(b *strings.Builder, tag, val, indent string) error {
 }
 
 func isSensitiveSandboxHostPath(raw string) bool {
-	norm := strings.ToLower(filepath.ToSlash(filepath.Clean(strings.TrimSpace(raw))))
-	base := filepath.Base(norm)
+	norm := strings.ToLower(path.Clean(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")))
+	base := path.Base(norm)
 	for _, blocked := range []string{"vault", "secrets", ".ssh", ".aws", ".gnupg"} {
 		if base == blocked || strings.Contains(norm, "/"+blocked+"/") {
 			return true

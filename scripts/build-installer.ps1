@@ -32,6 +32,25 @@ function Require-Command([string]$Name, [string]$Hint) {
     return $cmd.Source
 }
 
+function Invoke-GuiExe([string]$FilePath, [string[]]$ArgumentList) {
+    $outTmp = [System.IO.Path]::GetTempFileName()
+    $errTmp = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp
+        $stdout = if (Test-Path $outTmp) { (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue) } else { "" }
+        $stderr = if (Test-Path $errTmp) { (Get-Content $errTmp -Raw -ErrorAction SilentlyContinue) } else { "" }
+        $combined = (($stdout, $stderr) | Where-Object { $_ -and $_.Trim() -ne "" }) -join "`n"
+        return @{
+            ExitCode = $proc.ExitCode
+            Output   = $combined.Trim()
+        }
+    }
+    finally {
+        Remove-Item $outTmp, $errTmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Find-Iscc {
     $cmd = Get-Command "iscc" -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -252,11 +271,13 @@ try {
         }
 
         Write-Step "Executando smoke-check da IDE"
-        & $ideExe --smoke-check
-        if ($LASTEXITCODE -ne 0) { throw "Smoke-check da IDE falhou" }
-        $ideVersion = (& $ideExe --version) -join " "
+        $smokeRes = Invoke-GuiExe $ideExe @("--smoke-check")
+        if ($smokeRes.Output) { Write-Host $smokeRes.Output }
+        if ($smokeRes.ExitCode -ne 0) { throw "Smoke-check da IDE falhou (exit $($smokeRes.ExitCode))" }
+        $verRes = Invoke-GuiExe $ideExe @("--version")
+        $ideVersion = ($verRes.Output -replace "\r?\n", " ").Trim()
         Write-Host "hivemind-ide --version -> $ideVersion"
-        if (-not $ideVersion.Contains($AppVersion)) {
+        if ($verRes.ExitCode -ne 0 -or -not $ideVersion.Contains($AppVersion)) {
             throw "hivemind-ide --version impresso [$ideVersion] nao contem a versao $AppVersion."
         }
     }

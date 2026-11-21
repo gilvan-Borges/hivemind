@@ -33,13 +33,18 @@ func TestBuildWSBXMLDefaultsAndEscaping(t *testing.T) {
 }
 
 func TestBuildWSBXMLRejectsSensitiveVaultFolders(t *testing.T) {
-	_, err := BuildWSBXML(WSBConfig{
-		MappedFolders: []MappedFolder{
-			{HostFolder: `C:\Users\dev\AppData\Local\HiveMind\resident\vault`},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected vault host path to be rejected in .wsb mapped folders")
+	for _, sensitive := range []string{
+		`C:\Users\dev\AppData\Local\HiveMind\resident\vault`,
+		`/home/dev/.local/share/hivemind/resident/vault`,
+		`/home/dev/.ssh`,
+	} {
+		if _, err := BuildWSBXML(WSBConfig{
+			MappedFolders: []MappedFolder{
+				{HostFolder: sensitive},
+			},
+		}); err == nil {
+			t.Fatalf("expected sensitive host path %q to be rejected in .wsb mapped folders", sensitive)
+		}
 	}
 }
 
