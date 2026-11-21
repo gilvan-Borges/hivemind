@@ -34,6 +34,10 @@ export function CancelCommand(arg1) {
   return window['go']['main']['App']['CancelCommand'](arg1);
 }
 
+export function CancelGitAction(arg1) {
+  return window['go']['main']['App']['CancelGitAction'](arg1);
+}
+
 export function CancelInlineAI() {
   return window['go']['main']['App']['CancelInlineAI']();
 }
@@ -322,12 +326,36 @@ export function OpenProject(arg1) {
   return window['go']['main']['App']['OpenProject'](arg1);
 }
 
+export function OrbDismissNotice(arg1) {
+  return window['go']['main']['App']['OrbDismissNotice'](arg1);
+}
+
+export function OrbPushNotice(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
+  return window['go']['main']['App']['OrbPushNotice'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+
+export function OrbRunning() {
+  return window['go']['main']['App']['OrbRunning']();
+}
+
+export function OrbSetMood(arg1) {
+  return window['go']['main']['App']['OrbSetMood'](arg1);
+}
+
+export function OrbShow() {
+  return window['go']['main']['App']['OrbShow']();
+}
+
 export function ParseOutputProblems(arg1, arg2) {
   return window['go']['main']['App']['ParseOutputProblems'](arg1, arg2);
 }
 
 export function ProbeProviders() {
   return window['go']['main']['App']['ProbeProviders']();
+}
+
+export function QuitAll() {
+  return window['go']['main']['App']['QuitAll']();
 }
 
 export function ReadFile(arg1, arg2) {
@@ -338,12 +366,12 @@ export function ReadNativeSkill(arg1) {
   return window['go']['main']['App']['ReadNativeSkill'](arg1);
 }
 
-export function RelayClaimLinkCode(arg1) {
-  return window['go']['main']['App']['RelayClaimLinkCode'](arg1);
-}
-
 export function RelayChangePassword(arg1, arg2) {
   return window['go']['main']['App']['RelayChangePassword'](arg1, arg2);
+}
+
+export function RelayClaimLinkCode(arg1) {
+  return window['go']['main']['App']['RelayClaimLinkCode'](arg1);
 }
 
 export function RelayCreateAccount(arg1, arg2) {
@@ -490,6 +518,10 @@ export function RunGitAction(arg1, arg2) {
   return window['go']['main']['App']['RunGitAction'](arg1, arg2);
 }
 
+export function RunGitActionTimeout(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RunGitActionTimeout'](arg1, arg2, arg3);
+}
+
 export function SaveAIUsageLimits(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAIUsageLimits'](arg1, arg2, arg3);
 }
@@ -568,6 +600,10 @@ export function SetMobileBridgeEnabled(arg1) {
 
 export function SetNativeSkillEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetNativeSkillEnabled'](arg1, arg2);
+}
+
+export function ShowDesktopNotification(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ShowDesktopNotification'](arg1, arg2, arg3, arg4);
 }
 
 export function StageFile(arg1, arg2, arg3) {

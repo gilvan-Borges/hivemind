@@ -83,6 +83,16 @@ func (a *App) RelaySetEnabled(on bool) (relayclient.Status, error) {
 	})
 }
 
+// RelayCreateQRLogin returns a one-time QR code that signs the mobile app into the relay account with one scan.
+func (a *App) RelayCreateQRLogin() (relayclient.LinkCode, error) {
+	if a == nil || a.relay == nil {
+		return relayclient.LinkCode{}, errors.New("relay indisponível")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return a.relay.CreateQRLogin(ctx)
+}
+
 // RelayCreateLinkCode returns a code and QR for the phone to confirm.
 func (a *App) RelayCreateLinkCode() (relayclient.LinkCode, error) {
 	if a == nil || a.relay == nil {

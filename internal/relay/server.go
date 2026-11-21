@@ -2,12 +2,14 @@ package relay
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,11 @@ type Options struct {
 	MaxConns   int
 }
 
+type qrLoginTicket struct {
+	accountID string
+	expiresAt time.Time
+}
+
 // Server is the relay HTTP and WebSocket API.
 type Server struct {
 	store      *Store
@@ -43,6 +50,8 @@ type Server struct {
 	argon      Argon
 	dummy      string
 	argonMu    sync.Mutex
+	qrMu       sync.Mutex
+	qrTickets  map[string]qrLoginTicket
 	publicURL  string
 	accessTTL  time.Duration
 	refreshTTL time.Duration
@@ -82,6 +91,7 @@ func New(store *Store, opt Options) (*Server, error) {
 		limiter:    NewLimiter(opt.Limits),
 		argon:      opt.Argon,
 		dummy:      dummy,
+		qrTickets:  make(map[string]qrLoginTicket),
 		publicURL:  strings.TrimRight(strings.TrimSpace(opt.PublicURL), "/"),
 		accessTTL:  opt.AccessTTL,
 		refreshTTL: opt.RefreshTTL,
@@ -95,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/qr-ticket", s.handleCreateQRTicket)
+	mux.HandleFunc("POST /api/v1/auth/qr-redeem", s.handleRedeemQRTicket)
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleRefresh)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/auth/me", s.handleMe)
@@ -167,6 +179,89 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.limiter.Success(ipKey)
 	s.limiter.Success(mailKey)
+	writeJSON(w, http.StatusOK, tokenJSON(sess))
+}
+
+func (s *Server) handleCreateQRTicket(w http.ResponseWriter, r *http.Request) {
+	acct, _, ok := s.user(w, r)
+	if !ok {
+		return
+	}
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, relaywire.CodeInternal, "falha ao gerar ticket")
+		return
+	}
+	ticket := "hmr_qr_" + hex.EncodeToString(raw[:])
+	now := time.Now().UTC()
+	exp := now.Add(5 * time.Minute)
+
+	s.qrMu.Lock()
+	if s.qrTickets == nil {
+		s.qrTickets = make(map[string]qrLoginTicket)
+	}
+	for k, v := range s.qrTickets {
+		if now.After(v.expiresAt) {
+			delete(s.qrTickets, k)
+		}
+	}
+	s.qrTickets[ticket] = qrLoginTicket{accountID: acct.ID, expiresAt: exp}
+	s.qrMu.Unlock()
+
+	base := s.publicURL
+	if base == "" {
+		scheme := "https"
+		if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			scheme = "http"
+		}
+		if r.Host != "" {
+			base = scheme + "://" + r.Host
+		}
+	}
+	uri := "hivemind://qr-login?relay=" + url.QueryEscape(base) + "&ticket=" + url.QueryEscape(ticket)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ticket":    ticket,
+		"expiresAt": exp.Format(time.RFC3339),
+		"uri":       uri,
+	})
+}
+
+func (s *Server) handleRedeemQRTicket(w http.ResponseWriter, r *http.Request) {
+	ipKey := "ip:" + clientIP(r)
+	if !s.limiter.AllowLogin(ipKey) {
+		writeAPIError(w, http.StatusTooManyRequests, relaywire.CodeRateLimited, "muitas tentativas; aguarde um instante")
+		return
+	}
+	var req struct {
+		Ticket string `json:"ticket"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	ticket := strings.TrimSpace(req.Ticket)
+	if !strings.HasPrefix(ticket, "hmr_qr_") {
+		s.limiter.Fail(ipKey)
+		writeAPIError(w, http.StatusUnauthorized, relaywire.CodeUnauthorized, "QR Code inválido ou expirado")
+		return
+	}
+	now := time.Now().UTC()
+	s.qrMu.Lock()
+	entry, ok := s.qrTickets[ticket]
+	if ok {
+		delete(s.qrTickets, ticket)
+	}
+	s.qrMu.Unlock()
+	if !ok || now.After(entry.expiresAt) {
+		s.limiter.Fail(ipKey)
+		writeAPIError(w, http.StatusUnauthorized, relaywire.CodeUnauthorized, "QR Code inválido ou expirado")
+		return
+	}
+	sess, err := s.store.issue(entry.accountID, r.UserAgent(), s.accessTTL, s.refreshTTL)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	s.limiter.Success(ipKey)
 	writeJSON(w, http.StatusOK, tokenJSON(sess))
 }
 

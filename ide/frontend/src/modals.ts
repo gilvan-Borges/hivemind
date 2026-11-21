@@ -1232,6 +1232,11 @@ export function renderModalLayer() {
                 ` : ""}
               </details>
             ` : ""}
+            ${state.relayStatus?.loggedIn ? `
+              <div class="relay-actions" style="margin-top:8px">
+                <button class="primary mini" id="relay-make-qr-login" type="button">Gerar QR Code para entrar no celular (5G / Remoto)</button>
+              </div>
+            ` : ""}
             ${state.relayStatus?.linked ? `
               <div class="dim" style="font-size:12px;margin-top:8px">
                 IDE vinculada${state.relayStatus.deviceName ? `: ${escapeHtml(state.relayStatus.deviceName)}` : ""}${state.relayStatus.e2e ? " · chave do celular instalada" : " · aguardando a chave do celular"}
@@ -1243,16 +1248,17 @@ export function renderModalLayer() {
                 <input id="relay-claim" placeholder="Código gerado no celular" value="${escapeHtml(state.relayDraft.claim)}" autocomplete="off" />
                 <button class="mini" id="relay-claim-btn" type="button">Confirmar código</button>
               </div>
-              ${state.relayLink ? `
-                <div class="relay-code-box">
-                  ${safeImageSrc(state.relayLink.qrDataUrl) ? `<img src="${escapeHtml(safeImageSrc(state.relayLink.qrDataUrl))}" alt="QR de vínculo" width="160" height="160" />` : ""}
-                  <div>
-                    <div style="font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:18px;letter-spacing:0.08em">${escapeHtml(state.relayLink.code)}</div>
-                    <div class="dim" style="font-size:11px;margin-top:4px">Expira ${escapeHtml(state.relayLink.expiresAt)}</div>
-                  </div>
-                </div>
-              ` : ""}
             `}
+            ${state.relayLink ? `
+              <div class="relay-code-box" style="margin-top:10px">
+                ${safeImageSrc(state.relayLink.qrDataUrl) ? `<img src="${escapeHtml(safeImageSrc(state.relayLink.qrDataUrl))}" alt="QR do acesso remoto" width="176" height="176" style="background:#fff;padding:6px;border-radius:8px" />` : ""}
+                <div>
+                  <div style="font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:16px;letter-spacing:0.06em">${state.relayLink.code === "QR-LOGIN" ? "Escaneie no app do celular" : escapeHtml(state.relayLink.code)}</div>
+                  <div class="dim" style="font-size:11px;margin-top:4px">${state.relayLink.code === "QR-LOGIN" ? "Faz login automático no relay sem digitar URL, e-mail ou senha." : ""}</div>
+                  <div class="dim" style="font-size:11px;margin-top:4px">Expira ${escapeHtml(state.relayLink.expiresAt)}</div>
+                </div>
+              </div>
+            ` : ""}
           </div>
           <div id="mb-modal-err" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
           <div class="modal-footer">
@@ -1421,6 +1427,16 @@ export function renderModalLayer() {
         state.relayStatus = await backend.RelayUnlink();
         state.relayLink = null;
         updateStatusBar();
+        renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-make-qr-login")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayCreateQRLogin) return;
+      try {
+        state.relayLink = await backend.RelayCreateQRLogin();
         renderModalLayer();
       } catch (err) {
         showMbErr(err);

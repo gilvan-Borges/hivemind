@@ -680,6 +680,11 @@ export namespace idecore {
 	    myResponse?: string;
 	    needsAttention?: boolean;
 	    attentionReason?: string;
+	    mentionedMe?: boolean;
+	    lastActivityAt?: string;
+	    lastActivityAuthor?: string;
+	    lastActivityKind?: string;
+	    lastActivitySnippet?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectPullRequest(source);
@@ -704,6 +709,11 @@ export namespace idecore {
 	        this.myResponse = source["myResponse"];
 	        this.needsAttention = source["needsAttention"];
 	        this.attentionReason = source["attentionReason"];
+	        this.mentionedMe = source["mentionedMe"];
+	        this.lastActivityAt = source["lastActivityAt"];
+	        this.lastActivityAuthor = source["lastActivityAuthor"];
+	        this.lastActivityKind = source["lastActivityKind"];
+	        this.lastActivitySnippet = source["lastActivitySnippet"];
 	    }
 	}
 	export class ProjectStack {
@@ -2202,7 +2212,7 @@ export namespace relayclient {
 	    enabled: boolean;
 	    loggedIn: boolean;
 	    email: string;
-	    role?: string;
+	    role: string;
 	    baseUrl: string;
 	    deviceId: string;
 	    deviceName: string;

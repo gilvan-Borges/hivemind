@@ -29,6 +29,8 @@ export function CancelAgyOAuthLogin(arg1:string):Promise<modelx.ProfilesOverview
 
 export function CancelCommand(arg1:string):Promise<boolean>;
 
+export function CancelGitAction(arg1:string):Promise<boolean>;
+
 export function CancelInlineAI():Promise<void>;
 
 export function CancelRun(arg1:string):Promise<boolean>;
@@ -173,17 +175,29 @@ export function OpenPR(arg1:string,arg2:string,arg3:string,arg4:string):Promise<
 
 export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
 
+export function OrbDismissNotice(arg1:string):Promise<void>;
+
+export function OrbPushNotice(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:string):Promise<void>;
+
+export function OrbRunning():Promise<boolean>;
+
+export function OrbSetMood(arg1:string):Promise<void>;
+
+export function OrbShow():Promise<void>;
+
 export function ParseOutputProblems(arg1:string,arg2:string):Promise<Array<idecore.ProblemItem>>;
 
 export function ProbeProviders():Promise<Array<jev.ProviderHealthView>>;
+
+export function QuitAll():Promise<void>;
 
 export function ReadFile(arg1:string,arg2:string):Promise<string>;
 
 export function ReadNativeSkill(arg1:string):Promise<string>;
 
-export function RelayClaimLinkCode(arg1:string):Promise<relayclient.Status>;
-
 export function RelayChangePassword(arg1:string,arg2:string):Promise<relayclient.Status>;
+
+export function RelayClaimLinkCode(arg1:string):Promise<relayclient.Status>;
 
 export function RelayCreateAccount(arg1:string,arg2:string):Promise<void>;
 
@@ -257,6 +271,8 @@ export function RunCommand(arg1:string,arg2:string):Promise<idecore.CommandOutpu
 
 export function RunGitAction(arg1:string,arg2:string):Promise<string>;
 
+export function RunGitActionTimeout(arg1:string,arg2:string,arg3:number):Promise<string>;
+
 export function SaveAIUsageLimits(arg1:string,arg2:number,arg3:number):Promise<modelx.AIUsageReport>;
 
 export function SaveAPIKeys(arg1:Record<string, string>):Promise<Record<string, string>>;
@@ -296,6 +312,8 @@ export function SetMCPServerEnabled(arg1:string,arg2:string,arg3:boolean,arg4:bo
 export function SetMobileBridgeEnabled(arg1:boolean):Promise<remote.StatusInfo>;
 
 export function SetNativeSkillEnabled(arg1:string,arg2:boolean):Promise<void>;
+
+export function ShowDesktopNotification(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
 export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 

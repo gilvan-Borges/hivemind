@@ -1091,6 +1091,7 @@ export interface WailsBackendApp {
   RelayCreateAccount?(email: string, password: string): Promise<void>;
   RelayLogout?(): Promise<RelayStatus>;
   RelaySetEnabled?(on: boolean): Promise<RelayStatus>;
+  RelayCreateQRLogin?(): Promise<RelayLinkCode>;
   RelayCreateLinkCode?(): Promise<RelayLinkCode>;
   RelayClaimLinkCode?(code: string): Promise<RelayStatus>;
   RelayUnlink?(): Promise<RelayStatus>;

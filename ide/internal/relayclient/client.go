@@ -270,6 +270,34 @@ func (c *Client) SetEnabled(ctx context.Context, on bool) (Status, error) {
 	return c.Status(), nil
 }
 
+// CreateQRLogin asks the relay for a short-lived one-time QR login ticket so the phone
+// can sign in to the same relay account with a single scan (no typing URL, email, or password).
+func (c *Client) CreateQRLogin(ctx context.Context) (LinkCode, error) {
+	c.mu.Lock()
+	base := c.cfg.BaseURL
+	c.mu.Unlock()
+	if strings.TrimSpace(base) == "" {
+		return LinkCode{}, errors.New("faça login no relay primeiro")
+	}
+	var out struct {
+		Ticket    string `json:"ticket"`
+		ExpiresAt string `json:"expiresAt"`
+		URI       string `json:"uri"`
+	}
+	if err := c.authPost(ctx, "/api/v1/auth/qr-ticket", map[string]string{}, &out); err != nil {
+		return LinkCode{}, err
+	}
+	uri := strings.TrimSpace(out.URI)
+	if uri == "" || strings.Contains(uri, "relay=&") {
+		uri = "hivemind://qr-login?relay=" + url.QueryEscape(base) + "&ticket=" + url.QueryEscape(out.Ticket)
+	}
+	qr, err := remote.QRDataURL(uri, 280)
+	if err != nil {
+		return LinkCode{}, err
+	}
+	return LinkCode{Code: "QR-LOGIN", ExpiresAt: out.ExpiresAt, URI: uri, QRDataURL: qr}, nil
+}
+
 // CreateLinkCode asks the relay for a code the phone confirms.
 func (c *Client) CreateLinkCode(ctx context.Context) (LinkCode, error) {
 	if err := c.ensureKeys(); err != nil {
