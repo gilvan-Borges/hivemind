@@ -196,17 +196,24 @@ func (s *Server) handleCreateQRTicket(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	exp := now.Add(5 * time.Minute)
 
-	s.qrMu.Lock()
-	if s.qrTickets == nil {
-		s.qrTickets = make(map[string]qrLoginTicket)
-	}
-	for k, v := range s.qrTickets {
-		if now.After(v.expiresAt) {
-			delete(s.qrTickets, k)
+	if s.store != nil {
+		if err := s.store.CreateQRTicket(ticket, acct.ID, exp); err != nil {
+			writeStoreErr(w, err)
+			return
 		}
+	} else {
+		s.qrMu.Lock()
+		if s.qrTickets == nil {
+			s.qrTickets = make(map[string]qrLoginTicket)
+		}
+		for k, v := range s.qrTickets {
+			if now.After(v.expiresAt) {
+				delete(s.qrTickets, k)
+			}
+		}
+		s.qrTickets[ticket] = qrLoginTicket{accountID: acct.ID, expiresAt: exp}
+		s.qrMu.Unlock()
 	}
-	s.qrTickets[ticket] = qrLoginTicket{accountID: acct.ID, expiresAt: exp}
-	s.qrMu.Unlock()
 
 	base := s.publicURL
 	if base == "" {
@@ -228,6 +235,10 @@ func (s *Server) handleCreateQRTicket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRedeemQRTicket(w http.ResponseWriter, r *http.Request) {
 	ipKey := "ip:" + clientIP(r)
+	if blocked, retry := s.limiter.LoginBlocked(ipKey); blocked {
+		writeRate(w, retry)
+		return
+	}
 	if !s.limiter.AllowLogin(ipKey) {
 		writeAPIError(w, http.StatusTooManyRequests, relaywire.CodeRateLimited, "muitas tentativas; aguarde um instante")
 		return
@@ -245,18 +256,33 @@ func (s *Server) handleRedeemQRTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	s.qrMu.Lock()
-	entry, ok := s.qrTickets[ticket]
-	if ok {
-		delete(s.qrTickets, ticket)
+	var accountID string
+	var ok bool
+	if s.store != nil {
+		var err error
+		accountID, ok, err = s.store.RedeemQRTicket(ticket, now)
+		if err != nil {
+			writeStoreErr(w, err)
+			return
+		}
+	} else {
+		s.qrMu.Lock()
+		entry, found := s.qrTickets[ticket]
+		if found {
+			delete(s.qrTickets, ticket)
+		}
+		s.qrMu.Unlock()
+		if found && !now.After(entry.expiresAt) {
+			accountID = entry.accountID
+			ok = true
+		}
 	}
-	s.qrMu.Unlock()
-	if !ok || now.After(entry.expiresAt) {
+	if !ok {
 		s.limiter.Fail(ipKey)
 		writeAPIError(w, http.StatusUnauthorized, relaywire.CodeUnauthorized, "QR Code inválido ou expirado")
 		return
 	}
-	sess, err := s.store.issue(entry.accountID, r.UserAgent(), s.accessTTL, s.refreshTTL)
+	sess, err := s.store.issue(accountID, r.UserAgent(), s.accessTTL, s.refreshTTL)
 	if err != nil {
 		writeStoreErr(w, err)
 		return

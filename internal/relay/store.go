@@ -192,6 +192,11 @@ CREATE TABLE IF NOT EXISTS rpc_queue (
   body BLOB NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS qr_tickets (
+  ticket_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
 `)
 	return err
 }
@@ -980,6 +985,45 @@ func (s *Store) DeleteRPC(id string) error {
 	return err
 }
 
+// CreateQRTicket stores a hashed single-use QR login ticket in SQLite.
+func (s *Store) CreateQRTicket(ticket, accountID string, expiresAt time.Time) error {
+	if strings.TrimSpace(ticket) == "" || strings.TrimSpace(accountID) == "" {
+		return &httpError{Status: 400, Code: relaywire.CodeInvalid, Msg: "ticket inválido"}
+	}
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO qr_tickets(ticket_hash, account_id, expires_at) VALUES(?,?,?)`,
+		tokenHash(ticket), accountID, expiresAt.UTC().UnixMilli())
+	return err
+}
+
+// RedeemQRTicket atomically looks up and removes a QR login ticket, rejecting expired ones.
+func (s *Store) RedeemQRTicket(ticket string, now time.Time) (string, bool, error) {
+	hash := tokenHash(ticket)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var accountID string
+	var expMs int64
+	err = tx.QueryRow(`SELECT account_id, expires_at FROM qr_tickets WHERE ticket_hash=?`, hash).Scan(&accountID, &expMs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM qr_tickets WHERE ticket_hash=?`, hash); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	if now.UTC().After(time.UnixMilli(expMs).UTC()) {
+		return "", false, nil
+	}
+	return accountID, true, nil
+}
+
 // Cleanup drops expired sessions, access tokens, link codes and denylist rows.
 func (s *Store) Cleanup(now time.Time) error {
 	ms := now.UTC().UnixMilli()
@@ -988,6 +1032,7 @@ func (s *Store) Cleanup(now time.Time) error {
 		`DELETE FROM refresh_denylist WHERE expires_at < ` + fmt.Sprint(ms),
 		`DELETE FROM link_codes WHERE expires_at < ` + fmt.Sprint(ms) + ` AND consumed_at IS NULL`,
 		`DELETE FROM rpc_queue WHERE created_at < ` + fmt.Sprint(now.Add(-rpcTTL).UnixMilli()),
+		`DELETE FROM qr_tickets WHERE expires_at < ` + fmt.Sprint(ms),
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {

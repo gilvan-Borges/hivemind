@@ -123,3 +123,79 @@ func TestExpandKeepsPlaceholdersOutOfDisk(t *testing.T) {
 		t.Fatal(secretMessage(missing))
 	}
 }
+
+func TestFilteredCommandEnvStripsHostSecrets(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+	t.Setenv("OPENAI_API_KEY", "sk-proj-secret")
+	t.Setenv("GITHUB_TOKEN", "ghp_host_secret")
+
+	env, cwd := filteredCommandEnv(map[string]string{
+		"CUSTOM_TOKEN":     "allowed-explicit",
+		"HIVEMIND_MCP_CWD": "/tmp/ws",
+	})
+	if cwd != "/tmp/ws" {
+		t.Fatalf("cwd = %q, want /tmp/ws", cwd)
+	}
+	joined := strings.Join(env, "\n")
+	for _, secret := range []string{"sk-ant-secret", "sk-proj-secret", "ghp_host_secret"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("host secret leaked into MCP env: %s", secret)
+		}
+	}
+	if !strings.Contains(joined, "CUSTOM_TOKEN=allowed-explicit") {
+		t.Fatalf("explicit server env missing: %s", joined)
+	}
+}
+
+func TestWorkspaceTrustGateBlocksUntrustedCustomCommand(t *testing.T) {
+	useTempUserConfig(t)
+	workspace := t.TempDir()
+	projDir := filepath.Join(workspace, ".hivemind")
+	if err := os.MkdirAll(projDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgJSON := `{"servers":[{"name":"evil","transport":"stdio","command":"evil-bin","enabled":true}]}`
+	if err := os.WriteFile(filepath.Join(projDir, "mcp-servers.json"), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if IsWorkspaceConfigTrusted(workspace) {
+		t.Fatal("new project overlay should not be trusted initially")
+	}
+	untrusted, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findServer(untrusted.Servers, "evil") != nil {
+		t.Fatal("untrusted project custom MCP command must be blocked")
+	}
+
+	if err := TrustWorkspaceConfig(workspace); err != nil {
+		t.Fatal(err)
+	}
+	if !IsWorkspaceConfigTrusted(workspace) {
+		t.Fatal("expected workspace config to be trusted after TrustWorkspaceConfig")
+	}
+	trusted, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := findServer(trusted.Servers, "evil"); s == nil || s.Command != "evil-bin" {
+		t.Fatalf("trusted custom command should load after approval, got: %+v", s)
+	}
+
+	// Modifying the workspace file invalidates the recorded digest.
+	if err := os.WriteFile(filepath.Join(projDir, "mcp-servers.json"), []byte(`{"servers":[{"name":"evil2","transport":"stdio","command":"evil2-bin","enabled":true}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if IsWorkspaceConfigTrusted(workspace) {
+		t.Fatal("modified workspace overlay should invalidate previous trust")
+	}
+	afterModify, err := Load(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findServer(afterModify.Servers, "evil2") != nil {
+		t.Fatal("modified untrusted project MCP command must be blocked")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 )
 
@@ -379,9 +380,8 @@ func enrichOpenRouterDailyDiscounts(ctx context.Context, baseURL string, models 
 					Discounts: discovered,
 				}
 				if cachePath != "" {
-					_ = os.MkdirAll(filepath.Dir(cachePath), 0o700)
 					if rawBytes, err := json.MarshalIndent(cached, "", "  "); err == nil {
-						_ = os.WriteFile(cachePath, rawBytes, 0o600)
+						_ = atomicx.WriteFile(cachePath, rawBytes, 0o600)
 					}
 				}
 			}

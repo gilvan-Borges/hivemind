@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -372,5 +373,83 @@ func TestSeedOnce(t *testing.T) {
 	}
 	if !strings.Contains(hash, "m=19456,t=2,p=1") {
 		t.Fatalf("hash de produção: %s", hash)
+	}
+}
+
+func TestLimiterFloodDoesNotClearActiveLockout(t *testing.T) {
+	l := NewLimiter(LimitConfig{MaxFails: 3, FailWindow: 10 * time.Minute, BlockFor: 15 * time.Minute, LoginPerMin: 10, RPS: 20, Burst: 40})
+	now := time.Now()
+	l.now = func() time.Time { return now }
+
+	const attacker = "ip:203.0.113.99"
+	for i := 0; i < 3; i++ {
+		l.Fail(attacker)
+	}
+	if blocked, _ := l.LoginBlocked(attacker); !blocked {
+		t.Fatal("expected attacker IP to be blocked")
+	}
+
+	// Send 5,000 distinct flooding IPs across AllowRequest, AllowLogin, and Fail.
+	for i := 0; i < 5000; i++ {
+		k := fmt.Sprintf("ip:198.51.100.%d", i)
+		l.AllowRequest(k)
+		l.AllowLogin(k)
+		l.Fail(k)
+	}
+
+	if blocked, _ := l.LoginBlocked(attacker); !blocked {
+		t.Fatal("flood cleared active lockout for attacker IP")
+	}
+}
+
+func TestQRTicketPersistsAndRespectsLoginBlocked(t *testing.T) {
+	ts, store := newTestServer(t)
+	owner := login(t, ts.URL, "owner@example.com", "senha-inicial-ok")
+
+	var ticketRes struct {
+		Ticket string `json:"ticket"`
+	}
+	res := doJSON(t, http.MethodPost, ts.URL+"/api/v1/auth/qr-ticket", owner.AccessToken, nil, &ticketRes)
+	if res.StatusCode != http.StatusCreated || !strings.HasPrefix(ticketRes.Ticket, "hmr_qr_") {
+		t.Fatalf("create qr ticket: %d %+v", res.StatusCode, ticketRes)
+	}
+
+	// Simulate server restart backed by the same SQLite store.
+	restarted, err := New(store, Options{Argon: testArgon()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts2 := httptest.NewServer(restarted.Handler())
+	defer ts2.Close()
+
+	// Attacker triggers LoginBlocked on an IP before trying to redeem a ticket.
+	for i := 0; i < 5; i++ {
+		restarted.limiter.Fail("ip:198.51.100.77")
+	}
+	blockedReq, err := http.NewRequest(http.MethodPost, ts2.URL+"/api/v1/auth/qr-redeem", strings.NewReader(`{"ticket":"`+ticketRes.Ticket+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedReq.Header.Set("Content-Type", "application/json")
+	blockedReq.Header.Set("X-Forwarded-For", "198.51.100.77")
+	blockedResp, err := http.DefaultClient.Do(blockedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = blockedResp.Body.Close()
+	if blockedResp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when LoginBlocked, got %d", blockedResp.StatusCode)
+	}
+
+	// Legitimate client redeems the persisted ticket once.
+	var redeemed tokenResp
+	redeemRes := doJSON(t, http.MethodPost, ts2.URL+"/api/v1/auth/qr-redeem", "", map[string]string{"ticket": ticketRes.Ticket}, &redeemed)
+	if redeemRes.StatusCode != http.StatusOK || redeemed.AccessToken == "" {
+		t.Fatalf("expected ticket redeem after restart, got %d %+v", redeemRes.StatusCode, redeemed)
+	}
+	// Second redeem fails (single-use atomic deletion).
+	again := doJSON(t, http.MethodPost, ts2.URL+"/api/v1/auth/qr-redeem", "", map[string]string{"ticket": ticketRes.Ticket}, nil)
+	if again.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on second redeem, got %d", again.StatusCode)
 	}
 }

@@ -27,6 +27,7 @@ const (
 	searchMaxOutputBytes  = 24 * 1024
 	searchDefaultResults  = 50
 	searchHardMaxResults  = 120
+	searchMaxMatchesPerFile = 25
 
 	findDefaultResults = 60
 	findHardMaxResults = 200
@@ -127,6 +128,7 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 	}
 
 	glob := strings.TrimSpace(args.Glob)
+	isGitignored := loadGitignoreMatcher(absRoot)
 	var b strings.Builder
 	totalMatches := 0
 	filesScanned := 0
@@ -150,8 +152,15 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 
 		name := entry.Name()
 		if entry.IsDir() {
-			if path != searchDir && (searchIgnoredDirs[strings.ToLower(name)] || pathsec.IsSensitivePath(name)) {
-				return filepath.SkipDir
+			if path != searchDir {
+				if searchIgnoredDirs[strings.ToLower(name)] || pathsec.IsSensitivePath(name) {
+					return filepath.SkipDir
+				}
+				if rel, relErr := filepath.Rel(absRoot, path); relErr == nil {
+					if isGitignored(filepath.ToSlash(rel), name, true) {
+						return filepath.SkipDir
+					}
+				}
 			}
 			return nil
 		}
@@ -170,7 +179,7 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
-		if pathsec.IsSensitivePath(relSlash) || pathsec.IsSensitivePath(path) {
+		if pathsec.IsSensitivePath(relSlash) || pathsec.IsSensitivePath(path) || isGitignored(relSlash, name, false) {
 			return nil
 		}
 		if glob != "" && !matchGlob(glob, name, relSlash) {
@@ -230,6 +239,9 @@ func runSearchText(ctx interface{ Done() <-chan struct{} }, root string, args se
 func scanFileForQuery(fullPath, relSlash string, re *regexp.Regexp, needle string, caseSensitive bool, remaining int) ([]string, error) {
 	if remaining <= 0 {
 		return nil, nil
+	}
+	if remaining > searchMaxMatchesPerFile {
+		remaining = searchMaxMatchesPerFile
 	}
 	f, err := os.Open(fullPath)
 	if err != nil {
@@ -297,6 +309,7 @@ func runFindFiles(ctx interface{ Done() <-chan struct{} }, root string, args fin
 
 	hasGlobMeta := strings.ContainsAny(pattern, "*?[")
 	lowPattern := strings.ToLower(strings.ReplaceAll(pattern, "\\", "/"))
+	isGitignored := loadGitignoreMatcher(absRoot)
 
 	var matches []string
 	filesScanned := 0
@@ -315,8 +328,15 @@ func runFindFiles(ctx interface{ Done() <-chan struct{} }, root string, args fin
 		}
 		name := entry.Name()
 		if entry.IsDir() {
-			if path != searchDir && searchIgnoredDirs[strings.ToLower(name)] {
-				return filepath.SkipDir
+			if path != searchDir {
+				if searchIgnoredDirs[strings.ToLower(name)] || pathsec.IsSensitivePath(name) {
+					return filepath.SkipDir
+				}
+				if rel, relErr := filepath.Rel(absRoot, path); relErr == nil {
+					if isGitignored(filepath.ToSlash(rel), name, true) {
+						return filepath.SkipDir
+					}
+				}
 			}
 			return nil
 		}
@@ -330,17 +350,20 @@ func runFindFiles(ctx interface{ Done() <-chan struct{} }, root string, args fin
 			}
 		}
 
-		filesScanned++
-		if filesScanned > searchMaxFilesScanned {
-			truncated = true
-			return fs.SkipAll
-		}
-
 		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
+		if pathsec.IsSensitivePath(relSlash) || pathsec.IsSensitivePath(path) || isGitignored(relSlash, name, false) {
+			return nil
+		}
+
+		filesScanned++
+		if filesScanned > searchMaxFilesScanned {
+			truncated = true
+			return fs.SkipAll
+		}
 
 		ok := false
 		if hasGlobMeta {
@@ -425,4 +448,78 @@ func matchGlob(glob, baseName, relSlash string) bool {
 		}
 	}
 	return false
+}
+
+type gitignoreRule struct {
+	pattern string
+	dirOnly bool
+	hasSep  bool
+}
+
+func loadGitignoreMatcher(absRoot string) func(relSlash, name string, isDir bool) bool {
+	data, err := os.ReadFile(filepath.Join(absRoot, ".gitignore"))
+	if err != nil || len(data) == 0 {
+		return func(string, string, bool) bool { return false }
+	}
+	var rules []gitignoreRule
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		line = strings.ReplaceAll(line, "\\", "/")
+		dirOnly := strings.HasSuffix(line, "/")
+		line = strings.TrimSuffix(line, "/")
+		line = strings.TrimPrefix(line, "/")
+		line = strings.TrimPrefix(line, "**/")
+		if line == "" {
+			continue
+		}
+		rules = append(rules, gitignoreRule{
+			pattern: line,
+			dirOnly: dirOnly,
+			hasSep:  strings.Contains(line, "/"),
+		})
+	}
+	if len(rules) == 0 {
+		return func(string, string, bool) bool { return false }
+	}
+	return func(relSlash, name string, isDir bool) bool {
+		for _, r := range rules {
+			if r.dirOnly {
+				if r.hasSep {
+					if relSlash == r.pattern || strings.HasPrefix(relSlash, r.pattern+"/") {
+						return true
+					}
+					if ok, _ := filepath.Match(r.pattern, relSlash); ok {
+						return true
+					}
+				} else if isDir {
+					if ok, _ := filepath.Match(r.pattern, name); ok {
+						return true
+					}
+				} else if idx := strings.LastIndexByte(relSlash, '/'); idx > 0 {
+					for _, seg := range strings.Split(relSlash[:idx], "/") {
+						if ok, _ := filepath.Match(r.pattern, seg); ok {
+							return true
+						}
+					}
+				}
+				continue
+			}
+			if r.hasSep {
+				if relSlash == r.pattern || strings.HasPrefix(relSlash, r.pattern+"/") {
+					return true
+				}
+				if ok, _ := filepath.Match(r.pattern, relSlash); ok {
+					return true
+				}
+				continue
+			}
+			if ok, _ := filepath.Match(r.pattern, name); ok {
+				return true
+			}
+		}
+		return false
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,11 @@ type Client struct {
 	ring      *eventRing
 	http      *http.Client
 	refreshMu sync.Mutex
+
+	rpcMu     sync.Mutex
+	rpcSeen   map[string]struct{}
+	rpcOrder  []string
+	rpcMaxSeq uint64
 }
 
 // Load reads the config and prepares the client. It does not dial the network.
@@ -648,6 +654,10 @@ func (c *Client) handleRPC(ctx context.Context, send chan []byte, env relaywire.
 		c.replyErr(ctx, send, env.ID, relaywire.CodeDecryptFailed, "não foi possível abrir a mensagem")
 		return
 	}
+	if code, msg := c.checkRPCReplay(env, req); code != "" {
+		c.replyErr(ctx, send, env.ID, code, msg)
+		return
+	}
 	result := c.callBridge(ctx, req)
 	raw, err := keys.SealJSON(peer, result)
 	if err != nil {
@@ -657,6 +667,57 @@ func (c *Client) handleRPC(ctx context.Context, send chan []byte, env relaywire.
 	_ = enqueue(ctx, send, relaywire.Envelope{
 		V: 1, ID: env.ID, Type: relaywire.TypeRPCResult, DeviceID: env.DeviceID, Enc: relaywire.EncNaClBox, Payload: raw,
 	})
+}
+
+const maxRPCReplayEntries = 1024
+
+func (c *Client) checkRPCReplay(env relaywire.Envelope, req relaywire.RPCRequest) (code, msg string) {
+	if req.IssuedAtUnix > 0 {
+		delta := time.Now().Unix() - req.IssuedAtUnix
+		if delta < -90 || delta > 90 {
+			return relaywire.CodeExpired, "requisição RPC fora da janela de tempo"
+		}
+	}
+	var box relaywire.BoxPayload
+	_ = json.Unmarshal(env.Payload, &box)
+
+	var seenKeys []string
+	if box.Nonce != "" {
+		seenKeys = append(seenKeys, "box:"+box.Nonce)
+	}
+	if req.Nonce != "" {
+		seenKeys = append(seenKeys, "req:"+req.Nonce)
+	}
+	if req.Seq > 0 {
+		seenKeys = append(seenKeys, "seq:"+strconv.FormatUint(req.Seq, 10))
+	}
+
+	c.rpcMu.Lock()
+	defer c.rpcMu.Unlock()
+	if req.Seq > 0 && c.rpcMaxSeq > maxRPCReplayEntries && req.Seq <= c.rpcMaxSeq-maxRPCReplayEntries {
+		return relaywire.CodeConflict, "replay de RPC detectado"
+	}
+	for _, k := range seenKeys {
+		if _, exists := c.rpcSeen[k]; exists {
+			return relaywire.CodeConflict, "replay de RPC detectado"
+		}
+	}
+	if c.rpcSeen == nil {
+		c.rpcSeen = make(map[string]struct{}, 64)
+	}
+	for _, k := range seenKeys {
+		c.rpcSeen[k] = struct{}{}
+		c.rpcOrder = append(c.rpcOrder, k)
+	}
+	for len(c.rpcOrder) > maxRPCReplayEntries {
+		oldest := c.rpcOrder[0]
+		c.rpcOrder = c.rpcOrder[1:]
+		delete(c.rpcSeen, oldest)
+	}
+	if req.Seq > c.rpcMaxSeq {
+		c.rpcMaxSeq = req.Seq
+	}
+	return "", ""
 }
 
 func (c *Client) callBridge(ctx context.Context, req relaywire.RPCRequest) relaywire.RPCResult {

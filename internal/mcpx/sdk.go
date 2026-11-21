@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
@@ -22,21 +23,20 @@ func dialSDK(ctx context.Context, server Server) (session, error) {
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "hivemind", Version: "0.1.0"}, nil)
 	var transport mcp.Transport
+	var stderrBuf *cappedStderr
 	switch server.Transport {
 	case TransportStdio:
 		if strings.TrimSpace(server.Command) == "" {
 			return nil, fmt.Errorf("servidor %s sem comando", server.Name)
 		}
 		cmd := localCommand(server.Command, server.Args...)
-		cmd.Env = os.Environ()
-		for k, v := range server.Env {
-			if k == "HIVEMIND_MCP_CWD" {
-				cmd.Dir = v
-				continue
-			}
-			cmd.Env = append(cmd.Env, k+"="+v)
+		envList, cwd := filteredCommandEnv(server.Env)
+		cmd.Env = envList
+		if cwd != "" {
+			cmd.Dir = cwd
 		}
-		cmd.Stderr = io.Discard
+		stderrBuf = &cappedStderr{max: 16 << 10}
+		cmd.Stderr = stderrBuf
 		transport = &mcp.CommandTransport{Command: cmd}
 	case TransportHTTP:
 		if strings.TrimSpace(server.URL) == "" {
@@ -53,9 +53,121 @@ func dialSDK(ctx context.Context, server Server) (session, error) {
 	}
 	cs, err := client.Connect(dialCtx, transport, nil)
 	if err != nil {
+		if tail := redactSecrets(stderrBuf.String()); tail != "" {
+			return nil, fmt.Errorf("%w (stderr: %s)", err, tail)
+		}
 		return nil, err
 	}
-	return &sdkSession{session: cs, server: server.Name}, nil
+	return &sdkSession{session: cs, server: server.Name, stderr: stderrBuf}, nil
+}
+
+var allowedHostEnvKeys = map[string]bool{
+	"PATH":                    true,
+	"SYSTEMROOT":              true,
+	"WINDIR":                  true,
+	"COMSPEC":                 true,
+	"PATHEXT":                 true,
+	"HOME":                    true,
+	"USERPROFILE":             true,
+	"APPDATA":                 true,
+	"LOCALAPPDATA":            true,
+	"PROGRAMDATA":             true,
+	"PROGRAMFILES":            true,
+	"PROGRAMFILES(X86)":       true,
+	"COMMONPROGRAMFILES":      true,
+	"COMMONPROGRAMFILES(X86)": true,
+	"TEMP":                    true,
+	"TMP":                     true,
+	"TMPDIR":                  true,
+	"XDG_CONFIG_HOME":         true,
+	"XDG_CACHE_HOME":          true,
+	"XDG_DATA_HOME":           true,
+	"TERM":                    true,
+	"LANG":                    true,
+	"LC_ALL":                  true,
+	"SSL_CERT_FILE":           true,
+	"SSL_CERT_DIR":            true,
+	"NODE_EXTRA_CA_CERTS":     true,
+	"UV_CACHE_DIR":            true,
+	"NPM_CONFIG_CACHE":        true,
+	"GOPATH":                  true,
+	"GOROOT":                  true,
+}
+
+func filteredCommandEnv(extra map[string]string) ([]string, string) {
+	byUpper := make(map[string]string, 32)
+	for _, entry := range os.Environ() {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok || !allowedHostEnvKeys[strings.ToUpper(k)] {
+			continue
+		}
+		byUpper[strings.ToUpper(k)] = k + "=" + v
+	}
+	var cwd string
+	if len(extra) > 0 {
+		keys := make([]string, 0, len(extra))
+		for k := range extra {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := extra[k]
+			if k == "HIVEMIND_MCP_CWD" {
+				cwd = v
+				continue
+			}
+			up := strings.ToUpper(k)
+			if runtime.GOOS != "windows" {
+				up = k
+			}
+			byUpper[up] = k + "=" + v
+		}
+	}
+	keys := make([]string, 0, len(byUpper))
+	for k := range byUpper {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, byUpper[k])
+	}
+	return out, cwd
+}
+
+type cappedStderr struct {
+	mu  sync.Mutex
+	max int
+	buf bytes.Buffer
+}
+
+func (c *cappedStderr) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.max <= 0 {
+		return len(p), nil
+	}
+	if len(p) >= c.max {
+		c.buf.Reset()
+		_, _ = c.buf.Write(p[len(p)-c.max:])
+		return len(p), nil
+	}
+	if over := c.buf.Len() + len(p) - c.max; over > 0 {
+		keep := append([]byte(nil), c.buf.Bytes()[over:]...)
+		c.buf.Reset()
+		_, _ = c.buf.Write(keep)
+	}
+	_, _ = c.buf.Write(p)
+	return len(p), nil
+}
+
+func (c *cappedStderr) String() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.TrimSpace(c.buf.String())
 }
 
 func localCommand(name string, args ...string) *exec.Cmd {
@@ -96,14 +208,20 @@ func headerClient(headers map[string]string) *http.Client {
 type sdkSession struct {
 	session *mcp.ClientSession
 	server  string
+	stderr  *cappedStderr
 }
 
 func (s *sdkSession) Tools(ctx context.Context) ([]RemoteTool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	var out []RemoteTool
 	var cursor string
 	for page := 0; page < 20; page++ {
 		res, err := s.session.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
+			if tail := redactSecrets(s.stderr.String()); tail != "" {
+				return nil, fmt.Errorf("%w (stderr: %s)", err, tail)
+			}
 			return nil, err
 		}
 		for _, tool := range res.Tools {
@@ -126,8 +244,13 @@ func (s *sdkSession) Tools(ctx context.Context) ([]RemoteTool, error) {
 }
 
 func (s *sdkSession) Call(ctx context.Context, name string, args map[string]any) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 	res, err := s.session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
+		if tail := redactSecrets(s.stderr.String()); tail != "" {
+			return "", fmt.Errorf("%w (stderr: %s)", err, tail)
+		}
 		return "", err
 	}
 	text := contentText(res)

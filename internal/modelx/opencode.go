@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -124,21 +123,21 @@ type storedCredentials struct {
 	OpenCodeBaseURL string `json:"opencode_base_url,omitempty"`
 }
 
-func credentialsFilePath() (string, error) {
-	if base, err := os.UserConfigDir(); err == nil && strings.TrimSpace(base) != "" {
-		return filepath.Join(base, "HiveMind", "credentials.json"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".hivemind", "credentials.json"), nil
-}
+var credentialsFilePathFn = defaultCredentialsFilePath
 
 // LoadOpenCodeCredentials resolves the OpenCode API key and base URL from environment
 // variables (OPENCODE_API_KEY / OPENCODE_ZEN_API_KEY / OPENCODE_BASE_URL) or the local
 // user credentials file (~/.config/HiveMind/credentials.json or %AppData%\HiveMind\credentials.json).
 func LoadOpenCodeCredentials() (apiKey, baseURL, source string) {
+	return LoadOpenCodeCredentialsForContext(context.Background())
+}
+
+// LoadOpenCodeCredentialsForContext resolves OpenCode credentials while respecting
+// workspace organization isolation when ctx carries a workspace path.
+func LoadOpenCodeCredentialsForContext(ctx context.Context) (apiKey, baseURL, source string) {
+	if WorkspaceFromContext(ctx) != "" && CredentialIsolated(ctx, "opencode") {
+		return "", OpenCodeDefaultBaseURL, ""
+	}
 	baseURL = strings.TrimSpace(os.Getenv("OPENCODE_BASE_URL"))
 
 	if envKey := firstEnv("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"); envKey != "" {
@@ -156,7 +155,7 @@ func LoadOpenCodeCredentials() (apiKey, baseURL, source string) {
 		}
 	}
 	if apiKey == "" {
-		if profKey := strings.TrimSpace(resolveEnvForContext(context.Background(), "opencode", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY")); profKey != "" {
+		if profKey := strings.TrimSpace(resolveEnvForContext(ctx, "opencode", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY")); profKey != "" {
 			apiKey = profKey
 			source = "profile"
 		}
@@ -172,7 +171,7 @@ func LoadOpenCodeCredentials() (apiKey, baseURL, source string) {
 // SaveOpenCodeCredentials stores or clears the OpenCode API token in the user config dir
 // (outside project repositories so secrets are never committed to Git).
 func SaveOpenCodeCredentials(apiKey, baseURL string) error {
-	path, err := credentialsFilePath()
+	path, err := credentialsFilePathFn()
 	if err != nil {
 		return err
 	}
@@ -180,7 +179,17 @@ func SaveOpenCodeCredentials(apiKey, baseURL string) error {
 	if existing, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(existing, &creds)
 	}
-	creds.OpenCodeAPIKey = strings.TrimSpace(apiKey)
+	trimmedKey := strings.TrimSpace(apiKey)
+	if trimmedKey == "" {
+		vaultDeleteSecret(path, "modelx:opencode:api_key")
+		creds.OpenCodeAPIKey = ""
+	} else {
+		ref, verr := vaultSaveSecret(path, "modelx:opencode:api_key", trimmedKey)
+		if verr != nil {
+			return verr
+		}
+		creds.OpenCodeAPIKey = ref
+	}
 	cleanURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if cleanURL == "" || cleanURL == OpenCodeDefaultBaseURL {
 		creds.OpenCodeBaseURL = ""
@@ -213,7 +222,7 @@ var (
 )
 
 func readOpenCodeFile() (string, string) {
-	path, err := credentialsFilePath()
+	path, err := credentialsFilePathFn()
 	if err != nil {
 		return "", ""
 	}
@@ -237,11 +246,23 @@ func readOpenCodeFile() (string, string) {
 		ocFileCache.ok = false
 		return "", ""
 	}
+	resolvedKey, migrated := vaultLoadSecret(path, "modelx:opencode:api_key", strings.TrimSpace(creds.OpenCodeAPIKey))
+	baseVal := strings.TrimSpace(creds.OpenCodeBaseURL)
+	if migrated {
+		creds.OpenCodeAPIKey = vaultRefPrefix + safeVaultKey("modelx:opencode:api_key")
+		if migBytes, merr := json.MarshalIndent(creds, "", "  "); merr == nil {
+			if writeSecretFile(path, append(migBytes, '\n')) == nil {
+				if st, serr := os.Stat(path); serr == nil {
+					info = st
+				}
+			}
+		}
+	}
 	ocFileCache.path = path
 	ocFileCache.mod = info.ModTime()
 	ocFileCache.size = info.Size()
-	ocFileCache.key = strings.TrimSpace(creds.OpenCodeAPIKey)
-	ocFileCache.base = strings.TrimSpace(creds.OpenCodeBaseURL)
+	ocFileCache.key = resolvedKey
+	ocFileCache.base = baseVal
 	ocFileCache.ok = true
 	return ocFileCache.key, ocFileCache.base
 }
@@ -386,7 +407,7 @@ func NewOpenCode(ctx context.Context, modelName string) (model.LLM, error) {
 		zenBaseURL = strings.TrimRight(strings.TrimSpace(profileEnvValue(prof, "OPENCODE_BASE_URL")), "/")
 	}
 	if apiKey == "" && !profileOnly {
-		fileKey, fileBase, _ := LoadOpenCodeCredentials()
+		fileKey, fileBase, _ := LoadOpenCodeCredentialsForContext(ctx)
 		apiKey = fileKey
 		if zenBaseURL == "" {
 			zenBaseURL = fileBase

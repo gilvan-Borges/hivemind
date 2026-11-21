@@ -89,7 +89,17 @@ func (l *Limiter) AllowLogin(key string) bool {
 		lim = rate.NewLimiter(perSec, l.cfg.LoginPerMin)
 		l.logins[key] = lim
 		if len(l.logins) > 4096 {
-			l.logins = map[string]*rate.Limiter{key: lim}
+			evicted := 0
+			for k := range l.logins {
+				if k == key {
+					continue
+				}
+				delete(l.logins, k)
+				evicted++
+				if evicted >= 512 {
+					break
+				}
+			}
 		}
 	}
 	return lim.Allow()
@@ -105,7 +115,17 @@ func (l *Limiter) AllowRequest(key string) bool {
 		lim = rate.NewLimiter(l.cfg.RPS, l.cfg.Burst)
 		l.hits[key] = lim
 		if len(l.hits) > 4096 {
-			l.hits = map[string]*rate.Limiter{key: lim}
+			evicted := 0
+			for k := range l.hits {
+				if k == key {
+					continue
+				}
+				delete(l.hits, k)
+				evicted++
+				if evicted >= 512 {
+					break
+				}
+			}
 		}
 	}
 	return lim.Allow()
@@ -142,9 +162,41 @@ func (l *Limiter) Fail(key string) (blocked bool, retry time.Duration) {
 	st.fails++
 	if st.fails >= l.cfg.MaxFails {
 		st.blockedUntil = now.Add(l.cfg.BlockFor)
+		l.evictStaleFailsLocked(key, now)
 		return true, l.cfg.BlockFor
 	}
+	l.evictStaleFailsLocked(key, now)
 	return false, 0
+}
+
+func (l *Limiter) evictStaleFailsLocked(keep string, now time.Time) {
+	if len(l.fails) <= 4096 {
+		return
+	}
+	for k, v := range l.fails {
+		if k == keep {
+			continue
+		}
+		if !v.blockedUntil.IsZero() && !now.Before(v.blockedUntil) {
+			delete(l.fails, k)
+		} else if v.blockedUntil.IsZero() && now.Sub(v.windowStart) > l.cfg.FailWindow {
+			delete(l.fails, k)
+		}
+	}
+	if len(l.fails) <= 4096 {
+		return
+	}
+	for k, v := range l.fails {
+		if k == keep {
+			continue
+		}
+		if v.blockedUntil.IsZero() || !now.Before(v.blockedUntil) {
+			delete(l.fails, k)
+			if len(l.fails) <= 4096 {
+				break
+			}
+		}
+	}
 }
 
 // Success clears failure state for the key.

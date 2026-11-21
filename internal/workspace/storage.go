@@ -7,8 +7,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"unicode"
+
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 )
+
+var migrateMu sync.Mutex
 
 // AppDataRoot returns the user-level HiveMind storage directory outside any Git repository:
 //   - HIVEMIND_DATA_DIR when explicitly set
@@ -126,6 +131,8 @@ func LogsDir(workspaceRoot string) string {
 }
 
 func migrateLegacyFile(legacyPath, externalPath string) {
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
 	if strings.TrimSpace(legacyPath) == "" || strings.TrimSpace(externalPath) == "" {
 		return
 	}
@@ -136,7 +143,7 @@ func migrateLegacyFile(legacyPath, externalPath string) {
 	if _, extErr := os.Stat(externalPath); os.IsNotExist(extErr) {
 		if data, rErr := os.ReadFile(legacyPath); rErr == nil {
 			if mkErr := os.MkdirAll(filepath.Dir(externalPath), 0o700); mkErr == nil {
-				if wErr := os.WriteFile(externalPath, data, 0o600); wErr == nil {
+				if wErr := atomicx.WriteFile(externalPath, data, 0o600); wErr == nil {
 					_ = os.Remove(legacyPath)
 				}
 			}
@@ -148,6 +155,8 @@ func migrateLegacyFile(legacyPath, externalPath string) {
 }
 
 func migrateLegacySessions(workspaceRoot, externalSessionsDir string) {
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return
 	}
@@ -167,7 +176,7 @@ func migrateLegacySessions(workspaceRoot, externalSessionsDir string) {
 		dst := filepath.Join(externalSessionsDir, e.Name())
 		if _, statErr := os.Stat(dst); os.IsNotExist(statErr) {
 			if data, rErr := os.ReadFile(src); rErr == nil {
-				if wErr := os.WriteFile(dst, data, 0o600); wErr == nil {
+				if wErr := atomicx.WriteFile(dst, data, 0o600); wErr == nil {
 					_ = os.Remove(src)
 				}
 			}

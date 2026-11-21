@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
@@ -171,5 +172,43 @@ func TestEditFileSurgicalErrorsAndReplaceAll(t *testing.T) {
 	}
 	if _, err := editFileSurgical(root, editArgs{Path: "../fora.txt", OldText: "a", NewText: "b"}); err == nil {
 		t.Fatal("esperava bloqueio de path traversal")
+	}
+}
+
+func TestEditFileRejectsStaleMtimeAfterRead(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "code.go")
+	if err := os.WriteFile(p, []byte("package main\nfunc v1() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-10 * time.Second)
+	if err := os.Chtimes(p, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	d := Deps{Root: root, tracker: newFileReadTracker()}
+	if _, err := d.readFile(readFileArgs{Path: "code.go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an external edit advancing the file's mtime.
+	if err := os.WriteFile(p, []byte("package main\nfunc v1() {}\n// external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(p, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.editFile(editArgs{Path: "code.go", OldText: "v1", NewText: "v2"}); err == nil || !strings.Contains(err.Error(), "modificado externamente") {
+		t.Fatalf("expected stale mtime error, got: %v", err)
+	}
+
+	// Re-reading refreshes the tracked mtime and allows editing.
+	if _, err := d.readFile(readFileArgs{Path: "code.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.editFile(editArgs{Path: "code.go", OldText: "v1", NewText: "v2"}); err != nil {
+		t.Fatalf("expected edit to succeed after re-read: %v", err)
 	}
 }

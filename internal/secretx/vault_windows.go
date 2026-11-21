@@ -303,3 +303,101 @@ func dpapiBlobFilePath(name string) (string, error) {
 	sum := sha256.Sum256([]byte(name))
 	return filepath.Join(base, "HiveMind", "resident", "vault", hex.EncodeToString(sum[:])+".dpapi"), nil
 }
+
+// ReadRawGenericCredential reads the unencrypted CredentialBlob from a generic
+// Windows Credential Manager target (such as external CLI slot "gemini:antigravity").
+func ReadRawGenericCredential(target string) ([]byte, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, errors.New("alvo de credencial vazio")
+	}
+	if err := modAdvapi32.Load(); err != nil {
+		return nil, err
+	}
+	targetPtr, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return nil, err
+	}
+	var pCred *credential
+	r1, _, e1 := procCredReadW.Call(
+		uintptr(unsafe.Pointer(targetPtr)),
+		credTypeGeneric,
+		0,
+		uintptr(unsafe.Pointer(&pCred)),
+	)
+	if r1 == 0 || pCred == nil {
+		if errors.Is(e1, windows.ERROR_NOT_FOUND) {
+			return nil, ErrSecretNotFound
+		}
+		return nil, fmt.Errorf("CredReadW %s: %w", target, e1)
+	}
+	defer procCredFree.Call(uintptr(unsafe.Pointer(pCred)))
+	if pCred.CredentialBlobSize == 0 || pCred.CredentialBlob == nil {
+		return nil, errors.New("sessão OAuth vazia")
+	}
+	raw := unsafe.Slice(pCred.CredentialBlob, int(pCred.CredentialBlobSize))
+	return append([]byte(nil), raw...), nil
+}
+
+// WriteRawGenericCredential writes raw bytes into a generic Windows Credential
+// Manager entry (for interoperability with external CLIs sharing a credential target).
+func WriteRawGenericCredential(target, userName string, raw []byte) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return errors.New("alvo de credencial vazio")
+	}
+	if len(raw) == 0 {
+		return errors.New("blob de credencial vazio")
+	}
+	if err := modAdvapi32.Load(); err != nil {
+		return err
+	}
+	targetPtr, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return err
+	}
+	userPtr, err := windows.UTF16PtrFromString(userName)
+	if err != nil {
+		return err
+	}
+	cred := credential{
+		Type:               credTypeGeneric,
+		TargetName:         targetPtr,
+		CredentialBlobSize: uint32(len(raw)),
+		CredentialBlob:     &raw[0],
+		Persist:            credPersistLocalMachine,
+		UserName:           userPtr,
+	}
+	r1, _, e1 := procCredWriteW.Call(uintptr(unsafe.Pointer(&cred)), 0)
+	if r1 == 0 {
+		return fmt.Errorf("CredWriteW %s: %w", target, e1)
+	}
+	return nil
+}
+
+// DeleteRawGenericCredential deletes a generic Windows Credential Manager entry.
+func DeleteRawGenericCredential(target string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return errors.New("alvo de credencial vazio")
+	}
+	if err := modAdvapi32.Load(); err != nil {
+		return err
+	}
+	targetPtr, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return err
+	}
+	r1, _, e1 := procCredDeleteW.Call(
+		uintptr(unsafe.Pointer(targetPtr)),
+		credTypeGeneric,
+		0,
+	)
+	if r1 == 0 {
+		if errors.Is(e1, windows.ERROR_NOT_FOUND) {
+			return ErrSecretNotFound
+		}
+		return fmt.Errorf("CredDeleteW %s: %w", target, e1)
+	}
+	return nil
+}

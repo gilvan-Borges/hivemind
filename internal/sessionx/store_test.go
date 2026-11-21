@@ -47,9 +47,19 @@ func TestCompactOldToolOutputsAlsoTrimsWriteFileArguments(t *testing.T) {
 	if err := CompactOldToolOutputs(created.Session, 5); err != nil {
 		t.Fatal(err)
 	}
-	content, _ := writeCall.LLMResponse.Content.Parts[0].FunctionCall.Args["content"].(string)
+	ev := created.Session.Events().At(0)
+	content, _ := ev.LLMResponse.Content.Parts[0].FunctionCall.Args["content"].(string)
 	if len(content) >= len(big) || !strings.Contains(content, "compactado") {
 		t.Fatalf("write_file content was not compacted: len=%d", len(content))
+	}
+	if orig, _ := writeCall.LLMResponse.Content.Parts[0].FunctionCall.Args["content"].(string); orig != big {
+		t.Fatalf("caller event was mutated in place: len=%d", len(orig))
+	}
+	// Mutating the snapshot returned by Events() must not affect stored events.
+	ev.LLMResponse.Content.Parts[0].FunctionCall.Args["content"] = "mutated"
+	again, _ := created.Session.Events().At(0).LLMResponse.Content.Parts[0].FunctionCall.Args["content"].(string)
+	if again != content {
+		t.Fatalf("Events() leaked internal mutable map: got %q want %q", again, content)
 	}
 }
 

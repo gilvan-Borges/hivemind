@@ -209,9 +209,28 @@ func loadProfilesLocked() (storedProfilesFile, error) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return out, err
 	}
+	migrated := false
 	for i := range out.Profiles {
 		out.Profiles[i].Provider = NormalizeProfileProvider(out.Profiles[i].Provider)
 		out.Profiles[i].ID = sanitizeSlug(out.Profiles[i].ID)
+		for k, v := range out.Profiles[i].Env {
+			uk := strings.ToUpper(strings.TrimSpace(k))
+			tv := strings.TrimSpace(v)
+			if isSecretKeyName(uk) && tv != "" {
+				resolved, mig := vaultLoadSecret(path, "modelx:prof:"+out.Profiles[i].ID+":"+uk, tv)
+				if mig {
+					migrated = true
+				}
+				if resolved != "" {
+					out.Profiles[i].Env[k] = resolved
+				} else {
+					delete(out.Profiles[i].Env, k)
+				}
+			}
+		}
+	}
+	if migrated {
+		_ = saveProfilesLocked(out)
 	}
 	return out, nil
 }
@@ -221,7 +240,32 @@ func saveProfilesLocked(doc storedProfilesFile) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(doc, "", "  ")
+	diskDoc := storedProfilesFile{
+		Profiles:          make([]ProviderProfile, len(doc.Profiles)),
+		WorkspaceBindings: doc.WorkspaceBindings,
+	}
+	for i, p := range doc.Profiles {
+		cp := p
+		if len(p.Env) > 0 {
+			envCopy := make(map[string]string, len(p.Env))
+			for k, v := range p.Env {
+				uk := strings.ToUpper(strings.TrimSpace(k))
+				tv := strings.TrimSpace(v)
+				if isSecretKeyName(uk) && tv != "" {
+					ref, verr := vaultSaveSecret(path, "modelx:prof:"+p.ID+":"+uk, tv)
+					if verr != nil {
+						return verr
+					}
+					envCopy[k] = ref
+				} else {
+					envCopy[k] = v
+				}
+			}
+			cp.Env = envCopy
+		}
+		diskDoc.Profiles[i] = cp
+	}
+	data, err := json.MarshalIndent(diskDoc, "", "  ")
 	if err != nil {
 		return err
 	}

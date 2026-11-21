@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
@@ -400,7 +401,7 @@ func copyBetweenTrees(srcRoot, dstRoot, relSlash string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, info.Mode().Perm())
+	return atomicx.WriteFile(dst, data, info.Mode().Perm())
 }
 
 func removeInTree(dstRoot, relSlash string) {

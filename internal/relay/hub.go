@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -122,6 +123,7 @@ func (h *Hub) Attach(c *clientConn) error {
 			ln.ide.Close()
 		}
 		ln.ide = c
+		broadcastPresenceLocked(ln, c.deviceID, true)
 		return nil
 	}
 	if len(ln.apps) >= maxAppsPerIDE {
@@ -147,6 +149,7 @@ func (h *Hub) Detach(c *clientConn) {
 	if c.role == relaywire.RoleIDE {
 		if ln.ide == c {
 			ln.ide = nil
+			broadcastPresenceLocked(ln, c.deviceID, false)
 		}
 	} else {
 		delete(ln.apps, c)
@@ -339,6 +342,32 @@ func (h *Hub) NotifyPeerKey(deviceID, forRole string, frame []byte) {
 			case app.send <- frame:
 			default:
 			}
+		}
+	}
+}
+
+func broadcastPresenceLocked(ln *lane, deviceID string, online bool) {
+	if ln == nil || len(ln.apps) == 0 {
+		return
+	}
+	payload, err := json.Marshal(relaywire.PeerPresenceNotice{Online: online, Role: relaywire.RoleIDE})
+	if err != nil {
+		return
+	}
+	frame, err := json.Marshal(relaywire.Envelope{
+		V:        relaywire.ProtocolVersion,
+		Type:     relaywire.TypePeerPresence,
+		DeviceID: deviceID,
+		Payload:  payload,
+	})
+	if err != nil {
+		return
+	}
+	for app := range ln.apps {
+		select {
+		case <-app.closed:
+		case app.send <- frame:
+		default:
 		}
 	}
 }

@@ -17,20 +17,20 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
+	"github.com/gilvan-Borges/HiveMind/internal/secretx"
+	"golang.org/x/sys/windows"
 )
 
 const (
-	credTypeGeneric         = 1
-	credPersistLocalMachine = 2
-	agyCredTargetName       = "gemini:antigravity"
-	agyCredUserName         = "antigravity"
-	agyDefaultWriterID      = "PlzI4ttSxFTVfy2T6XvuxBiIBjkVNj0I6hCD0F3Jqko"
-	agyOOBRedirectURI       = "https://antigravity.google/oauth-callback"
+	agyCredTargetName  = "gemini:antigravity"
+	agyCredUserName    = "antigravity"
+	agyDefaultWriterID = "PlzI4ttSxFTVfy2T6XvuxBiIBjkVNj0I6hCD0F3Jqko"
+	agyOOBRedirectURI  = "https://antigravity.google/oauth-callback"
+	agyLeaseBackupKey  = "modelx:agy:lease_backup"
+	agyVaultMutexName  = `Local\HiveMind.AgyVaultSlot`
 )
 
 func agyLoopbackClientID() string {
@@ -67,28 +67,7 @@ var agyConsumerOAuthScopes = []string{
 	"https://www.googleapis.com/auth/userinfo.profile",
 }
 
-type winCredential struct {
-	Flags              uint32
-	Type               uint32
-	TargetName         *uint16
-	Comment            *uint16
-	LastWritten        syscall.Filetime
-	CredentialBlobSize uint32
-	CredentialBlob     *byte
-	Persist            uint32
-	AttributeCount     uint32
-	Attributes         uintptr
-	TargetAlias        *uint16
-	UserName           *uint16
-}
-
 var (
-	advapi32DLL     = syscall.NewLazyDLL("advapi32.dll")
-	procCredReadW   = advapi32DLL.NewProc("CredReadW")
-	procCredWriteW  = advapi32DLL.NewProc("CredWriteW")
-	procCredDeleteW = advapi32DLL.NewProc("CredDeleteW")
-	procCredFree    = advapi32DLL.NewProc("CredFree")
-
 	agyVaultSwitchMu sync.Mutex
 
 	pendingAgyLoginMu     sync.Mutex
@@ -123,6 +102,7 @@ type agyOAuthCredMeta struct {
 	IDTokenEmail string `json:"id_token_email"`
 	AuthMethod   string `json:"auth_method"`
 	WriterID     string `json:"writer_id"`
+	VaultRef     string `json:"vault_ref,omitempty"`
 }
 
 // ReadLiveAgyOAuthCredential reads the active Antigravity Google OAuth session blob
@@ -132,28 +112,10 @@ func ReadLiveAgyOAuthCredential() (raw []byte, email string, err error) {
 	if runtime.GOOS != "windows" {
 		return nil, "", fmt.Errorf("vault OAuth do agy suportado no Windows")
 	}
-	targetPtr, err := syscall.UTF16PtrFromString(agyCredTargetName)
+	copied, err := secretx.ReadRawGenericCredential(agyCredTargetName)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("nenhuma sessão OAuth ativa em %s (%v)", agyCredTargetName, err)
 	}
-	var cred *winCredential
-	r1, _, e1 := procCredReadW.Call(
-		uintptr(unsafe.Pointer(targetPtr)),
-		uintptr(credTypeGeneric),
-		0,
-		uintptr(unsafe.Pointer(&cred)),
-	)
-	if r1 == 0 || cred == nil {
-		return nil, "", fmt.Errorf("nenhuma sessão OAuth ativa em %s (%v)", agyCredTargetName, e1)
-	}
-	defer procCredFree.Call(uintptr(unsafe.Pointer(cred)))
-
-	if cred.CredentialBlobSize == 0 || cred.CredentialBlob == nil {
-		return nil, "", fmt.Errorf("sessão OAuth vazia")
-	}
-	blob := unsafe.Slice(cred.CredentialBlob, int(cred.CredentialBlobSize))
-	copied := append([]byte(nil), blob...)
-
 	var meta agyOAuthCredMeta
 	if json.Unmarshal(copied, &meta) == nil {
 		email = strings.TrimSpace(meta.IDTokenEmail)
@@ -170,28 +132,8 @@ func WriteLiveAgyOAuthCredential(raw []byte) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("blob OAuth vazio")
 	}
-	targetPtr, err := syscall.UTF16PtrFromString(agyCredTargetName)
-	if err != nil {
-		return err
-	}
-	userPtr, err := syscall.UTF16PtrFromString(agyCredUserName)
-	if err != nil {
-		return err
-	}
-	cred := winCredential{
-		Type:               credTypeGeneric,
-		TargetName:         targetPtr,
-		CredentialBlobSize: uint32(len(raw)),
-		CredentialBlob:     &raw[0],
-		Persist:            credPersistLocalMachine,
-		UserName:           userPtr,
-	}
-	r1, _, e1 := procCredWriteW.Call(
-		uintptr(unsafe.Pointer(&cred)),
-		0,
-	)
-	if r1 == 0 {
-		return fmt.Errorf("gravar sessão OAuth em %s: %v", agyCredTargetName, e1)
+	if err := secretx.WriteRawGenericCredential(agyCredTargetName, agyCredUserName, raw); err != nil {
+		return fmt.Errorf("gravar sessão OAuth em %s: %w", agyCredTargetName, err)
 	}
 	return nil
 }
@@ -203,23 +145,73 @@ func DeleteLiveAgyOAuthCredential() error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-	targetPtr, err := syscall.UTF16PtrFromString(agyCredTargetName)
-	if err != nil {
-		return err
-	}
-	r1, _, e1 := procCredDeleteW.Call(
-		uintptr(unsafe.Pointer(targetPtr)),
-		uintptr(credTypeGeneric),
-		0,
-	)
-	if r1 == 0 {
-		return fmt.Errorf("limpar slot OAuth ativo: %v", e1)
+	if err := secretx.DeleteRawGenericCredential(agyCredTargetName); err != nil {
+		return fmt.Errorf("limpar slot OAuth ativo: %w", err)
 	}
 	return nil
 }
 
+func agyVaultConfigBasePath() string {
+	if p, err := profilesFilePathFn(); err == nil && strings.TrimSpace(p) != "" {
+		return p
+	}
+	return filepath.Join(defaultModelxVaultDir(), "provider-profiles.json")
+}
+
+func writeAgyProfileVaultBlob(profileID string, blob []byte) error {
+	if len(blob) == 0 {
+		return fmt.Errorf("blob OAuth vazio")
+	}
+	vpath, err := AgyProfileVaultPath(profileID)
+	if err != nil {
+		return err
+	}
+	pid := sanitizeSlug(profileID)
+	if pid == "" {
+		pid = "default"
+	}
+	ref, err := vaultSaveSecret(agyVaultConfigBasePath(), "modelx:agy:oauth:"+pid, string(blob))
+	if err != nil {
+		return err
+	}
+	var meta agyOAuthCredMeta
+	_ = json.Unmarshal(blob, &meta)
+	meta.VaultRef = ref
+	metaBytes, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSecretFile(vpath, append(metaBytes, '\n'))
+}
+
+func readAgyProfileVaultBlob(profileID string) ([]byte, error) {
+	vpath, err := AgyProfileVaultPath(profileID)
+	if err != nil || vpath == "" {
+		return nil, err
+	}
+	data, err := os.ReadFile(vpath)
+	if err != nil || len(data) == 0 {
+		return nil, err
+	}
+	pid := sanitizeSlug(profileID)
+	if pid == "" {
+		pid = "default"
+	}
+	var meta agyOAuthCredMeta
+	if json.Unmarshal(data, &meta) == nil && strings.HasPrefix(strings.TrimSpace(meta.VaultRef), vaultRefPrefix) {
+		secret, _ := vaultLoadSecret(agyVaultConfigBasePath(), "modelx:agy:oauth:"+pid, strings.TrimSpace(meta.VaultRef))
+		if secret == "" {
+			return nil, fmt.Errorf("sessão OAuth ausente no cofre para %s", profileID)
+		}
+		return []byte(secret), nil
+	}
+	// Legacy plaintext oauth-session.json: migrate secret to vault and keep metadata only.
+	_ = writeAgyProfileVaultBlob(pid, data)
+	return data, nil
+}
+
 // AgyProfileVaultPath returns the isolated file path where a named AGY Google account's
-// OAuth session blob is persisted (%APPDATA%\HiveMind\agy-profiles\<profileID>\oauth-session.json).
+// OAuth session metadata/reference is persisted (%APPDATA%\HiveMind\agy-profiles\<profileID>\oauth-session.json).
 func AgyProfileVaultPath(profileID string) (string, error) {
 	base, err := profilesFilePathFn()
 	if err != nil {
@@ -234,11 +226,7 @@ func AgyProfileVaultPath(profileID string) (string, error) {
 
 // HasAgyVaultSession reports whether an isolated AGY profile folder has a saved Google OAuth session.
 func HasAgyVaultSession(profileID string) (bool, string) {
-	p, err := AgyProfileVaultPath(profileID)
-	if err != nil || p == "" {
-		return false, ""
-	}
-	data, err := os.ReadFile(p)
+	data, err := readAgyProfileVaultBlob(profileID)
 	if err != nil || len(data) == 0 {
 		return false, ""
 	}
@@ -294,11 +282,7 @@ func SaveAgyProfileSessionBlob(blob []byte, email string) (*ProviderProfile, err
 		}
 	}
 
-	vaultPath, verr := AgyProfileVaultPath(profID)
-	if verr == nil && vaultPath != "" {
-		_ = os.MkdirAll(filepath.Dir(vaultPath), 0o700)
-		_ = writeSecretFile(vaultPath, blob)
-	}
+	_ = writeAgyProfileVaultBlob(profID, blob)
 
 	var resultProf ProviderProfile
 	if foundIdx >= 0 {
@@ -342,20 +326,45 @@ func SyncCurrentLiveAgyAccountToProfiles() (*ProviderProfile, error) {
 	return SaveAgyProfileSessionBlob(raw, email)
 }
 
-// AcquireAgyVaultGuard serializes temporary swaps of the Windows Credential Manager
-// "gemini:antigravity" slot across concurrent HiveMind goroutines.
-func AcquireAgyVaultGuard() func() {
+func acquireAgyCrossProcessLock() func() {
 	agyVaultSwitchMu.Lock()
-	return func() { agyVaultSwitchMu.Unlock() }
+	var h windows.Handle
+	if runtime.GOOS == "windows" {
+		if namePtr, err := windows.UTF16PtrFromString(agyVaultMutexName); err == nil {
+			if handle, merr := windows.CreateMutex(nil, false, namePtr); merr == nil {
+				const waitTimeoutMs = 30_000
+				const waitAbandoned = 0x00000080
+				res, werr := windows.WaitForSingleObject(handle, waitTimeoutMs)
+				if werr == nil && (res == windows.WAIT_OBJECT_0 || res == waitAbandoned) {
+					h = handle
+				} else {
+					_ = windows.CloseHandle(handle)
+				}
+			}
+		}
+	}
+	return func() {
+		if h != 0 {
+			_ = windows.ReleaseMutex(h)
+			_ = windows.CloseHandle(h)
+		}
+		agyVaultSwitchMu.Unlock()
+	}
+}
+
+// AcquireAgyVaultGuard serializes temporary swaps of the Windows Credential Manager
+// "gemini:antigravity" slot across concurrent HiveMind goroutines and processes.
+func AcquireAgyVaultGuard() func() {
+	return acquireAgyCrossProcessLock()
 }
 
 // WithAgyVaultLease executes fn using profileID's isolated OAuth session while
 // protecting the user's active Antigravity account in Windows Credential Manager:
 //   - If profileID is empty/"__system__"/"__global__" or matches the account already active
 //     in "gemini:antigravity", fn runs directly without overwriting Credential Manager.
-//   - Otherwise, "gemini:antigravity" is temporarily leased under agyVaultSwitchMu, any
-//     refreshed token produced during fn is persisted back to profileID's isolated folder,
-//     and the user's original "gemini:antigravity" session is immediately restored on exit.
+//   - Otherwise, "gemini:antigravity" is temporarily leased under the cross-process mutex,
+//     a crash-recovery backup is written to the vault, any refreshed token produced during fn
+//     is persisted back to profileID's vault, and the original session is restored on exit.
 func WithAgyVaultLease(profileID string, fn func() error) error {
 	if fn == nil {
 		return nil
@@ -367,11 +376,7 @@ func WithAgyVaultLease(profileID string, fn func() error) error {
 	if pid == "" || pid == "__system__" || pid == "__global__" {
 		return fn()
 	}
-	vaultPath, err := AgyProfileVaultPath(pid)
-	if err != nil || vaultPath == "" {
-		return fn()
-	}
-	targetBlob, rerr := os.ReadFile(vaultPath)
+	targetBlob, rerr := readAgyProfileVaultBlob(pid)
 	if rerr != nil || len(targetBlob) == 0 {
 		return fn()
 	}
@@ -381,8 +386,8 @@ func WithAgyVaultLease(profileID string, fn func() error) error {
 		targetEmail = strings.TrimSpace(targetMeta.IDTokenEmail)
 	}
 
-	agyVaultSwitchMu.Lock()
-	defer agyVaultSwitchMu.Unlock()
+	unlock := acquireAgyCrossProcessLock()
+	defer unlock()
 
 	origRaw, origEmail, origErr := ReadLiveAgyOAuthCredential()
 	alreadyActive := origErr == nil && len(origRaw) > 0 && targetEmail != "" && strings.EqualFold(origEmail, targetEmail)
@@ -391,29 +396,36 @@ func WithAgyVaultLease(profileID string, fn func() error) error {
 		defer func() {
 			if curRaw, curEmail, cerr := ReadLiveAgyOAuthCredential(); cerr == nil && len(curRaw) > 0 {
 				if curEmail == "" || strings.EqualFold(curEmail, targetEmail) {
-					_ = writeSecretFile(vaultPath, curRaw)
+					_ = writeAgyProfileVaultBlob(pid, curRaw)
 				}
 			}
 		}()
 		return fn()
 	}
 
-	// Backup the active Antigravity account into its own vault folder before leasing the slot.
+	// Backup the active Antigravity account into its own vault and crash-recovery marker before leasing the slot.
+	cfgBase := agyVaultConfigBasePath()
 	if origErr == nil && len(origRaw) > 0 {
 		_, _ = SaveAgyProfileSessionBlob(origRaw, origEmail)
+		_, _ = vaultSaveSecret(cfgBase, agyLeaseBackupKey, string(origRaw))
 	}
 
 	if werr := WriteLiveAgyOAuthCredential(targetBlob); werr != nil {
+		vaultDeleteSecret(cfgBase, agyLeaseBackupKey)
 		return werr
 	}
 	defer func() {
 		if curRaw, curEmail, cerr := ReadLiveAgyOAuthCredential(); cerr == nil && len(curRaw) > 0 {
 			if targetEmail == "" || strings.EqualFold(curEmail, targetEmail) {
-				_ = writeSecretFile(vaultPath, curRaw)
+				_ = writeAgyProfileVaultBlob(pid, curRaw)
 			}
 		}
 		if origErr == nil && len(origRaw) > 0 {
-			_ = WriteLiveAgyOAuthCredential(origRaw)
+			if WriteLiveAgyOAuthCredential(origRaw) == nil {
+				vaultDeleteSecret(cfgBase, agyLeaseBackupKey)
+			}
+		} else {
+			vaultDeleteSecret(cfgBase, agyLeaseBackupKey)
 		}
 	}()
 
@@ -421,7 +433,7 @@ func WithAgyVaultLease(profileID string, fn func() error) error {
 }
 
 // ActivateAgyProfileSession switches the active Antigravity Google OAuth session
-// to profileID's isolated `oauth-session.json` (first backing up whichever account
+// to profileID's isolated session (first backing up whichever account
 // is currently active so no token refresh is ever lost).
 func ActivateAgyProfileSession(profileID string) error {
 	if runtime.GOOS != "windows" {
@@ -431,11 +443,7 @@ func ActivateAgyProfileSession(profileID string) error {
 	if pid == "" || pid == "__system__" || pid == "__global__" {
 		return nil
 	}
-	vaultPath, err := AgyProfileVaultPath(pid)
-	if err != nil {
-		return err
-	}
-	targetBlob, err := os.ReadFile(vaultPath)
+	targetBlob, err := readAgyProfileVaultBlob(pid)
 	if err != nil || len(targetBlob) == 0 {
 		return fmt.Errorf("sessão OAuth isolada não encontrada para %s", profileID)
 	}
@@ -446,9 +454,9 @@ func ActivateAgyProfileSession(profileID string) error {
 	return WriteLiveAgyOAuthCredential(targetBlob)
 }
 
-// EnsureLiveAgyCredentialRestored guarantees that if the live "gemini:antigravity"
-// slot is empty (and no OAuth code entry is currently in progress), the primary saved
-// AGY vault account (e.g. Conta #1) is automatically restored from its isolated folder.
+// EnsureLiveAgyCredentialRestored guarantees that if an interrupted lease left a
+// recovery backup in the vault or the live "gemini:antigravity" slot is empty (and
+// no OAuth code entry is in progress), the user's primary account is restored.
 func EnsureLiveAgyCredentialRestored() {
 	if runtime.GOOS != "windows" {
 		return
@@ -458,6 +466,13 @@ func EnsureLiveAgyCredentialRestored() {
 	pendingAgyLoginMu.Unlock()
 	if inLogin {
 		return
+	}
+	cfgBase := agyVaultConfigBasePath()
+	if backupStr, _ := vaultLoadSecret(cfgBase, agyLeaseBackupKey, vaultRefPrefix+agyLeaseBackupKey); len(backupStr) > 0 {
+		if WriteLiveAgyOAuthCredential([]byte(backupStr)) == nil {
+			vaultDeleteSecret(cfgBase, agyLeaseBackupKey)
+			return
+		}
 	}
 	if raw, _, err := ReadLiveAgyOAuthCredential(); err == nil && len(raw) > 0 {
 		return
@@ -472,11 +487,9 @@ func EnsureLiveAgyCredentialRestored() {
 		if p.Provider != "agy" {
 			continue
 		}
-		if vpath, verr := AgyProfileVaultPath(p.ID); verr == nil && vpath != "" {
-			if blob, rerr := os.ReadFile(vpath); rerr == nil && len(blob) > 0 {
-				_ = WriteLiveAgyOAuthCredential(blob)
-				return
-			}
+		if blob, rerr := readAgyProfileVaultBlob(p.ID); rerr == nil && len(blob) > 0 {
+			_ = WriteLiveAgyOAuthCredential(blob)
+			return
 		}
 	}
 }
@@ -822,11 +835,7 @@ func findSavedRefreshTokenForEmail(email string) string {
 		return ""
 	}
 	profID := sanitizeSlug("agy-" + email)
-	vpath, err := AgyProfileVaultPath(profID)
-	if err != nil || vpath == "" {
-		return ""
-	}
-	raw, err := os.ReadFile(vpath)
+	raw, err := readAgyProfileVaultBlob(profID)
 	if err != nil || len(raw) == 0 {
 		return ""
 	}

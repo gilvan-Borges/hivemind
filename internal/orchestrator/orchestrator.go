@@ -2573,6 +2573,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	baseDevs := r.Team.ByRole(team.RoleDeveloper)
 	maxDevs := r.maxAllowedDevs()
 
+	var delegateMu sync.Mutex
 	var delegated bool
 	var planCardEmitted bool
 	allTools := baseTools
@@ -2620,6 +2621,8 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			Name:        "delegate_to_squad",
 			Description: fmt.Sprintf("Registra o plano técnico e dispara dinamicamente de 1 até %d desenvolvedores paralelos em worktrees separadas (Dev(s) → QA → Chefe).", maxDevs),
 		}, func(tctx agent.Context, args delegateArgs) (delegateResult, error) {
+			delegateMu.Lock()
+			defer delegateMu.Unlock()
 			delegated = true
 			r.chiefPlan = strings.TrimSpace(args.Plan)
 			r.chiefContextBrief = strings.TrimSpace(args.ContextBrief)
@@ -3074,16 +3077,20 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			}
 		}
 	}
-	if delegated {
+	delegateMu.Lock()
+	wasDelegated := delegated
+	wasPlanCard := planCardEmitted
+	delegateMu.Unlock()
+	if wasDelegated {
 		r.sealHandoff(sess.ID())
 	}
-	if delegated && r.chiefPlan != "" {
+	if wasDelegated && r.chiefPlan != "" {
 		_ = sess.State().Set("chief_plan", r.chiefPlan)
 	}
-	if delegated && r.chiefContextBrief != "" {
+	if wasDelegated && r.chiefContextBrief != "" {
 		_ = sess.State().Set("chief_context_brief", r.chiefContextBrief)
 	}
-	if runMode == "plan" && !planCardEmitted && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
+	if runMode == "plan" && !wasPlanCard && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
 		r.OnEvent(Event{
 			Kind:   "plan_ready",
 			Stage:  "chief",
@@ -3092,7 +3099,7 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			Text:   strings.TrimSpace(summary),
 		})
 	}
-	return delegated, summary, nil
+	return wasDelegated, summary, nil
 }
 
 // writeHandoffDossier grava o pacote sanitizado. O markdown no worktree nasce 0600.

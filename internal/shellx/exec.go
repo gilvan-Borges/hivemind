@@ -75,7 +75,7 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 	cmd.Stdout = out
 	cmd.Stderr = out
 	err := cmd.Run()
-	text := strx.TruncateBytes(out.String(), maxReturnedOutput, "\n…(saída truncada)")
+	text := strx.TruncateHeadTailBytes(out.String(), 4<<10, 12<<10)
 	if runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 		return text, fmt.Errorf("comando excedeu o tempo limite de %s: %s", DefaultTimeout, strings.TrimSpace(text))
 	}

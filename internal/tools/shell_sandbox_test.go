@@ -115,3 +115,51 @@ func TestSquadShellUnsandboxedNeedsConfirmOrFullAccess(t *testing.T) {
 		t.Fatalf("auditoria: %s", text)
 	}
 }
+
+type bigStdoutSandbox struct {
+	out string
+}
+
+func (b *bigStdoutSandbox) Probe() sandboxx.ProbeResult {
+	return sandboxx.ProbeResult{Available: true, Mechanism: "test"}
+}
+
+func (b *bigStdoutSandbox) Run(_ context.Context, _ sandboxx.Options) (sandboxx.Result, error) {
+	return sandboxx.Result{Stdout: b.out, Mechanism: "test"}, nil
+}
+
+func TestRunShellSandboxedSavesFullOutputOnTruncate(t *testing.T) {
+	full := strings.Repeat("HEAD\n", 1200) + strings.Repeat("MID\n", 5000) + "\nFAIL: exact-tail-error\n"
+	deps := applyShellPolicy(Deps{
+		Root:      t.TempDir(),
+		Settings:  team.DefaultSettings(),
+		Sandbox:   &bigStdoutSandbox{out: full},
+		Allowlist: []string{"go"},
+	})
+	out, err := deps.runShell(context.Background(), "go test ./...", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "FAIL: exact-tail-error") {
+		t.Fatalf("expected tail preserved, got: %s", out)
+	}
+	const marker = "[saída completa salva em: "
+	idx := strings.Index(out, marker)
+	if idx < 0 {
+		t.Fatalf("expected saved log path in truncated output, got: %s", out)
+	}
+	rest := out[idx+len(marker):]
+	end := strings.IndexByte(rest, ']')
+	if end <= 0 {
+		t.Fatalf("malformed log path line: %q", rest)
+	}
+	logPath := rest[:end]
+	t.Cleanup(func() { _ = os.Remove(logPath) })
+	saved, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading saved shell log %s: %v", logPath, err)
+	}
+	if string(saved) != full {
+		t.Fatalf("saved shell log mismatch: len=%d want=%d", len(saved), len(full))
+	}
+}

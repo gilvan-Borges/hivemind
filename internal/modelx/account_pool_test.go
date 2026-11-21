@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -131,5 +133,67 @@ func TestPerAccountPerModelQuotaMatrixAndFailover(t *testing.T) {
 	}
 	if gotGemini != "ok:agy-1:gemini-4-neon-high" {
 		t.Fatalf("expected gemini-4-neon-high to stay on Conta 1 (agy-1), got %q", gotGemini)
+	}
+}
+
+func TestAccountPoolNeverCrossesOrganizationBoundaries(t *testing.T) {
+	tmp := t.TempDir()
+	prev := profilesFilePathFn
+	profilesFilePathFn = func() (string, error) {
+		return filepath.Join(tmp, "provider-profiles.json"), nil
+	}
+	t.Cleanup(func() { profilesFilePathFn = prev })
+
+	wsVibetex := filepath.Join(tmp, "vibetex-web")
+	wsAcme := filepath.Join(tmp, "acme-api")
+	for _, pair := range [][2]string{
+		{wsVibetex, "git@github.com:vibetex/web.git"},
+		{wsAcme, "git@github.com:acme-corp/api.git"},
+	} {
+		gitDir := filepath.Join(pair[0], ".git")
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = "+pair[1]+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	profiles := []SaveProfileRequest{
+		{
+			ID: "or-vibetex-1", Provider: "openrouter", Name: "Vibetex 1",
+			OrgPatterns: []string{"vibetex"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-vtx-1"},
+		},
+		{
+			ID: "or-vibetex-2", Provider: "openrouter", Name: "Vibetex 2",
+			OrgPatterns: []string{"vibetex"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-vtx-2"},
+		},
+		{
+			ID: "or-acme", Provider: "openrouter", Name: "Acme",
+			OrgPatterns: []string{"acme-corp"}, Env: map[string]string{"OPENROUTER_API_KEY": "sk-acme"},
+		},
+		{
+			ID: "or-personal", Provider: "openrouter", Name: "Pessoal",
+			IsDefault: true, Env: map[string]string{"OPENROUTER_API_KEY": "sk-personal"},
+		},
+	}
+	for _, req := range profiles {
+		if _, err := SaveProviderProfile(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	vPool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsVibetex), "openrouter", "")
+	var vIDs []string
+	for _, p := range vPool {
+		vIDs = append(vIDs, p.ID)
+	}
+	if strings.Join(vIDs, ",") != "or-vibetex-1,or-vibetex-2" {
+		t.Fatalf("vibetex pool leaked external accounts: %v", vIDs)
+	}
+
+	aPool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsAcme), "openrouter", "")
+	if len(aPool) != 1 || aPool[0].ID != "or-acme" {
+		t.Fatalf("acme pool leaked external accounts: %+v", aPool)
 	}
 }

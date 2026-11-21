@@ -5,6 +5,8 @@ package mcpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
@@ -118,7 +121,115 @@ func Load(workspace string) (File, error) {
 	if err != nil {
 		return File{}, err
 	}
+	if len(proj.Servers) > 0 && !IsWorkspaceConfigTrusted(workspace) {
+		proj = stripUntrustedProjectExec(merged, proj)
+	}
 	return merge(merged, proj), nil
+}
+
+type trustedWorkspacesFile struct {
+	Hashes map[string]string `json:"hashes,omitempty"`
+}
+
+func trustedConfigPath() (string, error) {
+	up, err := userConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(up), "trusted-mcp.json"), nil
+}
+
+func workspaceConfigDigest(workspace string) (cleanWS, digest string, exists bool, err error) {
+	projPath := projectConfigPath(workspace)
+	if projPath == "" {
+		return "", "", false, nil
+	}
+	data, err := os.ReadFile(projPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	cleanWS = filepath.Clean(workspace)
+	if abs, absErr := filepath.Abs(cleanWS); absErr == nil {
+		cleanWS = abs
+	}
+	sum := sha256.Sum256(data)
+	return cleanWS, hex.EncodeToString(sum[:]), true, nil
+}
+
+// IsWorkspaceConfigTrusted reports whether the repository's .hivemind/mcp-servers.json
+// either does not exist or matches the SHA-256 explicitly trusted by the user.
+func IsWorkspaceConfigTrusted(workspace string) bool {
+	cleanWS, digest, exists, err := workspaceConfigDigest(workspace)
+	if err != nil || !exists {
+		return err == nil && !exists
+	}
+	trustPath, err := trustedConfigPath()
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(trustPath)
+	if err != nil {
+		return false
+	}
+	var tf trustedWorkspacesFile
+	if err := json.Unmarshal(raw, &tf); err != nil {
+		return false
+	}
+	return tf.Hashes[cleanWS] != "" && tf.Hashes[cleanWS] == digest
+}
+
+// TrustWorkspaceConfig records the current SHA-256 digest of <workspace>/.hivemind/mcp-servers.json
+// as explicitly approved by the user.
+func TrustWorkspaceConfig(workspace string) error {
+	cleanWS, digest, exists, err := workspaceConfigDigest(workspace)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	trustPath, err := trustedConfigPath()
+	if err != nil {
+		return err
+	}
+	var tf trustedWorkspacesFile
+	if raw, rErr := os.ReadFile(trustPath); rErr == nil {
+		_ = json.Unmarshal(raw, &tf)
+	}
+	if tf.Hashes == nil {
+		tf.Hashes = make(map[string]string)
+	}
+	tf.Hashes[cleanWS] = digest
+	data, err := json.MarshalIndent(tf, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(trustPath), 0o700); err != nil {
+		return err
+	}
+	return atomicx.WriteFile(trustPath, append(data, '\n'), 0o600)
+}
+
+func stripUntrustedProjectExec(base, proj File) File {
+	var safe []Server
+	for _, s := range proj.Servers {
+		name := strings.TrimSpace(s.Name)
+		if name == "" || findServer(base.Servers, name) == nil {
+			continue
+		}
+		if s.Transport != "" || s.Command != "" || len(s.Args) > 0 || len(s.Env) > 0 || s.URL != "" || len(s.Headers) > 0 {
+			continue
+		}
+		safe = append(safe, Server{
+			Name:        name,
+			Description: s.Description,
+			Enabled:     s.Enabled,
+		})
+	}
+	return File{Servers: safe}
 }
 
 // SetEnabled grava o interruptor. projectOnly escreve em .hivemind/ do
@@ -236,7 +347,7 @@ func readFile(path string) (File, error) {
 }
 
 func writeFile(path string, f File) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
@@ -244,7 +355,7 @@ func writeFile(path string, f File) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
+	return atomicx.WriteFile(path, data, 0o600)
 }
 
 func findServer(list []Server, name string) *Server {

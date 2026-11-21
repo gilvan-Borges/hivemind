@@ -1,6 +1,8 @@
 package modelx
 
 import (
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,13 @@ func TestStoredAPIKeysRoundTrip(t *testing.T) {
 	}
 	if got := EnvOrStored("OPENROUTER_API_KEY"); got != "sk-or-v1-abcdefghijklmnop" {
 		t.Fatalf("stored fallback failed: %q", got)
+	}
+	diskRaw, err := os.ReadFile(tmp + "/api-keys.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(diskRaw), "sk-or-v1-abcdefghijklmnop") || !strings.Contains(string(diskRaw), `"vault:modelx:apikey:OPENROUTER_API_KEY"`) {
+		t.Fatalf("api-keys.json must store vault ref instead of plaintext key:\n%s", string(diskRaw))
 	}
 	if got := EnvOrStored("OPENROUTER_BASE_URL"); got != "https://openrouter.ai/api/v1" {
 		t.Fatalf("stored base url failed: %q", got)

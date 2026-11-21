@@ -21,10 +21,11 @@ const (
 	TypeRPCResult = "rpc_result"
 	TypeEvent     = "event"
 	TypeAck       = "ack"
-	TypePing      = "ping"
-	TypePong      = "pong"
-	TypeError     = "error"
-	TypePeerKey   = "peer_key"
+	TypePing         = "ping"
+	TypePong         = "pong"
+	TypeError        = "error"
+	TypePeerKey      = "peer_key"
+	TypePeerPresence = "peer_presence"
 
 	RoleApp = "app"
 	RoleIDE = "ide"
@@ -82,14 +83,23 @@ type PeerKeyNotice struct {
 	Role      string `json:"role"`
 }
 
+// PeerPresenceNotice informs apps whether the IDE socket is online.
+type PeerPresenceNotice struct {
+	Online bool   `json:"online"`
+	Role   string `json:"role,omitempty"`
+}
+
 // RPCRequest is the decrypted body of an app→IDE call. It mirrors one
 // request of the LAN bridge (docs/SPEC_APP_MOBILE_NATIVO.md §5) except
 // GET /api/v1/events, which is replaced by TypeEvent frames.
 type RPCRequest struct {
-	Method string          `json:"method"`
-	Path   string          `json:"path"`
-	Query  string          `json:"query,omitempty"`
-	Body   json.RawMessage `json:"body,omitempty"`
+	Method       string          `json:"method"`
+	Path         string          `json:"path"`
+	Query        string          `json:"query,omitempty"`
+	Body         json.RawMessage `json:"body,omitempty"`
+	Seq          uint64          `json:"seq,omitempty"`
+	IssuedAtUnix int64           `json:"issuedAtUnix,omitempty"`
+	Nonce        string          `json:"nonce,omitempty"`
 }
 
 // RPCResult is the decrypted body of the IDE's reply.

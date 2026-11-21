@@ -76,8 +76,12 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 		return nil, fmt.Errorf("session_id inválido: %q", id)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if _, ok := s.live[id]; ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("sessão %s já existe", id)
+	}
 	if _, err := os.Stat(s.path(id)); err == nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("sessão %s já existe", id)
 	}
 	fs := &fileSession{
@@ -93,13 +97,16 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	}
 	fs.objective, _ = fs.state["objective"].(string)
 	fs.jiraKey, _ = fs.state["jira_key"].(string)
-	if err := fs.writeLocked(); err != nil {
+	s.live[id] = fs
+	meta := fs.metaNoLock()
+	s.mu.Unlock()
+
+	if err := fs.persist(meta); err != nil {
+		s.mu.Lock()
+		delete(s.live, id)
+		s.mu.Unlock()
 		return nil, err
 	}
-	_ = s.ensureIndexLocked()
-	s.live[id] = fs
-	s.metas[id] = fs.metaNoLock()
-	s.writeIndexLocked()
 	return &session.CreateResponse{Session: fs}, nil
 }
 
@@ -203,7 +210,7 @@ func (s *Store) AppendEvent(ctx context.Context, cur session.Session, event *ses
 	for k, v := range event.Actions.StateDelta {
 		fs.state[k] = v
 	}
-	fs.events = append(fs.events, event)
+	fs.events = append(fs.events, cloneEvent(event))
 	fs.updatedAt = event.Timestamp
 	meta := fs.metaNoLock()
 	fs.mu.Unlock()
@@ -292,10 +299,12 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 	}
 	changed := false
 	for i := 0; i < cutoff; i++ {
-		ev := fs.events[i]
-		if ev == nil || ev.LLMResponse.Content == nil {
+		orig := fs.events[i]
+		if orig == nil || orig.LLMResponse.Content == nil {
 			continue
 		}
+		ev := cloneEvent(orig)
+		eventChanged := false
 		for _, part := range ev.LLMResponse.Content.Parts {
 			if part == nil {
 				continue
@@ -309,13 +318,13 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 				case "write_file", "write_doc":
 					if content, ok := part.FunctionCall.Args["content"].(string); ok && len(content) > maxOldToolArgBytes {
 						part.FunctionCall.Args["content"] = fmt.Sprintf("…(conteúdo de %d bytes compactado; arquivo já gravado na worktree)", len(content))
-						changed = true
+						eventChanged = true
 					}
 				case "edit_file":
 					for _, field := range []string{"old_text", "new_text"} {
 						if txt, ok := part.FunctionCall.Args[field].(string); ok && len(txt) > maxOldToolArgBytes {
 							part.FunctionCall.Args[field] = fmt.Sprintf("…(trecho de %d bytes compactado; edição já aplicada na worktree)", len(txt))
-							changed = true
+							eventChanged = true
 						}
 					}
 				}
@@ -333,8 +342,12 @@ func CompactOldToolOutputs(sess session.Session, keepRecentEvents int) error {
 					maxOldToolOutputBytes,
 					"\n…(saída de turno anterior compactada para economia de tokens)",
 				)
-				changed = true
+				eventChanged = true
 			}
+		}
+		if eventChanged {
+			fs.events[i] = ev
+			changed = true
 		}
 	}
 	if !changed {
@@ -596,8 +609,46 @@ func (s *fileSession) State() session.State { return &memState{mu: &s.mu, m: s.s
 func (s *fileSession) Events() session.Events {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cp := append([]*session.Event(nil), s.events...)
+	cp := make([]*session.Event, 0, len(s.events))
+	for _, ev := range s.events {
+		cp = append(cp, cloneEvent(ev))
+	}
 	return eventList(cp)
+}
+
+func cloneEvent(ev *session.Event) *session.Event {
+	if ev == nil {
+		return nil
+	}
+	cp := *ev
+	if ev.Actions.StateDelta != nil {
+		cp.Actions.StateDelta = maps.Clone(ev.Actions.StateDelta)
+	}
+	if ev.LLMResponse.Content != nil {
+		c := *ev.LLMResponse.Content
+		if len(ev.LLMResponse.Content.Parts) > 0 {
+			c.Parts = make([]*genai.Part, len(ev.LLMResponse.Content.Parts))
+			for i, p := range ev.LLMResponse.Content.Parts {
+				if p == nil {
+					continue
+				}
+				pc := *p
+				if p.FunctionCall != nil {
+					fc := *p.FunctionCall
+					fc.Args = maps.Clone(p.FunctionCall.Args)
+					pc.FunctionCall = &fc
+				}
+				if p.FunctionResponse != nil {
+					fr := *p.FunctionResponse
+					fr.Response = maps.Clone(p.FunctionResponse.Response)
+					pc.FunctionResponse = &fr
+				}
+				c.Parts[i] = &pc
+			}
+		}
+		cp.LLMResponse.Content = &c
+	}
+	return &cp
 }
 
 func (s *fileSession) metaNoLock() Meta {

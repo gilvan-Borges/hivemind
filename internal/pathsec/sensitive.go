@@ -9,24 +9,28 @@ import (
 )
 
 var sensitiveFileNames = map[string]bool{
-	"api-keys.json":         true,
-	"remote-bridge.json":    true,
-	"relay.json":            true,
-	"jira-connector.json":   true,
-	"github-connector.json": true,
-	"credentials.json":      true,
-	"policy.json":           true,
-	"resident.json":         true,
-	"initial-password.txt":  true,
-	".env":                  true,
-	".npmrc":                true,
-	".pypirc":               true,
-	".netrc":                true,
-	"_netrc":                true,
-	"id_rsa":                true,
-	"id_ed25519":            true,
-	"id_ecdsa":              true,
-	"id_dsa":                true,
+	"api-keys.json":           true,
+	"remote-bridge.json":      true,
+	"relay.json":              true,
+	"jira-connector.json":     true,
+	"github-connector.json":   true,
+	"credentials.json":        true,
+	"policy.json":             true,
+	"resident.json":           true,
+	"initial-password.txt":    true,
+	"terraform.tfstate":       true,
+	"terraform.tfstate.backup": true,
+	".htpasswd":               true,
+	"kubeconfig":              true,
+	".env":                    true,
+	".npmrc":                  true,
+	".pypirc":                 true,
+	".netrc":                  true,
+	"_netrc":                  true,
+	"id_rsa":                  true,
+	"id_ed25519":              true,
+	"id_ecdsa":                true,
+	"id_dsa":                  true,
 }
 
 var sensitiveFileExts = map[string]bool{
@@ -37,6 +41,9 @@ var sensitiveFileExts = map[string]bool{
 	".jks":      true,
 	".keystore": true,
 	".kdbx":     true,
+	".crt":      true,
+	".der":      true,
+	".tfvars":   true,
 }
 
 // IsSensitivePath reports whether relOrAbs points to a secret, credential store,
@@ -54,7 +61,7 @@ func IsSensitivePath(relOrAbs string) bool {
 		if clean == "" {
 			continue
 		}
-		if clean == ".git" || strings.HasPrefix(clean, "git~") || clean == ".ssh" || clean == ".aws" || clean == ".gnupg" {
+		if clean == ".git" || strings.HasPrefix(clean, "git~") || clean == ".ssh" || clean == ".aws" || clean == ".gnupg" || clean == ".kube" || clean == ".docker" {
 			return true
 		}
 		if clean == ".hivemind" || strings.HasPrefix(clean, "hivemi~") {
@@ -70,7 +77,7 @@ func IsSensitivePath(relOrAbs string) bool {
 		if strings.HasPrefix(clean, ".env.") && !strings.HasSuffix(clean, ".example") && !strings.HasSuffix(clean, ".sample") && !strings.HasSuffix(clean, ".template") {
 			return true
 		}
-		if strings.Contains(clean, "secret") && (strings.HasSuffix(clean, ".json") || strings.HasSuffix(clean, ".yaml") || strings.HasSuffix(clean, ".yml") || strings.HasSuffix(clean, ".env")) {
+		if strings.Contains(clean, "secret") && (strings.HasSuffix(clean, ".json") || strings.HasSuffix(clean, ".yaml") || strings.HasSuffix(clean, ".yml") || strings.HasSuffix(clean, ".env") || strings.HasSuffix(clean, ".toml") || strings.HasSuffix(clean, ".ini") || strings.HasSuffix(clean, ".properties")) {
 			return true
 		}
 		if sensitiveFileExts[filepath.Ext(clean)] {

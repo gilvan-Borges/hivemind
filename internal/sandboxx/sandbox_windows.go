@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -313,16 +314,18 @@ func runPlatform(ctx context.Context, opts Options) (Result, error) {
 	}
 
 	readTargets := append([]string(nil), opts.ReadRoots...)
-	exeDir := filepath.Dir(resolvedExe)
-	sysRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
-	underSystemRoot := sysRoot != "" && strings.HasPrefix(strings.ToLower(filepath.Clean(exeDir)), strings.ToLower(filepath.Clean(sysRoot)))
-	if !underSystemRoot {
-		readTargets = append(readTargets, exeDir)
-	}
 	for _, root := range dedupeAbsPaths(readTargets) {
 		if err := grantAppContainerACL(root, sid, fileGenericRead|fileGenericExecute); err != nil {
 			return Result{Mechanism: mechanismWindows}, fmt.Errorf("conceder ACL de leitura em %s: %w", root, err)
 		}
+	}
+	exeDir := filepath.Dir(resolvedExe)
+	sysRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+	underSystemRoot := sysRoot != "" && strings.HasPrefix(strings.ToLower(filepath.Clean(exeDir)), strings.ToLower(filepath.Clean(sysRoot)))
+	if !underSystemRoot {
+		// Best-effort for protected tool directories (e.g. Program Files without elevation),
+		// which already grant read/execute to ALL APPLICATION PACKAGES by default.
+		_ = grantAppContainerACL(exeDir, sid, fileGenericRead|fileGenericExecute)
 	}
 	for _, root := range opts.WriteRoots {
 		if err := grantAppContainerACL(root, sid, fileGenericRead|fileGenericWrite|fileGenericExecute|stdDelete); err != nil {
@@ -373,10 +376,23 @@ func runPlatform(ctx context.Context, opts Options) (Result, error) {
 	secCaps := securityCapabilities{
 		AppContainerSid: sid,
 	}
+	var netCaps []windows.SIDAndAttributes
 	if opts.AllowNetwork {
-		// Note: AppContainer network remains disabled by policy unless a well-known capability SID is added;
-		// Phase 2 keeps OS sandbox network off and routes allowlisted HTTP via broker netguard.
-		secCaps.CapabilityCount = 0
+		// Well-known AppContainer capabilities:
+		// S-1-15-3-1 = internetClient, S-1-15-3-3 = privateNetworkClientServer.
+		for _, capStr := range []string{"S-1-15-3-1", "S-1-15-3-3"} {
+			capSID, capErr := windows.StringToSid(capStr)
+			if capErr == nil && capSID != nil {
+				netCaps = append(netCaps, windows.SIDAndAttributes{
+					Sid:        capSID,
+					Attributes: windows.SE_GROUP_ENABLED,
+				})
+			}
+		}
+		if len(netCaps) > 0 {
+			secCaps.Capabilities = uintptr(unsafe.Pointer(&netCaps[0]))
+			secCaps.CapabilityCount = uint32(len(netCaps))
+		}
 	}
 	if err := attrList.Update(procThreadAttributeSecurityCapabilities, unsafe.Pointer(&secCaps), unsafe.Sizeof(secCaps)); err != nil {
 		return Result{Mechanism: mechanismWindows}, fmt.Errorf("attr SECURITY_CAPABILITIES: %w", err)
@@ -434,6 +450,7 @@ func runPlatform(ctx context.Context, opts Options) (Result, error) {
 		&si.StartupInfo,
 		&pi,
 	)
+	runtime.KeepAlive(netCaps)
 	// Close parent copies of write ends immediately so pipes reach EOF cleanly.
 	_ = outW.Close()
 	_ = errW.Close()

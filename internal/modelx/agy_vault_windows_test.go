@@ -137,6 +137,9 @@ func TestAgyOAuthLoopbackAndManualCodeExchangeEndToEnd(t *testing.T) {
 		if rerr != nil || len(data) == 0 {
 			t.Fatalf("missing isolated vault file for %s at %s: %v", p.ID, vpath, rerr)
 		}
+		if strings.Contains(string(data), "ya29.") || strings.Contains(string(data), "1//") || !strings.Contains(string(data), `"vault_ref": "vault:`) {
+			t.Fatalf("oauth-session.json must store vault_ref metadata without plaintext tokens:\n%s", string(data))
+		}
 	}
 
 	// 3. Also test manual code paste via SubmitAgyOAuthCode (both raw 4/0A... code and full callback URL).

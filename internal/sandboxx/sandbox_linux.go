@@ -98,6 +98,14 @@ func runPlatform(ctx context.Context, opts Options) (Result, error) {
 	if !opts.AllowNetwork {
 		args = append(args, "--unshare-net")
 	}
+	if home, hErr := os.UserHomeDir(); hErr == nil && strings.TrimSpace(home) != "" {
+		for _, sub := range []string{".ssh", ".aws", ".gnupg", ".kube", ".docker"} {
+			p := filepath.Join(home, sub)
+			if _, sErr := os.Stat(p); sErr == nil {
+				args = append(args, "--tmpfs", p)
+			}
+		}
+	}
 	for _, root := range opts.ReadRoots {
 		if _, err := os.Stat(root); err == nil {
 			args = append(args, "--ro-bind", root, root)

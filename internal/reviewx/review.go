@@ -10,14 +10,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 const noteBodyMax = 2 << 10
+
+var notesMu sync.Mutex
 
 // LineNote is a local review comment. It is not a merge approval.
 type LineNote struct {
@@ -36,6 +41,8 @@ type LineNote struct {
 
 // Add stores one note outside the worktree. The path must stay inside the workspace jail.
 func Add(workspaceRoot, repoKey string, note LineNote) (LineNote, error) {
+	notesMu.Lock()
+	defer notesMu.Unlock()
 	if _, err := workspace.Resolve(workspaceRoot, note.Path); err != nil {
 		return LineNote{}, err
 	}
@@ -51,7 +58,7 @@ func Add(workspaceRoot, repoKey string, note LineNote) (LineNote, error) {
 		return LineNote{}, fmt.Errorf("comentário vazio")
 	}
 	if len(body) > noteBodyMax {
-		body = body[:noteBodyMax]
+		body = strx.TruncateBytes(body, noteBodyMax, "")
 	}
 	note.Side = side
 	note.Body = body
@@ -71,6 +78,8 @@ func Add(workspaceRoot, repoKey string, note LineNote) (LineNote, error) {
 
 // Send builds one handoff package for the chosen role. It does not include a transcript.
 func Send(workspaceRoot, repoKey, noteID, toRole string) (orchestrator.HandoffPackage, error) {
+	notesMu.Lock()
+	defer notesMu.Unlock()
 	key := safeKey(repoKey)
 	notes, err := readNotes(key)
 	if err != nil {
@@ -143,6 +152,7 @@ func readNotes(repoKey string) ([]LineNote, error) {
 	defer f.Close()
 	var out []LineNote
 	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for sc.Scan() {
 		var n LineNote
 		if err := json.Unmarshal(sc.Bytes(), &n); err != nil {
@@ -164,10 +174,7 @@ func rewriteNotes(repoKey string, notes []LineNote) error {
 		b.Write(raw)
 		b.WriteByte('\n')
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return atomicx.WriteFile(path, []byte(b.String()), 0o600)
 }
 
 func safeKey(key string) string {

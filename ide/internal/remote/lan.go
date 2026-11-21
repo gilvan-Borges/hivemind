@@ -646,7 +646,24 @@ func (l *redeemLimiter) fail(ip string, now time.Time) {
 		st.until = now.Add(redeemBlock)
 	}
 	if len(l.by) > 4096 {
-		l.by = map[string]*redeemFail{ip: st}
+		for k, v := range l.by {
+			if k == ip {
+				continue
+			}
+			if (!v.until.IsZero() && !now.Before(v.until)) || (v.until.IsZero() && now.Sub(v.start) > redeemWindow) {
+				delete(l.by, k)
+			}
+		}
+		if len(l.by) > 4096 {
+			for k, v := range l.by {
+				if k != ip && (v.until.IsZero() || !now.Before(v.until)) {
+					delete(l.by, k)
+					if len(l.by) <= 4096 {
+						break
+					}
+				}
+			}
+		}
 	}
 }
 

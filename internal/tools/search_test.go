@@ -229,3 +229,48 @@ func TestAllRolesExposeSearchAndFindTools(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchAndFindRespectGitignore(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(".gitignore", "# comments\ncoverage/\n*.generated.go\nbuild/out/\n")
+	mustWrite("src/app.go", "package main\nconst gitignoreMarker = 1\n")
+	mustWrite("src/app.generated.go", "package main\nconst gitignoreMarker = 2\n")
+	mustWrite("coverage/report.txt", "gitignoreMarker coverage\n")
+	mustWrite("build/out/bundle.js", "gitignoreMarker bundle\n")
+
+	out, err := runSearchText(context.Background(), root, searchTextArgs{Query: "gitignoreMarker"})
+	if err != nil {
+		t.Fatalf("search_text failed: %v", err)
+	}
+	if !strings.Contains(out, "src/app.go:2:") {
+		t.Fatalf("expected src/app.go in search results, got:\n%s", out)
+	}
+	for _, hidden := range []string{"app.generated.go", "coverage/", "build/out/"} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("gitignored path %q leaked into search_text:\n%s", hidden, out)
+		}
+	}
+
+	found, err := runFindFiles(context.Background(), root, findFilesArgs{Pattern: "*"})
+	if err != nil {
+		t.Fatalf("find_files failed: %v", err)
+	}
+	if !strings.Contains(found, "src/app.go") {
+		t.Fatalf("expected src/app.go in find_files:\n%s", found)
+	}
+	for _, hidden := range []string{"app.generated.go", "coverage/", "build/out/"} {
+		if strings.Contains(found, hidden) {
+			t.Fatalf("gitignored path %q leaked into find_files:\n%s", hidden, found)
+		}
+	}
+}

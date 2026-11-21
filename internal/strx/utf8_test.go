@@ -1,6 +1,7 @@
 package strx
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -25,5 +26,23 @@ func TestTruncateRunes(t *testing.T) {
 	got := TruncateRunes(input, 3, "…")
 	if got != "olá…" {
 		t.Fatalf("got %q, want %q", got, "olá…")
+	}
+}
+
+func TestTruncateHeadTailBytesPreservesTailAndUTF8(t *testing.T) {
+	head := "INÍCIO-CONFIGURAÇÃO-" + strings.Repeat("a", 64)
+	tail := strings.Repeat("b", 64) + "-ERRO_FINAL_COMPILAÇÃO"
+	got := TruncateHeadTailBytes(head+tail, 24, 30)
+	if !utf8.ValidString(got) {
+		t.Fatalf("expected valid UTF-8 output, got %q", got)
+	}
+	if !strings.HasPrefix(got, "INÍCIO") {
+		t.Fatalf("expected head preserved, got %q", got)
+	}
+	if !strings.HasSuffix(got, "ERRO_FINAL_COMPILAÇÃO") {
+		t.Fatalf("expected tail error preserved, got %q", got)
+	}
+	if !strings.Contains(got, "bytes omitidos") {
+		t.Fatalf("expected omission marker, got %q", got)
 	}
 }

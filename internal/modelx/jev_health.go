@@ -42,6 +42,15 @@ func DefaultJevHealthStore() *jev.HealthStore {
 // JevCredentialFingerprints returns SHA-256 prefixes of each provider's credential
 // state (never raw secrets) so auth-opened circuits auto-reset when keys change.
 func JevCredentialFingerprints() map[string]string {
+	return JevCredentialFingerprintsForContext(context.Background())
+}
+
+// JevCredentialFingerprintsForContext computes credential fingerprints scoped to
+// ctx's active workspace/organization.
+func JevCredentialFingerprintsForContext(ctx context.Context) map[string]string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	hashVal := func(parts ...string) string {
 		h := sha256.New()
 		for _, p := range parts {
@@ -51,21 +60,20 @@ func JevCredentialFingerprints() map[string]string {
 		sum := h.Sum(nil)
 		return hex.EncodeToString(sum[:8])
 	}
-	bg := context.Background()
-	ocKey, ocBase, _ := LoadOpenCodeCredentials()
+	ocKey, ocBase, _ := LoadOpenCodeCredentialsForContext(ctx)
 	agyBin, _ := LookAgy()
 	curBin, _ := LookCursor()
 	return map[string]string{
-		"typesafe":         hashVal(resolveEnvForContext(bg, "typesafe", "TYPESAFE_API_KEY"), resolveEnvForContext(bg, "typesafe", "TYPESAFE_BASE_URL")),
+		"typesafe":         hashVal(resolveEnvForContext(ctx, "typesafe", "TYPESAFE_API_KEY"), resolveEnvForContext(ctx, "typesafe", "TYPESAFE_BASE_URL")),
 		"agy":              hashVal(agyBin),
-		"cursor":           hashVal(curBin, resolveEnvForContext(bg, "cursor", "CURSOR_API_KEY")),
+		"cursor":           hashVal(curBin, resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")),
 		"opencode":         hashVal(ocKey, ocBase),
-		"openrouter":       hashVal(resolveEnvForContext(bg, "openrouter", "OPENROUTER_API_KEY"), resolveEnvForContext(bg, "openrouter", "OPENROUTER_BASE_URL")),
-		"gemini":           hashVal(resolveEnvForContext(bg, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")),
-		"vertex":           hashVal(resolveEnvForContext(bg, "gemini", "GOOGLE_CLOUD_PROJECT"), resolveEnvForContext(bg, "gemini", "GOOGLE_CLOUD_LOCATION")),
-		"anthropic":        hashVal(resolveEnvForContext(bg, "anthropic", "ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_BACKEND")),
-		"openai":           hashVal(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY"), resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")),
-		"openai-responses": hashVal(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY"), resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")),
+		"openrouter":       hashVal(resolveEnvForContext(ctx, "openrouter", "OPENROUTER_API_KEY"), resolveEnvForContext(ctx, "openrouter", "OPENROUTER_BASE_URL")),
+		"gemini":           hashVal(resolveEnvForContext(ctx, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")),
+		"vertex":           hashVal(resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT"), resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_LOCATION")),
+		"anthropic":        hashVal(resolveEnvForContext(ctx, "anthropic", "ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_BACKEND")),
+		"openai":           hashVal(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY"), resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")),
+		"openai-responses": hashVal(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY"), resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")),
 	}
 }
 
@@ -98,7 +106,7 @@ func ProbeProviderRecovery(ctx context.Context, hs *jev.HealthStore, provider st
 	if hs == nil {
 		return
 	}
-	hs.SyncCredentialFingerprints(JevCredentialFingerprints())
+	hs.SyncCredentialFingerprints(JevCredentialFingerprintsForContext(ctx))
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "agy":
 		q := fetchAgyUsageFn(ctx)
@@ -186,8 +194,8 @@ func ProbeAllProvidersHealth(ctx context.Context, hs *jev.HealthStore, policy je
 	if hs == nil {
 		hs = DefaultJevHealthStore()
 	}
-	hs.SyncCredentialFingerprints(JevCredentialFingerprints())
-	creds := JevCredentialPresence()
+	hs.SyncCredentialFingerprints(JevCredentialFingerprintsForContext(ctx))
+	creds := JevCredentialPresenceForContext(ctx)
 	snap := hs.Snapshot(creds, nil)
 
 	targets := map[string]bool{}
@@ -217,7 +225,7 @@ func ProbeAllProvidersHealth(ctx context.Context, hs *jev.HealthStore, policy je
 		}(prov)
 	}
 	wg.Wait()
-	return hs.Summary(policy, JevCredentialPresence())
+	return hs.Summary(policy, JevCredentialPresenceForContext(ctx))
 }
 
 var errProbeUnavailable = context.DeadlineExceeded

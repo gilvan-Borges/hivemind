@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 )
 
 const (
@@ -15,6 +17,8 @@ const (
 	maxRoutineTextBytes   = 4 << 10
 	maxRoutineTurnsPerDay = 20
 )
+
+var routinesMu sync.Mutex
 
 // Routine is a structured schedule. It has no shell command field.
 type Routine struct {
@@ -64,12 +68,7 @@ func writeRoutines(baseDir string, list []Routine) error {
 		return err
 	}
 	raw = append(raw, '\n')
-	path := routinesPath(baseDir)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicx.WriteFile(routinesPath(baseDir), raw, 0o600)
 }
 
 // ValidateRoutine rejects shell commands, wildcards and unknown classes.
@@ -105,6 +104,8 @@ func ValidateRoutine(rt Routine) (Routine, error) {
 
 // SaveRoutine inserts or replaces a routine by id. The caller already approved.
 func SaveRoutine(baseDir string, rt Routine) (Routine, error) {
+	routinesMu.Lock()
+	defer routinesMu.Unlock()
 	clean, err := ValidateRoutine(rt)
 	if err != nil {
 		return Routine{}, err
@@ -138,6 +139,8 @@ func SaveRoutine(baseDir string, rt Routine) (Routine, error) {
 
 // DeleteRoutine removes one routine by id.
 func DeleteRoutine(baseDir, id string) error {
+	routinesMu.Lock()
+	defer routinesMu.Unlock()
 	id = strings.TrimSpace(id)
 	list, err := LoadRoutines(baseDir)
 	if err != nil {
@@ -154,6 +157,8 @@ func DeleteRoutine(baseDir, id string) error {
 
 // SetRoutineEnabled pauses or resumes one routine.
 func SetRoutineEnabled(baseDir, id string, enabled bool) error {
+	routinesMu.Lock()
+	defer routinesMu.Unlock()
 	list, err := LoadRoutines(baseDir)
 	if err != nil {
 		return err
@@ -175,6 +180,8 @@ func SetRoutineEnabled(baseDir, id string, enabled bool) error {
 // ClaimDue marks at most one enabled routine whose next fire is at or before now.
 // A second call with the same now returns nothing. The daily cap is 20 turns.
 func ClaimDue(baseDir string, now time.Time) (Routine, bool, error) {
+	routinesMu.Lock()
+	defer routinesMu.Unlock()
 	list, err := LoadRoutines(baseDir)
 	if err != nil {
 		return Routine{}, false, err

@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 )
 
 // DefaultPort is the TCP port the bridge listens on (also used in the pairing
@@ -116,7 +118,7 @@ func saveConfig(path string, cfg Config) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return atomicx.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 // RotateToken drops every paired device. The new digest has no known preimage,

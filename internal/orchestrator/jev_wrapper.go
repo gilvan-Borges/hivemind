@@ -21,6 +21,7 @@ import (
 // GenerateContent invocation without duplicating tool calls.
 type jevModelWrapper struct {
 	mu           sync.Mutex
+	gen          uint64
 	current      model.LLM
 	choice       jev.Choice
 	taskBase     jev.Task
@@ -60,6 +61,7 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		w.mu.Lock()
 		curLLM := w.current
 		curChoice := w.choice
+		curGen := w.gen
 		w.mu.Unlock()
 
 		exclude := map[string]bool{}
@@ -122,8 +124,11 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		}
 
 		w.mu.Lock()
-		w.current = nextLLM
-		w.choice = nextChoice
+		if w.gen == curGen {
+			w.current = nextLLM
+			w.choice = nextChoice
+			w.gen++
+		}
 		w.mu.Unlock()
 
 		// Retry the same LLMRequest ONCE on the failover model (Spec §9).

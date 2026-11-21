@@ -56,7 +56,7 @@ func readEnv(t *testing.T, c *websocket.Conn, want string) relaywire.Envelope {
 		if err := json.Unmarshal(data, &env); err != nil {
 			t.Fatal(err)
 		}
-		if env.Type == relaywire.TypePing || env.Type == relaywire.TypePong {
+		if env.Type == relaywire.TypePing || env.Type == relaywire.TypePong || (want != relaywire.TypePeerPresence && env.Type == relaywire.TypePeerPresence) {
 			continue
 		}
 		if want != "" && env.Type != want {

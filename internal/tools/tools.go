@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
@@ -57,7 +59,60 @@ type Deps struct {
 	BaseBranch    string
 	// MCP, quando preenchido, expõe só os servidores ligados e as duas
 	// ferramentas leves de lista e de ligar sob aprovação.
-	MCP *mcpx.Host
+	MCP     *mcpx.Host
+	tracker *fileReadTracker
+}
+
+type fileReadTracker struct {
+	mu     sync.Mutex
+	mtimes map[string]time.Time
+}
+
+func newFileReadTracker() *fileReadTracker {
+	return &fileReadTracker{mtimes: make(map[string]time.Time)}
+}
+
+func (t *fileReadTracker) record(path string, modTime time.Time) {
+	if t == nil || path == "" || modTime.IsZero() {
+		return
+	}
+	t.mu.Lock()
+	t.mtimes[filepath.Clean(path)] = modTime
+	t.mu.Unlock()
+}
+
+func (t *fileReadTracker) refresh(path string) {
+	if t == nil || path == "" {
+		return
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		t.record(path, info.ModTime())
+	}
+}
+
+func (t *fileReadTracker) checkNotStale(root, relArg string) error {
+	if t == nil {
+		return nil
+	}
+	path, err := workspace.Resolve(root, relArg)
+	if err != nil {
+		return nil
+	}
+	clean := filepath.Clean(path)
+	t.mu.Lock()
+	recorded, ok := t.mtimes[clean]
+	t.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		return nil
+	}
+	if info.ModTime().After(recorded) {
+		return fmt.Errorf("edição recusada: %s foi modificado externamente desde a última leitura; chame read_file novamente antes de editar", relArg)
+	}
+	return nil
 }
 
 // ForRole returns the tools a role is allowed to call.
@@ -66,6 +121,9 @@ type Deps struct {
 func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 	normRole := team.NormalizeRole(role)
 	deps.Role = normRole
+	if deps.tracker == nil {
+		deps.tracker = newFileReadTracker()
+	}
 	if deps.Shell == nil {
 		deps.Shell = shellx.Local{}
 	}
@@ -288,12 +346,25 @@ type readFileArgs struct {
 	EndLine   int    `json:"end_line,omitempty" jsonschema:"Linha final inclusiva (1-based) opcional (máx. 400 linhas por chamada quando especificado)."`
 }
 
+func (d Deps) readFile(args readFileArgs) (string, error) {
+	out, err := readFileRange(d.Root, args)
+	if err != nil {
+		return "", err
+	}
+	if d.tracker != nil {
+		if resolved, rErr := workspace.ResolveWithOptions(d.Root, args.Path, workspace.Options{AllowMemoryRead: true}); rErr == nil {
+			d.tracker.refresh(resolved)
+		}
+	}
+	return out, nil
+}
+
 func (d Deps) canRead() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "read_file",
 		Description: "Lê um arquivo de texto dentro do workspace do agente. Aceita start_line e end_line opcionais (1-based, até 400 linhas) para ler apenas o trecho relevante de arquivos grandes.",
 	}, func(_ agent.Context, args readFileArgs) (textResult, error) {
-		out, err := readFileRange(d.Root, args)
+		out, err := d.readFile(args)
 		if err != nil {
 			return textResult{}, err
 		}
@@ -391,11 +462,21 @@ func (d Deps) canList() (tool.Tool, error) {
 	}, func(_ agent.Context, args pathArgs) (struct {
 		Entries []string `json:"entries"`
 	}, error) {
+		if pathsec.IsSensitivePath(args.Path) {
+			return struct {
+				Entries []string `json:"entries"`
+			}{}, fmt.Errorf("listagem recusada: %s é um caminho sensível", args.Path)
+		}
 		path, err := workspace.Resolve(d.Root, args.Path)
 		if err != nil {
 			return struct {
 				Entries []string `json:"entries"`
 			}{}, err
+		}
+		if pathsec.IsSensitivePath(path) {
+			return struct {
+				Entries []string `json:"entries"`
+			}{}, fmt.Errorf("listagem recusada: %s é um caminho sensível", args.Path)
 		}
 		entries, err := os.ReadDir(path)
 		if err != nil {
@@ -407,6 +488,9 @@ func (d Deps) canList() (tool.Tool, error) {
 		for _, e := range entries {
 			name := e.Name()
 			if strings.EqualFold(name, ".git") || strings.EqualFold(name, ".hivemind") || strings.EqualFold(name, ".worktrees") {
+				continue
+			}
+			if pathsec.IsSensitivePath(name) || pathsec.IsSensitivePath(filepath.Join(args.Path, name)) {
 				continue
 			}
 			if e.IsDir() {
@@ -429,25 +513,40 @@ type writeArgs struct {
 	Content string `json:"content" jsonschema:"Conteúdo completo que substitui o arquivo."`
 }
 
+func (d Deps) writeFile(args writeArgs) (string, error) {
+	if len(args.Content) > 1<<20 {
+		return "", fmt.Errorf("conteúdo acima de 1 MiB")
+	}
+	if pathsec.IsSensitivePath(args.Path) {
+		return "", fmt.Errorf("escrita recusada: %s é um arquivo sensível", args.Path)
+	}
+	path, err := workspace.Resolve(d.Root, args.Path)
+	if err != nil {
+		return "", err
+	}
+	if pathsec.IsSensitivePath(path) {
+		return "", fmt.Errorf("escrita recusada: %s é um arquivo sensível", args.Path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := atomicx.WriteFile(path, []byte(args.Content), 0o644); err != nil {
+		return "", err
+	}
+	d.tracker.refresh(path)
+	return "arquivo gravado: " + args.Path, nil
+}
+
 func (d Deps) canWrite() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "write_file",
 		Description: "Cria um arquivo novo ou substitui todo o conteúdo de um arquivo no workspace. Para alterar arquivos existentes, prefira edit_file (preserva encoding, quebras de linha e economiza tokens).",
 	}, func(_ agent.Context, args writeArgs) (textResult, error) {
-		if len(args.Content) > 1<<20 {
-			return textResult{}, fmt.Errorf("conteúdo acima de 1 MiB")
-		}
-		path, err := workspace.Resolve(d.Root, args.Path)
+		out, err := d.writeFile(args)
 		if err != nil {
 			return textResult{}, err
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return textResult{}, err
-		}
-		if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil {
-			return textResult{}, err
-		}
-		return textResult{Text: "arquivo gravado: " + args.Path}, nil
+		return textResult{Text: out}, nil
 	})
 }
 
@@ -458,12 +557,28 @@ type editArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"Quando true, substitui todas as ocorrências de old_text; por padrão exige correspondência única."`
 }
 
+func (d Deps) editFile(args editArgs) (string, error) {
+	if err := d.tracker.checkNotStale(d.Root, args.Path); err != nil {
+		return "", err
+	}
+	out, err := editFileSurgical(d.Root, args)
+	if err != nil {
+		return "", err
+	}
+	if d.tracker != nil {
+		if resolved, rErr := workspace.Resolve(d.Root, args.Path); rErr == nil {
+			d.tracker.refresh(resolved)
+		}
+	}
+	return out, nil
+}
+
 func (d Deps) canEdit() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "edit_file",
 		Description: "Edita cirurgicamente um arquivo existente substituindo old_text por new_text, preservando exatamente bytes não tocados, encoding original e quebras de linha (CRLF/LF). Sempre prefira edit_file a write_file ou scripts shell para modificar arquivos existentes.",
 	}, func(_ agent.Context, args editArgs) (textResult, error) {
-		out, err := editFileSurgical(d.Root, args)
+		out, err := d.editFile(args)
 		if err != nil {
 			return textResult{}, err
 		}
@@ -475,9 +590,15 @@ func editFileSurgical(root string, args editArgs) (string, error) {
 	if args.OldText == "" {
 		return "", fmt.Errorf("old_text não pode ser vazio; informe o trecho exato a substituir ou use write_file para criar arquivo novo")
 	}
+	if pathsec.IsSensitivePath(args.Path) {
+		return "", fmt.Errorf("edição recusada: %s é um arquivo sensível", args.Path)
+	}
 	path, err := workspace.Resolve(root, args.Path)
 	if err != nil {
 		return "", err
+	}
+	if pathsec.IsSensitivePath(path) {
+		return "", fmt.Errorf("edição recusada: %s é um arquivo sensível", args.Path)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -553,7 +674,7 @@ func editFileSurgical(root string, args editArgs) (string, error) {
 	if perm == 0 {
 		perm = 0o644
 	}
-	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
+	if err := atomicx.WriteFile(path, []byte(updated), perm); err != nil {
 		return "", err
 	}
 
@@ -604,14 +725,20 @@ func (d Deps) writeDoc() (tool.Tool, error) {
 		if len(args.Content) > 1<<20 {
 			return textResult{}, fmt.Errorf("conteúdo acima de 1 MiB")
 		}
+		if pathsec.IsSensitivePath(args.Path) {
+			return textResult{}, fmt.Errorf("escrita recusada: %s é um arquivo sensível", args.Path)
+		}
 		path, err := workspace.Resolve(d.Root, args.Path)
 		if err != nil {
 			return textResult{}, err
 		}
+		if pathsec.IsSensitivePath(path) {
+			return textResult{}, fmt.Errorf("escrita recusada: %s é um arquivo sensível", args.Path)
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return textResult{}, err
 		}
-		if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil {
+		if err := atomicx.WriteFile(path, []byte(args.Content), 0o644); err != nil {
 			return textResult{}, err
 		}
 		return textResult{Text: "documento gravado: " + args.Path}, nil
@@ -780,7 +907,18 @@ func (d Deps) runShellSandboxed(ctx context.Context, dir, command string) (strin
 		}
 		text += res.Stderr
 	}
-	text = strx.TruncateBytes(text, 16<<10, "\n…(saída truncada)")
+	var logPath string
+	if len(text) > 16<<10 {
+		if f, tmpErr := os.CreateTemp("", "hivemind-shell-*.log"); tmpErr == nil {
+			logPath = f.Name()
+			_, _ = f.WriteString(text)
+			_ = f.Close()
+		}
+	}
+	text = strx.TruncateHeadTailBytes(text, 4<<10, 12<<10)
+	if logPath != "" {
+		text += "\n[saída completa salva em: " + logPath + "]"
+	}
 	if err != nil {
 		if strings.TrimSpace(text) == "" {
 			return "", err

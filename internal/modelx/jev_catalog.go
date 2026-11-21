@@ -12,23 +12,33 @@ import (
 // local CLI binaries available (including accounts saved in Pool de Contas),
 // returning only booleans (never key material).
 func JevCredentialPresence() map[string]bool {
-	bg := context.Background()
-	ocKey, _, _ := LoadOpenCodeCredentials()
+	return JevCredentialPresenceForContext(context.Background())
+}
+
+// JevCredentialPresenceForContext checks credential availability scoped to ctx's
+// active workspace/organization without borrowing keys from another tenant.
+func JevCredentialPresenceForContext(ctx context.Context) map[string]bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	hasWS := WorkspaceFromContext(ctx) != ""
+	ocKey, _, _ := LoadOpenCodeCredentialsForContext(ctx)
 	_, cursorErr := LookCursor()
-	cursorKey := strings.TrimSpace(resolveEnvForContext(bg, "cursor", "CURSOR_API_KEY")) != ""
+	cursorKey := strings.TrimSpace(resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")) != ""
+	agyOK := AgyAvailable() && (!hasWS || !CredentialIsolated(ctx, "agy"))
 
 	return map[string]bool{
-		"typesafe":         strings.TrimSpace(resolveEnvForContext(bg, "typesafe", "TYPESAFE_API_KEY")) != "",
-		"agy":              AgyAvailable(),
+		"typesafe":         strings.TrimSpace(resolveEnvForContext(ctx, "typesafe", "TYPESAFE_API_KEY")) != "",
+		"agy":              agyOK,
 		"cursor":           cursorErr == nil && cursorKey,
 		"opencode":         strings.TrimSpace(ocKey) != "",
 		"opencode_free":    true,
-		"openrouter":       strings.TrimSpace(resolveEnvForContext(bg, "openrouter", "OPENROUTER_API_KEY")) != "",
-		"gemini":           strings.TrimSpace(resolveEnvForContext(bg, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")) != "",
-		"vertex":           strings.TrimSpace(resolveEnvForContext(bg, "gemini", "GOOGLE_CLOUD_PROJECT")) != "",
-		"anthropic":        strings.TrimSpace(resolveEnvForContext(bg, "anthropic", "ANTHROPIC_API_KEY")) != "" || strings.EqualFold(strings.TrimSpace(os.Getenv("ANTHROPIC_BACKEND")), "vertex"),
-		"openai":           strings.TrimSpace(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")) != "",
-		"openai-responses": strings.TrimSpace(resolveEnvForContext(bg, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(bg, "openai", "OPENAI_BASE_URL")) != "",
+		"openrouter":       strings.TrimSpace(resolveEnvForContext(ctx, "openrouter", "OPENROUTER_API_KEY")) != "",
+		"gemini":           strings.TrimSpace(resolveEnvForContext(ctx, "gemini", "GOOGLE_API_KEY", "GEMINI_API_KEY")) != "",
+		"vertex":           strings.TrimSpace(resolveEnvForContext(ctx, "gemini", "GOOGLE_CLOUD_PROJECT")) != "",
+		"anthropic":        strings.TrimSpace(resolveEnvForContext(ctx, "anthropic", "ANTHROPIC_API_KEY")) != "" || strings.EqualFold(strings.TrimSpace(os.Getenv("ANTHROPIC_BACKEND")), "vertex"),
+		"openai":           strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")) != "",
+		"openai-responses": strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")) != "",
 	}
 }
 

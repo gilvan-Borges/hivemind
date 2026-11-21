@@ -66,8 +66,9 @@ type Runner struct {
 	SquadHandoff func(ctx context.Context, h SquadHandoff) (string, error)
 	// OnRoutineSaved rearms the in-process timer after cron_add.
 	OnRoutineSaved func()
-	gateOnce       sync.Once
-	gate           *spawnGate
+	gateOnce sync.Once
+	gate     *spawnGate
+	brokerMu sync.Mutex
 }
 
 // RunTurn executes one read-only resident turn and returns the final response
@@ -171,7 +172,9 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		OnRoutineSaved:         r.OnRoutineSaved,
 		ExperimentalUnisolated: r.Config.ExperimentalUnisolated,
 	})
+	r.brokerMu.Lock()
 	r.LastBroker = broker
+	r.brokerMu.Unlock()
 
 	buildTools := tools.ForResidentPhase2
 	if !r.Child {
@@ -477,6 +480,8 @@ func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes 
 }
 
 func (r *Runner) lastWorkspace() string {
+	r.brokerMu.Lock()
+	defer r.brokerMu.Unlock()
 	if r.LastBroker != nil {
 		return r.LastBroker.cfg.Workspace
 	}
@@ -484,6 +489,8 @@ func (r *Runner) lastWorkspace() string {
 }
 
 func (r *Runner) lastWorkstream() string {
+	r.brokerMu.Lock()
+	defer r.brokerMu.Unlock()
 	if r.LastBroker != nil {
 		return r.LastBroker.cfg.Workstream
 	}
@@ -491,6 +498,8 @@ func (r *Runner) lastWorkstream() string {
 }
 
 func (r *Runner) lastAccount() string {
+	r.brokerMu.Lock()
+	defer r.brokerMu.Unlock()
 	if r.LastBroker != nil {
 		return r.LastBroker.cfg.AccountID
 	}

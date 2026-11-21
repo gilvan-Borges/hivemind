@@ -173,4 +173,17 @@ func TestMultiOrgProviderProfilesResolution(t *testing.T) {
 	if strings.Contains(filepath.Clean(escaped), "..") || !strings.Contains(escaped, "agy-profiles") {
 		t.Fatalf("profile id escaped config root: %s", escaped)
 	}
+
+	rawDisk, err := os.ReadFile(filepath.Join(tmp, "provider-profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"sk-or-vibetex-1234567890", "sk-or-acme-0987654321"} {
+		if strings.Contains(string(rawDisk), secret) {
+			t.Fatalf("provider-profiles.json leaked plaintext key %s", secret)
+		}
+	}
+	if !strings.Contains(string(rawDisk), `"vault:modelx:prof:or-vibetex:OPENROUTER_API_KEY"`) {
+		t.Fatalf("expected vault reference in provider-profiles.json:\n%s", string(rawDisk))
+	}
 }

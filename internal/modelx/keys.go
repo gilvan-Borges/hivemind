@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
 )
 
 // SupportedStoredKeyNames lists the API key/setting names the IDE can persist
@@ -91,10 +93,62 @@ func loadStoredKeysLocked() (map[string]string, error) {
 	}
 	for k, v := range raw {
 		if v = strings.TrimSpace(v); v != "" {
-			out[strings.ToUpper(strings.TrimSpace(k))] = v
+			uk := strings.ToUpper(strings.TrimSpace(k))
+			out[uk] = v
+		}
+	}
+	migrated := false
+	for k, v := range out {
+		if isSecretStoredKey(k) {
+			resolved, mig := vaultLoadSecret(path, "modelx:apikey:"+k, v)
+			if mig {
+				migrated = true
+			}
+			if resolved != "" {
+				out[k] = resolved
+			} else {
+				delete(out, k)
+			}
+		}
+	}
+	if migrated {
+		disk := encodeStoredKeysForDisk(path, out)
+		if migData, merr := json.MarshalIndent(disk, "", "  "); merr == nil {
+			migData = append(migData, '\n')
+			if writeSecretFile(path, migData) == nil {
+				if st, serr := os.Stat(path); serr == nil {
+					keysBlob.path = path
+					keysBlob.mod = st.ModTime()
+					keysBlob.size = st.Size()
+					keysBlob.raw = append([]byte(nil), migData...)
+					keysBlob.ok = true
+				}
+			}
 		}
 	}
 	return out, nil
+}
+
+func isSecretStoredKey(name string) bool {
+	u := strings.ToUpper(strings.TrimSpace(name))
+	if u == "" || strings.HasSuffix(u, "_URL") || u == "GOOGLE_CLOUD_PROJECT" || u == "GOOGLE_CLOUD_LOCATION" || u == "GOOGLE_GENAI_USE_VERTEXAI" {
+		return false
+	}
+	return true
+}
+
+func encodeStoredKeysForDisk(path string, stored map[string]string) map[string]string {
+	disk := make(map[string]string, len(stored))
+	for k, v := range stored {
+		if isSecretStoredKey(k) {
+			if ref, err := vaultSaveSecret(path, "modelx:apikey:"+k, v); err == nil && ref != "" {
+				disk[k] = ref
+				continue
+			}
+		}
+		disk[k] = v
+	}
+	return disk
 }
 
 // EnvOrStored returns the value of the environment variable name, falling back
@@ -183,11 +237,15 @@ func SaveStoredAPIKeys(entries map[string]string) (map[string]string, error) {
 		}
 		if v = strings.TrimSpace(v); v == "" {
 			delete(stored, name)
+			if isSecretStoredKey(name) {
+				vaultDeleteSecret(path, "modelx:apikey:"+name)
+			}
 		} else {
 			stored[name] = v
 		}
 	}
-	data, err := json.MarshalIndent(stored, "", "  ")
+	disk := encodeStoredKeysForDisk(path, stored)
+	data, err := json.MarshalIndent(disk, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -226,43 +284,8 @@ func MaskKey(v string) string {
 
 // writeSecretFile replaces path atomically and leaves it readable only by the user.
 func writeSecretFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".secret-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		// Windows cannot replace an existing file with Rename.
-		_ = os.Remove(path)
-		if err2 := os.Rename(tmpName, path); err2 != nil {
-			return err2
-		}
-	}
-	cleanup = false
-	return os.Chmod(path, 0o600)
+	return atomicx.WriteFile(path, data, 0o600)
 }

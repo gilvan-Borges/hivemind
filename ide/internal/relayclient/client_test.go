@@ -268,7 +268,7 @@ func readJSON(t *testing.T, c *websocket.Conn, want string) relaywire.Envelope {
 		if json.Unmarshal(data, &env) != nil {
 			t.Fatalf("json %s", data)
 		}
-		if env.Type == relaywire.TypePing || env.Type == relaywire.TypePong || env.Type == relaywire.TypePeerKey {
+		if env.Type == relaywire.TypePing || env.Type == relaywire.TypePong || env.Type == relaywire.TypePeerKey || (want != relaywire.TypePeerPresence && env.Type == relaywire.TypePeerPresence) {
 			continue
 		}
 		if want != "" && env.Type != want {
@@ -435,5 +435,139 @@ func TestChangePasswordAndCreateAccount(t *testing.T) {
 	}
 	if createdEmail != "dev.user" {
 		t.Fatalf("expected created email dev.user, got %q", createdEmail)
+	}
+}
+
+func TestClientRejectsReplayedAndExpiredRPC(t *testing.T) {
+	ideKey, err := relaywire.NewKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	appKey, err := relaywire.NewKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var calls int
+	var mu sync.Mutex
+	c := &Client{
+		keys:    ideKey,
+		peer:    appKey.Public,
+		hasPeer: true,
+		opt: Options{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}),
+		},
+	}
+
+	send := make(chan []byte, 8)
+	sealed, err := appKey.SealJSON(ideKey.Public, relaywire.RPCRequest{
+		Method:       "POST",
+		Path:         "/api/v1/runs/start",
+		Seq:          1,
+		IssuedAtUnix: time.Now().Unix(),
+		Nonce:        "n-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := relaywire.Envelope{
+		V:        1,
+		ID:       "rpc-1",
+		Type:     relaywire.TypeRPC,
+		DeviceID: "dev-1",
+		Enc:      relaywire.EncNaClBox,
+		Payload:  sealed,
+	}
+
+	c.handleRPC(context.Background(), send, env)
+	firstRaw := <-send
+	var firstEnv relaywire.Envelope
+	if err := json.Unmarshal(firstRaw, &firstEnv); err != nil || firstEnv.Type != relaywire.TypeRPCResult {
+		t.Fatalf("expected TypeRPCResult on first call, got %s (%v)", firstRaw, err)
+	}
+
+	// Replay the exact encrypted frame.
+	c.handleRPC(context.Background(), send, env)
+	replayRaw := <-send
+	var replayEnv relaywire.Envelope
+	if err := json.Unmarshal(replayRaw, &replayEnv); err != nil || replayEnv.Type != relaywire.TypeError {
+		t.Fatalf("expected TypeError on replay, got %s (%v)", replayRaw, err)
+	}
+	var eb relaywire.ErrorBody
+	if err := json.Unmarshal(replayEnv.Payload, &eb); err != nil || eb.Code != relaywire.CodeConflict {
+		t.Fatalf("expected CodeConflict on replay, got %+v (%v)", eb, err)
+	}
+
+	// Expired timestamp even with a brand-new nonce/box must fail with CodeExpired.
+	expiredSealed, err := appKey.SealJSON(ideKey.Public, relaywire.RPCRequest{
+		Method:       "POST",
+		Path:         "/api/v1/runs/start",
+		Seq:          2,
+		IssuedAtUnix: time.Now().Add(-3 * time.Minute).Unix(),
+		Nonce:        "n-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleRPC(context.Background(), send, relaywire.Envelope{
+		V: 1, ID: "rpc-2", Type: relaywire.TypeRPC, DeviceID: "dev-1", Enc: relaywire.EncNaClBox, Payload: expiredSealed,
+	})
+	expRaw := <-send
+	var expEnv relaywire.Envelope
+	if err := json.Unmarshal(expRaw, &expEnv); err != nil || expEnv.Type != relaywire.TypeError {
+		t.Fatalf("expected TypeError on expired rpc, got %s (%v)", expRaw, err)
+	}
+	if err := json.Unmarshal(expEnv.Payload, &eb); err != nil || eb.Code != relaywire.CodeExpired {
+		t.Fatalf("expected CodeExpired, got %+v (%v)", eb, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected handler called once, got %d", calls)
+	}
+}
+
+func TestRelayConfigStoresSecretsInVaultAndMigratesPlaintext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.json")
+	rawLegacy := `{
+  "baseUrl": "https://relay.example.com",
+  "email": "owner@example.com",
+  "refreshToken": "hmr_rt_legacy_plain",
+  "deviceToken": "hmr_dev_legacy_plain",
+  "privateKey": "priv_key_legacy_plain",
+  "enabled": true
+}`
+	if err := os.WriteFile(path, []byte(rawLegacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RefreshToken != "hmr_rt_legacy_plain" || cfg.DeviceToken != "hmr_dev_legacy_plain" || cfg.PrivateKey != "priv_key_legacy_plain" {
+		t.Fatalf("migrated config mismatch: %+v", cfg)
+	}
+
+	diskAfter, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"hmr_rt_legacy_plain", "hmr_dev_legacy_plain", "priv_key_legacy_plain"} {
+		if strings.Contains(string(diskAfter), secret) {
+			t.Fatalf("relay.json still contains plaintext secret %s:\n%s", secret, string(diskAfter))
+		}
+	}
+	for _, ref := range []string{`"vault:relayclient:refresh_token"`, `"vault:relayclient:device_token"`, `"vault:relayclient:private_key"`} {
+		if !strings.Contains(string(diskAfter), ref) {
+			t.Fatalf("expected vault ref %s in relay.json:\n%s", ref, string(diskAfter))
+		}
 	}
 }

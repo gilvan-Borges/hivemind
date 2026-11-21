@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gilvan-Borges/HiveMind/internal/orgx"
 	"google.golang.org/adk/v2/model"
 )
 
@@ -360,9 +361,48 @@ func ListAccountPoolForProvider(ctx context.Context, provider, preferredAccountI
 	doc, _ := loadProfilesLocked()
 	profilesMu.Unlock()
 
+	ws := WorkspaceFromContext(ctx)
+	var orgID orgx.Identity
+	matchedWorkspaceOrg := false
+	hasAnyOrgScoped := false
+	if ws != "" {
+		orgID = orgx.Detect(ws)
+	}
+	for _, p := range doc.Profiles {
+		if p.Provider != prov || len(p.OrgPatterns) == 0 {
+			continue
+		}
+		hasAnyOrgScoped = true
+		if ws != "" {
+			if matched, _ := orgx.MatchPatterns(orgID, p.OrgPatterns); matched {
+				matchedWorkspaceOrg = true
+			}
+		}
+	}
+
+	resolvedProf, resolvedMode, _ := ResolveProfile(ctx, prov)
+	pinnedID := ""
+	if resolvedProf != nil && (resolvedMode == "manual" || resolvedMode == "override") {
+		pinnedID = resolvedProf.ID
+	}
+
 	var allForProv []ProviderProfile
 	for _, p := range doc.Profiles {
 		if p.Provider != prov {
+			continue
+		}
+		isPreferred := preferredAccountID != "" && strings.EqualFold(p.ID, preferredAccountID)
+		isPinned := pinnedID != "" && strings.EqualFold(p.ID, pinnedID)
+		if len(p.OrgPatterns) > 0 {
+			if ws != "" {
+				if matched, _ := orgx.MatchPatterns(orgID, p.OrgPatterns); !matched && !isPreferred && !isPinned {
+					continue
+				}
+			} else if !isPreferred && !isPinned {
+				continue
+			}
+		} else if matchedWorkspaceOrg && !isPreferred && !isPinned {
+			// Workspace matched an org-scoped profile: keep pool strictly within that org.
 			continue
 		}
 		ready, _ := evaluateProfileReadiness(p)
@@ -376,7 +416,7 @@ func ListAccountPoolForProvider(ctx context.Context, provider, preferredAccountI
 
 	// Also include the system/global account when available and not already represented
 	// so a user with 1 system account + 1 extra profile automatically has a 2-account pool.
-	if prov == "agy" && AgyAvailable() {
+	if prov == "agy" && AgyAvailable() && !matchedWorkspaceOrg && (!hasAnyOrgScoped || strings.EqualFold(pinnedID, "__global__")) {
 		hasLive := false
 		for _, p := range allForProv {
 			if strings.EqualFold(p.AuthMode, "live") || p.AuthMode == "" {
