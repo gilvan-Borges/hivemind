@@ -5,8 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=hivemind
-Group=hivemind
+# Alinhado com o usuário da imagem Docker (uid 65532, nome "relay") —
+# Dockerfile e unit compartilham o mesmo dono (Spec 10 §3.2.3).
+# Crie com: useradd --system --uid 65532 --home /var/lib/hivemind-relay --shell /usr/sbin/nologin relay
+User=relay
+Group=relay
 EnvironmentFile=/etc/hivemind-relay.env
 ExecStart=/usr/local/bin/hivemind-relay
 Restart=on-failure
@@ -17,6 +20,21 @@ ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/hivemind-relay
 LimitNOFILE=1024
+
+# Limites cgroup: o relay é um roteador leve; crescer além disso é vazamento.
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=256
+
+# Seccomp: syscall fora do conjunto de serviço morre com EPERM em vez de
+# escapar do perfil (systemd 239+).
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+LockPersonality=true
+RestrictNamespaces=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
 
 [Install]
 WantedBy=multi-user.target

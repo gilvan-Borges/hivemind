@@ -16,10 +16,12 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tui"
+	"github.com/gilvan-Borges/HiveMind/internal/version"
 )
 
-// Version is the CLI version printed by `hivemind version`.
-var Version = "0.1.0"
+// Version is the CLI version printed by `hivemind version`. O valor canônico
+// vem de internal/version (injetável via -ldflags -X no build oficial).
+var Version = version.Version
 
 // Execute runs the CLI with args, which do not include the program name.
 func Execute(args []string) error {
@@ -68,7 +70,7 @@ Sem argumentos, abre uma sessão interativa. Use "hivemind run" para executar um
 		Use:   "version",
 		Short: "Mostra a versão",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "hivemind", Version)
+			fmt.Fprintln(cmd.OutOrStdout(), "hivemind", version.String())
 			return nil
 		},
 	})

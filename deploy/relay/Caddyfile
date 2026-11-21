@@ -4,6 +4,17 @@
 
 relay.example.com {
 	encode gzip
+	# Cabeçalhos de segurança obrigatórios na borda pública (Spec 10 §3.2.3):
+	# HSTS de 2 anos com preload e CSP que proíbe qualquer conteúdo/render
+	# no host de API — o relay só fala JSON/WebSocket.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		-Server
+	}
 	request_body {
 		max_size 20MB
 	}

@@ -31,6 +31,8 @@ jobs:
           sudo apt-get install -y bubblewrap
       - name: Análise estática (go vet)
         run: go vet ./...
+      # ./... cobre todos os pacotes do módulo raiz — inclusive remote/relayclient
+      # quando a Onda 3 movê-los para internal/ (Spec 10 §3.2.3).
       - name: Testes unitários do CLI (com race detector)
         run: go test -race -count=1 ./...
 
@@ -46,8 +48,10 @@ jobs:
           cache: true
       - name: Análise estática (go vet)
         run: go vet ./...
-      - name: Testes unitários do CLI no Windows
-        run: go test -count=1 ./...
+      # Race detector também no Windows: os lockfiles cross-process são a plataforma
+      # alvo (mutex de kernel, CredMan), é aqui que data race escondido aparece.
+      - name: Testes unitários do CLI no Windows (com race detector)
+        run: go test -race -count=1 ./...
 
   test-ide:
     name: Testes IDE (${{ matrix.os }})
@@ -76,28 +80,67 @@ jobs:
         run: |
           npm ci
           npm run build
+      - name: Testes do bridge remoto e do cliente relay (com race detector)
+        working-directory: ide
+        run: |
+          go vet ./internal/remote/... ./internal/relayclient/...
+          go test -race -count=1 ./internal/remote/... ./internal/relayclient/...
       - name: Análise estática e testes unitários do core da IDE
         working-directory: ide
         run: |
           go vet ./internal/idecore/...
-          go test -v ./internal/idecore/...
-      - name: Testes do cliente de relay da IDE
-        working-directory: ide
-        run: |
-          go vet ./internal/relayclient/...
-          go test -count=1 ./internal/relayclient/...
+          go test -race -count=1 ./internal/idecore/...
       - name: Build e smoke-check do executável da IDE (Windows)
         if: runner.os == 'Windows'
         working-directory: ide
+        shell: pwsh
         run: |
+          $version = (Get-Content ..\VERSION -Raw).Trim()
+          $ldflags = "-s -w -H windowsgui -X github.com/gilvan-Borges/HiveMind/internal/version.Version=$version -X github.com/gilvan-Borges/HiveMind/internal/version.Commit=$env:GITHUB_SHA -X github.com/gilvan-Borges/HiveMind/internal/version.BuildDate=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
           go vet -tags desktop,production ./...
-          go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o build\hivemind-ide.exe .
-          .\build\hivemind-ide.exe --smoke-check
+          # Destino único ide/build/bin/ (Spec 10 §3.2.1): nenhuma cópia extra em ide/build/.
+          New-Item -ItemType Directory -Force build\bin | Out-Null
+          go build -tags desktop,production -ldflags $ldflags -o build\bin\hivemind-ide.exe .
+          .\build\bin\hivemind-ide.exe --version
+          .\build\bin\hivemind-ide.exe --smoke-check
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: hivemind-ide-windows-amd64
-          path: ide/build/hivemind-ide.exe
+          path: ide/build/bin/hivemind-ide.exe
+
+  test-android:
+    name: Testes HiveMind-App (Android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # O app mobile é um repositório Git independente (gilvan-Borges/HiveMind-App).
+      - uses: actions/checkout@v4
+        with:
+          repository: gilvan-Borges/HiveMind-App
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Testes unitários e lint do app Android
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug
+
+  govulncheck:
+    name: Vulnerabilidades (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - name: govulncheck ./... (módulo raiz)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: govulncheck ./... (módulo ide)
+        working-directory: ide
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   build-cli:
     name: Binário CLI ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -125,18 +168,24 @@ jobs:
         with:
           go-version: "1.26.10"
           cache: true
-      - name: Compilar binário estático
+      - name: Compilar binário estático com versão injetada
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+        shell: bash
         run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          pkg="github.com/gilvan-Borges/HiveMind/internal/version"
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w" -o "dist/${{ matrix.bin }}" ./cmd/hivemind
+          go build -trimpath -ldflags "-s -w -X ${pkg}.Version=${version} -X ${pkg}.Commit=${GITHUB_SHA::8} -X ${pkg}.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "dist/${{ matrix.bin }}" ./cmd/hivemind
+          sha256sum "dist/${{ matrix.bin }}" > "dist/${{ matrix.bin }}.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: hivemind-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ matrix.bin }}
+          path: |
+            dist/${{ matrix.bin }}
+            dist/${{ matrix.bin }}.sha256
 
   build-relay:
     name: Binário relay linux/${{ matrix.goarch }}
@@ -152,15 +201,21 @@ jobs:
         with:
           go-version: "1.26.10"
           cache: true
-      - name: Compilar hivemind-relay estático
+      - name: Compilar hivemind-relay estático com versão injetada
         env:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+        shell: bash
         run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          pkg="github.com/gilvan-Borges/HiveMind/internal/version"
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w" -o dist/hivemind-relay ./cmd/hivemind-relay
+          go build -trimpath -ldflags "-s -w -X ${pkg}.Version=${version} -X ${pkg}.Commit=${GITHUB_SHA::8} -X ${pkg}.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o dist/hivemind-relay ./cmd/hivemind-relay
+          sha256sum dist/hivemind-relay > dist/hivemind-relay.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: hivemind-relay-linux-${{ matrix.goarch }}
-          path: dist/hivemind-relay
+          path: |
+            dist/hivemind-relay
+            dist/hivemind-relay.sha256

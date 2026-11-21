@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/gilvan-Borges/HiveMind/internal/relay"
+	"github.com/gilvan-Borges/HiveMind/internal/version"
 )
 
 func main() {
@@ -42,7 +43,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *showVersion {
-		fmt.Println(relay.Version)
+		fmt.Println("hivemind-relay", version.String())
 		return
 	}
 	if *addr != "" {
