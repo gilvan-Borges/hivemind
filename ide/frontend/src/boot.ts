@@ -7,7 +7,8 @@ import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummariz
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
-import { handleResidentLaneEvent, refreshResidentStatus } from "./resident";
+import { handleResidentLaneEvent, openResidentTab, refreshResidentStatus } from "./resident";
+import { installRenderGuardFlushHooks, renderGuard } from "./render-guard";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
@@ -48,6 +49,9 @@ export async function boot() {
   initLSPHooks();
   mountShell();
   mountCompanion();
+  // Flush hooks do render guard (W4-06): re-renders async diferidos rodando
+  // quando o usuário abandona um input da região protegida.
+  installRenderGuardFlushHooks();
   const backend = api();
   if (!backend) {
     renderLeftSidebar();
@@ -418,6 +422,12 @@ export async function boot() {
   });
   void refreshResidentStatus();
 
+  // Botão "Abrir IDE" do Agent Hive flutuante: traz a IDE para frente e abre
+  // a aba Agent Hive (hive:resident) já sincronizada (Spec 007 H008).
+  window.runtime?.EventsOn("hivemind:open-resident", () => {
+    openResidentTab();
+  });
+
   window.runtime?.EventsOn("hivemind:autoreview-status", (payload: any) => {
     const wsKey = normalizePathKey(payload?.workspace || "");
     if (!wsKey) return;
@@ -435,7 +445,7 @@ export async function boot() {
       }
       updateStatusBar();
       if (state.sidebarView === "git" && state.showLeftSidebar) {
-        renderLeftSidebar();
+        renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
       }
       if (prevWasReviewing && payload.state !== "reviewing") {
         void loadGitHubPRs();
@@ -473,7 +483,7 @@ export async function boot() {
         state.githubUnreadCount += events.length;
       }
       if (state.sidebarView === "git" && state.showLeftSidebar) {
-        renderLeftSidebar();
+        renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
       }
     }
 
@@ -518,9 +528,9 @@ export function bootstrapAsync(rootDir?: string) {
     }
     updateStatusBar();
     updateMissionBoardIfOpen();
-    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-    if (state.showAPIKeysModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderGuard.guardedRender("modal-layer", renderModalLayer);
   }).catch(() => {});
 
   backend.BootstrapOpenCode?.(false).then((res) => {
@@ -534,15 +544,15 @@ export function bootstrapAsync(rootDir?: string) {
     updateStatusBar();
     updateMissionBoardIfOpen();
     void refreshInlineAIStatus();
-    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
-    if (state.showAPIKeysModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderGuard.guardedRender("modal-layer", renderModalLayer);
   }).catch(() => {});
 
   backend.ScanAllProviders?.(rootDir || "").then((report) => {
     state.providersScan = report;
     updateStatusBar();
-    if (state.showAPIKeysModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderGuard.guardedRender("modal-layer", renderModalLayer);
   }).catch(() => {});
 
   void refreshInlineAIStatus();
@@ -560,7 +570,7 @@ export function bootstrapAsync(rootDir?: string) {
 
   backend.CursorCLIStatus?.().then((st) => {
     state.cursorCLI = st;
-    if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
+    if (state.sidebarView === "team" && state.showLeftSidebar) renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
   }).catch(() => {});
 
@@ -572,7 +582,7 @@ export function bootstrapAsync(rootDir?: string) {
       if (state.project && normalizePathKey(state.project.root) === targetKey) {
         state.ghStatus = gh;
         if (state.sidebarView === "git" && state.showLeftSidebar) {
-          renderLeftSidebar();
+          renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
         }
       }
     }).catch(() => {});
@@ -587,7 +597,7 @@ export function bootstrapAsync(rootDir?: string) {
         state.autoReview = ar;
         updateStatusBar();
         if (state.sidebarView === "git" && state.showLeftSidebar) {
-          renderLeftSidebar();
+          renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
         }
       }
     }).catch(() => {});
@@ -614,7 +624,7 @@ export async function refreshSessions(targetRoot?: string) {
       updateStatusBar();
       updateMissionBoardIfOpen();
       if (state.sidebarView === "sessions" && state.showLeftSidebar) {
-        renderLeftSidebar();
+        renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
       }
     }
   } catch {

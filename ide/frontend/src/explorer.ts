@@ -7,6 +7,7 @@ import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindGitSidebarEvents, getGitStatusMap, renderGitSidebarHtml } from "./git";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
 import { renderModalLayer } from "./modals";
+import { notifyRegionRendered } from "./render-guard";
 import { bindMCPSidebarEvents, refreshMCP, renderMCPSidebar } from "./mcp";
 import { bindModelPickerPairs, handleInlineModelChange, refreshSkills, renderModelPickerPairHtml, renderSkillRowHtml } from "./models";
 import { syncLayoutVisibility, updateStatusBar } from "./shell";
@@ -326,6 +327,9 @@ export function bindSkillsSidebarEvents(): void {
 export function renderLeftSidebar() {
   const sidebar = document.getElementById("left-sidebar");
   if (!sidebar) return;
+  // A region is being re-rendered directly (user interaction or explicit
+  // refresh): any async render deferred by the guard is now satisfied.
+  notifyRegionRendered("left-sidebar");
 
   const proj = state.project;
   const lane = activeLane();

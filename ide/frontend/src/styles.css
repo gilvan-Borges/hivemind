@@ -1,3 +1,8 @@
+/* Modularização em camadas (Spec 07 §3.2.4): base < layout < components <
+   utilities. Tokens em :root ficam unlayered (precedência máxima) e o
+   checker check-design-tokens.mjs continua enxergando o bloco :root. */
+@layer base, layout, components, utilities;
+
 :root {
   /* Havrus Obsidian & Brand Gold — preto profundo, grafite sólido, branco e dourado (SDD Spec 001) */
   --surface-page: #050505;
@@ -102,6 +107,9 @@ body,
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Modularização: fundações (scrollbars, inputs, resets de controles). */
+@layer base {
 
 /* Dark scrollbars */
 ::-webkit-scrollbar {
@@ -222,11 +230,7 @@ button.ghost:hover:not(:disabled) {
   border-color: transparent;
   color: var(--text);
 }
-button.mini {
-  padding: 3px 8px;
-  font-size: 11.5px;
-  border-radius: 6px;
-}
+/* button.mini mudou para @layer utilities (helpers atômicos). */
 button.icon-btn {
   padding: 4px 6px;
   background: transparent;
@@ -253,6 +257,11 @@ button.icon-btn:hover:not(:disabled) {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: var(--bg-frame);
 }
+
+} /* fim @layer base */
+
+/* Modularização: estrutura do workbench (titlebar, abas de projeto, ilhas). */
+@layer layout {
 
 /* JetBrains New UI × Cursor 2.0 Frameless Titlebar */
 .titlebar {
@@ -496,13 +505,7 @@ button.icon-btn:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.spacer {
-  flex: 1;
-}
-.dim {
-  color: var(--text-dim);
-  font-size: 11.5px;
-}
+/* .spacer e .dim mudaram para @layer utilities (helpers atômicos). */
 
 .win-controls {
   display: flex;
@@ -709,6 +712,11 @@ button.icon-btn:hover:not(:disabled) {
   padding: 7px;
 }
 
+} /* fim @layer layout */
+
+/* Modularização: componentes da sidebar esquerda e painéis de conteúdo. */
+@layer components {
+
 /* Explorer Tree (VS Code-style flat indent + continuous vertical guides) */
 #explorer-tree-body {
   padding: 4px 0;
@@ -798,6 +806,11 @@ button.icon-btn:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+} /* fim @layer components */
+
+/* Modularização: a ilha central do editor é estrutura do workbench. */
+@layer layout {
+
 /* Center Editor / Mission Control Island */
 .center-area {
   flex: 1;
@@ -875,6 +888,11 @@ button.icon-btn:hover:not(:disabled) {
   font-size: 11.5px;
   flex-shrink: 0;
 }
+
+} /* fim @layer layout */
+
+/* Modularização: componentes de editor, missões, chat e cards. */
+@layer components {
 
 /* Live Overlay Code Editor */
 .editor-body-wrap {
@@ -2076,6 +2094,11 @@ button.icon-btn:hover:not(:disabled) {
 .diff-line.hunk { background: rgba(255, 255, 255, 0.072); color: #b9c0cb; }
 .diff-line.header { color: var(--text-dim); }
 
+} /* fim @layer components */
+
+/* Modularização: a status bar é estrutura do frame inferior. */
+@layer layout {
+
 /* Borderless Bottom Status Bar (JetBrains Islands Status Bar) */
 .status-bar {
   height: 28px;
@@ -2109,10 +2132,7 @@ button.icon-btn:hover:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.status-bar .spacer {
-  flex: 0 0 0;
-  display: none;
-}
+/* .status-bar .spacer mudou para @layer utilities junto com .spacer. */
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -2125,6 +2145,11 @@ button.icon-btn:hover:not(:disabled) {
 .status-chip:hover {
   background: rgba(255, 255, 255, 0.06);
 }
+
+} /* fim @layer layout */
+
+/* Modularização: modais, paleta e todos os componentes de conteúdo. */
+@layer components {
 
 /* Modals, Quick Open & Command Palette */
 .modal-backdrop {
@@ -2979,8 +3004,7 @@ button.status-chip:focus-visible,
   color: var(--text);
 }
 
-/* Alvos maiores para controles pequenos (Lei 2) */
-button.mini { min-height: 24px; }
+/* button.mini (alvos maiores) mudou para @layer utilities junto com o resto do helper. */
 button.icon-btn { min-width: 28px; min-height: 28px; }
 .editor-tab .close-x,
 .project-tab .proj-close-x {
@@ -4810,6 +4834,11 @@ button.lane-pill { text-align: left; }
   opacity: 1;
 }
 
+} /* fim @layer components */
+
+/* Modularização: base tipográfica de ícones globais. */
+@layer base {
+
 /* ===== Material Symbols (ícones oficiais do Google, embutidos offline) ===== */
 .ms {
   font-family: "Material Symbols Outlined Variable";
@@ -4834,6 +4863,11 @@ button.lane-pill { text-align: left; }
 .ms.fill {
   font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24;
 }
+
+} /* fim @layer base */
+
+/* Modularização: componentes das fases 3+ (editor, ghost text, orb, chat). */
+@layer components {
 
 /* =========================================================
    Fase 3 — Paridade Agentic (Ghost Text, Ctrl+K, Hunk Review)
@@ -7125,4 +7159,498 @@ body.is-orb-mode #app {
 }
 .orb-toggle-row input {
   accent-color: var(--accent);
+}
+
+/* =========================================================
+ * Agent Hive — aba Conversa do painel flutuante (Spec 007 D001)
+ * Tokens por papel: panel=camada 1, cards=camada 2, user=camada 3,
+ * input=camada 4, ação primária neutra e foco dourado Havrus.
+ * ========================================================= */
+.orb-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.orb-body > .orb-agent-config {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.orb-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border);
+  --wails-draggable: drag;
+}
+.orb-tab {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+.orb-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.orb-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.orb-tab.is-active {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+.orb-tab-badge {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning);
+  font-size: 9.5px;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.orb-head-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.orb-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.orb-chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.orb-chat-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 2px;
+}
+.orb-skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  animation: orb-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.orb-skeleton-line.short {
+  width: 62%;
+}
+@keyframes orb-skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb-skeleton-line {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+.orb-chat-empty {
+  margin: auto 0;
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.orb-chat-empty-icon {
+  color: var(--accent);
+}
+.orb-chat-empty-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.orb-chat-empty-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 280px;
+}
+.orb-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 4px;
+}
+.orb-suggestion {
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.orb-suggestion:hover {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+.orb-suggestion:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.orb-msg {
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-body);
+  line-height: 1.45;
+}
+.orb-msg.role-user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--surface-elevated);
+  border-color: var(--border-emphasis);
+  color: var(--text-primary);
+}
+.orb-msg.role-chief {
+  align-self: flex-start;
+  max-width: 96%;
+}
+.orb-msg.role-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 5px 9px;
+  color: var(--text-secondary);
+}
+.orb-msg.role-approval {
+  align-self: flex-start;
+  max-width: 96%;
+  border-left: 3px solid var(--color-warning);
+}
+.orb-msg.role-approval.resolved {
+  opacity: 0.72;
+}
+.orb-msg.role-error {
+  align-self: flex-start;
+  max-width: 96%;
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-subtle);
+}
+.orb-msg-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.orb-msg-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-strong);
+}
+.orb-msg-badge.badge-user {
+  background: var(--border-emphasis);
+  border-color: var(--border-emphasis);
+  color: var(--text-body);
+}
+.orb-msg-badge.badge-approval {
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+.orb-msg-badge.badge-error {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+.orb-msg-risk {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+.orb-msg-risk.risk-read {
+  background: var(--color-success-subtle);
+  border-color: var(--color-success-border);
+  color: var(--color-success);
+}
+.orb-msg-risk.risk-write {
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+.orb-msg-risk.risk-exec,
+.orb-msg-risk.risk-network {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+.orb-msg-risk.risk-credentials,
+.orb-msg-risk.risk-destructive {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+.orb-msg-body {
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+.orb-msg .md-prose,
+.orb-msg-body.md-prose {
+  white-space: normal;
+}
+.orb-msg-detail {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.orb-msg-spin {
+  color: var(--accent);
+  display: inline-flex;
+}
+.orb-msg-resolved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.orb-msg-resolved.ok {
+  background: var(--color-success-subtle);
+  border: 1px solid var(--color-success-border);
+  color: var(--color-success);
+}
+.orb-msg-resolved.off {
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+}
+.orb-msg-retry {
+  margin-top: 6px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-control);
+  background: var(--surface-input);
+  color: var(--text-body);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.orb-msg-retry:hover {
+  border-color: var(--border-control-hover);
+  color: var(--text-primary);
+}
+.orb-msg-retry:focus-visible,
+.orb-approval-actions button:focus-visible,
+.orb-composer-actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.orb-composer {
+  padding: 8px 10px 10px;
+  background: var(--surface-card);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  --wails-draggable: no-drag;
+}
+.orb-approval-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.orb-approval-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning-border);
+}
+.orb-approval-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.orb-approval-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orb-approval-detail {
+  font-size: 10px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orb-approval-actions {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.orb-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-danger-border);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.orb-btn-danger:hover {
+  border-color: var(--color-danger);
+}
+.orb-composer textarea {
+  width: 100%;
+  min-height: 44px;
+  max-height: 132px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border-control);
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: none;
+  font-family: inherit;
+}
+.orb-composer textarea::placeholder {
+  color: var(--text-tertiary);
+}
+.orb-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.orb-composer textarea:focus-visible {
+  border-color: var(--accent-strong);
+}
+.orb-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.orb-thinking-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+.orb-thinking-note .spin {
+  color: var(--accent);
+}
+.orb-thinking-note.waiting {
+  color: var(--color-warning);
+}
+.orb-composer-actions .spacer {
+  flex: 1;
+}
+.orb-composer-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.orb-composer-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.orb-composer .md-code-wrap pre {
+  max-height: 180px;
+}
+.orb-chat-list .md-code pre {
+  max-width: 100%;
+}
+} /* fim @layer components */
+
+/* =========================================================
+ * Utilities — helpers atômicos compartilhados (Spec 07 §3.2.4).
+ * Mantidos na MESMA ordem relativa original para preservar a cascata:
+ * button.mini (base) → .spacer/.dim (titlebar) → .status-bar .spacer →
+ * button.mini (alvos maiores). Refinamentos contextuais vivem em
+ * @layer components, que vence esta camada na ordem declarada.
+ * ========================================================= */
+@layer utilities {
+  button.mini {
+    padding: 3px 8px;
+    font-size: 11.5px;
+    border-radius: 6px;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .dim {
+    color: var(--text-dim);
+    font-size: 11.5px;
+  }
+  .status-bar .spacer {
+    flex: 0 0 0;
+    display: none;
+  }
+  button.mini {
+    min-height: 24px;
+  }
 }

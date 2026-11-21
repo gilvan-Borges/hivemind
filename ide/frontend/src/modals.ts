@@ -4,6 +4,8 @@ import { escapeHtml, formatTokens, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
+import { trapFocusIn, type FocusTrapHandle } from "./focus-trap";
+import { notifyRegionRendered, renderGuard } from "./render-guard";
 import { refreshSkills } from "./models";
 import { updateStatusBar } from "./shell";
 import { AI_USAGE_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
@@ -73,8 +75,8 @@ export async function openGitHubModal() {
   if (!backend?.GitHubStatus) return;
   try {
     state.ghStatus = await backend.GitHubStatus(state.project?.root || "");
-    renderLeftSidebar();
-    renderModalLayer();
+    renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
+    renderGuard.guardedRender("modal-layer", renderModalLayer);
   } catch {
     // keep current status visible
   }
@@ -114,7 +116,7 @@ export async function refreshJiraStatusAndProjects() {
       }
     }
     updateStatusBar();
-    if (state.showJiraModal) renderModalLayer();
+    if (state.showJiraModal) renderGuard.guardedRender("modal-layer", renderModalLayer);
     if (state.activeEditorPath === TEAM_CONFIG_TAB_KEY) renderEditorBody();
   } catch {
     // mantém último estado visível
@@ -128,7 +130,7 @@ export async function refreshProviderProfiles() {
   try {
     state.profilesOverview = await backend.GetProviderProfilesOverview(root);
     updateStatusBar();
-    if (state.showAPIKeysModal) renderModalLayer();
+    if (state.showAPIKeysModal) renderGuard.guardedRender("modal-layer", renderModalLayer);
   } catch {
     // mantém estado anterior
   }
@@ -175,7 +177,7 @@ export async function openAPIKeysModal(initialTab?: "profiles" | "global" | "sca
     }
     await Promise.all(tasks);
     updateStatusBar();
-    renderModalLayer();
+    renderGuard.guardedRender("modal-layer", renderModalLayer);
   } catch {
     // mantém o modal aberto sem status
   }
@@ -346,9 +348,58 @@ async function refreshMobilePairing() {
   renderModalLayer();
 }
 
+let activeModalTrap: FocusTrapHandle | null = null;
+
+/** IDs de botões que descartam o modal com segurança quando Escape é pressionado. */
+const DISMISSIBLE_MODAL_BUTTONS = ["confirm-modal-cancel", "img-preview-close", "path-modal-cancel"];
+
+function dismissDismissibleModal(): void {
+  for (const id of DISMISSIBLE_MODAL_BUTTONS) {
+    const btn = document.getElementById(id);
+    if (btn) {
+      (btn as HTMLButtonElement).click();
+      return;
+    }
+  }
+}
+
+/**
+ * renderModalLayer renders the active modal (if any) and keeps its keyboard
+ * accessibility in sync: ARIA labelling, Tab focus trap, Escape dismissal for
+ * disposable dialogs and focus restoration when everything closes (W4-07).
+ */
 export function renderModalLayer() {
+  renderModalLayerInner();
   const layer = document.getElementById("modal-layer");
   if (!layer) return;
+  const box = layer.querySelector<HTMLElement>(".modal-box");
+  if (!box) {
+    if (activeModalTrap) {
+      activeModalTrap.release();
+      activeModalTrap = null;
+    }
+    return;
+  }
+  // ARIA: every dialog gets an accessible name from its visible title.
+  if (!box.hasAttribute("aria-labelledby")) {
+    const title = box.querySelector<HTMLElement>(".modal-title");
+    if (title) {
+      if (!title.id) title.id = `modal-title-${Math.random().toString(36).slice(2, 9)}`;
+      box.setAttribute("aria-labelledby", title.id);
+    }
+  }
+  if (!box.hasAttribute("role")) box.setAttribute("role", "dialog");
+  if (!box.hasAttribute("aria-modal")) box.setAttribute("aria-modal", "true");
+  if (!activeModalTrap) {
+    activeModalTrap = trapFocusIn(layer, { onEscape: dismissDismissibleModal });
+  }
+}
+
+function renderModalLayerInner() {
+  const layer = document.getElementById("modal-layer");
+  if (!layer) return;
+  // A modal region is being re-rendered: deferred async renders are satisfied.
+  notifyRegionRendered("modal-layer");
 
   if (state.confirmModal) {
     const cm = state.confirmModal;
@@ -1141,6 +1192,8 @@ export function renderModalLayer() {
   if (state.showMobileModal) {
     const mb = state.mobileStatus;
     const pr = state.mobilePairing;
+    // QR só entra no DOM se for um data:image válido (W4-07: safeImageSrc).
+    const qrSrc = mb?.running ? safeImageSrc(pr?.qrDataUrl) : "";
     layer.innerHTML = `
       <div class="modal-backdrop" id="mb-modal-backdrop">
         <div class="modal-box" role="dialog" aria-modal="true" style="width:580px">
@@ -1156,18 +1209,18 @@ export function renderModalLayer() {
             <div class="spacer"></div>
             <button id="mb-toggle" class="${mb?.running ? "danger mini" : "primary mini"}">${mb?.running ? "Desligar Bridge" : "Ligar Bridge"}</button>
           </div>
-          ${mb?.running && pr?.qrDataUrl ? `
+          ${qrSrc ? `
             <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
               <div style="background:#fff;padding:8px;border-radius:8px">
-                <img src="${escapeHtml(pr.qrDataUrl)}" alt="QR de pareamento" style="width:208px;height:208px;image-rendering:pixelated" />
+                <img src="${escapeHtml(qrSrc)}" alt="QR de pareamento" style="width:208px;height:208px;image-rendering:pixelated" />
               </div>
               <div style="flex:1;min-width:220px">
                 <label style="font-size:11px;color:var(--text-dim)">URLs (Tailscale primeiro):</label>
                 <div class="dim" style="font-family:var(--mono);font-size:11px;margin:4px 0 10px;word-break:break-all">
-                  ${(pr.urls || []).map((u) => `<div>• ${escapeHtml(u)}</div>`).join("") || "—"}
+                  ${((pr?.urls) || []).map((u) => `<div>• ${escapeHtml(u)}</div>`).join("") || "—"}
                 </div>
                 <label style="font-size:11px;color:var(--text-dim)">Oferta de uso único</label>
-                <div class="dim" style="font-size:11px;margin:4px 0 10px">Válida até ${escapeHtml(pr.exp ? new Date(pr.exp * 1000).toLocaleString("pt-BR") : "—")}. Um resgate só.</div>
+                <div class="dim" style="font-size:11px;margin:4px 0 10px">Válida até ${escapeHtml(pr?.exp ? new Date(pr.exp * 1000).toLocaleString("pt-BR") : "—")}. Um resgate só.</div>
                 <div style="display:flex;gap:6px;align-items:center;margin:4px 0 10px">
                   <button id="mb-copy" class="mini" type="button">Copiar oferta</button>
                 </div>
