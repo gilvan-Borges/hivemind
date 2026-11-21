@@ -21,7 +21,6 @@ import (
 
 	"google.golang.org/adk/v2/model"
 
-	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
@@ -115,7 +114,7 @@ func ProbeAgy(ctx context.Context) AgyStatus {
 	status := AgyStatus{Found: true, Path: path}
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := agyCommand(probeCtx, path, []string{"models"})
+	cmd := cliCommand(probeCtx, path, []string{"models"})
 	var stderr bytes.Buffer
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr
@@ -226,11 +225,23 @@ func (a *Agy) Name() string {
 	return "agy"
 }
 
-// GenerateContent implements model.LLM.
-func (a *Agy) GenerateContent(ctx context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+// GenerateContent implements model.LLM. With stream=true it runs agy with
+// --output-format stream-json and emits incremental Partial responses (text
+// deltas and tool markers) before the final TurnComplete result — Spec 06
+// §3.1: "fazendo Agy.GenerateContent(..., stream=true) emitir deltas".
+func (a *Agy) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		resp, err := a.generate(ctx, req)
-		yield(resp, err)
+		if !stream {
+			resp, err := a.generate(ctx, req)
+			yield(resp, err)
+			return
+		}
+		resp, err := a.generateStreaming(ctx, req, yield)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		yield(resp, nil)
 	}
 }
 
@@ -825,7 +836,7 @@ func invokeAgy(ctx context.Context, bin, dir string, args []string, stdinText st
 }
 
 func invokeAgyWithEnv(ctx context.Context, bin, dir string, args []string, stdinText string, extraEnv map[string]string, isolate bool) (string, string, int, error) {
-	cmd := agyCommand(ctx, bin, args)
+	cmd := cliCommand(ctx, bin, args)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -945,21 +956,6 @@ func errString(err error) string {
 	return err.Error()
 }
 
-func agyCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
-	ext := strings.ToLower(filepath.Ext(bin))
-	var cmd *exec.Cmd
-	if ext == ".cmd" || ext == ".bat" {
-		wrapped := make([]string, 0, len(args)+3)
-		wrapped = append(wrapped, "/d", "/c", bin)
-		wrapped = append(wrapped, args...)
-		cmd = exec.CommandContext(ctx, "cmd.exe", wrapped...)
-	} else {
-		cmd = exec.CommandContext(ctx, bin, args...)
-	}
-	procx.ConfigureContext(cmd)
-	return cmd
-}
-
 func formatAgyTimeout(d time.Duration) string {
 	if d <= 0 {
 		return "10m"
@@ -1010,7 +1006,7 @@ func ListAgyModels(ctx context.Context) ([]AgyModel, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := agyCommand(probeCtx, bin, []string{"models"})
+	cmd := cliCommand(probeCtx, bin, []string{"models"})
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1055,7 +1051,7 @@ func ProbeAndListAgy(ctx context.Context) (AgyStatus, []AgyModel) {
 	status := AgyStatus{Found: true, Path: path}
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := agyCommand(probeCtx, path, []string{"models"})
+	cmd := cliCommand(probeCtx, path, []string{"models"})
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

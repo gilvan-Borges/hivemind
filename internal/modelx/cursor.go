@@ -1,15 +1,12 @@
 package modelx
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,8 +15,6 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/model"
-
-	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 const cursorInstallHint = "Instale o Cursor CLI oficial: no Windows, irm 'https://cursor.com/install?win32=true' | iex ; no Linux e no macOS, curl https://cursor.com/install -fsS | bash. Confirme com `agent --version`."
@@ -271,7 +266,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	defer os.Remove(taskPath)
 
 	args := cursorArgs(c.Model, dir, mode)
-	cmd := cursorCommand(runCtx, bin, args)
+	cmd := cliCommand(runCtx, bin, args)
 	cmd.Dir = dir
 	baseEnv := os.Environ()
 	if c.IsolateEnv {
@@ -284,7 +279,6 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &limitWriter{w: &stderr, n: 8 * 1024}
-	procx.ConfigureContext(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("não foi possível executar o Cursor CLI: %s", redactSecret(err.Error(), c.Key))
 	}
@@ -296,7 +290,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	// Lê até o EOF, inclusive linhas maiores que o limite: um tool_call com o
 	// corpo do arquivo pode passar de 4 MiB. Parar o scanner sem drenar enche
 	// o pipe e o CLI trava até o timeout.
-	readErr := readCursorStream(stdout, maxCursorLine, func(line string) bool {
+	readErr := readCLIStream(stdout, maxCursorLine, func(line string) bool {
 		notice, ok := parseCursorStreamLine(line)
 		if !ok {
 			return true
@@ -318,7 +312,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	if readErr != nil {
 		cancel()
 		_ = cmd.Wait()
-		if errors.Is(readErr, errStopStream) {
+		if errors.Is(readErr, errStopCLIStream) {
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("leitura do Cursor CLI: %s", redactSecret(readErr.Error(), c.Key))
@@ -449,18 +443,6 @@ func cursorChildEnv(base []string, key string) []string {
 	return append(out, "CURSOR_API_KEY="+key)
 }
 
-func cursorCommand(ctx context.Context, bin string, args []string) *exec.Cmd {
-	ext := strings.ToLower(filepath.Ext(bin))
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" && (ext == ".cmd" || ext == ".bat") {
-		cmd = exec.CommandContext(ctx, "cmd.exe", append([]string{"/d", "/c", bin}, args...)...)
-	} else {
-		cmd = exec.CommandContext(ctx, bin, args...)
-	}
-	procx.ConfigureContext(cmd)
-	return cmd
-}
-
 func writeCursorTask(dir, prompt string) (string, error) {
 	folder := filepath.Join(dir, ".hivemind")
 	if err := os.MkdirAll(folder, 0o755); err != nil {
@@ -526,7 +508,7 @@ func ListCursorModels(ctx context.Context) ([]AgyModel, CursorStatus, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cursorKey := resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")
-	cmd := cursorCommand(probeCtx, status.Path, []string{"models"})
+	cmd := cliCommand(probeCtx, status.Path, []string{"models"})
 	cmd.Env = cursorChildEnv(os.Environ(), cursorKey)
 	out, err := cmd.Output()
 	if err != nil {
@@ -644,79 +626,7 @@ func cursorWellKnown() []string {
 	return out
 }
 
-const maxCursorLine = 1024 * 1024
+// readCursorStream/limitWriter vivem agora em cli_exec.go (leitor NDJSON
+// único compartilhado com o agy — Spec 06 §3.1).
 
-var errStopStream = errors.New("stream interrompido")
-
-// readCursorStream lê até o EOF. Uma linha maior que max é descartada, mas o
-// restante do pipe continua sendo lido para o processo não bloquear.
-func readCursorStream(r io.Reader, max int, handle func(line string) bool) error {
-	br := bufio.NewReaderSize(r, 64*1024)
-	var buf []byte
-	skipping := false
-	for {
-		chunk, err := br.ReadSlice('\n')
-		if skipping {
-			if err == bufio.ErrBufferFull {
-				continue
-			}
-			skipping = false
-			if err == io.EOF {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if err == bufio.ErrBufferFull {
-			if len(buf)+len(chunk) > max {
-				buf = nil
-				skipping = true
-				continue
-			}
-			buf = append(buf, chunk...)
-			continue
-		}
-		if len(chunk) > 0 {
-			buf = append(buf, chunk...)
-		}
-		if len(buf) > 0 && len(buf) <= max {
-			line := string(buf)
-			buf = nil
-			if !handle(line) {
-				return errStopStream
-			}
-		} else {
-			buf = nil
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
-}
-
-type limitWriter struct {
-	w io.Writer
-	n int
-}
-
-func (l *limitWriter) Write(p []byte) (int, error) {
-	orig := len(p)
-	if l.n <= 0 || orig == 0 {
-		return orig, nil
-	}
-	write := p
-	if len(write) > l.n {
-		write = write[:l.n]
-	}
-	n, err := l.w.Write(write)
-	l.n -= n
-	if err != nil || n < len(write) {
-		return n, err
-	}
-	return orig, nil
-}
+const maxCursorLine = maxCLILine

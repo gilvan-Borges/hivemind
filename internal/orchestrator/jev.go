@@ -592,6 +592,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				Model:             choice.Model,
 				Tier:              string(choice.Tier),
 				Reasons:           append([]string(nil), choice.Reasons...),
+				DiscountPct:       choice.DiscountPct,
 				EstimatedMicroUSD: choice.EstimatedMicroUSD,
 				DecisionMicros:    choice.DecisionMicros,
 			})

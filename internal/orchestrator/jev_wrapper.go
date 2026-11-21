@@ -403,6 +403,13 @@ func (w *jevModelWrapper) recordSuccessAndSpend(ch jev.Choice, resp *model.LLMRe
 	}
 	inTok := int64(resp.UsageMetadata.PromptTokenCount)
 	outTok := int64(resp.UsageMetadata.CandidatesTokenCount)
+	cachedTok := int64(resp.UsageMetadata.CachedContentTokenCount)
+	if cachedTok < 0 {
+		cachedTok = 0
+	}
+	if cachedTok > inTok {
+		cachedTok = inTok
+	}
 	if inTok <= 0 && outTok <= 0 {
 		return
 	}
@@ -410,7 +417,14 @@ func (w *jevModelWrapper) recordSuccessAndSpend(ch jev.Choice, resp *model.LLMRe
 		return
 	}
 	if entry, ok := w.catalog.Snapshot().Lookup(ch.Provider, ch.Model); ok {
-		cost := float64(inTok)*entry.PromptMicroUSD + float64(outTok)*entry.CompletionMicroUSD
+		// Custo real (Spec 06 §4): desconto ativo aplicado e tokens lidos do
+		// cache de prompt cobrados a 10% do preço (a taxa de cache-read usada
+		// por Anthropic/OpenRouter) em vez de preço cheio — sem isso o spend
+		// diário era superestimado em até 10x.
+		disc := 1.0 - float64(ch.DiscountPct)/100.0
+		fresh := float64(inTok - cachedTok)
+		cached := float64(cachedTok)
+		cost := disc*(fresh*entry.PromptMicroUSD+float64(outTok)*entry.CompletionMicroUSD) + disc*0.1*cached*entry.PromptMicroUSD
 		if cost > 0 {
 			w.health.RecordSpend(ch.Provider, int64(math.Round(cost)))
 		}

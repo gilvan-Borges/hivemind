@@ -14,6 +14,7 @@ export type ModelProviderId =
   | "opencode-go"
   | "opencode"
   | "gemini"
+  | "vertex"
   | "anthropic"
   | "openai"
   | "openrouter"
@@ -48,6 +49,7 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
     if (pref === "opencode-go") return "opencode-go";
     if (pref === "opencode") return "opencode";
     if (pref === "gemini") return "gemini";
+    if (pref === "vertex") return "vertex";
     if (pref === "anthropic") return "anthropic";
     if (pref === "openai") return "openai";
     if (pref === "cursor") return "cursor";
@@ -62,6 +64,7 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   if (low.startsWith("opencode-go:") || low.startsWith("opencode-go/")) return "opencode-go";
   if (low.startsWith("opencode:") || low.startsWith("opencode/") || low === "opencode") return "opencode";
   if (low === "agy" || low.startsWith("agy:") || state.models.some((m) => m.slug.toLowerCase() === low)) return "agy";
+  if (low === "vertex" || low.startsWith("vertex:") || low.startsWith("vertex/")) return "vertex";
   if (low.includes("/")) return "openrouter";
   if (low.startsWith("gemini")) return "gemini";
   if (low.startsWith("claude")) return "anthropic";
@@ -107,6 +110,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   });
   out.push(
     { id: "gemini", label: "Google Gemini" },
+    { id: "vertex", label: "Vertex AI (Google Cloud)" },
     { id: "anthropic", label: "Anthropic (Claude)" },
     { id: "openai", label: "OpenAI / Grok" },
   );
@@ -138,6 +142,7 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         { value: "jev:opencode", label: "opencode — Só modelos do OpenCode Go/Zen (Jev escolhe)" },
         { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe c/ Pool de Contas)" },
         { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
+        { value: "jev:vertex", label: "vertex — Só modelos do Vertex AI/Google Cloud (Jev escolhe)" },
       ];
     case "agy": {
       const agyProfiles = (state.profilesOverview?.profiles || []).filter((p) => p.provider === "agy");
@@ -186,6 +191,16 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
         { value: "gemini-2.5-pro", label: "gemini-2.5-pro" },
         { value: "gemini-2.5-flash", label: "gemini-2.5-flash" },
         { value: "gemini-flash-latest", label: "gemini-flash-latest" },
+      ];
+      break;
+    case "vertex":
+      // Vertex AI (Spec Jev §2 / W2-10): mesmo catálogo Gemini servido pelo
+      // backend Google Cloud (GOOGLE_CLOUD_PROJECT, sem GOOGLE_API_KEY).
+      items = [
+        { value: "vertex:auto", label: "auto (Jev escolhe no Vertex)" },
+        { value: "vertex:gemini-2.5-pro", label: "gemini-2.5-pro" },
+        { value: "vertex:gemini-2.5-flash", label: "gemini-2.5-flash" },
+        { value: "vertex:gemini-flash-latest", label: "gemini-flash-latest" },
       ];
       break;
     case "anthropic":

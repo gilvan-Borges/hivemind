@@ -173,12 +173,12 @@ func TestLimitWriterReportsFullLength(t *testing.T) {
 	}
 }
 
-func TestReadCursorStreamSkipsOversizedLine(t *testing.T) {
+func TestReadCLIStreamSkipsOversizedLine(t *testing.T) {
 	first := "{\"type\":\"assistant\",\"timestamp_ms\":1,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"oi\"}]}}\n"
 	huge := strings.Repeat("y", 70*1024) + "\n"
 	last := "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"fim\"}\n"
 	var got []string
-	err := readCursorStream(strings.NewReader(first+huge+last), 1024, func(line string) bool {
+	err := readCLIStream(strings.NewReader(first+huge+last), 1024, func(line string) bool {
 		got = append(got, strings.TrimSpace(line))
 		return true
 	})

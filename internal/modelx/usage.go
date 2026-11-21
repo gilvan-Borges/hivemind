@@ -1,6 +1,7 @@
 package modelx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -106,7 +107,19 @@ type usageEvent struct {
 	InputTokens  int64     `json:"in"`
 	OutputTokens int64     `json:"out"`
 	TotalTokens  int64     `json:"tot"`
+	// Telemetria de cache (Spec 06 §4): tokens lidos/escritos em cache de
+	// prompt e o desconto ativo — sem isso o custo real é superestimado em
+	// até 10x e promoções não aparecem na página de uso.
+	CachedReadTokens  int64 `json:"cachedRead,omitempty"`
+	CachedWriteTokens int64 `json:"cachedWrite,omitempty"`
+	DiscountPct       int   `json:"discountPct,omitempty"`
 }
+
+// usageEventsMaxBytes rotates ai-usage.jsonl at 20 MiB, keeping a single
+// previous file — same policy as outcomes.jsonl.
+const usageEventsMaxBytes = 20 << 20
+
+const usageEventsPrevSuffix = ".1"
 
 type usageStoreFile struct {
 	Version int                       `json:"version"`
@@ -131,17 +144,27 @@ var (
 )
 
 // usageMem buffers ledger events so RecordAIUsage does not rewrite the whole
-// JSON file on every call. A crash loses only the events since the last flush.
-// pending and limitEdits are this process's unsaved delta. The flush re-reads
-// the file under an exclusive lock and merges that delta, so a concurrent IDE,
-// CLI, or hivemind serve does not lose its own writes.
+// file on every call. Events live in ai-usage.jsonl (append-only + rotation at
+// usageEventsMaxBytes — Spec 06 §4: "flushUsageLocked reescreve 31 dias de
+// histórico a cada 2s"); the legacy ai-usage.json keeps ONLY limits now and is
+// rewritten solely on explicit limit edits. A crash loses only the events since
+// the last flush; a concurrent IDE, CLI, or hivemind serve appends its own
+// lines under the same exclusive lock.
 type usageMem struct {
-	path       string
-	store      usageStoreFile
-	pending    []usageEvent
-	limitEdits map[string]limitEdit
-	dirty      bool
-	modTime    time.Time
+	base      string // legacy/limits file (ai-usage.json)
+	path      string // append-only event ledger (ai-usage.jsonl)
+	store     usageStoreFile
+	pending   []usageEvent
+	dirty     bool
+	modTime   time.Time
+}
+
+// usageLedgerPath maps the legacy ai-usage.json base to the append-only ledger.
+func usageLedgerPath(base string) string {
+	if strings.HasSuffix(base, ".json") {
+		return strings.TrimSuffix(base, ".json") + ".jsonl"
+	}
+	return base + ".jsonl"
 }
 
 type limitEdit struct {
@@ -222,9 +245,9 @@ func ensureUsageLocked() error {
 	if err != nil {
 		return err
 	}
-	if usageMemState != nil && usageMemState.path == path {
+	if usageMemState != nil && usageMemState.base == path {
 		if !usageMemState.dirty {
-			if info, statErr := os.Stat(path); statErr == nil && info.ModTime().After(usageMemState.modTime) {
+			if info, statErr := os.Stat(usageMemState.path); statErr == nil && info.ModTime().After(usageMemState.modTime) {
 				return loadUsageMemLocked(path)
 			}
 		}
@@ -236,27 +259,77 @@ func ensureUsageLocked() error {
 	return loadUsageMemLocked(path)
 }
 
-func loadUsageMemLocked(path string) error {
+// loadUsageMemLocked builds the in-memory store: limits + one-time legacy
+// event import from the base file, then the append-only JSONL ledger (plus
+// its rotated sibling). Events older than 31 days are dropped from memory;
+// the physical prune happens on rotation only.
+func loadUsageMemLocked(base string) error {
 	store := usageStoreFile{
 		Version: 1,
 		Limits:  make(map[string]ProviderLimits),
 	}
 	var mod time.Time
-	data, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(data, &store)
-		if store.Version == 0 {
-			store.Version = 1
-		}
-		if store.Limits == nil {
-			store.Limits = make(map[string]ProviderLimits)
-		}
-		if info, statErr := os.Stat(path); statErr == nil {
-			mod = info.ModTime()
+
+	legacyMigrated := false
+	if data, err := os.ReadFile(base); err == nil {
+		var legacy usageStoreFile
+		if json.Unmarshal(data, &legacy) == nil {
+			for k, v := range legacy.Limits {
+				store.Limits[k] = v
+			}
+			if len(legacy.Events) > 0 {
+				// Migration: the legacy mixed file still carries events —
+				// import them once and rewrite it holding ONLY limits.
+				store.Events = append(store.Events, legacy.Events...)
+				legacyMigrated = true
+			}
 		}
 	}
-	usageMemState = &usageMem{path: path, store: store, modTime: mod}
+	ledger := usageLedgerPath(base)
+	for _, p := range []string{ledger + usageEventsPrevSuffix, ledger} {
+		loadUsageJSONLInto(p, &store)
+	}
+	if info, statErr := os.Stat(ledger); statErr == nil {
+		mod = info.ModTime()
+	}
+	cutoff := time.Now().Add(-31 * 24 * time.Hour)
+	kept := store.Events[:0]
+	for _, ev := range store.Events {
+		if ev.Timestamp.Before(cutoff) {
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	store.Events = kept
+	usageMemState = &usageMem{base: base, path: ledger, store: store, modTime: mod}
+	if legacyMigrated {
+		if err := writeUsageAtomic(base, usageStoreFile{Version: 1, Limits: store.Limits}); err == nil {
+			usageMemState.dirty = false
+		}
+	}
 	return nil
+}
+
+// loadUsageJSONLInto folds one append-only ledger file into store.
+func loadUsageJSONLInto(path string, store *usageStoreFile) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 4096), 1<<20)
+	for sc.Scan() {
+		raw := strings.TrimSpace(sc.Text())
+		if raw == "" || !strings.HasPrefix(raw, "{") {
+			continue
+		}
+		var ev usageEvent
+		if json.Unmarshal([]byte(raw), &ev) != nil {
+			continue
+		}
+		store.Events = append(store.Events, ev)
+	}
 }
 
 func flushUsageLocked() error {
@@ -264,7 +337,24 @@ func flushUsageLocked() error {
 		usageFlushTimer.Stop()
 		usageFlushTimer = nil
 	}
-	if usageMemState == nil || !usageMemState.dirty {
+	if usageMemState == nil || (!usageMemState.dirty && len(usageMemState.pending) == 0) {
+		return nil
+	}
+	if err := appendUsageEventsLocked(); err != nil {
+		return err
+	}
+	usageMemState.pending = nil
+	usageMemState.dirty = false
+	if info, statErr := os.Stat(usageMemState.path); statErr == nil {
+		usageMemState.modTime = info.ModTime()
+	}
+	return nil
+}
+
+// appendUsageEventsLocked appends the pending events to the JSONL ledger under
+// the cross-process lock — no read-modify-write, no rewrite of history.
+func appendUsageEventsLocked() error {
+	if usageMemState == nil || len(usageMemState.pending) == 0 {
 		return nil
 	}
 	unlock, err := lockUsageFile(usageMemState.path)
@@ -273,27 +363,52 @@ func flushUsageLocked() error {
 	}
 	defer unlock()
 
-	disk := readUsageFile(usageMemState.path)
-	merged := mergeUsage(disk, usageMemState.pending, usageMemState.limitEdits)
-	cutoff := time.Now().Add(-31 * 24 * time.Hour)
-	pruned := make([]usageEvent, 0, len(merged.Events))
-	for _, ev := range merged.Events {
-		if !ev.Timestamp.Before(cutoff) {
-			pruned = append(pruned, ev)
-		}
-	}
-	merged.Events = pruned
-	if err := writeUsageAtomic(usageMemState.path, merged); err != nil {
+	if err := rotateUsageLedgerLocked(); err != nil {
 		return err
 	}
-	usageMemState.store = merged
-	usageMemState.pending = nil
-	usageMemState.limitEdits = nil
-	usageMemState.dirty = false
-	if info, statErr := os.Stat(usageMemState.path); statErr == nil {
-		usageMemState.modTime = info.ModTime()
+	f, err := os.OpenFile(usageMemState.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
 	}
-	return nil
+	w := bufio.NewWriter(f)
+	for _, ev := range usageMemState.pending {
+		line, merr := json.Marshal(ev)
+		if merr != nil {
+			continue
+		}
+		w.Write(line)
+		w.WriteByte('\n')
+	}
+	werr := w.Flush()
+	serr := f.Sync()
+	cerr := f.Close()
+	_ = os.Chmod(usageMemState.path, 0o600)
+	if werr != nil {
+		return werr
+	}
+	if serr != nil {
+		return serr
+	}
+	return cerr
+}
+
+// rotateUsageLedgerLocked moves a full ledger aside (single previous file).
+func rotateUsageLedgerLocked() error {
+	info, err := os.Stat(usageMemState.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Size() < usageEventsMaxBytes {
+		return nil
+	}
+	prev := usageMemState.path + usageEventsPrevSuffix
+	if err := os.Remove(prev); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(usageMemState.path, prev)
 }
 
 func readUsageFile(path string) usageStoreFile {
@@ -382,10 +497,17 @@ func resetUsageMemForTest() {
 
 // RecordAIUsage appends one completed LLM call's token counts into the local HiveMind usage ledger.
 func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
+	RecordAIUsageDetailed(provider, modelSpec, inTok, outTok, totTok, 0, 0, 0)
+}
+
+// RecordAIUsageDetailed is the full telemetry entry point (Spec 06 §4): the
+// orchestrator calls it directly so CLI/TUI runs count exactly like IDE runs,
+// and prompt-cache tokens plus the active discount travel with the event.
+func RecordAIUsageDetailed(provider, modelSpec string, inTok, outTok, totTok, cachedReadTok, cachedWriteTok int64, discountPct int) {
 	if totTok == 0 && (inTok > 0 || outTok > 0) {
 		totTok = inTok + outTok
 	}
-	if totTok <= 0 && inTok <= 0 && outTok <= 0 {
+	if totTok <= 0 && inTok <= 0 && outTok <= 0 && cachedReadTok <= 0 && cachedWriteTok <= 0 {
 		return
 	}
 	bucket := CanonicalUsageProvider(provider, modelSpec)
@@ -395,12 +517,15 @@ func RecordAIUsage(provider, modelSpec string, inTok, outTok, totTok int64) {
 		return
 	}
 	ev := usageEvent{
-		Timestamp:    time.Now().UTC(),
-		Provider:     bucket,
-		Model:        strings.TrimSpace(modelSpec),
-		InputTokens:  inTok,
-		OutputTokens: outTok,
-		TotalTokens:  totTok,
+		Timestamp:         time.Now().UTC(),
+		Provider:          bucket,
+		Model:             strings.TrimSpace(modelSpec),
+		InputTokens:       inTok,
+		OutputTokens:      outTok,
+		TotalTokens:        totTok,
+		CachedReadTokens:  cachedReadTok,
+		CachedWriteTokens: cachedWriteTok,
+		DiscountPct:       discountPct,
 	}
 	usageMemState.store.Events = append(usageMemState.store.Events, ev)
 	usageMemState.pending = append(usageMemState.pending, ev)
@@ -425,19 +550,33 @@ func SaveAIUsageLimits(provider string, fiveHourTokens, weeklyTokens int64) erro
 	if usageMemState.store.Limits == nil {
 		usageMemState.store.Limits = make(map[string]ProviderLimits)
 	}
-	if usageMemState.limitEdits == nil {
-		usageMemState.limitEdits = make(map[string]limitEdit)
-	}
+	value := ProviderLimits{FiveHourTokens: fiveHourTokens, WeeklyTokens: weeklyTokens}
 	if fiveHourTokens == 0 && weeklyTokens == 0 {
 		delete(usageMemState.store.Limits, bucket)
-		usageMemState.limitEdits[bucket] = limitEdit{remove: true}
 	} else {
-		value := ProviderLimits{FiveHourTokens: fiveHourTokens, WeeklyTokens: weeklyTokens}
 		usageMemState.store.Limits[bucket] = value
-		usageMemState.limitEdits[bucket] = limitEdit{value: value}
 	}
-	usageMemState.dirty = true
-	return flushUsageLocked()
+	// Limits são raras e pequenas: read-modify-write do arquivo base sob o
+	// lock exclusivo preserva os limites gravados por outro processo.
+	unlock, lerr := lockUsageFile(usageMemState.base)
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
+	disk := readUsageFile(usageMemState.base)
+	if disk.Limits == nil {
+		disk.Limits = make(map[string]ProviderLimits)
+	}
+	if fiveHourTokens == 0 && weeklyTokens == 0 {
+		delete(disk.Limits, bucket)
+	} else {
+		disk.Limits[bucket] = value
+	}
+	disk.Events = nil
+	if err := writeUsageAtomic(usageMemState.base, disk); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ParseOpenCodeUsageJSON parses the OpenCode Go usage response JSON into OpenCodeQuota.
@@ -683,7 +822,7 @@ func FetchAgyUsage(ctx context.Context) AgyQuota {
 	}
 	defer os.RemoveAll(dir)
 
-	cmd := agyCommand(runCtx, bin, []string{
+	cmd := cliCommand(runCtx, bin, []string{
 		"--output-format", "json",
 		"--print-timeout", "12s",
 		"--print=/usage",

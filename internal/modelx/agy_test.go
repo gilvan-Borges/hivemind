@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -212,7 +213,10 @@ func TestAgyAuthAndMissingBinary(t *testing.T) {
 }
 
 func TestAgyCmdWrapper(t *testing.T) {
-	cmd := agyCommand(context.Background(), `C:\Tools\agy.cmd`, []string{"-p", "oi"})
+	if runtime.GOOS != "windows" {
+		t.Skip("wrap .cmd/.bat é exclusivo do Windows no cliCommand unificado")
+	}
+	cmd := cliCommand(context.Background(), `C:\Tools\agy.cmd`, []string{"-p", "oi"})
 	if cmd.Path != "cmd.exe" && !strings.HasSuffix(strings.ToLower(cmd.Path), "cmd.exe") {
 		t.Fatalf("path = %s", cmd.Path)
 	}

@@ -239,8 +239,9 @@ func TestRecordAIUsageBuffersUntilFlush(t *testing.T) {
 	t.Setenv("OPENCODE_ZEN_API_KEY", "")
 
 	RecordAIUsage("agy", "agy:gemini-4-neon-high", 10, 1, 11)
-	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
-		t.Fatalf("a chamada não deveria regravar o JSON: %v", err)
+	ledger := tmp + "l" // ai-usage.jsonl — ledger append-only
+	if _, err := os.Stat(ledger); !os.IsNotExist(err) {
+		t.Fatalf("a chamada não deveria gravar o ledger: %v", err)
 	}
 	rep := GetAIUsageReport(context.Background())
 	var agy *AIProviderUsage
@@ -254,22 +255,19 @@ func TestRecordAIUsageBuffersUntilFlush(t *testing.T) {
 	}
 
 	FlushAIUsage()
-	info, err := os.Stat(tmp)
+	info, err := os.Stat(ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(tmp + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal("gravação atômica deixou o arquivo temporário")
-	}
 	RecordAIUsage("agy", "agy:gemini-4-neon-high", 3, 1, 4)
-	info2, err := os.Stat(tmp)
+	info2, err := os.Stat(ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info2.ModTime().Equal(info.ModTime()) || info2.Size() != info.Size() {
-		t.Fatal("a segunda chamada regravou o arquivo inteiro")
+		t.Fatal("a segunda chamada regravou o ledger inteiro")
 	}
-	data, err := os.ReadFile(tmp)
+	data, err := os.ReadFile(ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,21 +317,51 @@ func TestRecordAIUsagePrunesAfter31Days(t *testing.T) {
 		t.Fatal(err)
 	}
 	useUsageFile(t, tmp)
+	// O load importa os eventos legados UMA vez e regrava o arquivo base só
+	// com limites; a retenção de 31 dias cai na memória, não no ledger.
 	RecordAIUsage("agy", "agy:new", 2, 1, 3)
+	rep := GetAIUsageReport(context.Background())
+	var agy *AIProviderUsage
+	for i := range rep.Providers {
+		if rep.Providers[i].Provider == "agy" {
+			agy = &rep.Providers[i]
+		}
+	}
+	if agy == nil || agy.Window5h.TotalTokens != 3 || agy.Window5h.Calls != 1 {
+		t.Fatalf("evento com 40 dias não deve aparecer no relatório: %+v", agy)
+	}
+	var cursor *AIProviderUsage
+	for i := range rep.Providers {
+		if rep.Providers[i].Provider == "cursor" {
+			cursor = &rep.Providers[i]
+		}
+	}
+	if cursor == nil || cursor.Limits.WeeklyTokens != 42 {
+		t.Fatalf("limites antigos sumiram na migração: %+v", cursor)
+	}
 	FlushAIUsage()
-	data, err := os.ReadFile(tmp)
+	ledger := tmp + "l"
+	data, err := os.ReadFile(ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Count(string(data), `"tot":`) != 1 || strings.Contains(string(data), "agy:old") {
+		t.Fatalf("ledger deveria ter só o evento novo: %s", data)
+	}
+	// A migração deixa o base file só com limites (sem eventos históricos).
+	base, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(base), "agy:old") {
+		t.Fatalf("base file ainda carrega eventos legados: %s", base)
+	}
 	var store usageStoreFile
-	if err := json.Unmarshal(data, &store); err != nil {
+	if err := json.Unmarshal(base, &store); err != nil {
 		t.Fatal(err)
 	}
 	if store.Limits["cursor"].WeeklyTokens != 42 {
 		t.Fatalf("limites antigos: %+v", store.Limits)
-	}
-	if len(store.Events) != 1 || store.Events[0].TotalTokens != 3 || strings.Contains(string(data), "agy:old") {
-		t.Fatalf("retenção de 31 dias: %+v", store.Events)
 	}
 }
 
@@ -342,6 +370,8 @@ func TestFlushMergesLedgerWrittenByAnotherProcess(t *testing.T) {
 	useUsageFile(t, tmp)
 
 	RecordAIUsage("agy", "agy:local", 4, 1, 5)
+	// Outro processo (CLI / IDE) escreve um evento legado no arquivo base
+	// enquanto este processo tem buffer pendente.
 	other := usageStoreFile{
 		Version: 1,
 		Events: []usageEvent{{
@@ -359,28 +389,39 @@ func TestFlushMergesLedgerWrittenByAnotherProcess(t *testing.T) {
 	}
 	FlushAIUsage()
 
-	data, err := os.ReadFile(tmp)
+	// O ledger deste processo preserva o evento local (append-only).
+	ledger := tmp + "l"
+	data, err := os.ReadFile(ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var store usageStoreFile
-	if err := json.Unmarshal(data, &store); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(string(data), "agy:local") {
+		t.Fatalf("ledger sem o evento local: %s", data)
 	}
-	if store.Limits["cursor"].WeeklyTokens != 77 {
-		t.Fatalf("limite do outro processo sumiu: %+v", store.Limits)
-	}
+
+	// Um reload (novo processo / próximo report) importa o evento legado do
+	// outro processo sem perder o do ledger, e preserva o limite cursor:77.
+	resetUsageMemForTest()
+	t.Setenv("OPENCODE_API_KEY", "")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "")
+	rep := GetAIUsageReport(context.Background())
 	var sawLocal, sawOther bool
-	for _, ev := range store.Events {
-		if ev.Model == "agy:local" && ev.TotalTokens == 5 {
+	var cursor *AIProviderUsage
+	for i := range rep.Providers {
+		p := &rep.Providers[i]
+		if p.Provider == "agy" && p.Window5h.TotalTokens == 5 {
 			sawLocal = true
 		}
-		if ev.Provider == "cursor" && ev.TotalTokens == 10 {
+		if p.Provider == "cursor" && p.Window5h.TotalTokens == 10 {
 			sawOther = true
+			cursor = p
 		}
 	}
 	if !sawLocal || !sawOther {
-		t.Fatalf("eventos dos dois processos: %+v", store.Events)
+		t.Fatalf("eventos dos dois processos: local=%v other=%v", sawLocal, sawOther)
+	}
+	if cursor == nil || cursor.Limits.WeeklyTokens != 77 {
+		t.Fatalf("limite do outro processo sumiu: %+v", cursor)
 	}
 }
 

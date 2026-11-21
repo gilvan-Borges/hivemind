@@ -67,6 +67,7 @@ type Event struct {
 	FromModel         string                   `json:"fromModel,omitempty"`
 	Tier              string                   `json:"tier,omitempty"`
 	Reasons           []string                 `json:"reasons,omitempty"`
+	DiscountPct       int                      `json:"discountPct,omitempty"`
 	EstimatedMicroUSD int64                    `json:"estimatedMicroUsd,omitempty"`
 	DecisionMicros    int64                    `json:"decisionMicros,omitempty"`
 	Health            []jev.ProviderHealthView `json:"health,omitempty"`
@@ -148,6 +149,11 @@ type Runner struct {
 	devBudgets       map[string]*devTurnBudget
 	resolvedChoiceMu sync.Mutex
 	lastWorkingRoute team.Agent
+	// routedModels/routedDiscount guardam a última rota e o desconto ativo
+	// por agente — o recordUsage central usa isso para o ledger de uso
+	// (Spec 06 §4: CLI/TUI passam a contar igual à IDE).
+	routedModels  map[string][2]string
+	routedDiscount map[string]int
 }
 
 // devTurnBudget tracks, per developer agent and per Dev↔QA round, how many LLM
@@ -1049,12 +1055,41 @@ func (r *Runner) wrapRouteEvent(next func(Event)) func(Event) {
 		if (ev.Kind == "model_route" || ev.Kind == "provider_failover") && strings.TrimSpace(ev.Provider) != "" && strings.TrimSpace(ev.Model) != "" {
 			r.resolvedChoiceMu.Lock()
 			r.lastWorkingRoute = team.Agent{Provider: ev.Provider, Model: ev.Model}
+			if strings.TrimSpace(ev.Author) != "" {
+				if r.routedModels == nil {
+					r.routedModels = map[string][2]string{}
+				}
+				r.routedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
+				if ev.DiscountPct > 0 {
+					if r.routedDiscount == nil {
+						r.routedDiscount = map[string]int{}
+					}
+					r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))] = ev.DiscountPct
+				}
+			}
 			r.resolvedChoiceMu.Unlock()
 		}
 		if next != nil {
 			next(ev)
 		}
 	}
+}
+
+// resolveAuthorRoute returns the (provider, model) pair last routed for the
+// agent, falling back to the team config for pinned (non-Jev) agents.
+func (r *Runner) resolveAuthorRoute(author string) (string, string) {
+	r.resolvedChoiceMu.Lock()
+	rm := r.routedModels[strings.ToLower(strings.TrimSpace(author))]
+	r.resolvedChoiceMu.Unlock()
+	if rm[0] != "" {
+		return rm[0], rm[1]
+	}
+	for _, a := range r.Team.Agents {
+		if strings.EqualFold(a.Name, author) {
+			return team.NormalizeProvider(a.Provider, a.Model), a.Model
+		}
+	}
+	return "", ""
 }
 
 func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool, ownedPaths []string) (agent.Agent, error) {
@@ -2036,6 +2071,20 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	r.turnInputTokens += int64(inTok)
 	r.turnOutputTokens += int64(outTok)
 	r.turnTotalTokens += int64(totTok)
+
+	// Ledger central (Spec 06 §4): o ORQUESTRADOR registra o uso — CLI, TUI e
+	// IDE contam igual, com tokens de cache e desconto da rota.
+	prov, mod := r.resolveAuthorRoute(ev.Author)
+	if prov != "" {
+		r.resolvedChoiceMu.Lock()
+		disc := r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))]
+		r.resolvedChoiceMu.Unlock()
+		var cachedRead int64
+		if u.CachedContentTokenCount > 0 {
+			cachedRead = int64(u.CachedContentTokenCount)
+		}
+		modelx.RecordAIUsageDetailed(prov, mod, int64(inTok), int64(outTok), int64(totTok), cachedRead, 0, disc)
+	}
 
 	if r.OnEvent != nil {
 		label := labels[ev.Author]

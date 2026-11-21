@@ -98,6 +98,10 @@ type Config struct {
 	// ExperimentalUnisolated libera browser_open, desktop_click e desktop_type
 	// na sessão real. O padrão é falso: sem o campo, a política continua recusando.
 	ExperimentalUnisolated bool `json:"experimentalUnisolated,omitempty"`
+	// JevFailover (SPEC_JEV_ORQUESTRADOR / W2-10): failover opcional do
+	// resident — quando ligado, uma rota que falha em construir aciona o
+	// Score novamente excluindo o par que falhou, em vez de abortar o turno.
+	JevFailover bool `json:"jevFailover,omitempty"`
 }
 
 // MemoryFact is one personal long-term memory record stored in

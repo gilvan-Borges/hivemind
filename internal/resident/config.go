@@ -164,21 +164,40 @@ func buildThroughJev(ctx context.Context, cfg Config, deps jevRouteDeps) (model.
 	} else if pres := modelx.JevCredentialPresence(); pres != nil {
 		health.Credentials = pres
 	}
-	choice, ref := jev.Score(jev.Task{
-		Role:        "resident",
-		Class:       class,
-		Complexity:  comp,
-		InputTokens: tokens,
-		NeedsTools:  true,
-	}, cat, pol, health, pin, jev.RepoPolicy{})
-	if ref.Code != "" {
-		return nil, "", "", fmt.Errorf("jev recusou a rota do residente (%s)", ref.Code)
+	// Failover Jev opcional (SPEC_JEV_ORQUESTRADOR / W2-10): com cfg.JevFailover
+	// ligado, uma falha de build não aborta o resident — o Score re-avalia
+	// excluindo o par que falhou. Sem o flag, comportamento original (1 tentativa).
+	excludePairs := map[string]bool{}
+	attempts := 1
+	if cfg.JevFailover {
+		attempts = 3
 	}
-	llm, err := build(ctx, choice.Provider, choice.Model)
-	if err != nil {
-		return nil, choice.Provider, choice.Model, fmt.Errorf("inicializar modelo do residente (%s / %s): %w", choice.Provider, choice.Model, err)
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		snapHealth := health
+		snapHealth.ExcludePairs = excludePairs
+		choice, ref := jev.Score(jev.Task{
+			Role:        "resident",
+			Class:       class,
+			Complexity: comp,
+			InputTokens: tokens,
+			NeedsTools:  true,
+		}, cat, pol, snapHealth, pin, jev.RepoPolicy{})
+		if ref.Code != "" {
+			lastErr = fmt.Errorf("jev recusou a rota do residente (%s)", ref.Code)
+			break
+		}
+		llm, err := build(ctx, choice.Provider, choice.Model)
+		if err == nil {
+			return llm, choice.Provider, choice.Model, nil
+		}
+		lastErr = fmt.Errorf("inicializar modelo do residente (%s / %s): %w", choice.Provider, choice.Model, err)
+		if !cfg.JevFailover {
+			break
+		}
+		excludePairs[strings.ToLower(choice.Provider)+"\x00"+choice.Model] = true
 	}
-	return llm, choice.Provider, choice.Model, nil
+	return nil, "", "", lastErr
 }
 
 func explicitResidentPin(cfg Config) bool {

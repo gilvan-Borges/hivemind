@@ -8,7 +8,7 @@ import (
 )
 
 func TestCursorCommandHidesWindowOnWindows(t *testing.T) {
-	cmd := cursorCommand(context.Background(), `C:\Tools\agent.cmd`, []string{"models"})
+	cmd := cliCommand(context.Background(), `C:\Tools\agent.cmd`, []string{"models"})
 	if cmd.SysProcAttr == nil {
 		t.Fatal("SysProcAttr nil: janela de cmd.exe abriria no Windows")
 	}

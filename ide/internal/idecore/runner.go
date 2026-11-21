@@ -868,13 +868,10 @@ func (m *SessionManager) RunTurnWithOptions(
 			routedMu.Unlock()
 		}
 		if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
-			prov, mod := resolveAgentProviderModel(selected, ev.Author)
-			routedMu.Lock()
-			if rm, ok := routedModels[strings.ToLower(strings.TrimSpace(ev.Author))]; ok && rm[0] != "" {
-				prov, mod = rm[0], rm[1]
-			}
-			routedMu.Unlock()
-			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+			// O ledger central de uso agora é gravado pelo próprio orquestrador
+			// (Runner.recordUsage — Spec 06 §4): CLI, TUI e IDE contam igual e
+			// esta camada não duplica mais o evento.
+			_ = ev
 		}
 		if ev.Kind == "finish" {
 			m.noteHostSignal("lane")
@@ -1099,15 +1096,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 			autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))] = [2]string{ev.Provider, ev.Model}
 			autoRoutedMu.Unlock()
 		}
-		if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
-			prov, mod := resolveAgentProviderModel(selected, ev.Author)
-			autoRoutedMu.Lock()
-			if rm, ok := autoRoutedModels[strings.ToLower(strings.TrimSpace(ev.Author))]; ok && rm[0] != "" {
-				prov, mod = rm[0], rm[1]
-			}
-			autoRoutedMu.Unlock()
-			modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
-		}
+		// Uso gravado centralmente pelo orquestrador (Spec 06 §4): sem duplicar aqui.
 		if ev.Kind == "finish" {
 			m.noteHostSignal("lane")
 		}
