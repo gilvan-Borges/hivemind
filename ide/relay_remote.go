@@ -51,6 +51,23 @@ func (a *App) RelayLogin(baseURL, email, password string) (relayclient.Status, e
 	})
 }
 
+// RelayChangePassword updates the signed-in relay account password.
+func (a *App) RelayChangePassword(current, next string) (relayclient.Status, error) {
+	return a.relayCall(func(ctx context.Context) (relayclient.Status, error) {
+		return a.relay.ChangePassword(ctx, current, next)
+	})
+}
+
+// RelayCreateAccount creates a member account on the relay (owner only).
+func (a *App) RelayCreateAccount(email, password string) error {
+	if a.relay == nil {
+		return errors.New("cliente do relay não inicializado")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return a.relay.CreateAccount(ctx, email, password)
+}
+
 // RelayLogout revokes the user session and turns the tunnel off.
 func (a *App) RelayLogout() (relayclient.Status, error) {
 	return a.relayCall(func(ctx context.Context) (relayclient.Status, error) {

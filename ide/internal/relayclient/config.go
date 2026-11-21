@@ -14,6 +14,7 @@ import (
 type Config struct {
 	BaseURL       string `json:"baseUrl,omitempty"`
 	Email         string `json:"email,omitempty"`
+	Role          string `json:"role,omitempty"`
 	RefreshToken  string `json:"refreshToken,omitempty"`
 	DeviceID      string `json:"deviceId,omitempty"`
 	DeviceToken   string `json:"deviceToken,omitempty"`

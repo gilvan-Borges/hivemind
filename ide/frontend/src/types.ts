@@ -888,6 +888,7 @@ export interface RelayStatus {
   enabled: boolean;
   loggedIn: boolean;
   email: string;
+  role?: string;
   baseUrl: string;
   deviceId: string;
   deviceName: string;
@@ -1086,6 +1087,8 @@ export interface WailsBackendApp {
   MobilePairing?(): Promise<MobilePairing>;
   RelayStatus?(): Promise<RelayStatus>;
   RelayLogin?(baseURL: string, email: string, password: string): Promise<RelayStatus>;
+  RelayChangePassword?(current: string, next: string): Promise<RelayStatus>;
+  RelayCreateAccount?(email: string, password: string): Promise<void>;
   RelayLogout?(): Promise<RelayStatus>;
   RelaySetEnabled?(on: boolean): Promise<RelayStatus>;
   RelayCreateLinkCode?(): Promise<RelayLinkCode>;

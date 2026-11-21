@@ -101,7 +101,16 @@ export const state = {
   mobilePairing: null as MobilePairing | null,
   relayStatus: null as RelayStatus | null,
   relayLink: null as RelayLinkCode | null,
-  relayDraft: { baseUrl: "", email: "", password: "", claim: "" },
+  relayDraft: {
+    baseUrl: "",
+    email: "",
+    password: "",
+    claim: "",
+    currentPassword: "",
+    newPassword: "",
+    newUserEmail: "",
+    newUserPassword: "",
+  },
   aiUsagePage: {
     loading: false,
     report: null as AIUsageReport | null,

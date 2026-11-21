@@ -1180,19 +1180,58 @@ export function renderModalLayer() {
               <strong>WebSocket de saída</strong>. O tráfego do bridge vai cifrado de ponta a ponta; a LAN acima não muda.
             </p>
             <div id="relay-status-line" class="relay-status">${relayStatusLine()}</div>
+            ${!state.relayStatus?.loggedIn ? `
+              <div class="dim" style="font-size:11px;line-height:1.45;margin:8px 0;padding:8px 10px;border:1px dashed var(--border);border-radius:6px">
+                <strong>Primeiro acesso:</strong> o usuário inicial é criado no servidor do relay com
+                <code>HIVEMIND_SEED_EMAIL</code> / <code>HIVEMIND_SEED_PASSWORD</code> (ou gerado em
+                <code>initial-password.txt</code>) ou via CLI:
+                <code>hivemind-relay account set --email &lt;usuário&gt; --password &lt;senha&gt; --role owner</code>.
+              </div>
+            ` : ""}
             <div class="form-grid" style="margin-top:10px">
               <label for="relay-url">URL do relay</label>
               <input id="relay-url" type="url" placeholder="https://relay.seudominio" value="${escapeHtml(state.relayDraft.baseUrl)}" autocomplete="off" />
-              <label for="relay-email">E-mail</label>
-              <input id="relay-email" type="email" placeholder="voce@exemplo" value="${escapeHtml(state.relayDraft.email)}" autocomplete="username" />
+              <label for="relay-email">E-mail ou usuário</label>
+              <input id="relay-email" type="text" placeholder="gilvan.b ou voce@exemplo" value="${escapeHtml(state.relayDraft.email)}" autocomplete="username" />
               <label for="relay-password">Senha</label>
-              <input id="relay-password" type="password" placeholder="não fica salva" value="${escapeHtml(state.relayDraft.password)}" autocomplete="current-password" />
+              <input id="relay-password" type="password" placeholder="mínimo 8 caracteres (não fica salva)" value="${escapeHtml(state.relayDraft.password)}" autocomplete="current-password" />
             </div>
             <div class="relay-actions">
               <button class="primary mini" id="relay-login" type="button">Entrar</button>
               <button class="mini" id="relay-toggle" type="button">${state.relayStatus?.enabled ? "Desligar acesso remoto" : "Ligar acesso remoto"}</button>
               <button class="mini" id="relay-logout" type="button">Sair da conta</button>
             </div>
+            ${state.relayStatus?.loggedIn ? `
+              <details style="margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+                <summary style="cursor:pointer;font-size:12px;font-weight:600">Gerenciar conta do relay (${escapeHtml(state.relayStatus.email)}${state.relayStatus.role ? ` · ${escapeHtml(state.relayStatus.role)}` : ""})</summary>
+                <div style="margin-top:10px">
+                  <div style="font-size:11px;font-weight:600;margin-bottom:6px">Trocar senha</div>
+                  <div class="form-grid">
+                    <label for="relay-cur-pass">Senha atual</label>
+                    <input id="relay-cur-pass" type="password" placeholder="Senha atual" value="${escapeHtml(state.relayDraft.currentPassword)}" autocomplete="current-password" />
+                    <label for="relay-new-pass">Nova senha</label>
+                    <input id="relay-new-pass" type="password" placeholder="Mínimo 8 caracteres" value="${escapeHtml(state.relayDraft.newPassword)}" autocomplete="new-password" />
+                  </div>
+                  <div class="relay-actions" style="margin-top:6px">
+                    <button class="mini" id="relay-change-pass-btn" type="button">Atualizar senha</button>
+                  </div>
+                </div>
+                ${state.relayStatus.role === "owner" ? `
+                  <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+                    <div style="font-size:11px;font-weight:600;margin-bottom:6px">Criar novo usuário (membro)</div>
+                    <div class="form-grid">
+                      <label for="relay-new-user-email">E-mail ou usuário</label>
+                      <input id="relay-new-user-email" type="text" placeholder="novo.usuario ou email@exemplo" value="${escapeHtml(state.relayDraft.newUserEmail)}" autocomplete="off" />
+                      <label for="relay-new-user-pass">Senha inicial</label>
+                      <input id="relay-new-user-pass" type="password" placeholder="Mínimo 8 caracteres" value="${escapeHtml(state.relayDraft.newUserPassword)}" autocomplete="new-password" />
+                    </div>
+                    <div class="relay-actions" style="margin-top:6px">
+                      <button class="mini" id="relay-create-user-btn" type="button">Criar usuário</button>
+                    </div>
+                  </div>
+                ` : ""}
+              </details>
+            ` : ""}
             ${state.relayStatus?.linked ? `
               <div class="dim" style="font-size:12px;margin-top:8px">
                 IDE vinculada${state.relayStatus.deviceName ? `: ${escapeHtml(state.relayStatus.deviceName)}` : ""}${state.relayStatus.e2e ? " · chave do celular instalada" : " · aguardando a chave do celular"}
@@ -1229,7 +1268,10 @@ export function renderModalLayer() {
       renderModalLayer();
     };
     startRelayPoll();
-    const bindDraft = (id: string, key: "baseUrl" | "email" | "password" | "claim") => {
+    const bindDraft = (
+      id: string,
+      key: "baseUrl" | "email" | "password" | "claim" | "currentPassword" | "newPassword" | "newUserEmail" | "newUserPassword",
+    ) => {
       document.getElementById(id)?.addEventListener("input", (ev) => {
         state.relayDraft[key] = (ev.target as HTMLInputElement).value;
       });
@@ -1238,6 +1280,10 @@ export function renderModalLayer() {
     bindDraft("relay-email", "email");
     bindDraft("relay-password", "password");
     bindDraft("relay-claim", "claim");
+    bindDraft("relay-cur-pass", "currentPassword");
+    bindDraft("relay-new-pass", "newPassword");
+    bindDraft("relay-new-user-email", "newUserEmail");
+    bindDraft("relay-new-user-pass", "newUserPassword");
     const showMbErr = (err: unknown) => {
       const errEl = document.getElementById("mb-modal-err");
       if (errEl) {
@@ -1327,6 +1373,43 @@ export function renderModalLayer() {
         state.relayLink = null;
         updateStatusBar();
         renderModalLayer();
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-change-pass-btn")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayChangePassword) return;
+      if (!state.relayDraft.currentPassword || state.relayDraft.newPassword.length < 8) {
+        showMbErr("Informe a senha atual e uma nova senha com pelo menos 8 caracteres.");
+        return;
+      }
+      try {
+        state.relayStatus = await backend.RelayChangePassword(state.relayDraft.currentPassword, state.relayDraft.newPassword);
+        state.relayDraft.currentPassword = "";
+        state.relayDraft.newPassword = "";
+        updateStatusBar();
+        renderModalLayer();
+        toast("Senha do relay atualizada.", "success");
+      } catch (err) {
+        showMbErr(err);
+      }
+    });
+    document.getElementById("relay-create-user-btn")?.addEventListener("click", async () => {
+      const backend = api();
+      if (!backend?.RelayCreateAccount) return;
+      const user = state.relayDraft.newUserEmail.trim();
+      const pass = state.relayDraft.newUserPassword;
+      if (user.length < 3 || pass.length < 8) {
+        showMbErr("Informe um e-mail ou usuário (mín. 3 caracteres) e senha com pelo menos 8 caracteres.");
+        return;
+      }
+      try {
+        await backend.RelayCreateAccount(user, pass);
+        state.relayDraft.newUserEmail = "";
+        state.relayDraft.newUserPassword = "";
+        renderModalLayer();
+        toast(`Usuário ${user} criado no relay.`, "success");
       } catch (err) {
         showMbErr(err);
       }
