@@ -174,13 +174,18 @@ func TestJevFailover429And402AndTimeout(t *testing.T) {
 				t.Fatalf("got %q, want %q (built=%v)", gotText, "ok de "+tc.wantSecondModel, built)
 			}
 			var sawFailover bool
+			var failoverInputTokens int32
 			for _, ev := range events {
 				if ev.Kind == "provider_failover" && ev.FromModel == "cheap/a" && ev.Model == tc.wantSecondModel {
 					sawFailover = true
+					failoverInputTokens = ev.InputTokens
 				}
 			}
 			if !sawFailover {
 				t.Fatalf("expected provider_failover event to %s, got %+v", tc.wantSecondModel, events)
+			}
+			if failoverInputTokens <= 0 {
+				t.Fatalf("provider_failover must report the estimated re-cache input tokens (request re-processed without prefix cache), got %d", failoverInputTokens)
 			}
 			snap := hs.Snapshot(nil, nil)
 			if tc.wantOpenRouterOff && snap.Circuits["openrouter"].Circuit != jev.CircuitOpen {

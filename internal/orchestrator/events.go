@@ -9,12 +9,33 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
+
+// compactionStatsCallback emits one "compact" event per pass that actually
+// trimmed payloads: token savings per agent become visible on the live event
+// stream instead of being silently applied. No-op passes stay silent to avoid
+// one event per model call.
+func (r *Runner) compactionStatsCallback(author, label string) func(contextx.Stats) {
+	return func(s contextx.Stats) {
+		if r.OnEvent == nil || s.Compacted <= 0 {
+			return
+		}
+		r.OnEvent(Event{
+			Kind:   "compact",
+			Stage:  inferStage(author, label),
+			Author: author,
+			Label:  label,
+			Detail: fmt.Sprintf("%d saídas antigas compactadas · ~%d tokens poupados", s.Compacted, s.TokensSaved),
+			Tokens: int32(s.TokensSaved),
+		})
+	}
+}
 
 func (r *Runner) resetTurnCosts() {
 	r.costMu.Lock()
