@@ -92,6 +92,11 @@ type Budget struct {
 	// OnCompact, when set, receives one Stats per pass that actually trimmed
 	// payloads. No-op passes stay silent to avoid event spam.
 	OnCompact func(Stats)
+	// MaxToolEntryBytes optionally caps individual older (non-latest-turn) tool
+	// outputs via head-and-tail truncation even before the global 55% compaction
+	// threshold fires (Codex subagent_default_context_limits pattern). Zero disables
+	// the proactive per-entry cap.
+	MaxToolEntryBytes int
 }
 
 func (b Budget) window() int {
@@ -218,6 +223,41 @@ func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
 	}
 }
 
+// ContextUsageRatio returns the estimated fraction (0.0..1.0+) of the model's
+// context window currently occupied by req.
+func ContextUsageRatio(req *model.LLMRequest, b Budget) float64 {
+	if req == nil || len(req.Contents) == 0 {
+		return 0
+	}
+	window := b.window()
+	if window <= 0 {
+		return 0
+	}
+	est := EstimateRequestTokens(req)
+	if est <= 0 {
+		return 0
+	}
+	return float64(est) / float64(window)
+}
+
+// ContextWindowGuidance returns a concise <context_window_guidance> block when
+// req exceeds MicroThresholdPct (55%) of the active model window, helping the
+// agent conserve tokens and wrap up cleanly without mutating SystemInstruction/Tools.
+func ContextWindowGuidance(req *model.LLMRequest, b Budget) string {
+	ratio := ContextUsageRatio(req, b)
+	if ratio < MicroThresholdPct {
+		return ""
+	}
+	pct := int(ratio * 100)
+	if pct > 99 {
+		pct = 99
+	}
+	if ratio >= SummaryThresholdPct {
+		return fmt.Sprintf("<context_window_guidance>\nUso estimado da janela de contexto: ~%d%% (alto). NÃO faça novas leituras exploratórias redundantes — finalize as edições essenciais e entregue o resumo agora.\n</context_window_guidance>", pct)
+	}
+	return fmt.Sprintf("<context_window_guidance>\nUso estimado da janela de contexto: ~%d%%. Evite releituras de arquivos já vistos, prefira trechos pontuais e conclua a fatia com economia de tokens.\n</context_window_guidance>", pct)
+}
+
 // CompactRequest applies one non-destructive compaction pass over req and
 // reports how many payloads were compacted and how many bytes were saved.
 func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved int) {
@@ -231,7 +271,12 @@ func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved
 	}
 	ratio := float64(est) / float64(window)
 	if ratio < MicroThresholdPct {
-		// Nowhere near the window: no compaction cost at all.
+		// Even below 55%, enforce proactive per-entry head-and-tail caps for
+		// older oversized tool outputs when MaxToolEntryBytes is configured
+		// (subagent_default_context_limits).
+		if b.MaxToolEntryBytes > 0 {
+			return capOversizedOlderToolOutputs(req, b.MaxToolEntryBytes)
+		}
 		return 0, 0
 	}
 
@@ -248,6 +293,112 @@ func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved
 		previewBytes = summaryPreviewBytes
 	}
 	return compactLLMRequestInTurn(req, keepRecent, compactThreshold, previewBytes)
+}
+
+// capOversizedOlderToolOutputs applies head-and-tail truncation to older (non-latest-turn)
+// FunctionResponse entries exceeding maxEntryBytes, preserving both leading headers and
+// trailing error/test summaries while keeping subagent input tokens lean.
+func capOversizedOlderToolOutputs(req *model.LLMRequest, maxEntryBytes int) (compactedCount, bytesSaved int) {
+	if req == nil || maxEntryBytes <= 0 {
+		return 0, 0
+	}
+	lastCallContentIdx := -1
+	lastRespContentIdx := -1
+	for ci, content := range req.Contents {
+		if content == nil {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part == nil {
+				continue
+			}
+			if part.FunctionCall != nil {
+				lastCallContentIdx = ci
+			}
+			if part.FunctionResponse != nil {
+				lastRespContentIdx = ci
+			}
+		}
+	}
+	clonedSlice := false
+	for ci, origContent := range req.Contents {
+		if origContent == nil {
+			continue
+		}
+		// Never truncate the latest tool-response turn so the model sees fresh outputs in full.
+		if ci == lastRespContentIdx || (lastCallContentIdx >= 0 && ci > lastCallContentIdx) {
+			continue
+		}
+		var newParts []*genai.Part
+		contentChanged := false
+		for pi, origPart := range origContent.Parts {
+			if origPart != nil && origPart.FunctionResponse != nil {
+				fr := origPart.FunctionResponse
+				name := strings.ToLower(strings.TrimSpace(fr.Name))
+				if !neverCompactInTurnTools[name] && compactableInTurnTools[name] {
+					if rawText, ok := fr.Response["text"].(string); ok && len(rawText) > maxEntryBytes {
+						trimmed := truncateHeadTailTokenAware(rawText, maxEntryBytes)
+						if len(trimmed) < len(rawText) {
+							if !contentChanged {
+								newParts = make([]*genai.Part, 0, len(origContent.Parts))
+								newParts = append(newParts, origContent.Parts[:pi]...)
+								contentChanged = true
+							}
+							partCopy := *origPart
+							frCopy := *fr
+							respCopy := make(map[string]any, len(fr.Response))
+							for k, v := range fr.Response {
+								respCopy[k] = v
+							}
+							respCopy["text"] = trimmed
+							frCopy.Response = respCopy
+							partCopy.FunctionResponse = &frCopy
+							newParts = append(newParts, &partCopy)
+							compactedCount++
+							bytesSaved += len(rawText) - len(trimmed)
+							continue
+						}
+					}
+				}
+			}
+			if contentChanged {
+				newParts = append(newParts, origPart)
+			}
+		}
+		if contentChanged {
+			if !clonedSlice {
+				next := make([]*genai.Content, len(req.Contents))
+				copy(next, req.Contents)
+				req.Contents = next
+				clonedSlice = true
+			}
+			contentCopy := *origContent
+			contentCopy.Parts = newParts
+			req.Contents[ci] = &contentCopy
+		}
+	}
+	return compactedCount, bytesSaved
+}
+
+func truncateHeadTailTokenAware(raw string, maxBytes int) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) <= maxBytes || maxBytes < 64 {
+		return trimmed
+	}
+	headBytes := (maxBytes * 45) / 100
+	tailBytes := (maxBytes * 45) / 100
+	omittedBytes := len(trimmed) - (headBytes + tailBytes)
+	if omittedBytes <= 40 {
+		return trimmed
+	}
+	approxTokens := (omittedBytes + 3) / 4
+	head := strx.TruncateBytes(trimmed, headBytes, "")
+	tailRaw := trimmed[len(trimmed)-tailBytes:]
+	// Advance tailRaw to a valid UTF-8 rune boundary if needed.
+	for len(tailRaw) > 0 && (tailRaw[0]&0xC0) == 0x80 {
+		tailRaw = tailRaw[1:]
+	}
+	return fmt.Sprintf("%s\n<truncated omitted_approx_tokens=\"%d\" />\n%s", head, approxTokens, tailRaw)
 }
 
 type toolRespLoc struct {
@@ -503,7 +654,7 @@ func compactFunctionResponseMap(fr *genai.FunctionResponse, callTarget string, c
 func buildCompactNotice(toolName, label, raw string, previewBytes int) string {
 	lines := strings.Count(raw, "\n") + 1
 	sizeLabel := formatCompactSize(len(raw))
-	preview := strx.TruncateBytes(strings.TrimSpace(raw), previewBytes, "…")
+	preview := truncateHeadTailTokenAware(raw, previewBytes)
 	hint := "NÃO releia sem necessidade; use as conclusões já obtidas"
 	if toolName == "read_file" {
 		hint = "já lido neste turno; NÃO releia o mesmo trecho — avance na tarefa ou leia outra faixa start_line/end_line só se realmente faltar um detalhe"

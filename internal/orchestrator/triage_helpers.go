@@ -485,7 +485,8 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
 			"- Se a versão NATIVA da IDE parecer mais atual ou melhor que a versão do projeto, passe o nome em \"native_skills\"; se o projeto tiver uma skill de mesmo nome, o usuário será consultado para autorizar a substituição.\n" +
 			"- Skills na seção OPCIONAIS DESLIGADAS só entram em native_skills se o usuário pediu explicitamente essa skill pelo nome.\n" +
-			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file."
+			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file.\n" +
+			skillx.ProgressiveDisclosureHint()
 	}
 	if note := r.pinnedSkillsNote(); note != "" {
 		triageInstr += note

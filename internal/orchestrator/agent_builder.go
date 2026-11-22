@@ -117,12 +117,19 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		instruction += "\n\n" + extra
 	}
 	keys := append([]string(nil), stateKeys...)
+	subagentEntryCap := 0
+	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {
+		// Codex subagent_default_context_limits pattern: proactively head-and-tail cap
+		// older oversized tool outputs (>6 KiB) inside Dev/QA subagents to cut token burn.
+		subagentEntryCap = 6 * 1024
+	}
 	beforeModelCBs := []llmagent.BeforeModelCallback{
 		contextx.NewCompactionCallback(contextx.Budget{
-			ContextWindow:   agentContextWindow(a),
-			ContextWindowFn: r.dynamicAgentContextWindow(adkName, a),
-			KeepRecent:      r.Project.Settings.EffectiveInTurnKeepToolResults(),
-			OnCompact:       r.compactionStatsCallback(adkName, label),
+			ContextWindow:     agentContextWindow(a),
+			ContextWindowFn:   r.dynamicAgentContextWindow(adkName, a),
+			KeepRecent:        r.Project.Settings.EffectiveInTurnKeepToolResults(),
+			OnCompact:         r.compactionStatsCallback(adkName, label),
+			MaxToolEntryBytes: subagentEntryCap,
 		}),
 		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}
