@@ -1432,8 +1432,7 @@ export function appendGitProgress(label: string, line: string) {
 export async function cancelGitAction() {
   const backend = api();
   if (!backend?.CancelGitAction || !state.project) return;
-  const matchedPr = state.prs.list.find((p) => p.number === prNumber);
-  const targetRoot = matchedPr?.repoRoot || getActiveGitRepo()?.root || state.project.root;
+  const targetRoot = getActiveGitRepo()?.root || state.project.root;
   try {
     await backend.CancelGitAction(targetRoot);
   } catch (err: any) {
