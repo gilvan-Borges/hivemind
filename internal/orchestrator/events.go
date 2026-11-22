@@ -58,6 +58,9 @@ func usageSummaryLine(result Result) string {
 		return ""
 	}
 	base := fmt.Sprintf("Tokens: ↑%d entrada · ↓%d saída · %d total", result.InputTokens, result.OutputTokens, result.TotalTokens)
+	if result.CachedReadTokens > 0 && result.InputTokens > 0 {
+		base += fmt.Sprintf(" · cache read: %d (%d%%)", result.CachedReadTokens, result.CachedReadTokens*100/result.InputTokens)
+	}
 	if result.CostMicroUSD <= 0 {
 		return base
 	}
@@ -82,9 +85,14 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	if inTok == 0 && outTok == 0 && totTok == 0 {
 		return
 	}
+	var cachedRead int64
+	if u.CachedContentTokenCount > 0 {
+		cachedRead = int64(u.CachedContentTokenCount)
+	}
 	r.turnInputTokens += int64(inTok)
 	r.turnOutputTokens += int64(outTok)
 	r.turnTotalTokens += int64(totTok)
+	r.turnCachedRead += cachedRead
 
 	label := labels[ev.Author]
 	if label == "" {
@@ -95,10 +103,6 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	r.resolvedChoiceMu.Lock()
 	disc := r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))]
 	r.resolvedChoiceMu.Unlock()
-	var cachedRead int64
-	if u.CachedContentTokenCount > 0 {
-		cachedRead = int64(u.CachedContentTokenCount)
-	}
 	costMicro, costRole := r.recordCallCost(ev.Author, label, prov, mod, int64(inTok), int64(outTok), cachedRead, disc)
 
 	if prov != "" {
@@ -106,6 +110,10 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	}
 
 	if r.OnEvent != nil {
+		cacheHitPct := int32(0)
+		if inTok > 0 && cachedRead > 0 {
+			cacheHitPct = int32(cachedRead * 100 / int64(inTok))
+		}
 		r.OnEvent(Event{
 			Kind:             "usage",
 			Stage:            inferStage(ev.Author, label),
@@ -118,6 +126,7 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 			OutputTokens:     outTok,
 			Tokens:           totTok,
 			CachedReadTokens: int32(cachedRead),
+			CacheHitPct:      cacheHitPct,
 			CostMicroUSD:     costMicro,
 		})
 	}
@@ -419,7 +428,7 @@ func (r *Runner) resolveSkillCatalogs(target string, includeDynamic bool) (proje
 
 func (r *Runner) guidanceForRole(target string, includeDynamic bool) string {
 	project, native := r.resolveSkillCatalogs(target, includeDynamic)
-	return skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, project, native, 0, 0)
+	return skillx.GuidanceBlock(r.objectiveText, r.Workspace, r.NativeSkillsRoot, project, native, 0, 0)
 }
 
 func (r *Runner) nativeSkillGuide(names ...string) string {
@@ -435,7 +444,7 @@ func (r *Runner) nativeSkillGuide(names ...string) string {
 	if len(picked) == 0 {
 		return ""
 	}
-	return skillx.GuidanceBlock(r.Workspace, r.NativeSkillsRoot, nil, picked, 0, 0)
+	return skillx.GuidanceBlock(r.objectiveText, r.Workspace, r.NativeSkillsRoot, nil, picked, 0, 0)
 }
 
 func (r *Runner) pinnedSkillsNote() string {

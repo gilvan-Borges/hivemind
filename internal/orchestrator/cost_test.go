@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -9,6 +10,22 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
+
+func TestUsageSummaryLineReportsCacheReadAndHitPct(t *testing.T) {
+	line := usageSummaryLine(Result{
+		InputTokens:      10_000,
+		OutputTokens:     500,
+		TotalTokens:      10_500,
+		CachedReadTokens: 6_000,
+	})
+	if !strings.Contains(line, "cache read: 6000 (60%)") {
+		t.Fatalf("linha de uso deve reportar cache read com %% de acerto, got %q", line)
+	}
+	noCache := usageSummaryLine(Result{InputTokens: 100, OutputTokens: 10, TotalTokens: 110})
+	if strings.Contains(noCache, "cache read") {
+		t.Fatalf("sem cached read a linha não deve mencionar cache, got %q", noCache)
+	}
+}
 
 func TestRunnerCostAccumulationByRunAgentAndRole(t *testing.T) {
 	t.Setenv("HIVEMIND_DATA_DIR", t.TempDir())

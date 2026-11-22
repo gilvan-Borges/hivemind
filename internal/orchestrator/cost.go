@@ -118,6 +118,7 @@ func (r *Runner) populateUsageMetrics(res *Result) {
 	res.InputTokens = r.turnInputTokens
 	res.OutputTokens = r.turnOutputTokens
 	res.TotalTokens = r.turnTotalTokens
+	res.CachedReadTokens = r.turnCachedRead
 
 	r.costMu.Lock()
 	defer r.costMu.Unlock()

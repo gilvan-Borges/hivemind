@@ -134,6 +134,80 @@ func TestCatalogBlockCombinesSourcesWithDate(t *testing.T) {
 	}
 }
 
+func TestExtractTriggersParsesInlineAndBulletLists(t *testing.T) {
+	inline := "---\nname: test_inline\ntriggers: [\"cache\", 'Prompt Caching']\n---\nbody\n"
+	got := ExtractTriggers(inline)
+	if len(got) != 2 || got[0] != "cache" || got[1] != "prompt caching" {
+		t.Fatalf("inline triggers = %v", got)
+	}
+
+	bullets := "---\nname: test_bullets\ntriggers:\n  - Docker\n  - compose\nother: 1\n---\nbody\n"
+	got = ExtractTriggers(bullets)
+	if len(got) != 2 || got[0] != "docker" || got[1] != "compose" {
+		t.Fatalf("bullet triggers = %v", got)
+	}
+
+	noFront := "# apenas corpo\n"
+	if ExtractTriggers(noFront) != nil {
+		t.Fatal("sem frontmatter não pode declarar triggers")
+	}
+	untagged := "---\nname: x\ndescription: y\n---\ncorpo\n"
+	if ExtractTriggers(untagged) != nil {
+		t.Fatal("frontmatter sem triggers deve devolver nil (corpo completo)")
+	}
+}
+
+func TestMatchTriggerIsCaseInsensitiveSubstring(t *testing.T) {
+	s := Skill{Name: "x", Triggers: []string{"docker", "compose"}}
+	if !MatchTrigger(s, "Corrigir o arquivo DOCKER-COMPOSE.yml da homologação") {
+		t.Fatal("trigger deve casar case-insensitive como substring")
+	}
+	if MatchTrigger(s, "refatorar o módulo de autenticação") {
+		t.Fatal("sem keyword no texto não pode casar")
+	}
+	if MatchTrigger(Skill{Name: "sem-triggers"}, "qualquer texto docker") {
+		t.Fatal("skill sem triggers nunca casa por si só")
+	}
+}
+
+func TestGuidanceBlockTriggersInjectStubInsteadOfBody(t *testing.T) {
+	root := t.TempDir()
+	writeSkill := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, SkillsDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, SkillsDir, name, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill("docker", "---\nname: docker\ntriggers: [\"docker\", \"compose\"]\n---\nGuia de containers.\n\nDiretrizes longas de containers que nao devem entrar sem match.\n")
+	writeSkill("plain", "Diretrizes gerais de edição que sempre entram.\n")
+
+	catalog := Load(root)
+	if len(catalog) != 2 {
+		t.Fatalf("catálogo = %d skills", len(catalog))
+	}
+
+	// Sem match: skill com triggers vira stub de 1 linha; skill sem triggers mantém corpo.
+	got := GuidanceBlock("refatorar autenticação", root, "", catalog, nil, 0, 0)
+	if strings.Contains(got, "Diretrizes longas de containers") {
+		t.Fatalf("corpo de skill com triggers não pode entrar sem match:\n%s", got)
+	}
+	if !strings.Contains(got, "[Skill `docker` disponível") {
+		t.Fatalf("stub da skill com triggers ausente:\n%s", got)
+	}
+	if !strings.Contains(got, "Diretrizes gerais de edição") {
+		t.Fatalf("skill sem triggers deve manter corpo completo:\n%s", got)
+	}
+
+	// Com match: corpo completo entra.
+	got = GuidanceBlock("rodar os containers com docker compose", root, "", catalog, nil, 0, 0)
+	if !strings.Contains(got, "Diretrizes longas de containers") {
+		t.Fatalf("trigger casado deve injetar o corpo completo:\n%s", got)
+	}
+}
+
 func TestGuidanceBlockTruncatesAndCaps(t *testing.T) {
 	root := t.TempDir()
 	big := strings.Repeat("a \n", 4*1024) // ~8KB
@@ -145,7 +219,7 @@ func TestGuidanceBlockTruncatesAndCaps(t *testing.T) {
 		t.Fatalf("esperava 2 skills, veio %d", len(catalog))
 	}
 
-	got := GuidanceBlock(root, "", catalog, nil, 1024, 2048)
+	got := GuidanceBlock("", root, "", catalog, nil, 1024, 2048)
 	if got == "" {
 		t.Fatal("bloco vazio")
 	}
@@ -168,7 +242,7 @@ func TestGuidanceBlockMixesProjectAndNativeRoots(t *testing.T) {
 
 	project := Load(projectRoot)
 	native := LoadNative(nativeRoot)
-	got := GuidanceBlock(projectRoot, nativeRoot, project, native, 0, 0)
+	got := GuidanceBlock("", projectRoot, nativeRoot, project, native, 0, 0)
 	if !strings.Contains(got, "Diretriz do projeto.") {
 		t.Fatalf("skill do projeto ausente: %q", got)
 	}
