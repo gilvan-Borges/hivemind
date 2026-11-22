@@ -146,6 +146,27 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		shouldRestorePlan := hasExistingPlan && ((runMode == "squad" && (isPendingPlan || !isQAApproved)) ||
 			(isResume && (isPendingPlan || !isQAApproved)))
 
+		// Always restore PR context on resumed sessions (even after qa_approved=1)
+		// unless the user explicitly targets a different PR number in this turn.
+		explicitPR := extractReviewPRNumber(objective)
+		if explicitPR > 0 {
+			r.prNumber = explicitPR
+		} else {
+			if prevPR, err := got.Session.State().Get("pr_number"); err == nil && prevPR != nil {
+				r.prNumber, _ = strconv.Atoi(strings.TrimSpace(fmt.Sprint(prevPR)))
+			}
+			if r.prNumber > 0 {
+				if prevBranch, err := got.Session.State().Get("pr_branch"); err == nil && prevBranch != nil {
+					r.prBranch = strings.TrimSpace(fmt.Sprint(prevBranch))
+				}
+				if prevRevs, err := got.Session.State().Get("pr_reviewers"); err == nil && prevRevs != nil {
+					if raw := strings.TrimSpace(fmt.Sprint(prevRevs)); raw != "" {
+						r.prReviewers = strings.Split(raw, ",")
+					}
+				}
+			}
+		}
+
 		if shouldRestorePlan {
 			r.chiefPlan = strings.TrimSpace(fmt.Sprint(existingPlanRaw))
 			if prevBrief, err := got.Session.State().Get("chief_context_brief"); err == nil && prevBrief != nil {
@@ -161,17 +182,6 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			}
 			if prevSeq, err := got.Session.State().Get("dev_sequential"); err == nil && prevSeq != nil {
 				r.devSequential = strings.TrimSpace(fmt.Sprint(prevSeq)) == "1"
-			}
-			if prevPR, err := got.Session.State().Get("pr_number"); err == nil && prevPR != nil {
-				r.prNumber, _ = strconv.Atoi(strings.TrimSpace(fmt.Sprint(prevPR)))
-			}
-			if prevBranch, err := got.Session.State().Get("pr_branch"); err == nil && prevBranch != nil {
-				r.prBranch = strings.TrimSpace(fmt.Sprint(prevBranch))
-			}
-			if prevRevs, err := got.Session.State().Get("pr_reviewers"); err == nil && prevRevs != nil {
-				if raw := strings.TrimSpace(fmt.Sprint(prevRevs)); raw != "" {
-					r.prReviewers = strings.Split(raw, ",")
-				}
 			}
 			if prevSkills, err := got.Session.State().Get("selected_skills"); err == nil && prevSkills != nil {
 				if raw := strings.TrimSpace(fmt.Sprint(prevSkills)); raw != "" {
@@ -224,9 +234,11 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			resetMap["dev_slices_joined"] = ""
 			resetMap["dev_owned_paths_json"] = ""
 			resetMap["dev_sequential"] = ""
-			resetMap["pr_number"] = ""
-			resetMap["pr_branch"] = ""
-			resetMap["pr_reviewers"] = ""
+			if explicitPR > 0 || r.prNumber == 0 {
+				resetMap["pr_number"] = ""
+				resetMap["pr_branch"] = ""
+				resetMap["pr_reviewers"] = ""
+			}
 			resetMap["selected_skills"] = ""
 			resetMap["selected_native_skills"] = ""
 		}
