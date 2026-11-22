@@ -65,6 +65,11 @@ export function clearPendingGhostTimer(): void {
 /** Liga/desliga Ghost Text inline. */
 export function toggleGhostText(): void {
   state.ghostTextEnabled = !state.ghostTextEnabled;
+  try {
+    localStorage.setItem("hivemind.ghostTextEnabled", state.ghostTextEnabled ? "1" : "0");
+  } catch {
+    // ambiente sem storage
+  }
   if (!state.ghostTextEnabled) {
     clearPendingGhostTimer();
     clearGhostText();

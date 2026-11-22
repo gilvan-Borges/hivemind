@@ -9,12 +9,13 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { clearGitHubUnread, loadGitGraph, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAPIKeysModal, openAIUsagePage, openJiraModal, openMobileModal, openProvidersScanModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openAIUsagePage, openJiraModal, openMobileModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { openIdeSettingsTab } from "./ide-settings";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
 import { loadSettings, toggleCompanionEnabled } from "./companion/settings";
-import { api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
+import { IDE_SETTINGS_TAB_KEY, api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { countProblems, refreshLSPStatus } from "./lsp";
 import { openProblemsPanel, renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
@@ -144,6 +145,12 @@ export function renderProjectTabsBar() {
 export function mountShell() {
   try {
     state.chatExpandedPref = localStorage.getItem("hivemind.chatExpanded") === "1";
+    const savedGhost = localStorage.getItem("hivemind.ghostTextEnabled");
+    if (savedGhost === "0" || savedGhost === "1") state.ghostTextEnabled = savedGhost === "1";
+    const savedInlineRev = localStorage.getItem("hivemind.inlineReviewEnabled");
+    if (savedInlineRev === "0" || savedInlineRev === "1") state.inlineReviewEnabled = savedInlineRev === "1";
+    const savedDiff = localStorage.getItem("hivemind.diffViewMode");
+    if (savedDiff === "split" || savedDiff === "unified") state.diffViewMode = savedDiff;
   } catch {
     state.chatExpandedPref = false;
   }
@@ -206,7 +213,7 @@ export function mountShell() {
           <button class="act-btn" id="act-resident" title="Hive Residente">${icons.sparkle}</button>
           <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
           <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
-          <button class="act-btn" id="act-wizard" title="Configurar Equipe (.hivemind/team.yaml)">${icons.settings}</button>
+          <button class="act-btn" id="act-ide-settings" title="Configurações da IDE (Ctrl+,)">${icons.settings}</button>
         </nav>
 
         <aside class="left-sidebar" id="left-sidebar" style="width:${state.leftWidth}px"></aside>
@@ -345,7 +352,7 @@ export function bindStaticShellEvents() {
   });
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
-  document.getElementById("status-providers")?.addEventListener("click", () => void openAPIKeysModal("profiles"));
+  document.getElementById("status-providers")?.addEventListener("click", () => void openIdeSettingsTab("providers"));
   document.getElementById("status-jira")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
   document.getElementById("status-autoreview")?.addEventListener("click", () => {
@@ -407,8 +414,8 @@ export function bindStaticShellEvents() {
   document.getElementById("act-ai-usage")?.addEventListener("click", () => {
     void openAIUsagePage();
   });
-  document.getElementById("act-wizard")?.addEventListener("click", () => {
-    void openTeamConfigTab();
+  document.getElementById("act-ide-settings")?.addEventListener("click", () => {
+    void openIdeSettingsTab();
   });
 
   document.getElementById("btn-quick-open")?.addEventListener("click", () => openQuickOpen());
@@ -451,6 +458,11 @@ export function bindStaticShellEvents() {
   });
 
   document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === ",") {
+      e.preventDefault();
+      void openIdeSettingsTab();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       toggleChatExpanded();
@@ -783,6 +795,7 @@ export function syncActivityButtons() {
     const view = (el as HTMLElement).dataset.act;
     el.classList.toggle("active", state.showLeftSidebar && state.sidebarView === view);
   });
+  document.getElementById("act-ide-settings")?.classList.toggle("active", state.activeEditorPath === IDE_SETTINGS_TAB_KEY);
 }
 
 export function renderFileMenu() {
@@ -797,8 +810,9 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-open-folder-tab">${icons.plus}<span>Abrir Projeto em Nova Aba… (Ctrl+Shift+O)</span></button>
     <button class="dropdown-item" id="menu-open-folder">${icons.folderOpen}<span>Substituir Projeto na Aba Atual…</span></button>
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
-    <button class="dropdown-item" id="menu-new-team">${icons.settings}<span>Configurar Equipe…</span></button>
-    <button class="dropdown-item" id="menu-providers-pool">${icons.settings}<span>Provedores &amp; Contas (Pool)…</span></button>
+    <button class="dropdown-item" id="menu-new-team">${icons.team}<span>Configurar Equipe do Projeto…</span></button>
+    <button class="dropdown-item" id="menu-ide-settings">${icons.settings}<span>Configurações da IDE… (Ctrl+,)</span></button>
+    <button class="dropdown-item" id="menu-providers-pool">${icons.cloud}<span>Provedores &amp; Contas (Pool)…</span></button>
     <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
     <button type="button" class="dropdown-item" id="menu-companion" aria-pressed="${loadSettings().enabled ? "true" : "false"}">${icons.sparkle}<span>${loadSettings().enabled ? "Companion ligado" : "Companion desligado"}</span></button>
     <button type="button" class="dropdown-item" id="menu-orb-show">${icons.sparkle}<span>Mostrar Orb flutuante</span></button>
@@ -830,15 +844,20 @@ export function renderFileMenu() {
     renderFileMenu();
     void openTeamConfigTab();
   });
+  menu.querySelector("#menu-ide-settings")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    void openIdeSettingsTab();
+  });
   menu.querySelector("#menu-providers-pool")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    void openAPIKeysModal("profiles");
+    void openIdeSettingsTab("providers", { providersTab: "profiles" });
   });
   menu.querySelector("#menu-providers-scan")?.addEventListener("click", () => {
     state.showFileMenu = false;
     renderFileMenu();
-    void openProvidersScanModal();
+    void openIdeSettingsTab("providers", { providersTab: "scan", triggerScan: true });
   });
   menu.querySelector("#menu-companion")?.addEventListener("click", () => {
     toggleCompanionEnabled();

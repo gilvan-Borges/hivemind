@@ -294,8 +294,10 @@ export interface TerminalEntry {
   running: boolean;
 }
 
+export type IdeSettingsSection = "providers" | "agent-hive" | "limits" | "integrations" | "general";
+
 export interface EditorTab {
-  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident" | "ai-usage";
+  kind: "file" | "diff" | "mission" | "team-config" | "commit" | "resident" | "ai-usage" | "ide-settings";
   relPath: string;
   name: string;
   content: string;
@@ -1031,6 +1033,9 @@ export interface ExternalSession {
 
 export interface ResidentStatus {
   state: string;
+  enabled?: boolean;
+  orbEnabled?: boolean;
+  jevFailover?: boolean;
   readOnly: boolean;
   accountId: string;
   workstream: string;
@@ -1266,6 +1271,9 @@ export interface WailsBackendApp {
   ExternalSessions?(): Promise<ExternalSession[]>;
   ResidentStatus?(): Promise<ResidentStatus>;
   ResidentSaveConfig?(provider: string, model: string, workstream: string): Promise<ResidentStatus>;
+  ResidentSetEnabled?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetOrbEnabled?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetJevFailover?(on: boolean): Promise<ResidentStatus>;
   ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
   ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
   ResidentSetIsolatedSandbox?(on: boolean): Promise<ResidentStatus>;
@@ -1288,6 +1296,7 @@ export interface WailsBackendApp {
   ResidentDeleteRoutine?(id: string): Promise<void>;
   ResidentReviewSkill?(name: string): Promise<string>;
   OrbShow?(): Promise<void>;
+  OrbHide?(): Promise<void>;
   OrbRunning?(): Promise<boolean>;
   OrbSetMood?(mood: string): Promise<void>;
   OrbPushNotice?(

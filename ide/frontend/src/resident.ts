@@ -2,9 +2,10 @@ import { icons } from "./icons";
 import { renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus } from "./types";
 import { escapeHtml } from "./utils";
-import { renderEditorBody, renderEditorTabs } from "./editor";
+import { renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
+import { openIdeSettingsTab } from "./ide-settings";
 import { updateStatusBar } from "./shell";
-import { api, setStatus, state, toast, toastError } from "./state";
+import { IDE_SETTINGS_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { noteActivity, publishNotice } from "./companion/host";
 
 export const RESIDENT_TAB_KEY = "hive:resident";
@@ -183,9 +184,13 @@ export function updateResidentStatusChip(): void {
   const chip = document.getElementById("status-resident");
   if (!chip) return;
   const st = residentState.status;
-  const label = residentState.running ? "pensando" : (st?.state || "ocioso");
+  const label = st?.enabled === false
+    ? "desligado"
+    : (residentState.running ? "pensando" : (st?.state || "ocioso"));
   chip.textContent = `hive: ${label}`;
-  if (label === "pensando") {
+  if (label === "desligado") {
+    chip.style.color = "var(--text-dim)";
+  } else if (label === "pensando") {
     chip.style.color = "var(--accent-strong)";
   } else if (label === "aguardando você") {
     chip.style.color = "var(--amber)";
@@ -195,12 +200,18 @@ export function updateResidentStatusChip(): void {
   const sbInfo = st?.sandboxAvailable
     ? `Sandbox: ${st.sandboxMechanism || "ativa"}`
     : "Sandbox: indisponível (falha fechada)";
-  chip.title = st
-    ? `Agent Hive · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
-    : "Agent Hive — clique para abrir";
+  chip.title = st?.enabled === false
+    ? "Agent Hive desativado nas Configurações da IDE — clique para abrir"
+    : st
+      ? `Agent Hive · ${sbInfo} · Conta: ${st.accountId} · Modelo: ${st.provider}/${st.model}`
+      : "Agent Hive — clique para abrir";
 }
 
 function rerenderResidentIfOpen(): void {
+  if (state.activeEditorPath === IDE_SETTINGS_TAB_KEY && state.ideSettingsSection === "agent-hive") {
+    renderEditorBodyAsync();
+    return;
+  }
   if (state.activeEditorPath !== RESIDENT_TAB_KEY) {
     return;
   }
@@ -360,7 +371,10 @@ export function renderResidentViewHtml(): string {
   const acct = st?.accountId || "local";
   const prov = st?.provider || "openrouter";
   const mod = st?.model || "openrouter/auto";
-  const stateLabel = residentState.running ? "pensando" : (st?.state || "ocioso");
+  const enabled = st ? st.enabled !== false : true;
+  const stateLabel = !enabled
+    ? "desligado"
+    : (residentState.running ? "pensando" : (st?.state || "ocioso"));
   const activeWsName = state.project?.name || "nenhum workspace";
   const sbOk = Boolean(st?.sandboxAvailable);
   const sbText = sbOk
@@ -403,10 +417,18 @@ export function renderResidentViewHtml(): string {
         <button type="button" class="drawer-tab ${residentState.subTab === "audit" ? "active" : ""}" data-res-tab="audit">Auditoria (${residentState.audit.length})</button>
         <div class="spacer"></div>
         ${residentState.subTab === "chat" ? `<button type="button" class="mini ghost" id="btn-res-clear-chat">Limpar conversa</button>` : ""}
+        <button type="button" class="mini ghost" id="btn-res-open-settings" title="Abrir Configurações Globais do Agent Hive">${icons.settings}<span>Configurações</span></button>
         <button type="button" class="mini ghost" id="btn-res-refresh">${icons.refresh}<span>Atualizar</span></button>
       </div>
 
-      ${residentState.subTab === "chat" ? renderResidentChatHtml() : ""}
+      ${!enabled ? `
+        <div class="tc-error" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <span>Agent Hive está desativado nas Configurações da IDE. Ative-o para iniciar novos turnos ou reexibir o Orb flutuante.</span>
+          <button type="button" class="mini primary" id="btn-res-open-settings-enable">${icons.settings}<span>Ativar nas Configurações</span></button>
+        </div>
+      ` : ""}
+
+      ${residentState.subTab === "chat" ? renderResidentChatHtml(enabled) : ""}
       ${residentState.subTab === "security" ? renderResidentSecurityHtml() : ""}
       ${residentState.subTab === "memory" ? renderResidentMemoryHtml(acct) : ""}
       ${residentState.subTab === "audit" ? renderResidentAuditHtml() : ""}
@@ -414,7 +436,7 @@ export function renderResidentViewHtml(): string {
   `;
 }
 
-function renderResidentChatHtml(): string {
+function renderResidentChatHtml(enabled = true): string {
   const msgsHtml = residentState.messages.length === 0
     ? `
       <div class="chat-empty-state">
@@ -506,7 +528,7 @@ function renderResidentChatHtml(): string {
         <span class="dim">Auditoria fsync antes de cada efeito · escrita/execução exigem aprovação + sandbox do SO · saída cercada contra prompt injection</span>
         <div class="spacer"></div>
         <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
-        <button type="button" class="primary" id="btn-res-send" ${residentState.running ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+        <button type="button" class="primary" id="btn-res-send" ${residentState.running || !enabled ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
       </div>
     </div>
   `;
@@ -736,6 +758,12 @@ export function bindResidentViewEvents(): void {
     });
   });
 
+  document.getElementById("btn-res-open-settings")?.addEventListener("click", () => {
+    void openIdeSettingsTab("agent-hive");
+  });
+  document.getElementById("btn-res-open-settings-enable")?.addEventListener("click", () => {
+    void openIdeSettingsTab("agent-hive");
+  });
   document.getElementById("btn-res-refresh")?.addEventListener("click", () => {
     void refreshResidentData();
   });

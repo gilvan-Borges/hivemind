@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, UpdateCheckResult, WailsBackendApp, WorkspaceGitRepo } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, IdeSettingsSection, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, UpdateCheckResult, WailsBackendApp, WorkspaceGitRepo } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -29,6 +29,8 @@ export const MISSION_TAB_KEY = "mission:swarm";
 export const TEAM_CONFIG_TAB_KEY = "team:config";
 
 export const AI_USAGE_TAB_KEY = "ai:usage";
+
+export const IDE_SETTINGS_TAB_KEY = "ide:settings";
 
 export interface TeamConfigDraft {
   workspace: string;
@@ -93,6 +95,9 @@ export const state = {
   diffs: [] as FileDiff[],
   showFileMenu: false,
   teamConfigDraft: null as TeamConfigDraft | null,
+  ideSettingsSection: "providers" as IdeSettingsSection,
+  orbRunning: false,
+  appVersion: "",
   showGitHubModal: false,
   showJiraModal: false,
   showAPIKeysModal: false,

@@ -92,6 +92,7 @@ type AuditEntry struct {
 // It never stores secrets (§11).
 type Config struct {
 	Enabled       bool     `json:"enabled"`
+	OrbDisabled   bool     `json:"orbDisabled,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Workstream    string   `json:"workstream,omitempty"`
@@ -130,7 +131,10 @@ type ProjectRef struct {
 
 // Status reports the resident assistant's live state for the IDE UI (§11).
 type Status struct {
-	State                  string   `json:"state"` // "ocioso" | "pensando" | "aguardando você"
+	State                  string   `json:"state"` // "ocioso" | "pensando" | "aguardando você" | "desativado"
+	Enabled                bool     `json:"enabled"`
+	OrbEnabled             bool     `json:"orbEnabled"`
+	JevFailover            bool     `json:"jevFailover"`
 	ReadOnly               bool     `json:"readOnly"`
 	AccountID              string   `json:"accountId"`
 	Workstream             string   `json:"workstream"`

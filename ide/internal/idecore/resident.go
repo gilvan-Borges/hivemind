@@ -33,6 +33,7 @@ type ResidentManager struct {
 
 	mu            sync.Mutex
 	state         string // "ocioso" | "pensando" | "aguardando você"
+	enabled       bool
 	lastError     string
 	eventTriggers bool
 	cancel        context.CancelFunc
@@ -78,18 +79,47 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 		sandbox:       sb,
 		vault:         vault,
 		state:         "ocioso",
+		enabled:       cfg.Enabled,
 		eventTriggers: cfg.EventTriggers,
 		testModel:     opts.TestModel,
 	}
 	if release, ok := resident.TryAcquireLock(baseDir); ok {
 		m.release = release
 		m.sched = resident.NewScheduler(baseDir, m.fireRoutine)
-		m.sched.Arm()
+		if cfg.Enabled {
+			m.sched.Arm()
+		}
 	}
 	if m.sessions != nil {
 		m.sessions.HostSignal = func(kind string) { m.NoteHostEvent(kind) }
 	}
 	return m
+}
+
+// IsEnabled reports whether the resident assistant is enabled in resident.json.
+func (m *ResidentManager) IsEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if cfg, err := resident.LoadConfig(m.baseDir); err == nil {
+		return cfg.Enabled
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enabled
+}
+
+// IsOrbEnabled reports whether the floating Orb should run (resident enabled and Orb not disabled).
+func (m *ResidentManager) IsOrbEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if cfg, err := resident.LoadConfig(m.baseDir); err == nil {
+		return cfg.Enabled && !cfg.OrbDisabled
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enabled
 }
 
 // NoteHostEvent records an opt-in wake. It never starts a turn or a tool.
@@ -103,9 +133,10 @@ func (m *ResidentManager) NoteHostEvent(kind string) {
 		return
 	}
 	m.mu.Lock()
+	enabled := m.enabled
 	on := m.eventTriggers
 	m.mu.Unlock()
-	if !on || m.sessions == nil || m.sessions.Emit == nil {
+	if !enabled || !on || m.sessions == nil || m.sessions.Emit == nil {
 		return
 	}
 	m.sessions.Emit(LaneEvent{
@@ -118,6 +149,56 @@ func (m *ResidentManager) NoteHostEvent(kind string) {
 			Text:  "evento " + kind,
 		},
 	})
+}
+
+// SetEnabled persists whether the Agent Hive resident assistant is active.
+func (m *ResidentManager) SetEnabled(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.Enabled = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	m.mu.Lock()
+	m.enabled = on
+	m.mu.Unlock()
+	if !on {
+		m.Cancel()
+		if m.sched != nil {
+			m.sched.Stop()
+		}
+	} else if m.sched != nil {
+		m.sched.Arm()
+	}
+	return m.Status(), nil
+}
+
+// SetOrbEnabled persists whether the floating Orb mascot is enabled.
+func (m *ResidentManager) SetOrbEnabled(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.OrbDisabled = !on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
+// SetJevFailover persists whether resident retries alternate Jev routes when a build fails.
+func (m *ResidentManager) SetJevFailover(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.JevFailover = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
 }
 
 // SetEventTriggers persists the opt-in wake switch. Default is off.
@@ -178,6 +259,9 @@ func (m *ResidentManager) Close() {
 }
 
 func (m *ResidentManager) fireRoutine(rt resident.Routine) {
+	if !m.IsEnabled() {
+		return
+	}
 	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, resident.OriginRoutine, rt.Classes)
 }
 
@@ -237,7 +321,9 @@ func (m *ResidentManager) Status() resident.Status {
 	st := m.state
 	lastErr := m.lastError
 	m.mu.Unlock()
-	if st == "" {
+	if !cfg.Enabled {
+		st = "desativado"
+	} else if st == "" {
 		st = "ocioso"
 	}
 
@@ -249,6 +335,9 @@ func (m *ResidentManager) Status() resident.Status {
 	}
 	return resident.Status{
 		State:                  st,
+		Enabled:                cfg.Enabled,
+		OrbEnabled:             !cfg.OrbDisabled,
+		JevFailover:            cfg.JevFailover,
 		ReadOnly:               false,
 		AccountID:              acct,
 		Workstream:             resident.SanitizeWorkstream(cfg.Workstream),
@@ -293,7 +382,6 @@ func (m *ResidentManager) SaveConfig(provider, modelName, workstream string) (re
 	if err != nil {
 		return m.Status(), err
 	}
-	cfg.Enabled = true
 	cfg.Provider = strings.ToLower(strings.TrimSpace(provider))
 	cfg.Model = strings.TrimSpace(modelName)
 	if strings.TrimSpace(workstream) != "" {
@@ -368,6 +456,9 @@ func (m *ResidentManager) runTurn(
 	cfg, err := resident.LoadConfig(m.baseDir)
 	if err != nil {
 		return resident.TurnResult{}, err
+	}
+	if !cfg.Enabled {
+		return resident.TurnResult{}, fmt.Errorf("Agent Hive está desativado nas Configurações da IDE")
 	}
 	pol, _ := resident.LoadPolicy(m.baseDir)
 	if strings.TrimSpace(workstream) == "" {

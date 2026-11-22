@@ -23,7 +23,14 @@ func (a *App) ExternalSessions() ([]extsess.ExternalSession, error) {
 // ResidentStatus returns the resident agent's live state (zero secrets).
 func (a *App) ResidentStatus() resident.Status {
 	if a.resident == nil {
-		return resident.Status{State: "ocioso", ReadOnly: false, AccountID: resident.DefaultAccountID, Workstream: resident.DefaultWorkstream}
+		return resident.Status{
+			State:      "ocioso",
+			Enabled:    false,
+			OrbEnabled: false,
+			ReadOnly:   false,
+			AccountID:  resident.DefaultAccountID,
+			Workstream: resident.DefaultWorkstream,
+		}
 	}
 	return a.resident.Status()
 }
@@ -76,6 +83,52 @@ func (a *App) ResidentSetIsolatedSandbox(on bool) (resident.Status, error) {
 		return resident.Status{}, fmt.Errorf("agente residente indisponível")
 	}
 	return a.resident.SetIsolatedSandbox(on)
+}
+
+// ResidentSetEnabled activates or disables the Agent Hive resident assistant and its floating Orb.
+func (a *App) ResidentSetEnabled(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	st, err := a.resident.SetEnabled(on)
+	if err != nil {
+		return st, err
+	}
+	if !on {
+		a.hideOrbWindow()
+	} else if a.resident.IsOrbEnabled() {
+		if err := a.launchOrbWindow(); err == nil {
+			go a.orbSyncResidentSnapshot()
+		}
+	}
+	return st, nil
+}
+
+// ResidentSetOrbEnabled shows or hides the independent floating Orb mascot and persists the preference.
+func (a *App) ResidentSetOrbEnabled(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	st, err := a.resident.SetOrbEnabled(on)
+	if err != nil {
+		return st, err
+	}
+	if !on {
+		a.hideOrbWindow()
+	} else if a.resident.IsEnabled() {
+		if err := a.launchOrbWindow(); err == nil {
+			go a.orbSyncResidentSnapshot()
+		}
+	}
+	return st, nil
+}
+
+// ResidentSetJevFailover enables or disables Jev fallback route retries for the resident assistant.
+func (a *App) ResidentSetJevFailover(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetJevFailover(on)
 }
 
 func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (resident.Status, error) {

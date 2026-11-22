@@ -6,7 +6,8 @@ import { highlightActiveTreeRow, refreshExplorerTree } from "./explorer";
 import { refreshDiffs } from "./git";
 import { openCommandPalette, openQuickOpen } from "./quickopen";
 import { bindResidentViewEvents, renderResidentViewHtml } from "./resident";
-import { renderProjectTabsBar, syncChatExpandLayout, syncLayoutVisibility } from "./shell";
+import { bindIdeSettingsEvents, renderIdeSettingsPageHtml } from "./ide-settings";
+import { renderProjectTabsBar, syncActivityButtons, syncChatExpandLayout, syncLayoutVisibility } from "./shell";
 import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
@@ -202,12 +203,14 @@ export function renderEditorTabs() {
         : t.kind === "mission"
           ? icons.swarm
           : t.kind === "team-config"
-            ? icons.settings
-            : t.kind === "ai-usage"
-              ? icons.aiUsage
-              : t.kind === "diff" || t.kind === "commit"
-                ? icons.gitSmall
-                : fileBadge(t.name);
+            ? icons.team
+            : t.kind === "ide-settings"
+              ? icons.settings
+              : t.kind === "ai-usage"
+                ? icons.aiUsage
+                : t.kind === "diff" || t.kind === "commit"
+                  ? icons.gitSmall
+                  : fileBadge(t.name);
     return `
       <div class="editor-tab ${t.relPath === state.activeEditorPath ? "active" : ""}" data-tab="${escapeHtml(t.relPath)}">
         ${tabIcon}
@@ -258,6 +261,7 @@ export function renderEditorTabs() {
     });
   });
   syncChatExpandLayout();
+  syncActivityButtons();
 }
 
 export function syncActiveTabDirtyUI(tab: EditorTab) {
@@ -675,6 +679,12 @@ export function renderEditorBody() {
     return;
   }
 
+  if (activeTab.kind === "ide-settings") {
+    body.innerHTML = renderIdeSettingsPageHtml();
+    bindIdeSettingsEvents();
+    return;
+  }
+
   if (activeTab.kind === "commit" && activeTab.commitDetail) {
     const cd = activeTab.commitDetail;
     body.innerHTML = `
@@ -889,4 +899,26 @@ export function renderEditorBody() {
     activeTab.mdView = "source";
     renderEditorBody();
   });
+}
+
+/** Re-renderiza o corpo do editor em respostas assíncronas sem descartar edição ativa em inputs. */
+export function renderEditorBodyAsync(): void {
+  if (typeof document !== "undefined") {
+    const active = document.activeElement as HTMLElement | null;
+    const body = document.getElementById("editor-body");
+    if (active && body && body.contains(active)) {
+      const tag = active.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") {
+        const el = active as HTMLInputElement | HTMLTextAreaElement;
+        if (tag !== "select" && el.value !== (el.defaultValue ?? "")) {
+          return;
+        }
+        const activeId = active.id;
+        renderEditorBody();
+        if (activeId) document.getElementById(activeId)?.focus();
+        return;
+      }
+    }
+  }
+  renderEditorBody();
 }

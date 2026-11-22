@@ -1,21 +1,28 @@
 import { icons } from "./icons";
 import type { AgyAccountQuota, AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
 import { escapeHtml, formatMicroUsd, formatTokens, safeImageSrc } from "./utils";
-import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
+import { openFileInEditor, renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
 import { trapFocusIn, type FocusTrapHandle } from "./focus-trap";
 import { notifyRegionRendered, renderGuard } from "./render-guard";
 import { refreshSkills } from "./models";
 import { updateStatusBar } from "./shell";
-import { AI_USAGE_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
+import { AI_USAGE_TAB_KEY, IDE_SETTINGS_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
+
+function rerenderProvidersSurface(): void {
+  if (state.showAPIKeysModal) renderModalLayer();
+  if (state.activeEditorPath === IDE_SETTINGS_TAB_KEY && state.ideSettingsSection === "providers") {
+    renderEditorBodyAsync();
+  }
+}
 
 export async function runProvidersScan() {
   const backend = api();
   if (!backend) return;
   state.providersScanning = true;
-  if (state.showAPIKeysModal) renderModalLayer();
+  rerenderProvidersSurface();
   setStatus("Varrendo provedores e contas…");
   const root = state.project?.root || "";
   try {
@@ -55,7 +62,7 @@ export async function runProvidersScan() {
   } finally {
     state.providersScanning = false;
     updateStatusBar();
-    if (state.showAPIKeysModal) renderModalLayer();
+    rerenderProvidersSurface();
   }
 }
 
@@ -147,18 +154,7 @@ export async function openOpenCodeModal() {
   await openAPIKeysModal("profiles", "opencode");
 }
 
-export async function openAPIKeysModal(initialTab?: "profiles" | "global" | "scan", initialProvider?: string) {
-  if (initialTab) state.apiKeysTab = initialTab;
-  if (initialProvider) {
-    state.apiKeysTab = "profiles";
-    if (initialProvider === "agy") {
-      state.profileEditor = { open: false, id: "", provider: "agy", authMode: "adc" };
-    } else {
-      state.profileEditor = { open: true, id: "", provider: initialProvider, authMode: "key" };
-    }
-  }
-  state.showAPIKeysModal = true;
-  renderModalLayer();
+export async function refreshProvidersData(): Promise<void> {
   const backend = api();
   try {
     const root = state.project?.root || "";
@@ -177,10 +173,25 @@ export async function openAPIKeysModal(initialTab?: "profiles" | "global" | "sca
     }
     await Promise.all(tasks);
     updateStatusBar();
-    renderGuard.guardedRender("modal-layer", renderModalLayer);
   } catch {
-    // mantém o modal aberto sem status
+    // mantém estado anterior
   }
+}
+
+export async function openAPIKeysModal(initialTab?: "profiles" | "global" | "scan", initialProvider?: string) {
+  if (initialTab) state.apiKeysTab = initialTab;
+  if (initialProvider) {
+    state.apiKeysTab = "profiles";
+    if (initialProvider === "agy") {
+      state.profileEditor = { open: false, id: "", provider: "agy", authMode: "adc" };
+    } else {
+      state.profileEditor = { open: true, id: "", provider: initialProvider, authMode: "key" };
+    }
+  }
+  state.showAPIKeysModal = true;
+  renderModalLayer();
+  await refreshProvidersData();
+  renderGuard.guardedRender("modal-layer", renderModalLayer);
 }
 
 export function renderProvidersScanTabHtml(
@@ -427,6 +438,627 @@ export function renderModalLayer() {
   }
 }
 
+function providersConfigMeta() {
+  const ov = state.profilesOverview;
+  const profilesList = ov?.profiles || [];
+  const provLabels: Record<string, string> = {
+    agy: "Antigravity (Google)",
+    typesafe: "TypeSafe AI (Jev Oficial)",
+    openrouter: "OpenRouter",
+    opencode: "OpenCode Go & Zen",
+    anthropic: "Anthropic (Claude)",
+    openai: "OpenAI / Grok",
+    gemini: "Google Gemini API",
+    cursor: "Cursor CLI",
+  };
+  const ed = state.profileEditor;
+  const editingProf: ProviderProfileSummary | undefined = ed.id
+    ? profilesList.find((p) => p.id === ed.id)
+    : undefined;
+  const curProv = (ed.provider && ed.provider !== "agy" ? ed.provider : editingProf?.provider) || "openrouter";
+  return {
+    ov,
+    profilesList,
+    agyAccounts: profilesList.filter((p) => p.provider === "agy"),
+    otherAccounts: profilesList.filter((p) => p.provider !== "agy"),
+    provLabels,
+    editingProf,
+    curProv,
+    wsRoot: state.project?.root || "",
+  };
+}
+
+export function renderProvidersTabButtonsHtml(): string {
+  const tab = state.apiKeysTab || "profiles";
+  const { profilesList } = providersConfigMeta();
+  const scan = state.providersScan;
+  return `
+    <button type="button" class="mini ${tab === "profiles" ? "primary" : ""}" id="ak-tab-profiles">Pool de Contas (${profilesList.length})</button>
+    <button type="button" class="mini ${tab === "global" ? "primary" : ""}" id="ak-tab-global">Chaves Globais</button>
+    <button type="button" class="mini ${tab === "scan" ? "primary" : ""}" id="ak-tab-scan">Varredura${scan ? ` (${scan.connectedProviders}/${scan.totalProviders})` : ""}</button>
+  `;
+}
+
+export function renderProvidersContentHtml(opts?: { inline?: boolean }): string {
+  const tab = state.apiKeysTab || "profiles";
+  const saved = state.apiKeysStatus || {};
+  const scan = state.providersScan;
+  const { ov, agyAccounts, otherAccounts, provLabels, editingProf, curProv } = providersConfigMeta();
+  const ed = state.profileEditor;
+  const field = (id: string, keyName: string, label: string, placeholder: string, savedMask?: string) => `
+    <label for="${id}">${escapeHtml(label)}${savedMask ? ` <span class="dim" style="font-weight:500">(salvo: ${escapeHtml(savedMask)})</span>` : ""}</label>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input id="${id}" type="${keyName.includes("KEY") ? "password" : "text"}" placeholder="${savedMask ? "Cole novo valor apenas se quiser trocar" : escapeHtml(placeholder)}" autocomplete="off" style="flex:1" />
+      ${savedMask ? `<button type="button" class="mini danger ghost" data-ak-clear="${escapeHtml(keyName)}" title="Remover chave salva">${icons.trash}</button>` : ""}
+    </div>
+  `;
+
+  const nonAgyProvs: Record<string, string> = {
+    typesafe: "TypeSafe AI (Jev Oficial)",
+    openrouter: "OpenRouter",
+    opencode: "OpenCode Go & Zen",
+    anthropic: "Anthropic (Claude)",
+    openai: "OpenAI / Grok",
+    gemini: "Google Gemini API",
+    cursor: "Cursor CLI",
+  };
+  const provKeys: Record<string, Array<{ key: string; label: string; placeholder: string; secret?: boolean }>> = {
+    typesafe: [{ key: "TYPESAFE_API_KEY", label: "TypeSafe AI API Key (console.typesafe.ai/keys)", placeholder: "ts_…", secret: true }],
+    openrouter: [{ key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", placeholder: "sk-or-v1-…", secret: true }],
+    opencode: [{ key: "OPENCODE_API_KEY", label: "OpenCode Token", placeholder: "oc_…", secret: true }],
+    anthropic: [{ key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", placeholder: "sk-ant-…", secret: true }],
+    openai: [{ key: "OPENAI_API_KEY", label: "OpenAI API Key", placeholder: "sk-…", secret: true }],
+    gemini: [{ key: "GOOGLE_API_KEY", label: "Gemini API Key", placeholder: "AIza…", secret: true }],
+    cursor: [{ key: "CURSOR_API_KEY", label: "Cursor API Key", placeholder: "crsr_…", secret: true }],
+  };
+
+  const renderKeyAccountEditor = () => {
+    if (!ed.open) return "";
+    const keyFields = (provKeys[curProv] || []).map((f) => {
+      const mask = editingProf?.envMasked?.[f.key] || "";
+      return `
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label for="prof-env-${f.key}" style="font-size:11.5px;color:var(--text-dim);font-weight:600">
+            ${escapeHtml(f.label)}${mask ? ` <span class="dim">(atual: ${escapeHtml(mask)})</span>` : ""}
+          </label>
+          <input id="prof-env-${f.key}" type="password" placeholder="${mask ? "Cole nova chave apenas se quiser trocar" : escapeHtml(f.placeholder)}" autocomplete="off" style="padding:8px 10px;font-size:12.5px" />
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div style="margin-top:10px;padding:14px;border-radius:12px;background:var(--bg-deep);border:1px solid var(--border-strong);display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <strong style="font-size:13px">${editingProf ? `Editar Conta · ${escapeHtml(editingProf.name)}` : "Adicionar Conta por Chave de API"}</strong>
+          <button type="button" class="mini" id="prof-cancel-edit">Cancelar</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <label for="prof-provider" style="font-size:11.5px;color:var(--text-dim);font-weight:600">Provedor</label>
+            <select id="prof-provider" ${editingProf ? "disabled" : ""} style="padding:7px 10px;font-size:12.5px">
+              ${Object.entries(nonAgyProvs).map(([id, lbl]) => `<option value="${id}" ${curProv === id ? "selected" : ""}>${escapeHtml(lbl)}</option>`).join("")}
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <label for="prof-name" style="font-size:11.5px;color:var(--text-dim);font-weight:600">Identificação / E-mail</label>
+            <input id="prof-name" value="${escapeHtml(editingProf?.name || "")}" placeholder="ex.: OpenRouter Reserva ou email@empresa.com" style="padding:7px 10px;font-size:12.5px" />
+          </div>
+        </div>
+        ${keyFields}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
+          <button type="button" class="primary" id="prof-save" style="padding:6px 14px">${icons.check}<span>Salvar Conta no Pool</span></button>
+        </div>
+      </div>
+    `;
+  };
+
+  const inlineHeader = opts?.inline
+    ? `
+      <div class="ide-settings-card-head">
+        <div>
+          <h3>Provedores &amp; Contas LLM</h3>
+          <div class="dim">Gerencie contas Google (Antigravity), pool de chaves de API, chaves globais e faça varredura de todos os provedores.</div>
+        </div>
+        <div class="ide-settings-subtabs">${renderProvidersTabButtonsHtml()}</div>
+      </div>
+    `
+    : "";
+
+  const bodyHtml = tab === "profiles" ? `
+    <div style="padding:14px 16px;border-radius:12px;background:var(--accent-subtle);border:1px solid var(--accent-border);display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:36px;height:36px;border-radius:10px;background:var(--surface-elevated);border:1px solid var(--accent-border);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:var(--accent-strong);flex-shrink:0">G</div>
+          <div>
+            <div style="font-weight:700;font-size:13.5px;color:var(--text)">Contas Google · Antigravity (agy)</div>
+            <div class="dim" style="font-size:11.5px">Se o token do <code>argon</code> acabar na Conta 1, o Jev mantém os outros modelos na Conta 1 e muda só o <code>argon</code> para a Conta 2.</div>
+          </div>
+        </div>
+        <button type="button" class="primary" id="btn-connect-google-agy" style="padding:7px 14px;font-weight:600;font-size:12.5px;border-radius:8px;flex-shrink:0">
+          ${icons.sparkle}<span>${state.agyOAuthWaitingCode ? "Reabrir Login Google" : "+ Logar Nova Conta Google"}</span>
+        </button>
+      </div>
+
+      ${state.agyOAuthWaitingCode ? `
+        <div style="padding:12px 14px;border-radius:10px;background:var(--surface-panel);border:1px solid var(--accent-border);display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <strong style="font-size:12.5px;color:var(--accent-strong)">${icons.spinner} Aguardando seleção da Conta Google no navegador…</strong>
+            <button type="button" class="mini" id="btn-cancel-agy-oauth">Cancelar</button>
+          </div>
+          <div class="dim" style="font-size:11.5px;line-height:1.45">
+            1. Escolha sua conta Google e clique em <strong>Continuar</strong> no navegador — o HiveMind recebe o retorno automaticamente em <code>localhost</code> e já salva na pasta isolada pelo e-mail.<br/>
+            2. Caso seu navegador não redirecione sozinho, você também pode colar o código <code>4/0A…</code> ou a URL abaixo:
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="agy-oauth-code-input" type="text" value="${escapeHtml(state.agyOAuthCodeInput || "")}" placeholder="Opcional: cole aqui o código 4/0A... ou a URL de callback" style="flex:1;font-family:var(--mono);font-size:12px" />
+            <button type="button" class="mini" id="btn-paste-agy-oauth" title="Colar da área de transferência e conectar">Colar &amp; Conectar</button>
+            <button type="button" class="primary mini" id="btn-submit-agy-oauth">${icons.check}<span>Confirmar Código</span></button>
+          </div>
+        </div>
+      ` : ""}
+
+      ${agyAccounts.length === 0 ? `
+        <div style="padding:14px;border-radius:10px;background:var(--surface-input);border:1px dashed var(--border);text-align:center;font-size:12px;color:var(--text-dim)">
+          Nenhuma conta Google salva no Pool ainda. Clique em <strong>+ Logar Nova Conta Google</strong> acima para autenticar no navegador e salvar automaticamente pelo seu e-mail.
+        </div>
+      ` : `
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${agyAccounts.map((p, idx) => {
+            const email = p.configValues?.["AGY_EMAIL"] || p.name;
+            const initial = (email[0] || "G").toUpperCase();
+            const rankBadge = idx === 0 ? "Conta #1 · Principal" : `Conta #${idx + 1} · Reserva ${idx}`;
+            const isActiveNow = ov?.resolved?.["agy"]?.profileId === p.id || (idx === 0 && !ov?.resolved?.["agy"]?.profileId);
+            return `
+              <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid ${isActiveNow ? "var(--color-success-border)" : "var(--border)"};display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
+                  <div style="width:32px;height:32px;border-radius:50%;background:${idx === 0 ? "var(--color-success-subtle)" : "var(--accent-subtle)"};border:1px solid ${idx === 0 ? "var(--color-success-border)" : "var(--accent-border)"};color:${idx === 0 ? "var(--color-success)" : "var(--accent-strong)"};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">${escapeHtml(initial)}</div>
+                  <div style="min-width:0;flex:1">
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                      <strong style="font-size:13px;color:var(--text)">${escapeHtml(email)}</strong>
+                      <span class="flow-pill ${idx === 0 ? "approved" : "pending"}">${escapeHtml(rankBadge)}</span>
+                      <span style="font-size:10.5px;color:var(--green)">● Pasta isolada salva</span>
+                    </div>
+                    <div class="dim" style="font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                      Vault: <code>%APPDATA%\\HiveMind\\agy-profiles\\${escapeHtml(p.id)}\\oauth-session.json</code>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                  <button type="button" class="mini ${isActiveNow ? "primary" : ""}" data-activate-agy-account="${escapeHtml(p.id)}" title="Ativar esta conta Google como primária agora">${isActiveNow ? "Ativa" : "Ativar"}</button>
+                  <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}" title="Remover conta do Pool">${icons.trash}</button>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `}
+    </div>
+
+    <div style="padding:12px 14px;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div>
+          <strong style="font-size:12.5px">Outras Contas por Chave de API (OpenRouter, OpenCode, Claude, Cursor)</strong>
+          <div class="dim" style="font-size:11px">Opcional: cadastre chaves extras de reserva para failover automático.</div>
+        </div>
+        <button type="button" class="mini" id="prof-new">+ Adicionar Chave Extra</button>
+      </div>
+
+      ${renderKeyAccountEditor()}
+
+      ${otherAccounts.length > 0 ? `
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+          ${otherAccounts.map((p, idx) => {
+            const maskedList = Object.entries(p.envMasked || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(" · ");
+            return `
+              <div style="padding:8px 10px;border-radius:8px;background:var(--bg-deep);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div style="min-width:0;flex:1">
+                  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                    <span class="tok-pill">${escapeHtml(provLabels[p.provider] || p.provider)}</span>
+                    <strong style="font-size:12.5px">${escapeHtml(p.name)}</strong>
+                    <span class="flow-pill pending">Conta #${idx + 1}</span>
+                    <span style="font-size:11px;color:${p.ready ? "var(--green)" : "var(--amber)"}">${p.ready ? "● Pronta" : "Pendente"}</span>
+                  </div>
+                  ${maskedList ? `<div class="dim" style="font-size:11px;margin-top:2px">${maskedList}</div>` : ""}
+                </div>
+                <div style="display:flex;gap:5px;flex-shrink:0">
+                  <button type="button" class="mini prof-edit" data-id="${escapeHtml(p.id)}">Editar</button>
+                  <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}">${icons.trash}</button>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
+    </div>
+  ` : tab === "global" ? `
+    <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
+      Chaves globais padrão salvas fora do repositório (<code>api-keys.json</code> e credenciais OpenCode). Campos deixados em branco mantêm o valor já salvo; use o botão de lixeira para remover uma chave específica.
+    </p>
+    ${state.apiKeysStatus?.["env_TYPESAFE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>TYPESAFE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
+    ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
+    ${state.apiKeysStatus?.["env_OPENCODE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENCODE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
+    <div class="form-grid">
+      ${field("ak-TYPESAFE_API_KEY", "TYPESAFE_API_KEY", "TypeSafe AI Key (Jev · console.typesafe.ai):", "ts_… (TYPESAFE_API_KEY)", saved["TYPESAFE_API_KEY"])}
+      ${field("ak-TYPESAFE_BASE_URL", "TYPESAFE_BASE_URL", "TypeSafe Base URL:", "https://api.typesafe.ai", saved["TYPESAFE_BASE_URL"])}
+      ${field("ak-OPENCODE_API_KEY", "OPENCODE_API_KEY", "OpenCode Go & Zen Token:", "oc_… (OPENCODE_API_KEY)", saved["OPENCODE_API_KEY"])}
+      ${field("ak-OPENCODE_BASE_URL", "OPENCODE_BASE_URL", "OpenCode Base URL:", "https://opencode.ai/zen/v1", saved["OPENCODE_BASE_URL"])}
+      ${field("ak-OPENROUTER_API_KEY", "OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
+      ${field("ak-OPENROUTER_BASE_URL", "OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
+      ${field("ak-CURSOR_API_KEY", "CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
+      ${field("ak-ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
+      ${field("ak-OPENAI_API_KEY", "OPENAI_API_KEY", "OpenAI / Grok API Key:", "sk-…", saved["OPENAI_API_KEY"])}
+      ${field("ak-OPENAI_BASE_URL", "OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
+      ${field("ak-GOOGLE_API_KEY", "GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
+      ${field("ak-GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
+      ${field("ak-GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
+    </div>
+    ${opts?.inline ? `
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="primary" id="ak-save">${icons.check}<span>Salvar Chaves Globais</span></button>
+      </div>
+    ` : ""}
+  ` : `
+    ${renderProvidersScanTabHtml(scan, state.providersScanning, state.providersScanExpanded)}
+    ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
+  `;
+
+  return `${inlineHeader}${bodyHtml}<div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:4px;display:none"></div>`;
+}
+
+export function bindProvidersContentEvents(rerender: () => void): void {
+  const { profilesList, agyAccounts, provLabels, curProv, wsRoot } = providersConfigMeta();
+
+  document.getElementById("ak-tab-profiles")?.addEventListener("click", () => {
+    state.apiKeysTab = "profiles";
+    rerender();
+  });
+  document.getElementById("ak-tab-global")?.addEventListener("click", () => {
+    state.apiKeysTab = "global";
+    rerender();
+  });
+  document.getElementById("ak-tab-scan")?.addEventListener("click", () => {
+    state.apiKeysTab = "scan";
+    rerender();
+    if (!state.providersScan && !state.providersScanning) {
+      void runProvidersScan();
+    }
+  });
+  document.getElementById("btn-scan-all-providers")?.addEventListener("click", () => {
+    void runProvidersScan();
+  });
+  document.querySelectorAll<HTMLElement>("[data-scan-toggle-models]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.scanToggleModels || "";
+      if (!id) return;
+      state.providersScanExpanded[id] = !state.providersScanExpanded[id];
+      rerender();
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-scan-configure]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.scanConfigure || "";
+      state.apiKeysTab = "profiles";
+      if (id && id !== "agy") {
+        state.profileEditor = { open: true, id: "", provider: id, authMode: "key" };
+      } else {
+        state.profileEditor.open = false;
+      }
+      rerender();
+    });
+  });
+  document.getElementById("aiu-probe-providers")?.addEventListener("click", async () => {
+    const b = api();
+    if (!b?.ProbeProviders) return;
+    state.providerHealthProbing = true;
+    rerender();
+    try {
+      const views = await b.ProbeProviders();
+      if (Array.isArray(views)) {
+        state.providerHealth = views;
+        updateStatusBar();
+      }
+    } catch (err: any) {
+      toastError("sondar provedores Jev", err);
+    } finally {
+      state.providerHealthProbing = false;
+      rerender();
+    }
+  });
+
+  document.getElementById("btn-connect-google-agy")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.ConnectNewAgyGoogleAccount) return;
+    const btn = document.getElementById("btn-connect-google-agy") as HTMLButtonElement | null;
+    const prevIds = new Set(agyAccounts.map((a) => a.id));
+    const prevCount = agyAccounts.length;
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `${icons.spinner}<span>Abrindo login Google no navegador…</span>`;
+    }
+    try {
+      state.profilesOverview = await backend.ConnectNewAgyGoogleAccount(wsRoot);
+      state.agyOAuthWaitingCode = true;
+      state.agyOAuthCodeInput = "";
+      rerender();
+      toast("Escolha sua conta Google no navegador que abriu — o HiveMind conecta e salva na pasta isolada automaticamente!", "info");
+
+      let checks = 0;
+      const timer = window.setInterval(async () => {
+        checks++;
+        const providersOpen =
+          state.showAPIKeysModal ||
+          (state.activeEditorPath === IDE_SETTINGS_TAB_KEY && state.ideSettingsSection === "providers");
+        if (!providersOpen || !state.agyOAuthWaitingCode || checks > 90 || !backend.GetProviderProfilesOverview) {
+          window.clearInterval(timer);
+          return;
+        }
+        try {
+          const latest = await backend.GetProviderProfilesOverview(wsRoot);
+          const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
+          const added = newAgy.find((p) => !prevIds.has(p.id));
+          if (added || newAgy.length > prevCount) {
+            window.clearInterval(timer);
+            state.profilesOverview = latest;
+            state.agyOAuthWaitingCode = false;
+            state.agyOAuthCodeInput = "";
+            updateStatusBar();
+            updateMissionBoardIfOpen();
+            rerender();
+            toast(`Nova conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
+          }
+        } catch {
+          // ignore poll error
+        }
+      }, 1200);
+    } catch (err: any) {
+      toastError("iniciar login Google do Antigravity", err);
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `${icons.sparkle}<span>+ Logar Nova Conta Google</span>`;
+      }
+    }
+  });
+
+  const submitAgyOAuthCodeFlow = async (rawCode: string) => {
+    const backend = api();
+    if (!backend?.SubmitAgyOAuthCode) return;
+    const code = rawCode.trim();
+    if (!code) {
+      toast("Cole o código 4/0A... gerado na página do Google Antigravity.", "error");
+      return;
+    }
+    const submitBtn = document.getElementById("btn-submit-agy-oauth") as HTMLButtonElement | null;
+    const pasteBtn = document.getElementById("btn-paste-agy-oauth") as HTMLButtonElement | null;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `${icons.spinner}<span>Validando código…</span>`;
+    }
+    if (pasteBtn) pasteBtn.disabled = true;
+    try {
+      const prevIds = new Set(agyAccounts.map((a) => a.id));
+      const latest = await backend.SubmitAgyOAuthCode(code, wsRoot);
+      state.profilesOverview = latest;
+      state.agyOAuthWaitingCode = false;
+      state.agyOAuthCodeInput = "";
+      const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
+      const added = newAgy.find((p) => !prevIds.has(p.id)) || newAgy[newAgy.length - 1];
+      if (added && wsRoot && backend.BindProviderWorkspace) {
+        state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, "agy", added.id);
+      }
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      rerender();
+      toast(`Conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
+    } catch (err: any) {
+      toastError("validar código OAuth do Google Antigravity", err);
+      rerender();
+    }
+  };
+
+  document.getElementById("agy-oauth-code-input")?.addEventListener("input", (e) => {
+    state.agyOAuthCodeInput = (e.target as HTMLInputElement).value;
+  });
+  document.getElementById("agy-oauth-code-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+      void submitAgyOAuthCodeFlow(val);
+    }
+  });
+  document.getElementById("btn-submit-agy-oauth")?.addEventListener("click", () => {
+    const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+    void submitAgyOAuthCodeFlow(val);
+  });
+  document.getElementById("btn-paste-agy-oauth")?.addEventListener("click", async () => {
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (clip && clip.trim()) {
+        state.agyOAuthCodeInput = clip.trim();
+        const inp = document.getElementById("agy-oauth-code-input") as HTMLInputElement | null;
+        if (inp) inp.value = state.agyOAuthCodeInput;
+        await submitAgyOAuthCodeFlow(state.agyOAuthCodeInput);
+        return;
+      }
+    } catch {
+      // clipboard permission fallback
+    }
+    const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
+    await submitAgyOAuthCodeFlow(val);
+  });
+  document.getElementById("btn-cancel-agy-oauth")?.addEventListener("click", async () => {
+    const backend = api();
+    state.agyOAuthWaitingCode = false;
+    state.agyOAuthCodeInput = "";
+    if (backend?.CancelAgyOAuthLogin) {
+      state.profilesOverview = await backend.CancelAgyOAuthLogin(wsRoot);
+    }
+    rerender();
+    toast("Login cancelado. Sua conta Google anterior continua ativa.", "info");
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-activate-agy-account]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const backend = api();
+      const pid = btn.dataset.activateAgyAccount || "";
+      if (!backend?.ActivateAgyAccount || !pid) return;
+      try {
+        state.profilesOverview = await backend.ActivateAgyAccount(pid, wsRoot);
+        if (wsRoot && backend.BindProviderWorkspace) {
+          state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, "agy", pid);
+        }
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        rerender();
+        const acc = (state.profilesOverview?.profiles || []).find((p) => p.id === pid);
+        toast(`Conta Google ativa trocada para ${acc?.name || pid}.`, "success");
+      } catch (err: any) {
+        toastError("ativar conta Google", err);
+      }
+    });
+  });
+
+  document.getElementById("prof-new")?.addEventListener("click", () => {
+    state.profileEditor = { open: true, id: "", provider: "openrouter", authMode: "key" };
+    rerender();
+  });
+  document.getElementById("prof-cancel-edit")?.addEventListener("click", () => {
+    state.profileEditor.open = false;
+    rerender();
+  });
+  document.getElementById("prof-provider")?.addEventListener("change", (e) => {
+    const pv = (e.target as HTMLSelectElement).value;
+    state.profileEditor.provider = pv;
+    state.profileEditor.authMode = "key";
+    rerender();
+  });
+
+  const saveProfileAction = async () => {
+    const backend = api();
+    if (!backend?.SaveProviderProfile) return;
+    const nameVal = (document.getElementById("prof-name") as HTMLInputElement | null)?.value.trim() || provLabels[curProv] || curProv;
+    const env: Record<string, string> = {};
+    document.querySelectorAll<HTMLInputElement>("[id^='prof-env-']").forEach((inp) => {
+      const key = inp.id.replace("prof-env-", "");
+      env[key] = inp.value.trim();
+    });
+    try {
+      state.profilesOverview = await backend.SaveProviderProfile({
+        id: state.profileEditor.id || "",
+        provider: curProv,
+        name: nameVal,
+        authMode: "key",
+        command: "",
+        env,
+        orgPatterns: [],
+        isDefault: false,
+        bindWorkspace: "",
+      });
+      state.profileEditor.open = false;
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      toast("Conta adicionada ao Pool.", "success");
+      rerender();
+    } catch (err: any) {
+      const errEl = document.getElementById("ak-modal-err");
+      if (errEl) {
+        errEl.textContent = err?.message || String(err);
+        errEl.style.display = "block";
+      }
+    }
+  };
+  document.getElementById("prof-save")?.addEventListener("click", () => void saveProfileAction());
+
+  document.querySelectorAll<HTMLElement>(".prof-edit").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pid = btn.dataset.id || "";
+      const found = profilesList.find((x) => x.id === pid);
+      if (!found) return;
+      state.profileEditor = {
+        open: true,
+        id: found.id,
+        provider: found.provider,
+        authMode: "key",
+      };
+      rerender();
+    });
+  });
+  document.querySelectorAll<HTMLElement>(".prof-del").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const backend = api();
+      const pid = btn.dataset.id || "";
+      if (!backend?.DeleteProviderProfile || !pid) return;
+      try {
+        state.profilesOverview = await backend.DeleteProviderProfile(pid, wsRoot);
+        updateStatusBar();
+        updateMissionBoardIfOpen();
+        rerender();
+      } catch (err: any) {
+        toastError("excluir conta", err);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-ak-clear]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const backend = api();
+      const keyName = btn.dataset.akClear || "";
+      if (!backend?.SaveAPIKeys || !keyName) return;
+      try {
+        state.apiKeysStatus = await backend.SaveAPIKeys({ [keyName]: "" });
+        if (keyName === "OPENCODE_API_KEY" || keyName === "OPENCODE_BASE_URL") {
+          const ocRes = await backend.BootstrapOpenCode?.(true);
+          if (ocRes) state.openCodeStatus = ocRes.status;
+        }
+        state.providersScan = null;
+        updateStatusBar();
+        toast(`Chave ${keyName} removida.`, "info");
+        rerender();
+      } catch (err: any) {
+        toastError(`remover ${keyName}`, err);
+      }
+    });
+  });
+
+  document.getElementById("ak-save")?.addEventListener("click", async () => {
+    const backend = api();
+    if (!backend?.SaveAPIKeys) return;
+    const entries: Record<string, string> = {};
+    for (const name of ["TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
+      const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
+      const val = el?.value?.trim() || "";
+      if (val !== "") {
+        entries[name] = val;
+      }
+    }
+    if (Object.keys(entries).length === 0) {
+      toast("Nenhuma nova chave informada para atualizar.", "info");
+      return;
+    }
+    try {
+      state.apiKeysStatus = await backend.SaveAPIKeys(entries);
+      if (entries["OPENCODE_API_KEY"] || entries["OPENCODE_BASE_URL"]) {
+        const ocRes = await backend.BootstrapOpenCode?.(true);
+        if (ocRes) {
+          state.openCodeStatus = ocRes.status;
+          if (ocRes.goModels?.length) state.openCodeGoModels = ocRes.goModels;
+          if (ocRes.models?.length) state.openCodeModels = ocRes.models;
+        }
+      }
+      state.providersScan = null;
+      updateStatusBar();
+      toast("Chaves globais salvas.", "success");
+      setStatus("Chaves de API atualizadas.");
+      rerender();
+    } catch (err: any) {
+      const errEl = document.getElementById("ak-modal-err");
+      if (errEl) {
+        errEl.textContent = `Falha ao salvar: ${err?.message || String(err)}`;
+        errEl.style.display = "block";
+      }
+    }
+  });
+}
+
 function renderModalLayerInner() {
   const layer = document.getElementById("modal-layer");
   if (!layer) return;
@@ -605,96 +1237,7 @@ function renderModalLayerInner() {
 
   if (state.showAPIKeysModal) {
     const tab = state.apiKeysTab || "profiles";
-    const ov = state.profilesOverview;
-    const saved = state.apiKeysStatus || {};
-    const scan = state.providersScan;
-    const field = (id: string, keyName: string, label: string, placeholder: string, savedMask?: string) => `
-      <label for="${id}">${escapeHtml(label)}${savedMask ? ` <span class="dim" style="font-weight:500">(salvo: ${escapeHtml(savedMask)})</span>` : ""}</label>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input id="${id}" type="${keyName.includes("KEY") ? "password" : "text"}" placeholder="${savedMask ? "Cole novo valor apenas se quiser trocar" : escapeHtml(placeholder)}" autocomplete="off" style="flex:1" />
-        ${savedMask ? `<button type="button" class="mini danger ghost" data-ak-clear="${escapeHtml(keyName)}" title="Remover chave salva">${icons.trash}</button>` : ""}
-      </div>
-    `;
-
-    const provLabels: Record<string, string> = {
-      agy: "Antigravity (Google)",
-      typesafe: "TypeSafe AI (Jev Oficial)",
-      openrouter: "OpenRouter",
-      opencode: "OpenCode Go & Zen",
-      anthropic: "Anthropic (Claude)",
-      openai: "OpenAI / Grok",
-      gemini: "Google Gemini API",
-      cursor: "Cursor CLI",
-    };
-    const nonAgyProvs: Record<string, string> = {
-      typesafe: "TypeSafe AI (Jev Oficial)",
-      openrouter: "OpenRouter",
-      opencode: "OpenCode Go & Zen",
-      anthropic: "Anthropic (Claude)",
-      openai: "OpenAI / Grok",
-      gemini: "Google Gemini API",
-      cursor: "Cursor CLI",
-    };
-    const provKeys: Record<string, Array<{ key: string; label: string; placeholder: string; secret?: boolean }>> = {
-      typesafe: [{ key: "TYPESAFE_API_KEY", label: "TypeSafe AI API Key (console.typesafe.ai/keys)", placeholder: "ts_…", secret: true }],
-      openrouter: [{ key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", placeholder: "sk-or-v1-…", secret: true }],
-      opencode: [{ key: "OPENCODE_API_KEY", label: "OpenCode Token", placeholder: "oc_…", secret: true }],
-      anthropic: [{ key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", placeholder: "sk-ant-…", secret: true }],
-      openai: [{ key: "OPENAI_API_KEY", label: "OpenAI API Key", placeholder: "sk-…", secret: true }],
-      gemini: [{ key: "GOOGLE_API_KEY", label: "Gemini API Key", placeholder: "AIza…", secret: true }],
-      cursor: [{ key: "CURSOR_API_KEY", label: "Cursor API Key", placeholder: "crsr_…", secret: true }],
-    };
-
-    const profilesList = ov?.profiles || [];
-    const agyAccounts = profilesList.filter((p) => p.provider === "agy");
-    const otherAccounts = profilesList.filter((p) => p.provider !== "agy");
-    const ed = state.profileEditor;
-    const editingProf: ProviderProfileSummary | undefined = ed.id
-      ? profilesList.find((p) => p.id === ed.id)
-      : undefined;
-    const curProv = (ed.provider && ed.provider !== "agy" ? ed.provider : editingProf?.provider) || "openrouter";
-    const wsRoot = state.project?.root || "";
-
-    const renderKeyAccountEditor = () => {
-      if (!ed.open) return "";
-      const keyFields = (provKeys[curProv] || []).map((f) => {
-        const mask = editingProf?.envMasked?.[f.key] || "";
-        return `
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <label for="prof-env-${f.key}" style="font-size:11.5px;color:var(--text-dim);font-weight:600">
-              ${escapeHtml(f.label)}${mask ? ` <span class="dim">(atual: ${escapeHtml(mask)})</span>` : ""}
-            </label>
-            <input id="prof-env-${f.key}" type="password" placeholder="${mask ? "Cole nova chave apenas se quiser trocar" : escapeHtml(f.placeholder)}" autocomplete="off" style="padding:8px 10px;font-size:12.5px" />
-          </div>
-        `;
-      }).join("");
-
-      return `
-        <div style="margin-top:10px;padding:14px;border-radius:12px;background:var(--bg-deep);border:1px solid var(--border-strong);display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <strong style="font-size:13px">${editingProf ? `Editar Conta · ${escapeHtml(editingProf.name)}` : "Adicionar Conta por Chave de API"}</strong>
-            <button type="button" class="mini" id="prof-cancel-edit">Cancelar</button>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            <div style="display:flex;flex-direction:column;gap:4px">
-              <label for="prof-provider" style="font-size:11.5px;color:var(--text-dim);font-weight:600">Provedor</label>
-              <select id="prof-provider" ${editingProf ? "disabled" : ""} style="padding:7px 10px;font-size:12.5px">
-                ${Object.entries(nonAgyProvs).map(([id, lbl]) => `<option value="${id}" ${curProv === id ? "selected" : ""}>${escapeHtml(lbl)}</option>`).join("")}
-              </select>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:4px">
-              <label for="prof-name" style="font-size:11.5px;color:var(--text-dim);font-weight:600">Identificação / E-mail</label>
-              <input id="prof-name" value="${escapeHtml(editingProf?.name || "")}" placeholder="ex.: OpenRouter Reserva ou email@empresa.com" style="padding:7px 10px;font-size:12.5px" />
-            </div>
-          </div>
-          ${keyFields}
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
-            <button type="button" class="primary" id="prof-save" style="padding:6px 14px">${icons.check}<span>Salvar Conta no Pool</span></button>
-          </div>
-        </div>
-      `;
-    };
-
+    const { wsRoot } = providersConfigMeta();
     layer.innerHTML = `
       <div class="modal-backdrop" id="ak-modal-backdrop">
         <div class="modal-box" role="dialog" aria-modal="true" style="width:660px;max-height:88vh;display:flex;flex-direction:column;padding:18px 20px">
@@ -704,148 +1247,12 @@ function renderModalLayerInner() {
               <div class="dim" style="font-size:11.5px;margin-top:2px">Gerencie contas Google (Antigravity), pool de chaves de API, chaves globais e faça varredura de todos os provedores.</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap">
-              <button type="button" class="mini ${tab === "profiles" ? "primary" : ""}" id="ak-tab-profiles">Pool de Contas (${profilesList.length})</button>
-              <button type="button" class="mini ${tab === "global" ? "primary" : ""}" id="ak-tab-global">Chaves Globais</button>
-              <button type="button" class="mini ${tab === "scan" ? "primary" : ""}" id="ak-tab-scan">Varredura${scan ? ` (${scan.connectedProviders}/${scan.totalProviders})` : ""}</button>
+              ${renderProvidersTabButtonsHtml()}
             </div>
           </div>
 
           <div style="overflow-y:auto;padding-right:4px;flex:1;display:flex;flex-direction:column;gap:12px">
-            ${tab === "profiles" ? `
-              <!-- Card Principal: Contas Google Antigravity (agy) -->
-              <div style="padding:14px 16px;border-radius:12px;background:linear-gradient(180deg, rgba(56,189,248,0.08), var(--accent-subtle));border:1px solid rgba(56,189,248,0.28);display:flex;flex-direction:column;gap:12px">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <div style="width:36px;height:36px;border-radius:10px;background:rgba(56,189,248,0.16);border:1px solid rgba(56,189,248,0.4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#7dd3fc;flex-shrink:0">G</div>
-                    <div>
-                      <div style="font-weight:700;font-size:13.5px;color:var(--text)">Contas Google · Antigravity (agy)</div>
-                      <div class="dim" style="font-size:11.5px">Se o token do <code>argon</code> acabar na Conta 1, o Jev mantém os outros modelos na Conta 1 e muda só o <code>argon</code> para a Conta 2.</div>
-                    </div>
-                  </div>
-                  <button type="button" class="primary" id="btn-connect-google-agy" style="padding:7px 14px;font-weight:600;font-size:12.5px;border-radius:8px;flex-shrink:0">
-                    ${icons.sparkle}<span>${state.agyOAuthWaitingCode ? "Reabrir Login Google" : "+ Logar Nova Conta Google"}</span>
-                  </button>
-                </div>
-
-                ${state.agyOAuthWaitingCode ? `
-                  <div style="padding:12px 14px;border-radius:10px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.55);display:flex;flex-direction:column;gap:8px">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                      <strong style="font-size:12.5px;color:#7dd3fc">${icons.spinner} Aguardando seleção da Conta Google no navegador…</strong>
-                      <button type="button" class="mini" id="btn-cancel-agy-oauth">Cancelar</button>
-                    </div>
-                    <div class="dim" style="font-size:11.5px;line-height:1.45">
-                      1. Escolha sua conta Google e clique em <strong>Continuar</strong> no navegador — o HiveMind recebe o retorno automaticamente em <code>localhost</code> e já salva na pasta isolada pelo e-mail.<br/>
-                      2. Caso seu navegador não redirecione sozinho, você também pode colar o código <code>4/0A…</code> ou a URL abaixo:
-                    </div>
-                    <div style="display:flex;gap:8px;align-items:center">
-                      <input id="agy-oauth-code-input" type="text" value="${escapeHtml(state.agyOAuthCodeInput || "")}" placeholder="Opcional: cole aqui o código 4/0A... ou a URL de callback" style="flex:1;font-family:var(--font-mono);font-size:12px" />
-                      <button type="button" class="mini" id="btn-paste-agy-oauth" title="Colar da área de transferência e conectar">Colar &amp; Conectar</button>
-                      <button type="button" class="primary mini" id="btn-submit-agy-oauth">${icons.check}<span>Confirmar Código</span></button>
-                    </div>
-                  </div>
-                ` : ""}
-
-                ${agyAccounts.length === 0 ? `
-                  <div style="padding:14px;border-radius:10px;background:rgba(0,0,0,0.22);border:1px dashed var(--border);text-align:center;font-size:12px;color:var(--text-dim)">
-                    Nenhuma conta Google salva no Pool ainda. Clique em <strong>+ Logar Nova Conta Google</strong> acima para autenticar no navegador e salvar automaticamente pelo seu e-mail.
-                  </div>
-                ` : `
-                  <div style="display:flex;flex-direction:column;gap:8px">
-                    ${agyAccounts.map((p, idx) => {
-                      const email = p.configValues?.["AGY_EMAIL"] || p.name;
-                      const initial = (email[0] || "G").toUpperCase();
-                      const rankBadge = idx === 0 ? "Conta #1 · Principal" : `Conta #${idx + 1} · Reserva ${idx}`;
-                      const isActiveNow = ov?.resolved?.["agy"]?.profileId === p.id || (idx === 0 && !ov?.resolved?.["agy"]?.profileId);
-                      return `
-                        <div style="padding:10px 12px;border-radius:10px;background:var(--bg-card);border:1px solid ${isActiveNow ? "rgba(52,211,153,0.45)" : "var(--border)"};display:flex;align-items:center;justify-content:space-between;gap:10px">
-                          <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">
-                            <div style="width:32px;height:32px;border-radius:50%;background:${idx === 0 ? "rgba(52,211,153,0.18)" : "var(--accent-subtle)"};border:1px solid ${idx === 0 ? "rgba(52,211,153,0.45)" : "var(--accent-border)"};color:${idx === 0 ? "#6ee7b7" : "var(--accent-strong)"};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">${escapeHtml(initial)}</div>
-                            <div style="min-width:0;flex:1">
-                              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                                <strong style="font-size:13px;color:var(--text)">${escapeHtml(email)}</strong>
-                                <span class="flow-pill ${idx === 0 ? "approved" : "pending"}">${escapeHtml(rankBadge)}</span>
-                                <span style="font-size:10.5px;color:var(--green)">● Pasta isolada salva</span>
-                              </div>
-                              <div class="dim" style="font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                                Vault: <code>%APPDATA%\\HiveMind\\agy-profiles\\${escapeHtml(p.id)}\\oauth-session.json</code>
-                              </div>
-                            </div>
-                          </div>
-                          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-                            <button type="button" class="mini ${isActiveNow ? "primary" : ""}" data-activate-agy-account="${escapeHtml(p.id)}" title="Ativar esta conta Google como primária agora">${isActiveNow ? "Ativa" : "Ativar"}</button>
-                            <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}" title="Remover conta do Pool">${icons.trash}</button>
-                          </div>
-                        </div>
-                      `;
-                    }).join("")}
-                  </div>
-                `}
-              </div>
-
-              <!-- Card Secundário: Contas Extras de Outros Provedores (OpenRouter, OpenCode, Claude, etc.) -->
-              <div style="padding:12px 14px;border-radius:12px;background:var(--bg-card);border:1px solid var(--border);display:flex;flex-direction:column;gap:8px">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                  <div>
-                    <strong style="font-size:12.5px">Outras Contas por Chave de API (OpenRouter, OpenCode, Claude, Cursor)</strong>
-                    <div class="dim" style="font-size:11px">Opcional: cadastre chaves extras de reserva para failover automático.</div>
-                  </div>
-                  <button type="button" class="mini" id="prof-new">+ Adicionar Chave Extra</button>
-                </div>
-
-                ${renderKeyAccountEditor()}
-
-                ${otherAccounts.length > 0 ? `
-                  <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
-                    ${otherAccounts.map((p, idx) => {
-                      const maskedList = Object.entries(p.envMasked || {}).map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(" · ");
-                      return `
-                        <div style="padding:8px 10px;border-radius:8px;background:var(--bg-deep);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
-                          <div style="min-width:0;flex:1">
-                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                              <span class="tok-pill">${escapeHtml(provLabels[p.provider] || p.provider)}</span>
-                              <strong style="font-size:12.5px">${escapeHtml(p.name)}</strong>
-                              <span class="flow-pill pending">Conta #${idx + 1}</span>
-                              <span style="font-size:11px;color:${p.ready ? "var(--green)" : "var(--amber)"}">${p.ready ? "● Pronta" : "Pendente"}</span>
-                            </div>
-                            ${maskedList ? `<div class="dim" style="font-size:11px;margin-top:2px">${maskedList}</div>` : ""}
-                          </div>
-                          <div style="display:flex;gap:5px;flex-shrink:0">
-                            <button type="button" class="mini prof-edit" data-id="${escapeHtml(p.id)}">Editar</button>
-                            <button type="button" class="danger mini prof-del" data-id="${escapeHtml(p.id)}">${icons.trash}</button>
-                          </div>
-                        </div>
-                      `;
-                    }).join("")}
-                  </div>
-                ` : ""}
-              </div>
-            ` : tab === "global" ? `
-              <p class="dim" style="font-size:12px;margin-top:2px;margin-bottom:10px;line-height:1.5">
-                Chaves globais padrão salvas fora do repositório (<code>api-keys.json</code> e credenciais OpenCode). Campos deixados em branco mantêm o valor já salvo; use o botão de lixeira para remover uma chave específica.
-              </p>
-              ${state.apiKeysStatus?.["env_TYPESAFE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>TYPESAFE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
-              ${state.apiKeysStatus?.["env_OPENROUTER_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENROUTER_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
-              ${state.apiKeysStatus?.["env_OPENCODE_API_KEY"] ? `<div style="color:var(--amber);font-size:12px;margin-bottom:6px">A variável de ambiente <code>OPENCODE_API_KEY</code> está definida no sistema e tem prioridade.</div>` : ""}
-              <div class="form-grid">
-                ${field("ak-TYPESAFE_API_KEY", "TYPESAFE_API_KEY", "TypeSafe AI Key (Jev · console.typesafe.ai):", "ts_… (TYPESAFE_API_KEY)", saved["TYPESAFE_API_KEY"])}
-                ${field("ak-TYPESAFE_BASE_URL", "TYPESAFE_BASE_URL", "TypeSafe Base URL:", "https://api.typesafe.ai", saved["TYPESAFE_BASE_URL"])}
-                ${field("ak-OPENCODE_API_KEY", "OPENCODE_API_KEY", "OpenCode Go & Zen Token:", "oc_… (OPENCODE_API_KEY)", saved["OPENCODE_API_KEY"])}
-                ${field("ak-OPENCODE_BASE_URL", "OPENCODE_BASE_URL", "OpenCode Base URL:", "https://opencode.ai/zen/v1", saved["OPENCODE_BASE_URL"])}
-                ${field("ak-OPENROUTER_API_KEY", "OPENROUTER_API_KEY", "OpenRouter API Key:", "sk-or-v1-…", saved["OPENROUTER_API_KEY"])}
-                ${field("ak-OPENROUTER_BASE_URL", "OPENROUTER_BASE_URL", "OpenRouter Base URL:", "https://openrouter.ai/api/v1", saved["OPENROUTER_BASE_URL"])}
-                ${field("ak-CURSOR_API_KEY", "CURSOR_API_KEY", "Cursor API Key (agente CLI):", "crsr_… (painel Cursor → API Keys)", saved["CURSOR_API_KEY"])}
-                ${field("ak-ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "Anthropic API Key:", "sk-ant-…", saved["ANTHROPIC_API_KEY"])}
-                ${field("ak-OPENAI_API_KEY", "OPENAI_API_KEY", "OpenAI / Grok API Key:", "sk-…", saved["OPENAI_API_KEY"])}
-                ${field("ak-OPENAI_BASE_URL", "OPENAI_BASE_URL", "OpenAI Base URL:", "https://api.openai.com/v1", saved["OPENAI_BASE_URL"])}
-                ${field("ak-GOOGLE_API_KEY", "GOOGLE_API_KEY", "Google Gemini API Key:", "AIza…", saved["GOOGLE_API_KEY"])}
-                ${field("ak-GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT", "Vertex — Projeto:", "meu-projeto-gcp", saved["GOOGLE_CLOUD_PROJECT"])}
-                ${field("ak-GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_LOCATION", "Vertex — Região:", "us-central1", saved["GOOGLE_CLOUD_LOCATION"])}
-              </div>
-            ` : `
-              ${renderProvidersScanTabHtml(scan, state.providersScanning, state.providersScanExpanded)}
-              ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
-            `}
-            <div id="ak-modal-err" style="color:var(--red);font-size:12px;margin-top:4px;display:none"></div>
+            ${renderProvidersContentHtml({ inline: false })}
           </div>
 
           <div class="modal-footer" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
@@ -872,352 +1279,7 @@ function renderModalLayerInner() {
     document.getElementById("ak-modal-backdrop")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement)?.id === "ak-modal-backdrop") closeAk();
     });
-    document.getElementById("ak-tab-profiles")?.addEventListener("click", () => {
-      state.apiKeysTab = "profiles";
-      renderModalLayer();
-    });
-    document.getElementById("ak-tab-global")?.addEventListener("click", () => {
-      state.apiKeysTab = "global";
-      renderModalLayer();
-    });
-    document.getElementById("ak-tab-scan")?.addEventListener("click", () => {
-      state.apiKeysTab = "scan";
-      renderModalLayer();
-      if (!state.providersScan && !state.providersScanning) {
-        void runProvidersScan();
-      }
-    });
-    document.getElementById("btn-scan-all-providers")?.addEventListener("click", () => {
-      void runProvidersScan();
-    });
-    document.querySelectorAll<HTMLElement>("[data-scan-toggle-models]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const id = btn.dataset.scanToggleModels || "";
-        if (!id) return;
-        state.providersScanExpanded[id] = !state.providersScanExpanded[id];
-        renderModalLayer();
-      });
-    });
-    document.querySelectorAll<HTMLElement>("[data-scan-configure]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const id = btn.dataset.scanConfigure || "";
-        state.apiKeysTab = "profiles";
-        if (id && id !== "agy") {
-          state.profileEditor = { open: true, id: "", provider: id, authMode: "key" };
-        } else {
-          state.profileEditor.open = false;
-        }
-        renderModalLayer();
-      });
-    });
-    document.getElementById("aiu-probe-providers")?.addEventListener("click", async () => {
-      const b = api();
-      if (!b?.ProbeProviders) return;
-      state.providerHealthProbing = true;
-      renderModalLayer();
-      try {
-        const views = await b.ProbeProviders();
-        if (Array.isArray(views)) {
-          state.providerHealth = views;
-          updateStatusBar();
-        }
-      } catch (err: any) {
-        toastError("sondar provedores Jev", err);
-      } finally {
-        state.providerHealthProbing = false;
-        if (state.showAPIKeysModal) renderModalLayer();
-      }
-    });
-
-    document.getElementById("btn-connect-google-agy")?.addEventListener("click", async () => {
-      const backend = api();
-      if (!backend?.ConnectNewAgyGoogleAccount) return;
-      const btn = document.getElementById("btn-connect-google-agy") as HTMLButtonElement | null;
-      const prevIds = new Set(agyAccounts.map((a) => a.id));
-      const prevCount = agyAccounts.length;
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `${icons.spinner}<span>Abrindo login Google no navegador…</span>`;
-      }
-      try {
-        state.profilesOverview = await backend.ConnectNewAgyGoogleAccount(wsRoot);
-        state.agyOAuthWaitingCode = true;
-        state.agyOAuthCodeInput = "";
-        renderModalLayer();
-        toast("Escolha sua conta Google no navegador que abriu — o HiveMind conecta e salva na pasta isolada automaticamente!", "info");
-
-        let checks = 0;
-        const timer = window.setInterval(async () => {
-          checks++;
-          if (!state.showAPIKeysModal || !state.agyOAuthWaitingCode || checks > 90 || !backend.GetProviderProfilesOverview) {
-            window.clearInterval(timer);
-            return;
-          }
-          try {
-            const latest = await backend.GetProviderProfilesOverview(wsRoot);
-            const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
-            const added = newAgy.find((p) => !prevIds.has(p.id));
-            if (added || newAgy.length > prevCount) {
-              window.clearInterval(timer);
-              state.profilesOverview = latest;
-              state.agyOAuthWaitingCode = false;
-              state.agyOAuthCodeInput = "";
-              updateStatusBar();
-              updateMissionBoardIfOpen();
-              renderModalLayer();
-              toast(`Nova conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
-            }
-          } catch {
-            // ignore poll error
-          }
-        }, 1200);
-      } catch (err: any) {
-        toastError("iniciar login Google do Antigravity", err);
-        if (btn) {
-          btn.disabled = false;
-          btn.innerHTML = `${icons.sparkle}<span>+ Logar Nova Conta Google</span>`;
-        }
-      }
-    });
-
-    const submitAgyOAuthCodeFlow = async (rawCode: string) => {
-      const backend = api();
-      if (!backend?.SubmitAgyOAuthCode) return;
-      const code = rawCode.trim();
-      if (!code) {
-        toast("Cole o código 4/0A... gerado na página do Google Antigravity.", "error");
-        return;
-      }
-      const submitBtn = document.getElementById("btn-submit-agy-oauth") as HTMLButtonElement | null;
-      const pasteBtn = document.getElementById("btn-paste-agy-oauth") as HTMLButtonElement | null;
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = `${icons.spinner}<span>Validando código…</span>`;
-      }
-      if (pasteBtn) pasteBtn.disabled = true;
-      try {
-        const prevIds = new Set(agyAccounts.map((a) => a.id));
-        const latest = await backend.SubmitAgyOAuthCode(code, wsRoot);
-        state.profilesOverview = latest;
-        state.agyOAuthWaitingCode = false;
-        state.agyOAuthCodeInput = "";
-        const newAgy = (latest?.profiles || []).filter((p) => p.provider === "agy");
-        const added = newAgy.find((p) => !prevIds.has(p.id)) || newAgy[newAgy.length - 1];
-        if (added && wsRoot && backend.BindProviderWorkspace) {
-          state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, "agy", added.id);
-        }
-        updateStatusBar();
-        updateMissionBoardIfOpen();
-        renderModalLayer();
-        toast(`Conta Google conectada e salva em pasta isolada: ${added?.name || "conectada"}!`, "success");
-      } catch (err: any) {
-        toastError("validar código OAuth do Google Antigravity", err);
-        renderModalLayer();
-      }
-    };
-
-    document.getElementById("agy-oauth-code-input")?.addEventListener("input", (e) => {
-      state.agyOAuthCodeInput = (e.target as HTMLInputElement).value;
-    });
-    document.getElementById("agy-oauth-code-input")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
-        void submitAgyOAuthCodeFlow(val);
-      }
-    });
-    document.getElementById("btn-submit-agy-oauth")?.addEventListener("click", () => {
-      const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
-      void submitAgyOAuthCodeFlow(val);
-    });
-    document.getElementById("btn-paste-agy-oauth")?.addEventListener("click", async () => {
-      try {
-        const clip = await navigator.clipboard.readText();
-        if (clip && clip.trim()) {
-          state.agyOAuthCodeInput = clip.trim();
-          const inp = document.getElementById("agy-oauth-code-input") as HTMLInputElement | null;
-          if (inp) inp.value = state.agyOAuthCodeInput;
-          await submitAgyOAuthCodeFlow(state.agyOAuthCodeInput);
-          return;
-        }
-      } catch {
-        // clipboard permission fallback
-      }
-      const val = (document.getElementById("agy-oauth-code-input") as HTMLInputElement | null)?.value || state.agyOAuthCodeInput;
-      await submitAgyOAuthCodeFlow(val);
-    });
-    document.getElementById("btn-cancel-agy-oauth")?.addEventListener("click", async () => {
-      const backend = api();
-      state.agyOAuthWaitingCode = false;
-      state.agyOAuthCodeInput = "";
-      if (backend?.CancelAgyOAuthLogin) {
-        state.profilesOverview = await backend.CancelAgyOAuthLogin(wsRoot);
-      }
-      renderModalLayer();
-      toast("Login cancelado. Sua conta Google anterior continua ativa.", "info");
-    });
-
-    document.querySelectorAll<HTMLElement>("[data-activate-agy-account]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const backend = api();
-        const pid = btn.dataset.activateAgyAccount || "";
-        if (!backend?.ActivateAgyAccount || !pid) return;
-        try {
-          state.profilesOverview = await backend.ActivateAgyAccount(pid, wsRoot);
-          if (wsRoot && backend.BindProviderWorkspace) {
-            state.profilesOverview = await backend.BindProviderWorkspace(wsRoot, "agy", pid);
-          }
-          updateStatusBar();
-          updateMissionBoardIfOpen();
-          renderModalLayer();
-          const acc = (state.profilesOverview?.profiles || []).find((p) => p.id === pid);
-          toast(`Conta Google ativa trocada para ${acc?.name || pid}.`, "success");
-        } catch (err: any) {
-          toastError("ativar conta Google", err);
-        }
-      });
-    });
-
-    document.getElementById("prof-new")?.addEventListener("click", () => {
-      state.profileEditor = { open: true, id: "", provider: "openrouter", authMode: "key" };
-      renderModalLayer();
-    });
-    document.getElementById("prof-cancel-edit")?.addEventListener("click", () => {
-      state.profileEditor.open = false;
-      renderModalLayer();
-    });
-    document.getElementById("prof-provider")?.addEventListener("change", (e) => {
-      const pv = (e.target as HTMLSelectElement).value;
-      state.profileEditor.provider = pv;
-      state.profileEditor.authMode = "key";
-      renderModalLayer();
-    });
-
-    const saveProfileAction = async () => {
-      const backend = api();
-      if (!backend?.SaveProviderProfile) return;
-      const nameVal = (document.getElementById("prof-name") as HTMLInputElement | null)?.value.trim() || provLabels[curProv] || curProv;
-      const env: Record<string, string> = {};
-      document.querySelectorAll<HTMLInputElement>("[id^='prof-env-']").forEach((inp) => {
-        const key = inp.id.replace("prof-env-", "");
-        env[key] = inp.value.trim();
-      });
-      try {
-        state.profilesOverview = await backend.SaveProviderProfile({
-          id: state.profileEditor.id || "",
-          provider: curProv,
-          name: nameVal,
-          authMode: "key",
-          command: "",
-          env,
-          orgPatterns: [],
-          isDefault: false,
-          bindWorkspace: "",
-        });
-        state.profileEditor.open = false;
-        updateStatusBar();
-        updateMissionBoardIfOpen();
-        toast("Conta adicionada ao Pool.", "success");
-        renderModalLayer();
-      } catch (err: any) {
-        const errEl = document.getElementById("ak-modal-err");
-        if (errEl) {
-          errEl.textContent = err?.message || String(err);
-          errEl.style.display = "block";
-        }
-      }
-    };
-    document.getElementById("prof-save")?.addEventListener("click", () => void saveProfileAction());
-
-    document.querySelectorAll<HTMLElement>(".prof-edit").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const pid = btn.dataset.id || "";
-        const found = profilesList.find((x) => x.id === pid);
-        if (!found) return;
-        state.profileEditor = {
-          open: true,
-          id: found.id,
-          provider: found.provider,
-          authMode: "key",
-        };
-        renderModalLayer();
-      });
-    });
-    document.querySelectorAll<HTMLElement>(".prof-del").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const backend = api();
-        const pid = btn.dataset.id || "";
-        if (!backend?.DeleteProviderProfile || !pid) return;
-        try {
-          state.profilesOverview = await backend.DeleteProviderProfile(pid, wsRoot);
-          updateStatusBar();
-          updateMissionBoardIfOpen();
-          renderModalLayer();
-        } catch (err: any) {
-          toastError("excluir conta", err);
-        }
-      });
-    });
-
-    document.querySelectorAll<HTMLElement>("[data-ak-clear]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const backend = api();
-        const keyName = btn.dataset.akClear || "";
-        if (!backend?.SaveAPIKeys || !keyName) return;
-        try {
-          state.apiKeysStatus = await backend.SaveAPIKeys({ [keyName]: "" });
-          if (keyName === "OPENCODE_API_KEY" || keyName === "OPENCODE_BASE_URL") {
-            const ocRes = await backend.BootstrapOpenCode?.(true);
-            if (ocRes) state.openCodeStatus = ocRes.status;
-          }
-          state.providersScan = null;
-          updateStatusBar();
-          toast(`Chave ${keyName} removida.`, "info");
-          renderModalLayer();
-        } catch (err: any) {
-          toastError(`remover ${keyName}`, err);
-        }
-      });
-    });
-
-    document.getElementById("ak-save")?.addEventListener("click", async () => {
-      const backend = api();
-      if (!backend?.SaveAPIKeys) return;
-      const entries: Record<string, string> = {};
-      for (const name of ["TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "OPENCODE_API_KEY", "OPENCODE_BASE_URL", "CURSOR_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]) {
-        const el = document.getElementById(`ak-${name}`) as HTMLInputElement | null;
-        const val = el?.value?.trim() || "";
-        if (val !== "") {
-          entries[name] = val;
-        }
-      }
-      if (Object.keys(entries).length === 0) {
-        toast("Nenhuma nova chave informada para atualizar.", "info");
-        return;
-      }
-      try {
-        state.apiKeysStatus = await backend.SaveAPIKeys(entries);
-        if (entries["OPENCODE_API_KEY"] || entries["OPENCODE_BASE_URL"]) {
-          const ocRes = await backend.BootstrapOpenCode?.(true);
-          if (ocRes) {
-            state.openCodeStatus = ocRes.status;
-            if (ocRes.goModels?.length) state.openCodeGoModels = ocRes.goModels;
-            if (ocRes.models?.length) state.openCodeModels = ocRes.models;
-          }
-        }
-        state.providersScan = null;
-        updateStatusBar();
-        toast("Chaves globais salvas.", "success");
-        setStatus("Chaves de API atualizadas.");
-        renderModalLayer();
-      } catch (err: any) {
-        const errEl = document.getElementById("ak-modal-err");
-        if (errEl) {
-          errEl.textContent = `Falha ao salvar: ${err?.message || String(err)}`;
-          errEl.style.display = "block";
-        }
-      }
-    });
+    bindProvidersContentEvents(() => renderModalLayer());
     return;
   }
 
@@ -2167,27 +2229,11 @@ export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
   `;
 }
 
-export async function openAIUsagePage() {
-  const existing = state.editorTabs.find((t) => t.relPath === AI_USAGE_TAB_KEY);
-  if (!existing) {
-    state.editorTabs.unshift({
-      kind: "ai-usage",
-      relPath: AI_USAGE_TAB_KEY,
-      name: "Uso & Limites das IAs",
-      content: "",
-      dirty: false,
-    });
-  }
-  state.activeEditorPath = AI_USAGE_TAB_KEY;
-  state.aiUsagePage.editingProvider = "";
+export async function refreshAIUsageData(): Promise<void> {
   state.aiUsagePage.loading = true;
-  renderEditorTabs();
-  renderEditorBody();
-
   const backend = api();
   if (!backend || !backend.GetAIUsage) {
     state.aiUsagePage.loading = false;
-    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
     return;
   }
   try {
@@ -2206,8 +2252,28 @@ export async function openAIUsagePage() {
     toastError("carregar uso e limites das IAs", err);
   } finally {
     state.aiUsagePage.loading = false;
-    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
   }
+}
+
+export async function openAIUsagePage() {
+  const existing = state.editorTabs.find((t) => t.relPath === AI_USAGE_TAB_KEY);
+  if (!existing) {
+    state.editorTabs.unshift({
+      kind: "ai-usage",
+      relPath: AI_USAGE_TAB_KEY,
+      name: "Uso & Limites das IAs",
+      content: "",
+      dirty: false,
+    });
+  }
+  state.activeEditorPath = AI_USAGE_TAB_KEY;
+  state.aiUsagePage.editingProvider = "";
+  state.aiUsagePage.loading = true;
+  renderEditorTabs();
+  renderEditorBody();
+
+  await refreshAIUsageData();
+  if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
 }
 
 /** @deprecated use openAIUsagePage */
@@ -2715,9 +2781,19 @@ function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
   `;
 }
 
-export function renderAIUsagePageHtml(): string {
+export function renderAIUsageSectionsHtml(): string {
   const m = state.aiUsagePage;
   const rep = m.report;
+  return `
+    ${renderJevPolicyEditorHtml(jevPolicyDraft)}
+    ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
+    ${renderCostBreakdownCardHtml(rep)}
+    ${renderAIUsageCardsHtml(rep, m.loading)}
+  `;
+}
+
+export function renderAIUsagePageHtml(): string {
+  const m = state.aiUsagePage;
   return `
     <div class="ai-usage-page">
       <div class="tc-header">
@@ -2737,10 +2813,7 @@ export function renderAIUsagePageHtml(): string {
       </div>
 
       <div class="aiu-cards-wrap">
-        ${renderJevPolicyEditorHtml(jevPolicyDraft)}
-        ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
-        ${renderCostBreakdownCardHtml(rep)}
-        ${renderAIUsageCardsHtml(rep, m.loading)}
+        ${renderAIUsageSectionsHtml()}
       </div>
 
       <div class="dim" style="font-size:11px;padding:4px 2px">Dados locais em %AppData%\\HiveMind\\ai-usage.json</div>
@@ -2748,8 +2821,13 @@ export function renderAIUsagePageHtml(): string {
   `;
 }
 
-export function bindAIUsagePageEvents() {
-  document.getElementById("aiu-refresh")?.addEventListener("click", () => void openAIUsagePage());
+export function bindAIUsagePageEvents(onRerender?: () => void, onRefresh?: () => Promise<void>) {
+  const rerender = onRerender ?? (() => {
+    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+  });
+  const refresh = onRefresh ?? (() => openAIUsagePage());
+
+  document.getElementById("aiu-refresh")?.addEventListener("click", () => void refresh());
   document.getElementById("aiu-save-jev-policy")?.addEventListener("click", async () => {
     const backend = api();
     if (!backend?.SaveJevPolicy) return;
@@ -2796,7 +2874,7 @@ export function bindAIUsagePageEvents() {
     const b = api();
     if (!b?.ProbeProviders) return;
     state.providerHealthProbing = true;
-    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+    rerender();
     try {
       const views = await b.ProbeProviders();
       if (Array.isArray(views)) {
@@ -2807,7 +2885,7 @@ export function bindAIUsagePageEvents() {
       toastError("sondar provedores Jev", err);
     } finally {
       state.providerHealthProbing = false;
-      if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+      rerender();
     }
   });
   document.getElementById("aiu-open-opencode-cfg")?.addEventListener("click", () => {
@@ -2818,13 +2896,13 @@ export function bindAIUsagePageEvents() {
     btn.addEventListener("click", () => {
       const prov = (btn as HTMLElement).dataset.aiuEditLimits || "";
       state.aiUsagePage.editingProvider = state.aiUsagePage.editingProvider === prov ? "" : prov;
-      if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+      rerender();
     });
   });
 
   document.getElementById("aiu-limit-cancel")?.addEventListener("click", () => {
     state.aiUsagePage.editingProvider = "";
-    if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+    rerender();
   });
 
   document.querySelectorAll("[data-aiu-save-limits]").forEach((btn) => {
@@ -2836,7 +2914,7 @@ export function bindAIUsagePageEvents() {
       try {
         state.aiUsagePage.report = await api()!.SaveAIUsageLimits(prov, v5h, v7d);
         state.aiUsagePage.editingProvider = "";
-        if (state.activeEditorPath === AI_USAGE_TAB_KEY) renderEditorBody();
+        rerender();
         toast("Metas de uso atualizadas.", "success");
       } catch (err: any) {
         toastError("salvar metas de uso", err);

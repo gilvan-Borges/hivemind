@@ -48,8 +48,10 @@ func (a *App) startOrbHost() {
 	a.orb.hub = hub
 	a.orb.mu.Unlock()
 	a.hookResidentLaneEvents()
-	if err := a.launchOrbWindow(); err != nil {
-		log.Printf("aviso: janela do Orb flutuante não iniciou: %v", err)
+	if a.resident == nil || a.resident.IsOrbEnabled() {
+		if err := a.launchOrbWindow(); err != nil {
+			log.Printf("aviso: janela do Orb flutuante não iniciou: %v", err)
+		}
 	}
 	go a.orbSyncResidentSnapshot()
 }
@@ -224,6 +226,18 @@ func (a *App) isOrbRunning() bool {
 	return a.orb.running
 }
 
+func (a *App) hideOrbWindow() {
+	a.orb.mu.Lock()
+	cmd := a.orb.cmd
+	a.orb.cmd = nil
+	a.orb.running = false
+	a.orb.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+}
+
 func (a *App) stopOrbHost() {
 	a.orb.mu.Lock()
 	hub := a.orb.hub
@@ -358,6 +372,12 @@ func (a *App) QuitAll() {
 // OrbShow launches the floating Orb window if it is not currently running.
 func (a *App) OrbShow() error {
 	return a.launchOrbWindow()
+}
+
+// OrbHide stops the floating Orb window process while keeping the host hub ready.
+func (a *App) OrbHide() error {
+	a.hideOrbWindow()
+	return nil
 }
 
 // OrbRunning reports whether the independent floating Orb window is active.
