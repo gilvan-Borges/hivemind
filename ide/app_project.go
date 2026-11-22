@@ -339,7 +339,16 @@ func (a *App) LoadSession(workspace, sessionID string) (idecore.SessionDetail, e
 func (a *App) DeleteSession(workspace, sessionID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return idecore.DeleteWorkspaceSession(ctx, workspace, sessionID)
+	if err := idecore.DeleteWorkspaceSession(ctx, workspace, sessionID); err != nil {
+		return err
+	}
+	if a.mobile != nil && a.mobile.hub != nil {
+		a.mobile.hub.ClearSession(workspace, sessionID)
+		if sum, err := idecore.ListWorkspaceSessions(ctx, workspace); err == nil && len(sum.Sessions) == 0 {
+			a.mobile.hub.ClearWorkspaceLanes(workspace)
+		}
+	}
+	return nil
 }
 
 // SearchText performs parallel global text search (Ctrl+Shift+F) reusing the in-memory FileIndex.

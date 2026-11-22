@@ -273,6 +273,33 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLanes(w http.ResponseWriter, r *http.Request) {
 	ws := r.URL.Query().Get("workspace")
+	if s.deps != nil {
+		targets := []string{ws}
+		if ws == "" {
+			seen := map[string]bool{}
+			targets = nil
+			for _, snap := range s.hub.Snapshots("") {
+				if snap.Workspace != "" && !seen[snap.Workspace] {
+					seen[snap.Workspace] = true
+					targets = append(targets, snap.Workspace)
+				}
+			}
+		}
+		for _, targetWS := range targets {
+			if targetWS == "" {
+				continue
+			}
+			if sum, err := s.deps.ListSessions(r.Context(), targetWS); err == nil {
+				active := make(map[string]bool, len(sum.Sessions))
+				for _, sess := range sum.Sessions {
+					if sess.ID != "" {
+						active[sess.ID] = true
+					}
+				}
+				s.hub.PruneDeletedSessions(targetWS, active)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"lanes": s.hub.Snapshots(ws)})
 }
 

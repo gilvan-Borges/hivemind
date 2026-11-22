@@ -428,6 +428,65 @@ func (h *Hub) Projects() []ProjectSummary {
 	return out
 }
 
+// ClearSession removes non-running lanes bound to sessionID in workspace and
+// broadcasts a lanes_cleared event so connected mobile clients drop stale UI.
+func (h *Hub) ClearSession(workspace, sessionID string) {
+	if h == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	var removed bool
+	h.mu.Lock()
+	for k, st := range h.lanes {
+		if workspace != "" && st.snapshot.Workspace != workspace {
+			continue
+		}
+		if st.snapshot.Running {
+			continue
+		}
+		if sessionID == "" || st.snapshot.SessionID == sessionID || st.snapshot.SessionID == "" {
+			delete(h.lanes, k)
+			removed = true
+		}
+	}
+	h.mu.Unlock()
+	if removed {
+		raw, _ := json.Marshal(map[string]string{
+			"workspace": workspace,
+			"sessionId": sessionID,
+		})
+		h.broadcast(StreamEvent{Type: "lanes_cleared", Data: raw})
+	}
+}
+
+// ClearWorkspaceLanes removes all non-running lanes for workspace and notifies subscribers.
+func (h *Hub) ClearWorkspaceLanes(workspace string) {
+	h.ClearSession(workspace, "")
+}
+
+// PruneDeletedSessions drops finished/idle lanes in workspace whose persisted
+// session no longer exists on disk (or all finished lanes when the workspace
+// has zero saved sessions).
+func (h *Hub) PruneDeletedSessions(workspace string, activeSessionIDs map[string]bool) {
+	if h == nil || strings.TrimSpace(workspace) == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for k, st := range h.lanes {
+		if st.snapshot.Workspace != workspace || st.snapshot.Running {
+			continue
+		}
+		if len(activeSessionIDs) == 0 {
+			delete(h.lanes, k)
+			continue
+		}
+		if sid := strings.TrimSpace(st.snapshot.SessionID); sid != "" && !activeSessionIDs[sid] {
+			delete(h.lanes, k)
+		}
+	}
+}
+
 // Snapshots returns the live lane snapshots, optionally filtered by workspace.
 func (h *Hub) Snapshots(workspace string) []LaneSnapshot {
 	h.mu.Lock()
