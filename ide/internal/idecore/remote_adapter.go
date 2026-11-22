@@ -75,7 +75,10 @@ func (a *Adapter) RunStart(
 		if a.Sessions == nil {
 			return
 		}
-		_, err := a.Sessions.RunTurnWithOptions(context.Background(), laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+		res, err := a.Sessions.RunTurnWithOptions(context.Background(), laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+		if res.SessionID != "" {
+			a.Hub.SetSessionID(laneID, res.SessionID)
+		}
 		if err != nil {
 			a.Hub.HandleRunError(laneID, workspace, err)
 		}

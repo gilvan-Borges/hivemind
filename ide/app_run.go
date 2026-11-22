@@ -111,6 +111,9 @@ func (a *App) StartRunWithOptions(
 		baseCtx = context.Background()
 	}
 	res, err := a.sessions.RunTurnWithOptions(baseCtx, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode, images)
+	if a.mobile != nil && res.SessionID != "" {
+		a.mobile.hub.SetSessionID(laneID, res.SessionID)
+	}
 	if a.fileIndex != nil && strings.TrimSpace(workspace) != "" {
 		go func(root string) {
 			_ = a.fileIndex.Refresh(root)

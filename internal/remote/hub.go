@@ -3,6 +3,7 @@ package remote
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,6 +166,24 @@ func (h *Hub) RegisterRun(laneID, workspace, teamName, objective, sessionID, run
 	s.PendingApprovals = nil
 	st.approvals = make(map[string]ApprovalInfo)
 	h.mu.Unlock()
+}
+
+// SetSessionID records the persisted session ID associated with laneID once
+// a turn creates or resumes one, so mobile clients replying on the same lane
+// continue the active session instead of starting a blank one.
+func (h *Hub) SetSessionID(laneID, sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if h == nil || strings.TrimSpace(laneID) == "" || sessionID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ws := h.laneWks[laneID]
+	if ws == "" {
+		return
+	}
+	st := h.stateForLocked(ws, laneID)
+	st.snapshot.SessionID = sessionID
 }
 
 // HandleLaneEvent consumes every LaneEvent emitted by the
