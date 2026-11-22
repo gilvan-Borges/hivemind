@@ -341,12 +341,25 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	}
 	if wasDelegated {
 		r.sealHandoff(sess.ID())
-	}
-	if wasDelegated && r.chiefPlan != "" {
-		r.setStateChecked(sess.State(), "chief_plan", r.chiefPlan)
-	}
-	if wasDelegated && r.chiefContextBrief != "" {
-		r.setStateChecked(sess.State(), "chief_context_brief", r.chiefContextBrief)
+		stateVals := map[string]any{}
+		if r.chiefPlan != "" {
+			stateVals["chief_plan"] = r.chiefPlan
+		}
+		if r.chiefContextBrief != "" {
+			stateVals["chief_context_brief"] = r.chiefContextBrief
+		}
+		if len(r.devSlices) > 0 {
+			stateVals["dev_slices_joined"] = strings.Join(r.devSlices, "\n|||\n")
+		}
+		if len(r.devOwnedPaths) > 0 {
+			stateVals["dev_owned_paths_json"] = marshalOwnedPaths(r.devOwnedPaths)
+		}
+		if r.devSequential {
+			stateVals["dev_sequential"] = "1"
+		}
+		if len(stateVals) > 0 {
+			r.updateStateChecked(sess, stateVals)
+		}
 	}
 	if runMode == "plan" && !wasPlanCard && strings.TrimSpace(summary) != "" && r.OnEvent != nil {
 		r.OnEvent(Event{
