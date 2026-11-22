@@ -91,7 +91,7 @@ func (d Deps) listTree(args listTreeArgs) (string, error) {
 		displayRoot = strings.TrimSuffix(filepath.ToSlash(displayRoot), "/") + "/"
 	}
 
-	tb := &treeBuilder{budget: budget, maxDepth: maxDepth, displayRoot: displayRoot}
+	tb := &treeBuilder{budget: budget, maxDepth: maxDepth, root: root, displayRoot: displayRoot}
 	tb.walk(root, "", 0)
 	return tb.render(), nil
 }
@@ -101,12 +101,13 @@ func (d Deps) listTree(args listTreeArgs) (string, error) {
 // siblings of that directory as unexplored, so the model knows exactly where
 // to refine next instead of guessing behind a silent cut.
 type treeBuilder struct {
-	budget     int
-	maxDepth   int
+	budget      int
+	maxDepth    int
+	root        string // absolute workspace jail root (for re-Resolve on descent)
 	displayRoot string
-	used       int
-	lines      []string
-	truncated  bool
+	used        int
+	lines       []string
+	truncated   bool
 }
 
 // treeSkipDir reports whether a directory never enters the skeleton: VCS and
@@ -178,7 +179,16 @@ func (tb *treeBuilder) walk(dir, rel string, depth int) {
 			if rel != "" {
 				childRel = rel + "/" + name
 			}
-			tb.walk(filepath.Join(dir, name), childRel, depth+1)
+			childPath := filepath.Join(dir, name)
+			// Do not follow directory symlinks/junctions: Resolve only the start
+			// path, so a link under the workspace must not enumerate outside.
+			if info, err := os.Lstat(childPath); err != nil || (info.Mode()&os.ModeSymlink) != 0 {
+				continue
+			}
+			if _, err := workspace.Resolve(tb.root, childRel); err != nil {
+				continue
+			}
+			tb.walk(childPath, childRel, depth+1)
 			if tb.truncated {
 				return
 			}
