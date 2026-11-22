@@ -369,9 +369,11 @@ type residentCronArgs struct {
 }
 
 type residentSpawnArgs struct {
-	Objective string   `json:"objective" jsonschema:"Encargo objetivo do subagente, sem o transcript."`
-	Roots     []string `json:"roots,omitempty" jsonschema:"Raízes de arquivo que o subagente pode usar."`
-	Classes   []string `json:"classes,omitempty" jsonschema:"Classes máximas do subagente. Só estreita."`
+	Objective    string   `json:"objective" jsonschema:"Encargo objetivo do subagente, sem o transcript."`
+	Roots        []string `json:"roots,omitempty" jsonschema:"Raízes de arquivo que o subagente pode usar."`
+	Classes      []string `json:"classes,omitempty" jsonschema:"Classes máximas do subagente. Só estreita."`
+	ContextBrief string   `json:"context_brief,omitempty" jsonschema:"Fatos curtos já apurados por você que o subagente não precisa re-ler (máx. 2 KiB). Sem comandos."`
+	Readonly     bool     `json:"readonly,omitempty" jsonschema:"Quando true, o subagente fica travado em leitura (nenhuma escrita/execução) — ideal para pesquisa e análise barata."`
 }
 
 type residentHandoffArgs struct {
@@ -414,12 +416,14 @@ func ForResidentPhase3(broker ResidentBroker) ([]tool.Tool, error) {
 	}
 	if err := add(functiontool.New(functiontool.Config{
 		Name:        "spawn_subagent",
-		Description: "Abre um subagente com objetivo, raízes e classes. No máximo dois ao mesmo tempo. O filho não cria rotina nem outro subagente.",
+		Description: "Abre um subagente com objetivo, raízes e classes. No máximo dois ao mesmo tempo. O filho não cria rotina nem outro subagente. Use readonly=true para subagentes de pesquisa (travados em leitura) e context_brief para passar fatos que ele não precisa re-ler — o relatório volta com cabeçalho de custo (chamadas, tokens, duração).",
 	}, func(ctx agent.Context, args residentSpawnArgs) (textResult, error) {
 		res, err := broker.Execute(ctx, "spawn_subagent", map[string]any{
-			"objective": args.Objective,
-			"roots":     args.Roots,
-			"classes":   args.Classes,
+			"objective":     args.Objective,
+			"roots":         args.Roots,
+			"classes":       args.Classes,
+			"context_brief": args.ContextBrief,
+			"readonly":      args.Readonly,
 		})
 		if err != nil {
 			return textResult{}, err

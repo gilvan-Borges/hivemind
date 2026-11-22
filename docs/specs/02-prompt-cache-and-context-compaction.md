@@ -69,6 +69,13 @@ A compactação in-turn (3.3) age sobre o que **já entrou** no transcript. O sp
 5. Redação: formatos óbvios de credenciais (`sk-…`, `ghp_…`, `AKIA…`, JWT) são mascarados antes da gravação em disco e no preview.
 6. Retenção: varredura no máximo 1x/hora por raiz; arquivos com mais de 7 dias são removidos.
 
+### 3.6 Telemetria de gatilho da compactação (`contextx.Stats`)
+O evento `compact` não dizia *quando nem por quê* o pass disparou — só quanto poupou. Runs longos ficavam sem sinal de pressão de contexto.
+
+1. `contextx.Stats` ganha `ContextTokens` (estimativa capturada **antes** de `CompactRequest` — o pass muta a projeção de leitura, uma estimativa pós-pass subnotifica) e `ContextWindow`; `Stats.UsagePercent()` deriva a ocupação.
+2. O evento `compact` exibe `janela N% ocupada no gatilho (T/W tokens)` e marca a `1ª compactação deste agente no run` (closure por agente em `compactionStatsCallback`).
+3. `max_cost_micro_usd` (ADR 0003) complementa o `max_tokens` na camada de orçamento do runner: tokens medem volume, custo mede valor — abort com `Gate: "budget"` quando `turnCostMicroUSD` estoura.
+
 ---
 
 ## 4. Critérios de Aceite

@@ -66,9 +66,10 @@ var neverCompactInTurnTools = map[string]bool{
 	"sdd_docs_ready":     true,
 }
 
-// Stats reports what one compaction pass saved, so the orchestrator can emit
-// usage events (compacted payloads / tokens saved): without it, token savings
-// are invisible.
+// Stats reports what one compaction pass saved and where the request stood,
+// so the orchestrator can emit usage events (compacted payloads / tokens
+// saved / window occupancy): without it, token savings are invisible and the
+// context pressure that triggered the pass is unobservable.
 type Stats struct {
 	// Compacted is how many payloads were replaced with compact previews.
 	Compacted int
@@ -77,6 +78,24 @@ type Stats struct {
 	// TokensSaved is the conservative token estimate of BytesSaved using
 	// the same bytes/4 heuristic as EstimateRequestTokens.
 	TokensSaved int
+	// ContextTokens is the estimated request size (tokens) BEFORE the pass
+	// ran — the pressure metric that decided the compaction.
+	ContextTokens int
+	// ContextWindow is the resolved model window used for the decision.
+	ContextWindow int
+}
+
+// UsagePercent returns ContextTokens as a whole percentage of ContextWindow
+// (0 when either side is unknown). Capped at 999 to stay honest yet compact.
+func (s Stats) UsagePercent() int {
+	if s.ContextTokens <= 0 || s.ContextWindow <= 0 {
+		return 0
+	}
+	pct := s.ContextTokens * 100 / s.ContextWindow
+	if pct > 999 {
+		pct = 999
+	}
+	return pct
 }
 
 // Budget controls one compaction pass.
@@ -212,12 +231,17 @@ func appendArgValue(b *strings.Builder, v any) {
 // escalates to the aggressive cut at SummaryThresholdPct.
 func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
 	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		// Capture the pre-pass pressure first: CompactRequest mutates the
+		// in-memory read projection, so a post-call estimate would underreport.
+		contextTokens := EstimateRequestTokens(req)
 		compacted, bytesSaved := CompactRequest(req, b)
 		if compacted > 0 && b.OnCompact != nil {
 			b.OnCompact(Stats{
-				Compacted:   compacted,
-				BytesSaved:  bytesSaved,
-				TokensSaved: (bytesSaved + 3) / 4,
+				Compacted:     compacted,
+				BytesSaved:    bytesSaved,
+				TokensSaved:    (bytesSaved + 3) / 4,
+				ContextTokens: contextTokens,
+				ContextWindow: b.window(),
 			})
 		}
 		return nil, nil

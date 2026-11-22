@@ -420,6 +420,16 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				}
 				return result, budgetErr
 			}
+			if maxCost := r.Project.Settings.EffectiveMaxCostMicroUSD(); maxCost > 0 && r.turnCostMicroUSD > maxCost {
+				costErr := fmt.Errorf("orçamento de custo da execução esgotado (%s > %s; ajuste max_cost_micro_usd ou fatie a tarefa)",
+					jev.FormatMicroUSD(r.turnCostMicroUSD), jev.FormatMicroUSD(maxCost))
+				r.populateUsageMetrics(&result)
+				r.printUsageSummary(result, r.Err, "uso até parar: ")
+				if r.OnEvent != nil {
+					r.OnEvent(Event{Kind: "error", Gate: "budget", Text: costErr.Error()})
+				}
+				return result, costErr
+			}
 		}
 		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {
 			continue

@@ -64,6 +64,15 @@ O spillover (Spec 02 §3.5) arquiva em `.hivemind/spillover/` payloads que as pr
 2. O carve-out não vaza: `filepath.Clean` normaliza `..` **antes** do loop de segmentos (`.hivemind/spillover/../../team.yaml` continua bloqueado); symlinks são resolvidos antes da checagem (um link dentro do spillover apontando para `team.yaml` continua bloqueado); lookalikes aninhados (`docs/.hivemind/spillover/x.txt`) e sufixos (`.hivemind/spilloverx/`) não herdam a permissão.
 3. `pathsec.IsSensitivePath` permanece intacto para todos os outros chamadores; o carve-out é aplicado explicitamente em `readFileRange` (`internal/tools/fs.go`), compartilhado pelo residente via `ReadFileReadOnly`.
 
+### 3.5 Navegação de workspace com orçamento (`list_tree`) e leitura web bounded (`web_fetch`)
+Duas lacunas da superfície de tools do squad (ADR 0003): navegação de repositórios grandes por `list_dir` plano (cauda de chamadas cegas cujo output vira alvo da compactação) e ausência de um caminho barato de leitura web sem ligar um MCP de browser inteiro.
+
+1. **`list_tree`** (todos os papéis com leitura): esqueleto por profundidade (default 3, teto 6) com orçamento de caracteres (default 6.000, teto 20.000). Ao esgotar o orçamento, o diretório exato onde parou recebe `(+N entradas não exploradas)` — corte marcado, nunca silencioso. Pula `.git`/`.hivemind`/`.worktrees`/`node_modules`/`__pycache__` e aplica o mesmo `pathsec.IsSensitivePath` do `list_dir`.
+2. **`web_fetch`** (PM/TL/Arquiteto/Dev/QA): GET read-only, http/https apenas, sem userinfo. Guard SSRF em dois níveis: privado/link-local/metadata (`169.254.169.254`, `10.x`, `192.168.x`, `172.16-31.x`, `.internal`) **sempre** recusado; loopback só via `Deps.WebFetchAllowLoopback` — flag controlada pelo host, jamais alcançável por argumentos do modelo.
+3. Redirects são seguidos manualmente (`CheckRedirect = ErrUseLastResponse`, teto 3 hops) e **cada hop re-entra no guard**: uma URL pública que 302 para o range de metadata morre no hop, sem dial.
+4. Corpo: teto 64 KiB head+tail, content-type textual apenas, e cerca de conteúdo externo não confiável com neutralização de fechamento falsificado no corpo.
+5. Ambas as tools são puramente aditivas no catálogo por papel; nenhuma substitui `list_dir`, browser MCP ou `run_shell`.
+
 ## 4. Critérios de Aceite
 - Testes negativos garantindo que `write_file`, `edit_file`, `list_dir` e `find_files` do Squad recusam `.env`, `.kube/config`, `terraform.tfstate` e `id_rsa`.
 - Teste no Windows AppContainer validando `AllowNetwork=true` vs `AllowNetwork=false` e execução sob diretório read-only sem privilégio de admin.

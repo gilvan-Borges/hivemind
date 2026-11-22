@@ -131,6 +131,10 @@ type Settings struct {
 	MaxDevInputTokens        int64              `yaml:"max_dev_input_tokens,omitempty" json:"max_dev_input_tokens,omitempty"`
 	ModelCallTimeoutSeconds  int                `yaml:"model_call_timeout_seconds,omitempty" json:"model_call_timeout_seconds,omitempty"`
 	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	// MaxCostMicroUSD limita o custo somado do run (todas as chamadas, todos os
+	// agentes). 0 (padrão) desliga o teto. O contador é por execução: um turno
+	// que estoura aborta com erro claro em vez de seguir queimando orçamento.
+	MaxCostMicroUSD          int64              `yaml:"max_cost_micro_usd,omitempty" json:"max_cost_micro_usd,omitempty"`
 	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
 	ReviewModel              string             `yaml:"review_model,omitempty" json:"review_model,omitempty"`
 	InlineModel              string             `yaml:"inline_model,omitempty" json:"inline_model,omitempty"`
@@ -273,6 +277,20 @@ func (s Settings) EffectiveInTurnKeepToolResults() int {
 		return 20
 	}
 	return s.InTurnKeepToolResults
+}
+
+// EffectiveMaxCostMicroUSD returns the per-run monetary budget in micro-USD
+// (0 = teto desligado). O piso de 10.000 micro-USD (US$ 0,01) existe para um
+// valor explicitado abaixo disso não abortar o run na primeira chamada de um
+// modelo caro sem intenção clara do usuário.
+func (s Settings) EffectiveMaxCostMicroUSD() int64 {
+	if s.MaxCostMicroUSD <= 0 {
+		return 0
+	}
+	if s.MaxCostMicroUSD < 10_000 {
+		return 10_000
+	}
+	return s.MaxCostMicroUSD
 }
 
 // EffectivePermissionMode returns the normalized permission mode (default "governed").

@@ -7,6 +7,7 @@ package tools
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,6 +57,14 @@ type Deps struct {
 	// MCP, quando preenchido, expõe só os servidores ligados e as duas
 	// ferramentas leves de lista e de ligar sob aprovação.
 	MCP *mcpx.Host
+	// HTTPClient atende a tool web_fetch; nil usa um cliente padrão com
+	// timeout curto. Injetado pelos hosts que já possuem um client compartilhado.
+	HTTPClient *http.Client
+	// WebFetchAllowLoopback libera alvos loopback/privados no web_fetch.
+	// Default false (o guard SSRF recusa loopback, link-local, private e
+	// metadata endpoints). Existe para testes com httptest e hosts com
+	// proxy local explícito; NUNCA deve ser ligado em runs expostos ao modelo.
+	WebFetchAllowLoopback bool
 	// SkillLookup resolve o corpo completo de uma skill pelo nome para a tool
 	// read_skill (progressive disclosure). Quando nil, read_skill não é exposta.
 	SkillLookup func(name string) (skillx.Skill, string, bool)
@@ -146,6 +155,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+		if err := add(deps.canListTree()); err != nil {
+			return nil, err
+		}
 			return nil, err
 		}
 		if err := add(deps.canSearchText()); err != nil {
@@ -193,6 +205,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+		if err := add(deps.canListTree()); err != nil {
+			return nil, err
+		}
 			return nil, err
 		}
 		if err := add(deps.canSearchText()); err != nil {
@@ -219,6 +234,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+		if err := add(deps.canListTree()); err != nil {
+			return nil, err
+		}
 			return nil, err
 		}
 		if err := add(deps.canSearchText()); err != nil {
@@ -265,6 +283,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+		if err := add(deps.canListTree()); err != nil {
+			return nil, err
+		}
 			return nil, err
 		}
 		if err := add(deps.canSearchText()); err != nil {
@@ -294,6 +315,9 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 			return nil, err
 		}
 		if err := add(deps.canList()); err != nil {
+		if err := add(deps.canListTree()); err != nil {
+			return nil, err
+		}
 			return nil, err
 		}
 		if err := add(deps.canSearchText()); err != nil {

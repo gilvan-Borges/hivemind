@@ -54,7 +54,7 @@ type BrokerConfig struct {
 	Phase3         bool
 	AllowedTiers   []Tier
 	PermissionMode func(workspace string) string
-	Spawn          func(ctx context.Context, objective string, roots, classes []string) (string, error)
+	Spawn          func(ctx context.Context, req SpawnRequest) (string, error)
 	SquadHandoff   func(ctx context.Context, h SquadHandoff) (string, error)
 	OnRoutineSaved func()
 	BaseDir        string
