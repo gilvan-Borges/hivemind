@@ -84,3 +84,23 @@ func TestReadSkillToolResolvesProjectAndNative(t *testing.T) {
 		t.Fatal("nome vazio deveria falhar")
 	}
 }
+
+func TestReadSkillPreferredNativeOverridesSameNamedProjectSkill(t *testing.T) {
+	projectRoot := t.TempDir()
+	nativeRoot := t.TempDir()
+	writeSKILLMD(t, filepath.Join(projectRoot, skillx.SkillsDir), "shared", "# Shared\n\nVersão do projeto.")
+	writeSKILLMD(t, nativeRoot, "shared", "# Shared\n\nVersão nativa aprovada.")
+
+	project := skillx.Load(projectRoot)
+	native := skillx.LoadNative(nativeRoot)
+	lookup := NewSkillLookupWithPreferredNative(projectRoot, nativeRoot, project, native, native)
+
+	d := Deps{Root: projectRoot, SkillLookup: lookup}
+	res, err := d.readSkill(readSkillArgs{Name: "shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "Versão nativa aprovada.") {
+		t.Fatalf("esperava versão nativa preferida, veio: %q", res.Text)
+	}
+}

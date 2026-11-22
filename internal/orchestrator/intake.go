@@ -25,9 +25,12 @@ const (
 )
 
 // IntakeDir guarda, relativo ao workspace, o conteúdo removido do prompt
-// inicial para leitura seletiva (read_file) pelos agentes. O Chefe lê com
-// toolRoot = workspace, então o caminho relativo resolve naturalmente.
-const IntakeDir = ".hivemind/intake"
+// inicial para leitura seletiva (read_file) pelos agentes. Vive sob
+// .hivemind/spillover/intake para reutilizar o carve-out escopado do jail
+// (workspace.Options.AllowSpilloverRead + pathsec.IsSpilloverPath), mantendo
+// team.yaml/sessions/worktrees bloqueados enquanto permite que read_file leia
+// o arquivo de intake sem erro de permissão.
+const IntakeDir = ".hivemind/spillover/intake"
 
 func intakeHash8(data []byte) string {
 	sum := sha256.Sum256(data)

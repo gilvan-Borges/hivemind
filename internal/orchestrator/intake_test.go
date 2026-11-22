@@ -33,7 +33,7 @@ func TestBoundIntakeTrimsHugeObjectiveKeepingHeadAndTail(t *testing.T) {
 		t.Fatal("cauda real do objetivo deveria estar inline (últimos 2 KiB)")
 	}
 
-	rel := ".hivemind/intake/objective-" + intakeHash8([]byte(objective)) + ".txt"
+	rel := ".hivemind/spillover/intake/objective-" + intakeHash8([]byte(objective)) + ".txt"
 	if !strings.Contains(got, rel) {
 		t.Fatalf("marcador deveria apontar %s: %q", rel, got)
 	}
@@ -57,7 +57,7 @@ func TestBoundIntakeKeepsSmallObjectiveUntouched(t *testing.T) {
 	if len(atts) != 0 {
 		t.Fatalf("sem anexos, devolveu %d", len(atts))
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".hivemind", "intake")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(ws, ".hivemind", "spillover", "intake")); !os.IsNotExist(err) {
 		t.Fatal("nada deveria ser gravado para objetivo pequeno")
 	}
 }
@@ -83,10 +83,10 @@ func TestBoundIntakeDivertsLargeTextAttachmentKeepsImageInline(t *testing.T) {
 	if !strings.Contains(got, "build.log") || !strings.Contains(got, "text/plain") {
 		t.Fatalf("nota do anexo desviado ausente: %q", got)
 	}
-	if !strings.Contains(got, ".hivemind/intake/build.log.txt") {
+	if !strings.Contains(got, ".hivemind/spillover/intake/build.log.txt") {
 		t.Fatalf("nota deveria apontar o caminho do intake: %q", got)
 	}
-	raw, err := os.ReadFile(filepath.Join(ws, ".hivemind", "intake", "build.log.txt"))
+	raw, err := os.ReadFile(filepath.Join(ws, ".hivemind", "spillover", "intake", "build.log.txt"))
 	if err != nil || string(raw) != string(bigText) {
 		t.Fatal("conteúdo do anexo desviado deveria estar integral no intake")
 	}
