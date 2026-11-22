@@ -44,6 +44,11 @@ type Skill struct {
 	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
 	// Enabled é false só para skills nativas desligadas (opt-in). Skills de projeto nascem ligadas.
 	Enabled bool `json:"enabled"`
+	// Triggers são keywords declaradas no frontmatter (`triggers:`). Quando
+	// declaradas, o corpo completo só entra no prompt quando uma keyword casa
+	// com o objetivo da execução; sem match, o guidance injeta apenas um stub
+	// de 1 linha. Skills sem triggers mantêm o comportamento de corpo completo.
+	Triggers []string `json:"triggers,omitempty"`
 }
 
 // HashBody is the SHA-256 hex the IDE stores when a person reviews a skill.
@@ -178,6 +183,7 @@ func loadDir(dir, relBase, source string) ([]Skill, string) {
 			Source:      source,
 			UpdatedAt:   info.ModTime(),
 			Enabled:     true,
+			Triggers:     ExtractTriggers(string(data)),
 		})
 	}
 	sort.Strings(parts)
@@ -225,6 +231,75 @@ func stripFrontmatter(md string) string {
 		after = after[1:]
 	}
 	return after
+}
+
+// ExtractTriggers devolve as keywords declaradas no frontmatter `triggers:` do
+// SKILL.md. Aceita lista inline (triggers: ["a", "b"]) e bullets
+// (triggers:\n  - a\n  - b). Retorna nil quando o frontmatter não declara
+// triggers — skills sem triggers mantêm injeção de corpo completo.
+func ExtractTriggers(md string) []string {
+	s := strings.ReplaceAll(md, "\r\n", "\n")
+	if !strings.HasPrefix(s, "---\n") {
+		return nil
+	}
+	rest := s[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(raw string) {
+		t := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "\"'`"))
+		if t == "" || seen[t] {
+			return
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	inTriggers := false
+	for _, ln := range strings.Split(rest[:end], "\n") {
+		t := strings.TrimSpace(ln)
+		low := strings.ToLower(t)
+		if !inTriggers {
+			if strings.HasPrefix(low, "triggers:") {
+				inTriggers = true
+				inline := strings.TrimSpace(t[len("triggers:"):])
+				if inline != "" {
+					for _, part := range strings.Split(strings.Trim(inline, "[]"), ",") {
+						add(part)
+					}
+					return out
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "-") {
+			add(t[1:])
+			continue
+		}
+		if t == "" {
+			continue
+		}
+		break // próximo campo do frontmatter encerra a lista
+	}
+	return out
+}
+
+// MatchTrigger reports whether any declared trigger appears in text
+// (case-insensitive substring match, o modelo de keyword routing). Skills sem
+// triggers nunca casam — o chamador decide o fallback (corpo completo).
+func MatchTrigger(s Skill, text string) bool {
+	if len(s.Triggers) == 0 {
+		return false
+	}
+	low := strings.ToLower(text)
+	for _, tr := range s.Triggers {
+		if tr != "" && strings.Contains(low, tr) {
+			return true
+		}
+	}
+	return false
 }
 
 // Match devolve as skills do catálogo cujos nomes foram pedidos (case-insensitive),
@@ -335,7 +410,13 @@ func writeCatalogLine(b *strings.Builder, s Skill) {
 // dos executores (dev/QA). Skills de projeto são lidas de projectRoot e nativas
 // de nativeRoot. Cada corpo é truncado em maxPerSkill bytes e o conjunto em
 // maxTotal bytes (valores <= 0 usam os padrões), mantendo o consumo sob controle.
-func GuidanceBlock(projectRoot, nativeRoot string, project, native []Skill, maxPerSkill, maxTotal int) string {
+//
+// Skills que declaram `triggers:` no frontmatter seguem injeção condicional:
+// o corpo completo entra apenas quando uma keyword casa com o objetivo da
+// execução; sem match, o bloco carrega só um stub de 1 linha apontando o
+// caminho da skill, poupando tokens por turno. Skills sem triggers mantêm o
+// corpo completo (comportamento anterior).
+func GuidanceBlock(objective, projectRoot, nativeRoot string, project, native []Skill, maxPerSkill, maxTotal int) string {
 	if len(project) == 0 && len(native) == 0 {
 		return ""
 	}
@@ -348,6 +429,14 @@ func GuidanceBlock(projectRoot, nativeRoot string, project, native []Skill, maxP
 	var b strings.Builder
 	total := 0
 	appendBody := func(root string, s Skill) bool {
+		if len(s.Triggers) > 0 && !MatchTrigger(s, objective) {
+			desc := s.Description
+			if desc == "" {
+				desc = "guia declarado por esta skill"
+			}
+			fmt.Fprintf(&b, "\n\n[Skill `%s` disponível — %s. Não injetada porque o objetivo não casa com os triggers; leia `%s` com read_file apenas se a tarefa passar a exigir.]", s.Name, desc, s.Path)
+			return true
+		}
 		remaining := maxTotal - total
 		if remaining <= 0 {
 			return false

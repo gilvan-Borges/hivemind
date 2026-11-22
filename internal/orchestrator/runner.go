@@ -49,6 +49,7 @@ type Event struct {
 	OutputTokens      int32                    `json:"outputTokens,omitempty"`
 	Tokens            int32                    `json:"tokens,omitempty"`
 	CachedReadTokens  int32                    `json:"cachedReadTokens,omitempty"`
+	CacheHitPct       int32                    `json:"cacheHitPct,omitempty"` // cachedReadTokens/promptTokens por chamada (0 quando o provedor não reporta)
 	CostMicroUSD      int64                    `json:"costMicroUsd,omitempty"`
 	Role              string                   `json:"role,omitempty"`
 	Provider          string                   `json:"provider,omitempty"`
@@ -130,6 +131,7 @@ type Runner struct {
 	turnInputTokens   int64
 	turnOutputTokens  int64
 	turnTotalTokens   int64
+	turnCachedRead    int64
 	costMu            sync.Mutex
 	turnCostMicroUSD  int64
 	agentCosts        map[string]*AgentCost
@@ -189,7 +191,8 @@ type Result struct {
 	NestedDeliveries  []NestedDelivery `json:"nestedDeliveries,omitempty"`
 	InputTokens       int64            `json:"inputTokens"`
 	OutputTokens      int64            `json:"outputTokens"`
-	TotalTokens       int64            `json:"totalTokens"`
+	TotalTokens        int64            `json:"totalTokens"`
+	CachedReadTokens  int64            `json:"cachedReadTokens,omitempty"`
 	CostMicroUSD      int64            `json:"costMicroUsd,omitempty"`
 	CostByAgent       []AgentCost      `json:"costByAgent,omitempty"`
 	CostByRole        []RoleCost       `json:"costByRole,omitempty"`
@@ -481,6 +484,7 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.turnInputTokens = 0
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
+	r.turnCachedRead = 0
 	r.resetTurnCosts()
 	r.qaLastStatus = ""
 	r.qaHasLastStatus = false
