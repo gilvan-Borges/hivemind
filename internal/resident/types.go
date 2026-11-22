@@ -107,6 +107,31 @@ type Config struct {
 	// resident — quando ligado, uma rota que falha em construir aciona o
 	// Score novamente excluindo o par que falhou, em vez de abortar o turno.
 	JevFailover bool `json:"jevFailover,omitempty"`
+	// MaxConcurrentSubagents limita spawns simultâneos (default 2).
+	// Cada subagente consome tokens de API de forma independente: valores
+	// altos multiplicam o custo linearmente.
+	MaxConcurrentSubagents int `json:"maxConcurrentSubagents,omitempty"`
+	// MaxSubagentSummaryChars cala o texto que um subagente devolve ao pai
+	// (default 24.000). O excedente vira head+tail com o texto completo
+	// persistido para recuperação via read_file.
+	MaxSubagentSummaryChars int `json:"maxSubagentSummaryChars,omitempty"`
+}
+
+// EffectiveMaxConcurrentSubagents returns the spawn concurrency cap (default 2).
+func (c Config) EffectiveMaxConcurrentSubagents() int {
+	if c.MaxConcurrentSubagents > 0 {
+		return c.MaxConcurrentSubagents
+	}
+	return 2
+}
+
+// EffectiveMaxSubagentSummaryChars returns the per-child summary cap in chars
+// (default 24.000; floor 2.000 para nunca esmagar um relatório útil).
+func (c Config) EffectiveMaxSubagentSummaryChars() int {
+	if c.MaxSubagentSummaryChars >= 2_000 {
+		return c.MaxSubagentSummaryChars
+	}
+	return 24_000
 }
 
 // MemoryFact is one personal long-term memory record stored in

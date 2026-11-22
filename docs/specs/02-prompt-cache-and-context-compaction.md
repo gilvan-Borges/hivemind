@@ -1,7 +1,7 @@
 # Spec 02 — Estabilidade de Prompt Cache (KV-Cache), Compactação Token-Aware e Schemas
 
 > **Status:** Proposta de Refatoração
-> **Alvos:** `internal/orchestrator/orchestrator.go`, `pr_dossier.go`, `context_guard.go`, `handoff.go`, `internal/sessionx/store.go`, `internal/tools/mcp.go`, `internal/resident/prompt.go`, `fence.go`
+> **Alvos:** `internal/orchestrator/orchestrator.go`, `pr_dossier.go`, `context_guard.go`, `handoff.go`, `internal/sessionx/store.go`, `internal/tools/mcp.go`, `internal/resident/prompt.go`, `fence.go`, `internal/toolspill`
 
 ---
 
@@ -58,6 +58,16 @@
 ### 3.4 Schemas Limpos (`mcp.go` e `tools.go`)
 1. Remover o campo `Unused` das structs vazias em `internal/tools/tools.go` (usar `struct{}`).
 2. Em `internal/tools/mcp.go`, passar o `InputSchema` real do servidor MCP ou restringir o registro raiz a `mcp_list_tools` + `mcp_call` sob demanda quando houver > 5 tools MCP externas, evitando inflar todo turno com schemas textuais gigantes.
+
+### 3.5 Spillover de Tool Results (`internal/toolspill`)
+A compactação in-turn (3.3) age sobre o que **já entrou** no transcript. O spillover age **na fonte**, antes do payload entrar: resultados acima do limite não ocupam a janela de contexto nem uma vez.
+
+1. `AfterToolCallback` compartilhado (orquestrador e residente) intercepta o resultado, persiste o texto completo em `<workspace>/.hivemind/spillover/<tool>-<stamp>.txt` (escrita byte-verificada com read-back) e devolve inline apenas um preview head+tail (`~75%/25%`, cauda mínima de 400 caracteres — diagnósticos de builds/testes ficam no fim) com ponteiro `read_file (path=…, start_line/end_line)`.
+2. Orçamento por execução: `Monitor` acumula o inline total; ao exceder `TurnBudgetChars` (200k default), o limiar por resultado escala de 100k para 8k — o payload agregado do agente fica limitado mesmo com muitas chamadas pequenas.
+3. Fail-closed: falha de escrita/verificação devolve preview truncado **sem** ponteiro; nunca referenciamos um arquivo que perdeu bytes. Resultados de erro e tools de governança (`qa_approve`, `delegate_to_squad`, `github_get_pr`) ficam sempre verbatim; `read_file` é pinado (evita o loop persist→read→persist).
+4. Recuperação: leitura do subtree `.hivemind/spillover/` via carve-out escopado no jail (Spec 04 §3.4) — `team.yaml`, sessions e worktrees continuam bloqueados. O spill do `run_shell` substitui o antigo arquivo em `os.CreateTemp` (fora do jail, ilegível para o modelo).
+5. Redação: formatos óbvios de credenciais (`sk-…`, `ghp_…`, `AKIA…`, JWT) são mascarados antes da gravação em disco e no preview.
+6. Retenção: varredura no máximo 1x/hora por raiz; arquivos com mais de 7 dias são removidos.
 
 ---
 

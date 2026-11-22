@@ -20,6 +20,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/secretx"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
+	"github.com/gilvan-Borges/HiveMind/internal/toolspill"
 )
 
 const (
@@ -67,9 +68,23 @@ type Runner struct {
 	SquadHandoff func(ctx context.Context, h SquadHandoff) (string, error)
 	// OnRoutineSaved rearms the in-process timer after cron_add.
 	OnRoutineSaved func()
-	gateOnce sync.Once
-	gate     *spawnGate
-	brokerMu sync.Mutex
+	gateOnce       sync.Once
+	gate           *spawnGate
+	brokerMu       sync.Mutex
+}
+
+// residentSpillCallbacks returns the tool-result spillover guard for one
+// resident turn: oversized outputs are archived under the active workspace
+// and replaced inline by a bounded preview with a read_file pointer. Without
+// a workspace no tool can produce a spillable payload, so no callback is
+// registered.
+func residentSpillCallbacks(workspace string) []llmagent.AfterToolCallback {
+	if strings.TrimSpace(workspace) == "" {
+		return nil
+	}
+	return []llmagent.AfterToolCallback{
+		toolspill.NewAfterToolCallback(toolspill.DefaultConfig(), toolspill.NewStore(workspace), &toolspill.Monitor{}),
+	}
 }
 
 // RunTurn executes one read-only resident turn and returns the final response
@@ -201,6 +216,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
 			newInTurnCompactionCallback(residentKeepToolResults),
 		},
+		AfterToolCallbacks: residentSpillCallbacks(req.Workspace),
 	})
 	if err != nil {
 		return TurnResult{}, fmt.Errorf("criar agente residente: %w", err)
@@ -402,14 +418,22 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 }
 
 type spawnGate struct {
-	mu sync.Mutex
-	n  int
+	mu  sync.Mutex
+	n   int
+	max int
+}
+
+func newSpawnGate(max int) *spawnGate {
+	if max < 1 {
+		max = 1
+	}
+	return &spawnGate{max: max}
 }
 
 func (g *spawnGate) enter() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.n >= 2 {
+	if g.n >= g.max {
 		return false
 	}
 	g.n++
@@ -427,10 +451,54 @@ func (g *spawnGate) leave() {
 func (r *Runner) slots() *spawnGate {
 	r.gateOnce.Do(func() {
 		if r.gate == nil {
-			r.gate = &spawnGate{}
+			r.gate = newSpawnGate(r.Config.EffectiveMaxConcurrentSubagents())
 		}
 	})
 	return r.gate
+}
+
+// childResponseContract bounds what a subagent hands back: the parent only
+// ever sees the summary, so an overlong report crowds the parent's context
+// window on every later call.
+const childResponseContract = "\n\nCONTRATO DE RESPOSTA: devolva um relatório curto e direto — comece pelo resultado (sucesso/falha), depois bullets com arquivos alterados e verificação. Resumos longos lotam a janela de contexto do agente pai; sem narrativa passo a passo."
+
+// childSummaryCap resolves the per-child summary budget: the configured static
+// cap, tightened by the parent's leftover input budget (~4 chars/token, half
+// share) so a fan-out cannot overflow the parent's window. Floor 2.000 chars
+// keeps a useful report alive even under pressure.
+func (r *Runner) childSummaryCap() int {
+	cap := r.Config.EffectiveMaxSubagentSummaryChars()
+	if last := LoadRouteTokens(r.BaseDir); last > 0 {
+		headroom := MaxInputTokensPerTurn - last
+		if headroom < 500 {
+			headroom = 500
+		}
+		if dyn := headroom * 2; dyn < cap {
+			cap = dyn
+		}
+	}
+	if cap < 2_000 {
+		cap = 2_000
+	}
+	return cap
+}
+
+// budgetChildSummary trims an overlong child report to a head+tail preview and
+// spills the full text into the parent's spillover archive for read_file
+// recovery. Fail-closed: without a working archive the preview still bounds
+// the payload, just without a pointer.
+func budgetChildSummary(text string, cap int, store *toolspill.Store) string {
+	if cap <= 0 || len(text) <= cap {
+		return text
+	}
+	preview := toolspill.HeadTailPreview(text, cap)
+	if rel, err := store.Save("subagent-summary", text); err == nil {
+		return preview + fmt.Sprintf(
+			"\n\n[resumo do subagente calado em %d de %d caracteres — texto completo: %s — recupere trechos com read_file (path=%s, start_line/end_line)]",
+			cap, len(text), rel, rel,
+		)
+	}
+	return preview + fmt.Sprintf("\n\n[resumo do subagente truncado em %d de %d caracteres]", cap, len(text))
 }
 
 func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes []string) (string, error) {
@@ -450,7 +518,7 @@ func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes 
 		return "", err
 	}
 	if !r.slots().enter() {
-		return "", fmt.Errorf("limite de 2 subagentes ao mesmo tempo")
+		return "", fmt.Errorf("limite de %d subagentes ao mesmo tempo", r.Config.EffectiveMaxConcurrentSubagents())
 	}
 	defer r.slots().leave()
 
@@ -476,7 +544,9 @@ func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes 
 		gate:            r.slots(),
 	}
 	res, err := child.RunTurn(ctx, TurnRequest{
-		Message:    objective,
+		// The response contract rides with the objective so the child leads
+		// with outcomes instead of a step-by-step narrative.
+		Message:    objective + childResponseContract,
 		Workspace:  root,
 		Workstream: r.lastWorkstream(),
 		Origin:     OriginSubagent,
@@ -485,7 +555,14 @@ func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes 
 	if err != nil {
 		return "", err
 	}
-	return res.FinalText, nil
+	// Bound the summary that re-enters the parent's context and archive the
+	// full text: the pointer is rooted at the parent's workspace so its own
+	// read_file can resolve it.
+	spillRoot := r.lastWorkspace()
+	if spillRoot == "" {
+		spillRoot = root
+	}
+	return budgetChildSummary(res.FinalText, r.childSummaryCap(), toolspill.NewStore(spillRoot)), nil
 }
 
 func (r *Runner) lastWorkspace() string {

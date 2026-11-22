@@ -57,6 +57,13 @@
 
 ---
 
+### 3.4 Carve-out Escopado para `.hivemind/spillover`
+O spillover (Spec 02 §3.5) arquiva em `.hivemind/spillover/` payloads que as próprias tools do agente persistiram. Sem um carve-out, o ponteiro de recuperação seria ilegível para o `read_file` — o mesmo defeito do antigo spill em `os.CreateTemp`.
+
+1. Nova opção `workspace.Options.AllowSpilloverRead` e o helper `pathsec.IsSpilloverPath` liberam **apenas** o subtree `.hivemind/spillover/<arquivo>`: exigem `.hivemind` como primeiro segmento + segmento literal `spillover` + pelo menos um segmento de arquivo.
+2. O carve-out não vaza: `filepath.Clean` normaliza `..` **antes** do loop de segmentos (`.hivemind/spillover/../../team.yaml` continua bloqueado); symlinks são resolvidos antes da checagem (um link dentro do spillover apontando para `team.yaml` continua bloqueado); lookalikes aninhados (`docs/.hivemind/spillover/x.txt`) e sufixos (`.hivemind/spilloverx/`) não herdam a permissão.
+3. `pathsec.IsSensitivePath` permanece intacto para todos os outros chamadores; o carve-out é aplicado explicitamente em `readFileRange` (`internal/tools/fs.go`), compartilhado pelo residente via `ReadFileReadOnly`.
+
 ## 4. Critérios de Aceite
 - Testes negativos garantindo que `write_file`, `edit_file`, `list_dir` e `find_files` do Squad recusam `.env`, `.kube/config`, `terraform.tfstate` e `id_rsa`.
 - Teste no Windows AppContainer validando `AllowNetwork=true` vs `AllowNetwork=false` e execução sob diretório read-only sem privilégio de admin.

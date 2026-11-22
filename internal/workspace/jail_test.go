@@ -69,3 +69,61 @@ func TestResolveDotGitAndHivemindProtection(t *testing.T) {
 		t.Fatalf("IDE AllowHivemind should allow team.yaml: %v", err)
 	}
 }
+
+func TestResolveSpilloverScopedCarveOut(t *testing.T) {
+	root := t.TempDir()
+	spill := filepath.Join(".hivemind", "spillover", "run-shell-1.txt")
+	if err := os.MkdirAll(filepath.Join(root, ".hivemind", "spillover"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, spill), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The spillover subtree resolves ONLY with the scoped option.
+	if _, err := Resolve(root, spill); err == nil {
+		t.Fatal("spillover must stay blocked without the option")
+	}
+	if _, err := ResolveWithOptions(root, spill, Options{AllowSpilloverRead: true}); err != nil {
+		t.Fatalf("spillover read must be allowed with the option: %v", err)
+	}
+
+	// Everything else under .hivemind stays blocked even with the option.
+	for _, blocked := range []string{
+		filepath.Join(".hivemind", "team.yaml"),
+		filepath.Join(".hivemind", "spillover-secret.txt"),
+		filepath.Join(".hivemind", "spillovers", "x.txt"),
+		filepath.Join(".hivemind", "spillover"),
+	} {
+		if _, err := ResolveWithOptions(root, blocked, Options{AllowSpilloverRead: true}); err == nil {
+			t.Fatalf("expected %q to stay blocked with AllowSpilloverRead", blocked)
+		}
+	}
+
+	// Dot-dot cannot smuggle the carve-out into another .hivemind path:
+	// Clean runs before the segment loop.
+	if _, err := ResolveWithOptions(root, filepath.Join(".hivemind", "spillover", "..", "team.yaml"), Options{AllowSpilloverRead: true}); err == nil {
+		t.Fatal("dot-dot escape must stay blocked")
+	}
+
+	// A symlink inside spillover pointing back at protected config must not
+	// resolve through the carve-out.
+	if err := os.WriteFile(filepath.Join(root, ".hivemind", "team.yaml"), []byte("cfg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, ".hivemind", "spillover", "escape.txt")
+	if err := os.Symlink(filepath.Join(root, ".hivemind", "team.yaml"), link); err != nil {
+		t.Skipf("symlink indisponível neste ambiente: %v", err)
+	}
+	if _, err := ResolveWithOptions(root, filepath.Join(".hivemind", "spillover", "escape.txt"), Options{AllowSpilloverRead: true}); err == nil {
+		t.Fatal("symlink escape must stay blocked")
+	}
+
+	// Nested lookalikes do not inherit the carve-out.
+	if err := os.MkdirAll(filepath.Join(root, "docs", ".hivemind", "spillover"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveWithOptions(root, filepath.Join("docs", ".hivemind", "spillover", "x.txt"), Options{AllowSpilloverRead: true}); err == nil {
+		t.Fatal("nested .hivemind/spillover must stay blocked (carve-out is root-scoped)")
+	}
+}
