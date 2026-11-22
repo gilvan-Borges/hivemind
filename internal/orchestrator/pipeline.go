@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"iter"
 	"strings"
@@ -344,7 +346,20 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 	return root, labels, nil
 }
 
+// reminderBlock é um bloco de contexto injetável no último user content,
+// identificado por um marcador estável usado para deduplicação.
+type reminderBlock struct {
+	marker string
+	text   string
+}
+
+// newDynamicContextReminderCallback injeta o estado compartilhado do pipeline
+// como <system-reminder> anexado ao último user content. Blocos de estado que
+// não mudaram desde a última injeção E cujo texto atual ainda está presente no
+// transcript são omitidos: sem isso, planos, dossiês e reports de todos os
+// agentes eram re-enviados a cada chamada de modelo, crescendo linearmente.
 func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent, qa bool, outputKey string, keys []string) llmagent.BeforeModelCallback {
+	lastInjected := map[string]string{}
 	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 		if req == nil {
 			return nil, nil
@@ -369,22 +384,29 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			}
 		}
 
-		var b strings.Builder
+		// Blocos situacionais pequenos e notificações não-lidas: sempre injetados.
+		var fixed strings.Builder
 		if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
-			b.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
-		}
-		if a.Role == team.RoleDeveloper && worktreeStatus != "" {
-			fmt.Fprintf(&b, "[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE (git status)]\n%s\n(Estes arquivos JÁ estão gravados na sua worktree. Se houve troca de modelo via failover ou compactação de contexto, NÃO recomece do zero relendo plan.md/tasks.md — verifique apenas o que falta para concluir e entregue ao QA.)\n\n", worktreeStatus)
+			fixed.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
 		}
 		if a.Role == team.RoleDeveloper && hasQAFeedback {
 			if worktreeEmpty {
-				b.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.\n\n")
+				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.\n\n")
 			} else {
-				b.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar.\n\n")
+				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar.\n\n")
 			}
 		}
 		if qa && worktreeEmpty {
-			b.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
+			fixed.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
+		}
+
+		// Blocos grandes (git status, state keys, TeamBoard): deduplicados.
+		var dedup []reminderBlock
+		if a.Role == team.RoleDeveloper && worktreeStatus != "" {
+			dedup = append(dedup, reminderBlock{
+				marker: "[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE",
+				text:   fmt.Sprintf("[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE (git status)]\n%s\n(Estes arquivos JÁ estão gravados na sua worktree. Se houve troca de modelo via failover ou compactação de contexto, NÃO recomece do zero relendo plan.md/tasks.md — verifique apenas o que falta para concluir e entregue ao QA.)\n\n", worktreeStatus),
+			})
 		}
 		for _, k := range keys {
 			if a.Role == team.RoleDeveloper && hasQAFeedback && k == outputKey {
@@ -398,15 +420,28 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			if text == "" {
 				continue
 			}
-			fmt.Fprintf(&b, "[%s]\n%s\n\n", k, text)
+			dedup = append(dedup, reminderBlock{
+				marker: "[" + k + "]",
+				text:   fmt.Sprintf("[%s]\n%s\n\n", k, text),
+			})
 		}
 		if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
 			if notif := r.sharedBoard.UnreadNotificationFor(adkName); notif != "" {
-				fmt.Fprintf(&b, "%s\n\n", notif)
+				fmt.Fprintf(&fixed, "%s\n\n", notif)
 			}
 			if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
-				fmt.Fprintf(&b, "%s\n\n", boardText)
+				marker := "[Memória Compartilhada do Time"
+				if !strings.Contains(boardText, marker) {
+					marker = "[Arquivos modificados pelo time"
+				}
+				dedup = append(dedup, reminderBlock{marker: marker, text: boardText + "\n\n"})
 			}
+		}
+
+		var b strings.Builder
+		b.WriteString(fixed.String())
+		for _, blk := range filterReminderBlocks(req, dedup, lastInjected) {
+			b.WriteString(blk.text)
 		}
 		if guidance := contextx.ContextWindowGuidance(req, contextx.Budget{
 			ContextWindow:   agentContextWindow(a),
@@ -421,6 +456,48 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		appendSystemReminder(req, reminder)
 		return nil, nil
 	}
+}
+
+// filterReminderBlocks devolve apenas os blocos que mudaram desde a última
+// injeção ou cujo conteúdo atual não está mais presente no transcript (por
+// exemplo após compactação de contexto). Verificar o conteúdo trimado atual
+// (e não apenas o marcador) evita que um bloco antigo sobrevivente à
+// compactação impeça a reinjeção de uma versão mais nova.
+func filterReminderBlocks(req *model.LLMRequest, blocks []reminderBlock, lastInjected map[string]string) []reminderBlock {
+	var out []reminderBlock
+	for _, blk := range blocks {
+		sum := sha256.Sum256([]byte(blk.text))
+		hash := hex.EncodeToString(sum[:8])
+		needle := strings.TrimSpace(blk.text)
+		if needle == "" {
+			needle = blk.marker
+		}
+		if lastInjected[blk.marker] == hash && reminderBlockPresent(req, needle) {
+			continue
+		}
+		lastInjected[blk.marker] = hash
+		out = append(out, blk)
+	}
+	return out
+}
+
+// reminderBlockPresent reports whether the transcript already carries a block
+// with the given marker or content needle.
+func reminderBlockPresent(req *model.LLMRequest, marker string) bool {
+	if req == nil || marker == "" {
+		return false
+	}
+	for _, c := range req.Contents {
+		if c == nil {
+			continue
+		}
+		for _, p := range c.Parts {
+			if p != nil && strings.Contains(p.Text, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func appendSystemReminder(req *model.LLMRequest, reminder string) {

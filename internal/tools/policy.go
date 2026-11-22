@@ -332,6 +332,40 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 	return out, nil
 }
 
+// ForReadOnly returns the strictly read-only exploration toolset used by
+// ephemeral scout subagents: read, list, search, find plus git status/diff.
+// No write, shell or governance tool is exposed, so a scout can never mutate
+// the workspace, commit or open PRs — the subagent depth limit holds by
+// construction because scouts have no spawn tool of their own.
+func ForReadOnly(root string, settings team.Settings) ([]tool.Tool, error) {
+	deps := Deps{Root: root, Settings: settings}
+	if deps.tracker == nil {
+		deps.tracker = newFileReadTracker()
+	}
+	if deps.Shell == nil {
+		deps.Shell = shellx.Local{}
+	}
+	if deps.Git == nil {
+		deps.Git = gitx.Local{}
+	}
+	var out []tool.Tool
+	add := func(t tool.Tool, err error) error {
+		if err != nil {
+			return err
+		}
+		out = append(out, t)
+		return nil
+	}
+	for _, build := range []func() (tool.Tool, error){
+		deps.canRead, deps.canList, deps.canSearchText, deps.canFindFiles, deps.gitStatus, deps.gitDiff,
+	} {
+		if err := add(build()); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func (d Deps) canCommitAndManagePR() bool {
 	return d.Role == team.RoleProjectManager || d.Role == team.RoleArchitect
 }

@@ -132,6 +132,11 @@ type Settings struct {
 	ModelCallTimeoutSeconds  int                `yaml:"model_call_timeout_seconds,omitempty" json:"model_call_timeout_seconds,omitempty"`
 	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
+	// MaxSubagentCalls limita quantos subagentes efêmeros (scouts) um mesmo
+	// agente pode disparar por execução; MaxSubagentLLMCalls limita as chamadas
+	// de LLM de cada scout.
+	MaxSubagentCalls         int                `yaml:"max_subagent_calls,omitempty" json:"max_subagent_calls,omitempty"`
+	MaxSubagentLLMCalls      int                `yaml:"max_subagent_llm_calls,omitempty" json:"max_subagent_llm_calls,omitempty"`
 	ReviewModel              string             `yaml:"review_model,omitempty" json:"review_model,omitempty"`
 	InlineModel              string             `yaml:"inline_model,omitempty" json:"inline_model,omitempty"`
 	AutoReview               AutoReviewSettings `yaml:"auto_review,omitempty" json:"auto_review,omitempty"`
@@ -273,6 +278,35 @@ func (s Settings) EffectiveInTurnKeepToolResults() int {
 		return 20
 	}
 	return s.InTurnKeepToolResults
+}
+
+// EffectiveMaxSubagentCalls returns how many ephemeral read-only subagents
+// (scouts) a single squad agent may spawn per run (default 6, range 1..24).
+// The orchestrator refuses further spawns past this cap so a chatty agent
+// cannot offload an unbounded amount of exploration to children.
+func (s Settings) EffectiveMaxSubagentCalls() int {
+	if s.MaxSubagentCalls <= 0 {
+		return 6
+	}
+	if s.MaxSubagentCalls > 24 {
+		return 24
+	}
+	return s.MaxSubagentCalls
+}
+
+// EffectiveMaxSubagentLLMCalls returns the hard per-spawn LLM-call budget of
+// each scout subagent (default 8, range 3..24).
+func (s Settings) EffectiveMaxSubagentLLMCalls() int {
+	if s.MaxSubagentLLMCalls <= 0 {
+		return 8
+	}
+	if s.MaxSubagentLLMCalls < 3 {
+		return 3
+	}
+	if s.MaxSubagentLLMCalls > 24 {
+		return 24
+	}
+	return s.MaxSubagentLLMCalls
 }
 
 // EffectivePermissionMode returns the normalized permission mode (default "governed").

@@ -30,6 +30,14 @@ type AgentCost struct {
 
 // CanonicalCostRole normalizes an ADK author or display label into Chefe, Dev, QA or Outro.
 func CanonicalCostRole(author, label string) string {
+	a := strings.ToLower(strings.TrimSpace(author))
+	// O scout é um subagente do chamador: o custo cai no papel de quem o gerou.
+	if strings.HasPrefix(a, "scout_") {
+		if parent, ok := scoutParentFrom(a); ok && parent != "" {
+			return CanonicalCostRole(parent, label)
+		}
+		return "Outro"
+	}
 	raw := strings.ToLower(strings.TrimSpace(author + " " + label))
 	switch {
 	case strings.Contains(raw, "qa") || strings.Contains(raw, "revisor"):
@@ -115,13 +123,12 @@ func (r *Runner) populateUsageMetrics(res *Result) {
 	if res == nil {
 		return
 	}
+	r.costMu.Lock()
+	defer r.costMu.Unlock()
 	res.InputTokens = r.turnInputTokens
 	res.OutputTokens = r.turnOutputTokens
 	res.TotalTokens = r.turnTotalTokens
 	res.CachedReadTokens = r.turnCachedRead
-
-	r.costMu.Lock()
-	defer r.costMu.Unlock()
 	res.CostMicroUSD = r.turnCostMicroUSD
 
 	roleOrder := map[string]int{"Chefe": 0, "Dev": 1, "QA": 2, "Outro": 3}

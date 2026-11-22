@@ -148,6 +148,9 @@ type Runner struct {
 	hasImages         bool
 	jevRepo           string
 	devBudgets        map[string]*devTurnBudget
+	scoutMu           sync.Mutex
+	scoutSlotsCh      chan struct{}
+	scoutSpawns       map[string]int
 	resolvedChoiceMu  sync.Mutex
 	lastWorkingRoute  team.Agent
 	routedModels      map[string][2]string
@@ -411,8 +414,8 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				}
 				return result, guardErr
 			}
-			if r.Project.Settings.MaxTokens > 0 && r.turnTotalTokens > r.Project.Settings.MaxTokens {
-				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, r.Project.Settings.MaxTokens)
+			if tot := r.currentTotalTokens(); r.Project.Settings.MaxTokens > 0 && tot > r.Project.Settings.MaxTokens {
+				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", tot, r.Project.Settings.MaxTokens)
 				r.populateUsageMetrics(&result)
 				r.printUsageSummary(result, r.Err, "uso até parar: ")
 				if r.OnEvent != nil {
@@ -451,13 +454,19 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 		r.OnEvent(Event{
 			Kind:         "finish",
 			Text:         finishText,
-			InputTokens:  int32(r.turnInputTokens),
-			OutputTokens: int32(r.turnOutputTokens),
-			Tokens:       int32(r.turnTotalTokens),
+			InputTokens:  int32(result.InputTokens),
+			OutputTokens: int32(result.OutputTokens),
+			Tokens:       int32(result.TotalTokens),
 			CostMicroUSD: result.CostMicroUSD,
 		})
 	}
 	return result, nil
+}
+
+func (r *Runner) currentTotalTokens() int64 {
+	r.costMu.Lock()
+	defer r.costMu.Unlock()
+	return r.turnTotalTokens
 }
 
 func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx context.Context) {
@@ -485,10 +494,15 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.skills = skillx.Load(r.Workspace)
 	r.selectedSkills = nil
 	r.selectedNative = nil
+	r.costMu.Lock()
 	r.turnInputTokens = 0
 	r.turnOutputTokens = 0
 	r.turnTotalTokens = 0
 	r.turnCachedRead = 0
+	r.costMu.Unlock()
+	r.scoutMu.Lock()
+	r.scoutSpawns = nil
+	r.scoutMu.Unlock()
 	r.resetTurnCosts()
 	r.qaLastStatus = ""
 	r.qaHasLastStatus = false

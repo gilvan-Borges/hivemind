@@ -50,6 +50,11 @@ func (r *Runner) wrapRouteEvent(next func(Event)) func(Event) {
 // resolveAuthorRoute returns the (provider, model) pair last routed for the
 // agent, falling back to the team config for pinned (non-Jev) agents.
 func (r *Runner) resolveAuthorRoute(author string) (string, string) {
+	// O scout roda no modelo do chamador: resolva a rota do pai para o custo
+	// do subagente cair no provider/modelo certo.
+	if parent, ok := scoutParentFrom(author); ok && parent != "" {
+		author = parent
+	}
 	r.resolvedChoiceMu.Lock()
 	rm := r.routedModels[strings.ToLower(strings.TrimSpace(author))]
 	r.resolvedChoiceMu.Unlock()
@@ -62,6 +67,17 @@ func (r *Runner) resolveAuthorRoute(author string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// resolveAuthorDiscount returns the routed discount for author, inheriting the
+// caller's discount when author is an ephemeral scout subagent.
+func (r *Runner) resolveAuthorDiscount(author string) int {
+	if parent, ok := scoutParentFrom(author); ok && parent != "" {
+		author = parent
+	}
+	r.resolvedChoiceMu.Lock()
+	defer r.resolvedChoiceMu.Unlock()
+	return r.routedDiscount[strings.ToLower(strings.TrimSpace(author))]
 }
 
 func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool, ownedPaths []string) (agent.Agent, error) {
@@ -193,6 +209,11 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		triBefore, triAfter := newChiefTriageBudgetCallbacks(jiraKey, defaultMaxTriageExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, triAfter)
+	}
+	// Subagente efêmero de contexto limpo (scout) para pesquisa somente-leitura
+	// sem queimar o orçamento de exploração nem poluir o transcript do agente.
+	if sp, pErr := r.newSpawnSubagentTool(a, adkName, root); pErr == nil {
+		roleTools = append(roleTools, sp)
 	}
 	cfg := llmagent.Config{
 		Name:                     adkName,
