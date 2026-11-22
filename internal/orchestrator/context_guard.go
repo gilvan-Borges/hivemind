@@ -149,6 +149,19 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 				}, nil
 			}
 
+		case "read_skill":
+			n := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["name"])))
+			mu.Lock()
+			searchCalls["read_skill::"+n]++
+			calls := searchCalls["read_skill::"+n]
+			mu.Unlock()
+			if calls >= 2 {
+				return map[string]any{
+					"text": "AVISO ANTI-LOOP: você já carregou as diretrizes desta skill neste turno. NÃO recarregue — as diretrizes completas já estão no seu contexto; aplique-as e avance para a próxima etapa da tarefa.",
+				}, nil
+			}
+			return nil, nil
+
 		case "search_text", "find_files", "list_dir", "github_list_prs", "github_pr_files":
 			q := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["query"])))
 			pat := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["pattern"])))

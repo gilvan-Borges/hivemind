@@ -438,7 +438,7 @@ FLUXO TRAVADO POR GATES (você NÃO pula etapa):
 REGRAS:
 - write_doc aceita SOMENTE .md em docs/, specs/, .specify/ ou README.md; tentativas de gravar código serão recusadas pela ferramenta.
 - Se o usuário pedir ajustes após o gate, revise os docs e chame sdd_docs_ready novamente.
-- Siga as skills nativas sdd-discovery (entrevista) e sdd-architecture-docs (geração dos docs); leia-as com read_file quando precisar de diretrizes detalhadas.`,
+- Siga as skills nativas sdd-discovery (entrevista) e sdd-architecture-docs (geração dos docs); carregue as diretrizes completas com read_skill antes de conduzir a entrevista/gerar os docs.`,
 			chief.Instructions, chief.Name)
 	case "plan:sdd-jira":
 		triageInstr = fmt.Sprintf(`%s
@@ -485,7 +485,7 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			"- Ao delegar com delegate_to_squad, avalie quais skills acima cercam ou aceleram a tarefa e passe os nomes exatos em \"skills\" (apenas as relevantes; vazio = nenhuma).\n" +
 			"- Se a versão NATIVA da IDE parecer mais atual ou melhor que a versão do projeto, passe o nome em \"native_skills\"; se o projeto tiver uma skill de mesmo nome, o usuário será consultado para autorizar a substituição.\n" +
 			"- Skills na seção OPCIONAIS DESLIGADAS só entram em native_skills se o usuário pediu explicitamente essa skill pelo nome.\n" +
-			"- Em modo direto/consulta você mesmo pode seguir uma skill: leia o arquivo SKILL.md indicado com read_file.\n" +
+			"- Em modo direto/consulta você mesmo pode seguir uma skill: carregue as diretrizes completas com read_skill (nome exato da skill).\n" +
 			skillx.ProgressiveDisclosureHint()
 	}
 	if note := r.pinnedSkillsNote(); note != "" {

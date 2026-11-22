@@ -1698,7 +1698,7 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 	}
 	project.Normalize()
 
-	var chiefInst, chiefUserMsg, devInst, qaInst string
+	var chiefInst, chiefUserMsg, devInst, devSkillBody, qaInst string
 	extractSystem := func(req *model.LLMRequest) string {
 		if req == nil || req.Config == nil || req.Config.SystemInstruction == nil {
 			return ""
@@ -1756,6 +1756,19 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 			"dev": &modelx.Scripted{Fn: func(req *model.LLMRequest, call int) *model.LLMResponse {
 				if call == 1 {
 					devInst = extractSystem(req)
+					return modelx.FunctionCall("read_skill", "rs1", map[string]any{"name": "dev-only"})
+				}
+				if call == 2 {
+					for _, c := range req.Contents {
+						if c == nil || c.Role != genai.RoleUser {
+							continue
+						}
+						for _, p := range c.Parts {
+							if p != nil && p.FunctionResponse != nil {
+								devSkillBody += fmt.Sprint(p.FunctionResponse.Response)
+							}
+						}
+					}
 					return modelx.FunctionCall("write_file", "w1", map[string]any{"path": "a.txt", "content": "1\n"})
 				}
 				return modelx.Text("dev ok")
@@ -1779,23 +1792,32 @@ func TestRoleTargetedSkillsInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(chiefInst, "CORPO_EXCLUSIVO_CHIEF") || !strings.Contains(chiefInst, "CORPO_PARA_TODOS") {
-		t.Fatalf("expected chief-only and everyone in chief instruction, got: %s", chiefInst)
+	// Progressive disclosure: o prompt recebe apenas o stub (nome+descrição)
+	// das skills do papel; os corpos completos ficam disponíveis via read_skill.
+	if !strings.Contains(chiefInst, "`chief-only`") || !strings.Contains(chiefInst, "`everyone`") {
+		t.Fatalf("expected chief-only and everyone stubs in chief instruction, got: %s", chiefInst)
 	}
-	if strings.Contains(chiefInst, "CORPO_EXCLUSIVO_DEV") || strings.Contains(chiefInst, "CORPO_EXCLUSIVO_QA") {
-		t.Fatalf("did not expect dev-only or qa-only body in chief instruction")
+	if !strings.Contains(chiefInst, "read_skill") {
+		t.Fatal("chief instruction should point to read_skill for the full guidance")
 	}
-	if !strings.Contains(devInst, "CORPO_EXCLUSIVO_DEV") || !strings.Contains(devInst, "CORPO_PARA_TODOS") {
-		t.Fatalf("expected dev-only and everyone in dev instruction, got: %s", devInst)
+	if strings.Contains(chiefInst, "CORPO_EXCLUSIVO_DEV") || strings.Contains(chiefInst, "CORPO_EXCLUSIVO_QA") || strings.Contains(chiefInst, "CORPO_EXCLUSIVO_CHIEF") {
+		t.Fatalf("skill bodies must not be inlined anymore (chief), got: %s", chiefInst)
 	}
-	if strings.Contains(devInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(devInst, "CORPO_EXCLUSIVO_QA") {
-		t.Fatalf("did not expect chief-only or qa-only in dev instruction")
+	if !strings.Contains(devInst, "`dev-only`") || !strings.Contains(devInst, "`everyone`") {
+		t.Fatalf("expected dev-only and everyone stubs in dev instruction, got: %s", devInst)
 	}
-	if !strings.Contains(qaInst, "CORPO_EXCLUSIVO_QA") || !strings.Contains(qaInst, "CORPO_PARA_TODOS") {
-		t.Fatalf("expected qa-only and everyone in qa instruction, got: %s", qaInst)
+	if strings.Contains(devInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(devInst, "CORPO_EXCLUSIVO_QA") || strings.Contains(devInst, "CORPO_EXCLUSIVO_DEV") {
+		t.Fatalf("skill bodies must not be inlined anymore (dev), got: %s", devInst)
 	}
-	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") {
-		t.Fatalf("did not expect chief-only or dev-only in qa instruction")
+	if !strings.Contains(qaInst, "`qa-only`") || !strings.Contains(qaInst, "`everyone`") {
+		t.Fatalf("expected qa-only and everyone stubs in qa instruction, got: %s", qaInst)
+	}
+	if strings.Contains(qaInst, "CORPO_EXCLUSIVO_CHIEF") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_DEV") || strings.Contains(qaInst, "CORPO_EXCLUSIVO_QA") {
+		t.Fatalf("skill bodies must not be inlined anymore (qa), got: %s", qaInst)
+	}
+	// O corpo completo chega ao Dev apenas via tool read_skill (sob demanda).
+	if !strings.Contains(devSkillBody, "CORPO_EXCLUSIVO_DEV") {
+		t.Fatalf("read_skill should deliver the full dev-only body on demand, got: %q", devSkillBody)
 	}
 	// Spec 02 §3.1: a memória do time vive em UM único lugar estável — a
 	// primeira mensagem user da sessão (vista pelo Chefe) — e não é mais

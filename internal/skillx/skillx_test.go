@@ -251,6 +251,39 @@ func TestGuidanceBlockMixesProjectAndNativeRoots(t *testing.T) {
 	}
 }
 
+func TestStubBlockCompactAndOnDemand(t *testing.T) {
+	if StubBlock(nil, nil) != "" {
+		t.Fatal("sem skills deveria devolver bloco vazio")
+	}
+	project := []Skill{{Name: "code-review", Description: "Revisa PRs com foco em segurança."}}
+	native := []Skill{{Name: "sdd-discovery", Description: "Entrevista SDD.", Enabled: true}}
+
+	got := StubBlock(project, native)
+	if !strings.Contains(got, "`code-review`") || !strings.Contains(got, "Revisa PRs com foco em segurança.") {
+		t.Fatalf("stub do projeto incompleto: %q", got)
+	}
+	if !strings.Contains(got, "`sdd-discovery`") || !strings.Contains(got, "nativa da IDE") {
+		t.Fatalf("stub nativo incompleto: %q", got)
+	}
+	if !strings.Contains(got, "read_skill") {
+		t.Fatal("bloco deveria instruir o carregamento sob demanda via read_skill")
+	}
+	if strings.Contains(got, "# Code Review") {
+		t.Fatal("stub não deveria carregar corpo inline")
+	}
+	// O bloco inteiro deve custar bem menos que um corpo inline típico (4 KiB).
+	if len(got) > 1200 {
+		t.Fatalf("bloco de stubs deveria ser compacto: %d bytes", len(got))
+	}
+}
+
+func TestStubBlockWithoutDescription(t *testing.T) {
+	got := StubBlock(nil, []Skill{{Name: "misteriosa"}})
+	if !strings.Contains(got, "`misteriosa`") || !strings.Contains(got, "sem descrição") {
+		t.Fatalf("stub sem descrição incompleto: %q", got)
+	}
+}
+
 func TestLoadCacheInvalidatesOnMtimeAndHash(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "code-review", "# Code Review\n\nRevisa PRs com foco em segurança.")

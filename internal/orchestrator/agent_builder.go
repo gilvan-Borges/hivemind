@@ -95,6 +95,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	if err != nil {
 		return nil, fmt.Errorf("modelo de %s (provedor %s): %w", a.Name, a.Provider, err)
 	}
+	_, preferredNative := r.resolveSkillCatalogs(a.Role, true)
 	roleTools, err := tools.ForRole(a.Role, tools.Deps{
 		Root:                 root,
 		Settings:             r.Project.Settings,
@@ -109,6 +110,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		JiraKey:              jiraKey,
 		BaseBranch:           r.Project.Settings.BaseBranch,
 		MCP:                  r.MCP,
+		SkillLookup:          tools.NewSkillLookupWithPreferredNative(r.Workspace, r.NativeSkillsRoot, r.skills, r.NativeSkills, preferredNative),
 	})
 	if err != nil {
 		return nil, err

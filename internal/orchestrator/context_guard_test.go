@@ -323,6 +323,24 @@ func TestRepeatReadGuardBlocksThirdIdenticalReadAndResetsOnEdit(t *testing.T) {
 	}
 }
 
+func TestRepeatReadGuardBlocksRepeatedReadSkill(t *testing.T) {
+	cb := newRepeatReadGuardCallback()
+	skillTool := stubNamedTool{name: "read_skill"}
+	args := map[string]any{"name": "code-review"}
+
+	if res, err := cb(nil, skillTool, args); err != nil || res != nil {
+		t.Fatalf("1st read_skill should pass, got res=%v err=%v", res, err)
+	}
+	res, err := cb(nil, skillTool, args)
+	if err != nil || res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("2nd identical read_skill should trigger anti-loop, got res=%v err=%v", res, err)
+	}
+	// Outra skill não é afetada pelo bloqueio.
+	if res, err := cb(nil, skillTool, map[string]any{"name": "sdd-discovery"}); err != nil || res != nil {
+		t.Fatalf("read_skill de outra skill deve passar, got res=%v err=%v", res, err)
+	}
+}
+
 func TestRepeatReadGuardBlocksShiftedRangesAndRepeatedPRDiff(t *testing.T) {
 	cb := newRepeatReadGuardCallback()
 	readTool := stubNamedTool{name: "read_file"}

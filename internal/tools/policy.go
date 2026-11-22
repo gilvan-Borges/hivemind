@@ -20,6 +20,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
@@ -54,8 +55,11 @@ type Deps struct {
 	BaseBranch    string
 	// MCP, quando preenchido, expõe só os servidores ligados e as duas
 	// ferramentas leves de lista e de ligar sob aprovação.
-	MCP     *mcpx.Host
-	tracker *fileReadTracker
+	MCP *mcpx.Host
+	// SkillLookup resolve o corpo completo de uma skill pelo nome para a tool
+	// read_skill (progressive disclosure). Quando nil, read_skill não é exposta.
+	SkillLookup func(name string) (skillx.Skill, string, bool)
+	tracker     *fileReadTracker
 }
 
 type fileReadTracker struct {
@@ -316,6 +320,11 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 
 	default:
 		return nil, fmt.Errorf("papel sem ferramentas: %s", role)
+	}
+	if deps.SkillLookup != nil {
+		if err := add(deps.canReadSkill()); err != nil {
+			return nil, err
+		}
 	}
 	if err := deps.addMCP(&out); err != nil {
 		return nil, err
