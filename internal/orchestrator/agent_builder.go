@@ -255,7 +255,21 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	return llmagent.New(cfg)
 }
 
+// modelFor resolves o modelo do agente e aplica o teto de tempo por chamada
+// (Settings.ModelCallTimeoutSeconds, default 600s) para que um stream travado
+// do provedor não segure a rodada do squad indefinidamente.
 func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) {
+	m, err := r.modelForRaw(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if to := r.Project.Settings.EffectiveModelCallTimeout(); to > 0 {
+		m = modelx.NewPerCallTimeout(m, to)
+	}
+	return m, nil
+}
+
+func (r *Runner) modelForRaw(ctx context.Context, a team.Agent) (model.LLM, error) {
 	if r.Models != nil {
 		if m, ok := r.Models[a.Name]; ok && m != nil {
 			return m, nil

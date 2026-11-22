@@ -337,7 +337,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	if useTriage {
 		userObjective += r.teamMemorySnippet()
 	}
-	msg := buildUserContent(userObjective, req.Attachments)
+	// Defesa de contexto do prompt inicial: objetivo/anexos acima do teto
+	// deixam o miolo em .hivemind/intake/ em vez de estourar a janela do
+	// Chefe na primeira chamada.
+	userObjective, boundedAtts := r.boundIntake(userObjective, req.Attachments)
+	msg := buildUserContent(userObjective, boundedAtts)
 	if !useTriage && r.chiefPlan != "" {
 		if r.OnEvent != nil {
 			r.OnEvent(Event{
