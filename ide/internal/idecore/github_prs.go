@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
@@ -691,8 +692,79 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 }
 
 // ListProjectPullRequests fetches open pull requests for a GitHub-backed workspace,
-// preferring the native GitHub GraphQL/REST connector and falling back to `gh` CLI.
+// aggregating across all discovered Git repositories (root and nested) when the
+// workspace contains multiple repositories (e.g. monorepo/container with sibling apps).
 func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
+	repos, err := DiscoverGitRepos(ctx, workspace)
+	if err != nil || len(repos) <= 1 {
+		target := workspace
+		var repoName string
+		if len(repos) == 1 {
+			target = repos[0].Root
+			repoName = repos[0].Name
+		}
+		prs, listErr := listPullRequestsForRepo(ctx, target)
+		if len(repos) == 1 {
+			for i := range prs {
+				prs[i].Repo = repoName
+				prs[i].RepoRoot = target
+			}
+		}
+		return prs, listErr
+	}
+
+	type repoResult struct {
+		prs []ProjectPullRequest
+		err error
+	}
+	results := make([]repoResult, len(repos))
+	var wg sync.WaitGroup
+	for i, r := range repos {
+		wg.Add(1)
+		go func(idx int, repoInfo WorkspaceGitRepo) {
+			defer wg.Done()
+			prs, listErr := listPullRequestsForRepo(ctx, repoInfo.Root)
+			for j := range prs {
+				prs[j].Repo = repoInfo.Name
+				prs[j].RepoRoot = repoInfo.Root
+			}
+			results[idx] = repoResult{prs: prs, err: listErr}
+		}(i, r)
+	}
+	wg.Wait()
+
+	var merged []ProjectPullRequest
+	seenURL := make(map[string]bool)
+	var firstErr error
+	anyOK := false
+	for _, res := range results {
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
+			}
+			continue
+		}
+		anyOK = true
+		for _, pr := range res.prs {
+			if pr.URL != "" && seenURL[pr.URL] {
+				continue
+			}
+			if pr.URL != "" {
+				seenURL[pr.URL] = true
+			}
+			merged = append(merged, pr)
+		}
+	}
+	if !anyOK && firstErr != nil {
+		return nil, firstErr
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		return merged[i].UpdatedAt > merged[j].UpdatedAt
+	})
+	return merged, nil
+}
+
+func listPullRequestsForRepo(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
 	g := gitx.Local{}
 	if !g.IsRepo(ctx, workspace) {
 		return nil, nil

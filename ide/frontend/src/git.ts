@@ -708,10 +708,12 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
   const detailEntry = state.prDetails[pr.number];
   const detailOpen = Boolean(detailEntry?.open);
   const whenLabel = formatPrRelativeTime(pr.lastActivityAt || pr.updatedAt);
+  const multiRepo = getEffectiveGitRepos().length > 1;
   return `
     <div class="issue-card pr-card">
       <div class="pr-card-top">
         <span class="tok-pill">#${pr.number}</span>
+        ${multiRepo && pr.repo ? `<span class="tok-pill" title="${escapeHtml(pr.repoRoot || pr.repo)}">${escapeHtml(pr.repo)}</span>` : ""}
         ${pr.isMine && opts?.showMineBadge !== false ? `<span class="flow-pill mine">Meu PR</span>` : ""}
         ${attentionPill}
         ${pr.isDraft ? `<span class="pr-draft-pill">DRAFT</span>` : ""}
@@ -730,7 +732,7 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
           <span>Detalhes</span>
         </button>
         <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">${icons.openInNew}</button>
-        ${pr.isMine ? `<button class="mini danger" data-close-pr="${pr.number}" title="Fechar meu PR no GitHub">${icons.trash}</button>` : ""}
+        ${pr.isMine ? `<button class="mini danger" data-close-pr="${pr.number}" data-close-pr-root="${escapeHtml(pr.repoRoot || "")}" title="Fechar meu PR no GitHub">${icons.trash}</button>` : ""}
       </div>
       ${renderPrDetailsDrawerHtml(pr, detailEntry)}
     </div>
@@ -754,6 +756,7 @@ export function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
       <div class="pr-card-top" style="justify-content:space-between">
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
           <span class="tok-pill">${escapeHtml(iss.source.toUpperCase())} · ${escapeHtml(iss.key)}</span>
+          ${iss.repo ? `<span class="tok-pill" title="${escapeHtml(iss.repoRoot || iss.repo)}">${escapeHtml(iss.repo)}</span>` : ""}
           ${isSubtaskBadge ? `<span class="flow-pill subtask-type-pill" title="Subtarefa vinculada a ${escapeHtml(iss.parentKey || "task pai")}">Subtask</span>` : ""}
           ${hasSubtasks ? `<span class="flow-pill parent-count-pill" title="${subDone} concluída(s) · ${subPending} sem fazer · total de ${subTotal} subtasks">${subTotal} subtask${subTotal === 1 ? "" : "s"}</span>` : ""}
           ${isGH && iss.isMine ? `<span class="flow-pill mine">Minha</span>` : ""}
@@ -1429,7 +1432,8 @@ export function appendGitProgress(label: string, line: string) {
 export async function cancelGitAction() {
   const backend = api();
   if (!backend?.CancelGitAction || !state.project) return;
-  const targetRoot = getActiveGitRepo()?.root || state.project.root;
+  const matchedPr = state.prs.list.find((p) => p.number === prNumber);
+  const targetRoot = matchedPr?.repoRoot || getActiveGitRepo()?.root || state.project.root;
   try {
     await backend.CancelGitAction(targetRoot);
   } catch (err: any) {
@@ -1511,7 +1515,8 @@ async function fetchPrDetails(prNumber: number, force = false) {
     rerenderGitSidebarAnchored();
     return;
   }
-  const targetRoot = getActiveGitRepo()?.root || state.project.root;
+  const matchedPr = state.prs.list.find((p) => p.number === prNumber);
+  const targetRoot = matchedPr?.repoRoot || getActiveGitRepo()?.root || state.project.root;
   const projectKey = normalizePathKey(state.project.root);
   state.prDetails[prNumber] = { open: true, loading: true, error: "", data: cur?.data };
   rerenderGitSidebarAnchored();
@@ -1554,7 +1559,7 @@ async function fetchPrDetails(prNumber: number, force = false) {
 export async function loadGitHubPRs() {
   const backend = api();
   if (!backend || !state.project || state.prs.loading) return;
-  const targetRoot = getActiveGitRepo()?.root || state.project.root;
+  const targetRoot = state.project.root;
   const projectKey = normalizePathKey(state.project.root);
   const targetPrs = state.prs;
   targetPrs.loading = true;
@@ -2099,6 +2104,7 @@ export function bindGitSidebarEvents() {
   document.querySelectorAll("[data-close-pr]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const num = parseInt((btn as HTMLElement).dataset.closePr || "0", 10);
+      const repoRoot = (btn as HTMLElement).dataset.closePrRoot || state.project?.root || "";
       if (!num || !state.project) return;
       askConfirm({
         title: `Fechar meu PR #${num}`,
@@ -2108,7 +2114,7 @@ export function bindGitSidebarEvents() {
         onConfirm: async () => {
           if (!state.project || !api()?.CloseOwnGitHubItem) return;
           try {
-            await api()!.CloseOwnGitHubItem(state.project.root, "pr", num);
+            await api()!.CloseOwnGitHubItem(repoRoot || state.project.root, "pr", num);
             toast(`PR #${num} fechado no GitHub.`, "success");
             setStatus(`PR #${num} fechado.`);
             await loadGitHubPRs();
@@ -2161,16 +2167,17 @@ export function bindGitSidebarEvents() {
       const idx = parseInt((btn as HTMLElement).dataset.reviewPr || "0", 10);
       const pr = state.prs.list[idx];
       if (!pr) return;
+      const repoTag = getEffectiveGitRepos().length > 1 && pr.repo ? ` [${pr.repo}]` : "";
       const branchInfo = pr.headRef && pr.baseRef ? ` (${pr.headRef} → ${pr.baseRef})` : "";
       const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body.slice(0, 1200)}` : "";
       if (pr.isMine) {
-        state.draftObjective = `Atender feedback do nosso PR #${pr.number}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
+        state.draftObjective = `Atender feedback do nosso PR #${pr.number}${repoTag}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
       } else if (pr.mentionedMe) {
-        state.draftObjective = `Responder menção no PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Fui marcado por ${pr.lastActivityAuthor ? "@" + pr.lastActivityAuthor : "um colega"}; leia o PR e os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
+        state.draftObjective = `Responder menção no PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Fui marcado por ${pr.lastActivityAuthor ? "@" + pr.lastActivityAuthor : "um colega"}; leia o PR e os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else if (pr.needsAttention && pr.myResponse) {
-        state.draftObjective = `Reavaliar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Houve ${pr.attentionReason ? pr.attentionReason.toLowerCase() : "nova atualização"} após minha última revisão; leia os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
+        state.draftObjective = `Reavaliar PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Houve ${pr.attentionReason ? pr.attentionReason.toLowerCase() : "nova atualização"} após minha última revisão; leia os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else {
-        state.draftObjective = `Revisar PR #${pr.number} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
+        state.draftObjective = `Revisar PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
       }
       if (activeLane()?.id === "lane-autoreview") {
         const manualLane = state.lanes.find((lane) => lane.id !== "lane-autoreview");

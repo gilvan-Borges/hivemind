@@ -116,6 +116,8 @@ type ProjectIssue struct {
 	Author         string           `json:"author,omitempty"`
 	URL            string           `json:"url,omitempty"`
 	IsMine         bool             `json:"isMine,omitempty"`
+	Repo           string           `json:"repo,omitempty"`
+	RepoRoot       string           `json:"repoRoot,omitempty"`
 }
 
 // ProjectPullRequest represents an open GitHub pull request listed in the sidebar.
@@ -127,6 +129,8 @@ type ProjectPullRequest struct {
 	State               string   `json:"state"`
 	IsDraft             bool     `json:"isDraft"`
 	Author              string   `json:"author,omitempty"`
+	Repo                string   `json:"repo,omitempty"`
+	RepoRoot            string   `json:"repoRoot,omitempty"`
 	HeadRef             string   `json:"headRef,omitempty"`
 	BaseRef             string   `json:"baseRef,omitempty"`
 	UpdatedAt           string   `json:"updatedAt,omitempty"`

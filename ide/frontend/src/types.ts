@@ -85,6 +85,8 @@ export interface AutoReviewEntry {
   prNumber: number;
   title: string;
   author?: string;
+  repo?: string;
+  repoRoot?: string;
   headRef?: string;
   baseRef?: string;
   status: "reviewed" | "error" | "canceled";
@@ -529,6 +531,8 @@ export interface ProjectIssue {
   author?: string;
   url?: string;
   isMine?: boolean;
+  repo?: string;
+  repoRoot?: string;
 }
 
 export interface PREventItem {
@@ -559,6 +563,8 @@ export interface ProjectPullRequest {
   state: string;
   isDraft: boolean;
   author?: string;
+  repo?: string;
+  repoRoot?: string;
   headRef?: string;
   baseRef?: string;
   updatedAt?: string;

@@ -474,57 +474,95 @@ func ListProjectIssues(ctx context.Context, workspace string) ([]ProjectIssue, e
 		}
 	}
 
-	// 2. GitHub issues via native GitHub REST connector first, then `gh` CLI fallback
+	// 2. GitHub issues via native GitHub REST connector first, then `gh` CLI fallback,
+	// aggregating across all discovered Git repositories (root and nested).
+	repos, repoErr := DiscoverGitRepos(ctx, workspace)
+	if repoErr != nil || len(repos) == 0 {
+		if ghIssues := listGitHubIssuesForRepo(ctx, workspace, "", false); len(ghIssues) > 0 {
+			issues = append(issues, ghIssues...)
+		}
+		return issues, nil
+	}
+	seenURL := make(map[string]bool)
+	tagRepo := len(repos) > 1
+	for _, r := range repos {
+		for _, it := range listGitHubIssuesForRepo(ctx, r.Root, r.Name, tagRepo) {
+			if it.URL != "" && seenURL[it.URL] {
+				continue
+			}
+			if it.URL != "" {
+				seenURL[it.URL] = true
+			}
+			issues = append(issues, it)
+		}
+	}
+
+	return issues, nil
+}
+
+func listGitHubIssuesForRepo(ctx context.Context, repoRoot, repoName string, tagRepo bool) []ProjectIssue {
 	g := gitx.Local{}
-	if g.IsRepo(ctx, workspace) {
-		if remoteURL, err := g.RemoteURL(ctx, workspace); err == nil {
-			if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL); ok {
-				currentUser, _ := githubx.Detect(owner, repo).CurrentUser(ctx)
-				token, baseURL, _ := githubx.LoadCredentials()
-				if token != "" {
-					if restIssues, err := listIssuesREST(ctx, baseURL, owner, repo, token, currentUser); err == nil {
-						issues = append(issues, restIssues...)
-						return issues, nil
-					}
+	if !g.IsRepo(ctx, repoRoot) {
+		return nil
+	}
+	remoteURL, err := g.RemoteURL(ctx, repoRoot)
+	if err != nil {
+		return nil
+	}
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
+	if !ok {
+		return nil
+	}
+	currentUser, _ := githubx.Detect(owner, repo).CurrentUser(ctx)
+	token, baseURL, _ := githubx.LoadCredentials()
+	var outIssues []ProjectIssue
+	if token != "" {
+		if restIssues, err := listIssuesREST(ctx, baseURL, owner, repo, token, currentUser); err == nil {
+			outIssues = restIssues
+		}
+	}
+	if len(outIssues) == 0 {
+		if ghBin, err := exec.LookPath("gh"); err == nil {
+			cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "20", "--json", "number,title,body,state,author,url")
+			procx.ConfigureContext(cmd)
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			if err := cmd.Run(); err == nil {
+				var raw []struct {
+					Number int    `json:"number"`
+					Title  string `json:"title"`
+					Body   string `json:"body"`
+					State  string `json:"state"`
+					URL    string `json:"url"`
+					Author struct {
+						Login string `json:"login"`
+					} `json:"author"`
 				}
-				if ghBin, err := exec.LookPath("gh"); err == nil {
-					cmd := exec.CommandContext(ctx, ghBin, "issue", "list", "--repo", owner+"/"+repo, "--state", "open", "--limit", "20", "--json", "number,title,body,state,author,url")
-					procx.ConfigureContext(cmd)
-					var out bytes.Buffer
-					cmd.Stdout = &out
-					if err := cmd.Run(); err == nil {
-						var raw []struct {
-							Number int    `json:"number"`
-							Title  string `json:"title"`
-							Body   string `json:"body"`
-							State  string `json:"state"`
-							URL    string `json:"url"`
-							Author struct {
-								Login string `json:"login"`
-							} `json:"author"`
-						}
-						if json.Unmarshal(out.Bytes(), &raw) == nil {
-							for _, ghIt := range raw {
-								author := strings.TrimSpace(ghIt.Author.Login)
-								issues = append(issues, ProjectIssue{
-									Source: "github",
-									Key:    fmt.Sprintf("#%d", ghIt.Number),
-									Title:  ghIt.Title,
-									Body:   ghIt.Body,
-									Status: ghIt.State,
-									Author: author,
-									URL:    ghIt.URL,
-									IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
-								})
-							}
-						}
+				if json.Unmarshal(out.Bytes(), &raw) == nil {
+					for _, ghIt := range raw {
+						author := strings.TrimSpace(ghIt.Author.Login)
+						outIssues = append(outIssues, ProjectIssue{
+							Source: "github",
+							Key:    fmt.Sprintf("#%d", ghIt.Number),
+							Title:  ghIt.Title,
+							Body:   ghIt.Body,
+							Status: ghIt.State,
+							Author: author,
+							URL:    ghIt.URL,
+							IsMine: currentUser != "" && strings.EqualFold(author, currentUser),
+						})
 					}
 				}
 			}
 		}
 	}
-
-	return issues, nil
+	if tagRepo {
+		for i := range outIssues {
+			outIssues[i].Repo = repoName
+			outIssues[i].RepoRoot = repoRoot
+		}
+	}
+	return outIssues
 }
 
 func sanitizeJiraProjectKey(raw string) string {
