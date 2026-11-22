@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	"google.golang.org/adk/v2/agent"
@@ -15,6 +14,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/toolspill"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
@@ -180,17 +180,20 @@ func (d Deps) runShellSandboxed(ctx context.Context, dir, command string) (strin
 		}
 		text += res.Stderr
 	}
-	var logPath string
+	var spillPath string
 	if len(text) > 16<<10 {
-		if f, tmpErr := os.CreateTemp("", "hivemind-shell-*.log"); tmpErr == nil {
-			logPath = f.Name()
-			_, _ = f.WriteString(text)
-			_ = f.Close()
+		// Spill to the workspace-rooted archive so read_file can recover
+		// exact ranges; the old os.CreateTemp pointer was outside the jail
+		// and therefore unreadable for the model.
+		if store := toolspill.NewStore(d.Root); store != nil {
+			if rel, err := store.Save("run_shell", text); err == nil {
+				spillPath = rel
+			}
 		}
 	}
 	text = strx.TruncateHeadTailBytes(text, 4<<10, 12<<10)
-	if logPath != "" {
-		text += "\n[saída completa salva em: " + logPath + "]"
+	if spillPath != "" {
+		text += "\n[saída completa persistida em: " + spillPath + " — recupere trechos com read_file (start_line/end_line)]"
 	}
 	if err != nil {
 		if strings.TrimSpace(text) == "" {

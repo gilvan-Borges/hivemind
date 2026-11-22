@@ -15,6 +15,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/tools"
+	"github.com/gilvan-Borges/HiveMind/internal/toolspill"
 )
 
 func (r *Runner) llm(ctx context.Context, a team.Agent, adkName, outputKey, root, extra, jiraKey string, stateKeys []string, qa bool, disableGitWrite bool) (agent.Agent, error) {
@@ -131,7 +132,16 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	beforeToolCBs := []llmagent.BeforeToolCallback{
 		newRepeatReadGuardCallback(),
 	}
+	// Spillover guard (Spec 02): oversized tool outputs are persisted under
+	// <root>/.hivemind/spillover and replaced inline by a head+tail preview
+	// with a read_file pointer. One monitor per agent bounds the aggregate
+	// inline payload of the whole run.
 	var afterToolCBs []llmagent.AfterToolCallback
+	afterToolCBs = append(afterToolCBs, toolspill.NewAfterToolCallback(
+		toolspill.DefaultConfig(),
+		toolspill.NewStore(root),
+		&toolspill.Monitor{},
+	))
 	if a.Role == team.RoleDeveloper {
 		roundFn := func() int {
 			r.handoffMu.Lock()

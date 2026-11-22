@@ -10,6 +10,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/sandboxx"
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 type recordSandbox struct {
@@ -143,23 +144,28 @@ func TestRunShellSandboxedSavesFullOutputOnTruncate(t *testing.T) {
 	if !strings.Contains(out, "FAIL: exact-tail-error") {
 		t.Fatalf("expected tail preserved, got: %s", out)
 	}
-	const marker = "[saída completa salva em: "
+	const marker = "[saída completa persistida em: "
 	idx := strings.Index(out, marker)
 	if idx < 0 {
-		t.Fatalf("expected saved log path in truncated output, got: %s", out)
+		t.Fatalf("expected spilled archive pointer in truncated output, got: %s", out)
 	}
 	rest := out[idx+len(marker):]
-	end := strings.IndexByte(rest, ']')
+	end := strings.Index(rest, " —")
 	if end <= 0 {
-		t.Fatalf("malformed log path line: %q", rest)
+		t.Fatalf("malformed spill pointer line: %q", rest)
 	}
-	logPath := rest[:end]
-	t.Cleanup(func() { _ = os.Remove(logPath) })
-	saved, err := os.ReadFile(logPath)
+	rel := rest[:end]
+	// The pointer must resolve inside the workspace jail (the model recovers
+	// exact ranges from it with read_file), unlike the old system-temp path.
+	savedPath, err := workspace.ResolveWithOptions(deps.Root, rel, workspace.Options{AllowSpilloverRead: true})
 	if err != nil {
-		t.Fatalf("reading saved shell log %s: %v", logPath, err)
+		t.Fatalf("spill pointer must resolve inside the workspace jail: %v", err)
+	}
+	saved, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("reading spilled shell log %s: %v", savedPath, err)
 	}
 	if string(saved) != full {
-		t.Fatalf("saved shell log mismatch: len=%d want=%d", len(saved), len(full))
+		t.Fatalf("spilled shell log mismatch: len=%d want=%d", len(saved), len(full))
 	}
 }

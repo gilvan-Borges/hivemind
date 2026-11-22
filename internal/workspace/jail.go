@@ -16,6 +16,12 @@ type Options struct {
 	// AllowMemoryRead permits read-only access to .hivemind/MEMORY.md while
 	// keeping .hivemind/team.yaml, sessions, and worktrees off-limits to agents.
 	AllowMemoryRead bool
+	// AllowSpilloverRead permits read-only access to the .hivemind/spillover
+	// subtree ONLY (toolspill archives the model itself produced). Every other
+	// .hivemind path stays blocked, and the allowance applies strictly to the
+	// first path segment so nested ".hivemind/spillover" lookalikes in
+	// subdirectories do not inherit it.
+	AllowSpilloverRead bool
 }
 
 // Resolve returns the absolute path of rel inside root, blocking .git and .hivemind.
@@ -71,6 +77,9 @@ func ResolveWithOptions(root, rel string, opts Options) (string, error) {
 		}
 		if !opts.AllowHivemind && isHivemindSegment(cleanPart) {
 			if opts.AllowMemoryRead && i == 0 && len(parts) == 2 && strings.EqualFold(normalizeSegment(parts[1]), "memory.md") {
+				continue
+			}
+			if opts.AllowSpilloverRead && i == 0 && len(parts) >= 3 && normalizeSegment(parts[1]) == "spillover" {
 				continue
 			}
 			return "", fmt.Errorf("acesso a .hivemind não é permitido para agentes: %s", rel)

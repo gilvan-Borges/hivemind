@@ -168,7 +168,9 @@ Evento (arquivo salvos pelo watcher que já existe em `ide/internal/idecore/watc
 
 ## 8. Subagentes
 
-Subagente é um `llmagent` no mesmo processo, contexto novo, modelo barato, no máximo dois ao mesmo tempo. Recebe um encargo estruturado (objetivo, raízes, classes), não o transcript bruto. A origem do filho é `subagent` e o teto de classe é o do pai: pai remoto continua exigindo aprovação em cada ferramenta do filho. O filho não aprova, não grava política, não cria rotina e não chama `spawn_subagent`.
+Subagente é um `llmagent` no mesmo processo, contexto novo, modelo barato, no máximo dois ao mesmo tempo (configurável em `resident.json` via `maxConcurrentSubagents`; cada filho consome tokens de API de forma independente, então valores altos multiplicam o custo linearmente). Recebe um encargo estruturado (objetivo, raízes, classes), não o transcript bruto. A origem do filho é `subagent` e o teto de classe é o do pai: pai remoto continua exigindo aprovação em cada ferramenta do filho. O filho não aprova, não grava política, não cria rotina e não chama `spawn_subagent`.
+
+O texto que o filho devolve ao pai é calado por um orçamento de summary (`maxSubagentSummaryChars`, default 24.000, apertado dinamicamente pelo headroom de input do pai, piso 2.000): o excedente vira preview head+tail e o texto completo é persistido em `.hivemind/spillover/` para recuperação via `read_file`. O encaro carrega um contrato de resposta: o filho abre pelo resultado, sem narrativa passo a passo — resumos longos lotam a janela de contexto do pai em toda chamada seguinte.
 
 `delegate_to_hive_team` não é um subagente. Ela pede aprovação e, se a pessoa aceitar, sobe uma lane normal do `orchestrator` com o `team.yaml` daquele projeto. O cartão diz qual é o `permission_mode` daquele time, inclusive se for `full_access`. O residente não escreve esse campo.
 
