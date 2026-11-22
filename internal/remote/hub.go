@@ -154,7 +154,12 @@ func (h *Hub) RegisterRun(laneID, workspace, teamName, objective, sessionID, run
 	st := h.stateForLocked(workspace, laneID)
 	s := &st.snapshot
 	s.TeamName = teamName
-	s.SessionID = sessionID
+	// Keep the bound session when the client omits sessionId (mobile start is
+	// async and often sends blank). Overwriting with "" forced a new .hivemind
+	// sessions file on every App message.
+	if sid := strings.TrimSpace(sessionID); sid != "" {
+		s.SessionID = sid
+	}
 	s.RunMode = runMode
 	s.Objective = objective
 	s.Running = true
@@ -166,6 +171,24 @@ func (h *Hub) RegisterRun(laneID, workspace, teamName, objective, sessionID, run
 	s.PendingApprovals = nil
 	st.approvals = make(map[string]ApprovalInfo)
 	h.mu.Unlock()
+}
+
+// LaneSessionID returns the session currently bound to laneID, if any.
+func (h *Hub) LaneSessionID(laneID string) string {
+	if h == nil {
+		return ""
+	}
+	laneID = strings.TrimSpace(laneID)
+	if laneID == "" {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ws := h.laneWks[laneID]
+	if ws == "" {
+		return ""
+	}
+	return strings.TrimSpace(h.stateForLocked(ws, laneID).snapshot.SessionID)
 }
 
 // SetSessionID records the persisted session ID associated with laneID once
@@ -197,6 +220,10 @@ func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 	st := h.stateForLocked(ws, ev.LaneID)
 	s := &st.snapshot
 	switch e.Kind {
+	case "session":
+		if id := strings.TrimSpace(e.Text); id != "" {
+			s.SessionID = id
+		}
 	case "stage":
 		s.Stage = e.Stage
 		if !s.Running {
@@ -232,7 +259,7 @@ func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 		s.LastError = e.Text
 		st.approvals = make(map[string]ApprovalInfo)
 	}
-	if e.Kind != "usage" {
+	if e.Kind != "usage" && e.Kind != "session" {
 		item := LaneEventItem{
 			Kind:              e.Kind,
 			Stage:             e.Stage,

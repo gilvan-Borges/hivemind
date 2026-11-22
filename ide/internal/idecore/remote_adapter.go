@@ -60,6 +60,11 @@ func (a *Adapter) RunStart(
 		return nil
 	}
 
+	// Mobile often omits sessionId on follow-up messages; reuse the lane binding
+	// so each App turn does not open a fresh .hivemind/sessions file.
+	if strings.TrimSpace(sessionID) == "" && a.Hub != nil {
+		sessionID = a.Hub.LaneSessionID(laneID)
+	}
 	a.Hub.RegisterRun(laneID, workspace, teamName, objective, sessionID, runMode)
 	if a.Sessions != nil && a.Sessions.Emit != nil {
 		text := strings.TrimSpace(objective)
