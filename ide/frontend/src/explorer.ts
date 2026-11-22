@@ -756,19 +756,21 @@ export function renderExplorerTreeHtml(): string {
 
 export function renderAgentCardsHtml(agents: AgentRuntime[]): string {
   const lane = activeLane();
+  const laneRunning = Boolean(lane?.running);
   if (!agents || agents.length === 0) {
     return `<div class="team-sb-empty">Nenhum agente configurado nesta equipe. Clique em <strong>Config</strong> para adicionar.</div>`;
   }
   return agents.map((a) => {
-    const statusLabel = a.status === "idle" ? "pronto" : a.status === "running" ? "rodando" : a.status === "done" ? "ok" : "erro";
+    const effStatus = a.status === "running" && !laneRunning ? "done" : a.status;
+    const statusLabel = effStatus === "idle" ? "pronto" : effStatus === "running" ? "rodando" : effStatus === "done" ? "ok" : "erro";
     const chip = modelChipHtml(chipForAgent(a));
-    const hasFooter = Boolean(a.routeModel || a.tool || a.tokens > 0);
+    const hasFooter = Boolean(a.routeModel || (laneRunning && a.tool) || a.tokens > 0);
     return `
-      <div class="agent-card is-${escapeHtml(a.status)}" data-agent-card="${escapeHtml(a.name)}">
+      <div class="agent-card is-${escapeHtml(effStatus)}" data-agent-card="${escapeHtml(a.name)}">
         <div class="agent-card-top">
           <div class="agent-name">${escapeHtml(roleLabelPt(a.role))}</div>
-          <span class="status-pill ${escapeHtml(a.status)}">
-            ${a.status === "running" ? `<span class="status-dot" aria-hidden="true"></span>` : ""}
+          <span class="status-pill ${escapeHtml(effStatus)}">
+            ${effStatus === "running" ? `<span class="status-dot" aria-hidden="true"></span>` : ""}
             <span>${statusLabel}</span>
           </span>
         </div>

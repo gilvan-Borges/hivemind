@@ -192,4 +192,61 @@ func TestDevExploreBudgetCallbacksWarnSoftBlockAndResetOnWrite(t *testing.T) {
 	if blocked2 == nil || !strings.Contains(fmt.Sprint(blocked2["text"]), "ORÇAMENTO DE EXPLORAÇÃO DO DEV ATINGIDO") {
 		t.Fatalf("expected soft-block again in round 1 after 8 explores, got %+v", blocked2)
 	}
+
+	// Test total-calls soft wrap-up (maxCalls=20 -> softWrapCallsAt=16):
+	// When the Dev has already written files and approaches maxCalls, BeforeToolCallback
+	// soft-stops further tool calls so the Dev outputs its final summary and hands off to QA
+	// instead of crashing at checkDevGuard's hard cap.
+	round = 2
+	beforeWrap, afterWrap := newDevExploreBudgetCallbacks(40, func() int { return round }, 20)
+	if res, err := beforeWrap(nil, writeTool, nil); err != nil || res != nil {
+		t.Fatalf("initial write must pass: res=%+v err=%v", res, err)
+	}
+	var sawWrapWarn bool
+	for i := 2; i <= 16; i++ {
+		res, err := beforeWrap(nil, readTool, nil)
+		if err != nil || res != nil {
+			t.Fatalf("call %d <= softWrapCallsAt(16) must pass: res=%+v err=%v", i, res, err)
+		}
+		ares, _ := afterWrap(nil, readTool, nil, map[string]any{"text": "ok"}, nil)
+		if ares != nil && strings.Contains(fmt.Sprint(ares["text"]), "[AVISO DE ENCERRAMENTO DA RODADA") {
+			sawWrapWarn = true
+		}
+	}
+	if !sawWrapWarn {
+		t.Fatal("expected AfterToolCallback wrap-up warning before softWrapCallsAt")
+	}
+	wrapBlocked, err := beforeWrap(nil, readTool, nil)
+	if err != nil || wrapBlocked == nil || !strings.Contains(fmt.Sprint(wrapBlocked["text"]), "ORÇAMENTO DE FERRAMENTAS DA RODADA CONCLUÍDO") {
+		t.Fatalf("17th call (> softWrapCallsAt=16) must soft-stop to hand off to QA, got res=%+v err=%v", wrapBlocked, err)
+	}
+}
+
+func TestEmitEventOrdersTextBeforeToolCallsInSameResponse(t *testing.T) {
+	var kinds []string
+	r := &Runner{
+		OnEvent: func(ev Event) {
+			if ev.Kind == "text" || ev.Kind == "tool_call" {
+				kinds = append(kinds, ev.Kind)
+			}
+		},
+	}
+	// Mirrors agyEnvelope.toResponse: FunctionCall parts precede the final Text part.
+	ev := &session.Event{
+		Author: "dev",
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{ID: "agy-1-1", Name: "read_file", Args: map[string]any{"path": "a.go"}}},
+					{FunctionCall: &genai.FunctionCall{ID: "agy-1-2", Name: "read_file", Args: map[string]any{"path": "b.go"}}},
+					{Text: "Vou ler a.go e b.go."},
+				},
+			},
+		},
+	}
+	r.emitEvent(ev, map[string]string{"dev": "Desenvolvedor · dev"})
+	if strings.Join(kinds, ",") != "text,tool_call,tool_call" {
+		t.Fatalf("expected text event before tool_call events to prevent duplicate/concatenated bubbles, got %v", kinds)
+	}
 }

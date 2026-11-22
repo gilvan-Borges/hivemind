@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import type { AgentRuntime, ChatMessage, TeamLane } from "./types";
-import { escapeHtml, formatElapsedDuration, formatTokens, matchAgentRuntime, updateAgentRuntimeStatus } from "./utils";
+import { completePreviousStageAgents, escapeHtml, formatElapsedDuration, formatTokens, matchAgentRuntime, stopRunningAgentRuntimes, transitionAgentToRunning, updateAgentRuntimeStatus } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, syncComposerButtons } from "./chat";
 import { renderEditorBody } from "./editor";
 import { renderLeftSidebar } from "./explorer";
@@ -120,9 +120,14 @@ export function ensureThinkingTicker() {
   if (thinkingTickTimer) return;
   thinkingTickTimer = window.setInterval(() => {
     const now = Date.now();
+    const anyLaneRunning = state.lanes.some((l) => l.running);
     const nodes = document.querySelectorAll<HTMLElement>("[data-thinking-started], [data-agent-running-since]");
     let anyActive = false;
     nodes.forEach((node) => {
+      if (node.dataset.agentRunningSince && !anyLaneRunning) {
+        node.removeAttribute("data-agent-running-since");
+        return;
+      }
       const started = Number(node.dataset.thinkingStarted || node.dataset.agentRunningSince || 0);
       if (started > 0) {
         anyActive = true;
@@ -130,7 +135,13 @@ export function ensureThinkingTicker() {
       }
     });
     if (!anyActive) {
-      const stillRunning = state.lanes.some((l) => l.messages.some((m) => m.kind === "thinking" && m.active));
+      const stillRunning =
+        anyLaneRunning &&
+        state.lanes.some(
+          (l) =>
+            l.messages.some((m) => m.kind === "thinking" && m.active) ||
+            l.agents.some((a) => a.status === "running" && Boolean(a.runningSince))
+        );
       if (!stillRunning) {
         window.clearInterval(thinkingTickTimer);
         thinkingTickTimer = 0;
@@ -225,7 +236,25 @@ export function syncDynamicDevsInLane(lane: TeamLane, devNames: string[]) {
 
 export function updateAgentStatus(lane: TeamLane, author: string, label: string | undefined, status: AgentRuntime["status"], tool?: string) {
   const ag = matchAgentRuntime(lane.agents, author, label);
-  if (ag) updateAgentRuntimeStatus(ag, status, tool);
+  if (!ag) return;
+  if (status === "running") {
+    transitionAgentToRunning(lane.agents, ag, tool);
+  } else {
+    updateAgentRuntimeStatus(ag, status, tool);
+  }
+}
+
+export function syncStageAgents(lane: TeamLane, stage: string) {
+  completePreviousStageAgents(lane.agents, stage);
+}
+
+export function stopLaneRunningAgents(
+  lane: TeamLane,
+  finalStatus: "done" | "idle" | "error" = "done",
+  erroredAuthor?: string,
+  erroredLabel?: string
+) {
+  stopRunningAgentRuntimes(lane.agents, finalStatus, erroredAuthor, erroredLabel);
 }
 
 export function confirmDeleteSavedTeam(teamName: string) {

@@ -353,18 +353,25 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		hasQAFeedback := qaFeedback != ""
 
 		worktreeEmpty := false
-		if r.Git != nil && r.deliveryRoot != "" && (qa || (a.Role == team.RoleDeveloper && hasQAFeedback)) {
+		var worktreeStatus string
+		if r.Git != nil && r.deliveryRoot != "" && (qa || a.Role == team.RoleDeveloper) {
 			checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			st, stErr := r.compositeStatus(checkCtx)
 			cancel()
-			if stErr == nil && strings.TrimSpace(st) == "" {
-				worktreeEmpty = true
+			if stErr == nil {
+				worktreeStatus = strings.TrimSpace(st)
+				if worktreeStatus == "" {
+					worktreeEmpty = true
+				}
 			}
 		}
 
 		var b strings.Builder
 		if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
 			b.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
+		}
+		if a.Role == team.RoleDeveloper && worktreeStatus != "" {
+			fmt.Fprintf(&b, "[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE (git status)]\n%s\n(Estes arquivos JÁ estão gravados na sua worktree. Se houve troca de modelo via failover ou compactação de contexto, NÃO recomece do zero relendo plan.md/tasks.md — verifique apenas o que falta para concluir e entregue ao QA.)\n\n", worktreeStatus)
 		}
 		if a.Role == team.RoleDeveloper && hasQAFeedback {
 			if worktreeEmpty {

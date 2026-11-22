@@ -117,40 +117,15 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 	if ev.LLMResponse.Content == nil {
 		return
 	}
+	// Emit text and tool_result parts BEFORE tool_call parts of the same LLMResponse:
+	// providers like agy put FunctionCall parts before Text in the final non-partial
+	// envelope, which would otherwise push tool cards before the final text event and
+	// cause the UI to create a duplicate assistant bubble after the tools.
 	for _, part := range ev.LLMResponse.Content.Parts {
-		if part == nil {
+		if part == nil || part.FunctionCall != nil {
 			continue
 		}
-		if part.FunctionCall != nil {
-			r.OnEvent(Event{
-				Kind:     "tool_call",
-				Stage:    stage,
-				Author:   ev.Author,
-				Label:    label,
-				ToolName: part.FunctionCall.Name,
-				Detail:   summarizeToolArgs(part.FunctionCall.Name, part.FunctionCall.Args),
-				Tokens:   tokens,
-			})
-			if part.FunctionCall.Name == "qa_approve" {
-				note := fmt.Sprint(part.FunctionCall.Args["note"])
-				r.OnEvent(Event{
-					Kind:   "handoff",
-					Stage:  "qa",
-					Author: ev.Author,
-					Label:  "QA aprovou → Chefe (Fecho)",
-					Text:   strings.TrimSpace(note),
-				})
-			} else if part.FunctionCall.Name == "qa_request_changes" {
-				notes := fmt.Sprint(part.FunctionCall.Args["notes"])
-				r.OnEvent(Event{
-					Kind:   "handoff",
-					Stage:  "dev",
-					Author: ev.Author,
-					Label:  "QA pediu ajustes → Devs",
-					Text:   strings.TrimSpace(notes),
-				})
-			}
-		} else if part.FunctionResponse != nil {
+		if part.FunctionResponse != nil {
 			r.OnEvent(Event{
 				Kind:     "tool_result",
 				Stage:    stage,
@@ -170,6 +145,39 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 				Partial: ev.Partial,
 				Thought: part.Thought,
 				Tokens:  tokens,
+			})
+		}
+	}
+	for _, part := range ev.LLMResponse.Content.Parts {
+		if part == nil || part.FunctionCall == nil {
+			continue
+		}
+		r.OnEvent(Event{
+			Kind:     "tool_call",
+			Stage:    stage,
+			Author:   ev.Author,
+			Label:    label,
+			ToolName: part.FunctionCall.Name,
+			Detail:   summarizeToolArgs(part.FunctionCall.Name, part.FunctionCall.Args),
+			Tokens:   tokens,
+		})
+		if part.FunctionCall.Name == "qa_approve" {
+			note := fmt.Sprint(part.FunctionCall.Args["note"])
+			r.OnEvent(Event{
+				Kind:   "handoff",
+				Stage:  "qa",
+				Author: ev.Author,
+				Label:  "QA aprovou → Chefe (Fecho)",
+				Text:   strings.TrimSpace(note),
+			})
+		} else if part.FunctionCall.Name == "qa_request_changes" {
+			notes := fmt.Sprint(part.FunctionCall.Args["notes"])
+			r.OnEvent(Event{
+				Kind:   "handoff",
+				Stage:  "dev",
+				Author: ev.Author,
+				Label:  "QA pediu ajustes → Devs",
+				Text:   strings.TrimSpace(notes),
 			})
 		}
 	}

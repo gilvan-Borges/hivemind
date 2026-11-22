@@ -119,8 +119,9 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	keys := append([]string(nil), stateKeys...)
 	beforeModelCBs := []llmagent.BeforeModelCallback{
 		contextx.NewCompactionCallback(contextx.Budget{
-			ContextWindow: agentContextWindow(a),
-			KeepRecent:    r.Project.Settings.EffectiveInTurnKeepToolResults(),
+			ContextWindow:   agentContextWindow(a),
+			ContextWindowFn: r.dynamicAgentContextWindow(adkName, a),
+			KeepRecent:      r.Project.Settings.EffectiveInTurnKeepToolResults(),
 		}),
 		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}
@@ -132,11 +133,15 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	}
 	var afterToolCBs []llmagent.AfterToolCallback
 	if a.Role == team.RoleDeveloper {
-		devExpBefore, devExpAfter := newDevExploreBudgetCallbacks(r.Project.Settings.EffectiveMaxDevExploreCalls(), func() int {
-			r.handoffMu.Lock()
-			defer r.handoffMu.Unlock()
-			return r.qaLoopIter
-		})
+		devExpBefore, devExpAfter := newDevExploreBudgetCallbacks(
+			r.Project.Settings.EffectiveMaxDevExploreCalls(),
+			func() int {
+				r.handoffMu.Lock()
+				defer r.handoffMu.Unlock()
+				return r.qaLoopIter
+			},
+			r.Project.Settings.EffectiveMaxDevCalls(),
+		)
 		beforeToolCBs = append(beforeToolCBs, devExpBefore)
 		afterToolCBs = append(afterToolCBs, devExpAfter)
 		if guard := newOwnedPathsGuardCallback(root, adkName, ownedPaths, r.sharedBoard); guard != nil {

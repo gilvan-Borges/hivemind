@@ -85,11 +85,88 @@ export function updateAgentRuntimeStatus(
   tool: string | undefined,
   now = Date.now()
 ): void {
-  if (status === "running" && (agent.status !== "running" || !agent.runningSince)) {
-    agent.runningSince = now;
+  if (status === "running") {
+    if (agent.status !== "running" || !agent.runningSince) {
+      agent.runningSince = now;
+    }
+  } else {
+    agent.runningSince = undefined;
   }
   agent.status = status;
-  if (tool !== undefined) agent.tool = tool;
+  if (tool !== undefined) {
+    agent.tool = tool;
+  } else if (status !== "running") {
+    agent.tool = "";
+  }
+}
+
+export function agentRoleStageGroup(role: string): "chief" | "dev" | "qa" {
+  if (role === "developer") return "dev";
+  if (role === "qa") return "qa";
+  return "chief";
+}
+
+export function normalizeStageGroup(stage: string): "chief" | "dev" | "qa" | "" {
+  const s = (stage || "").trim().toLowerCase();
+  if (s === "dev" || s === "developer") return "dev";
+  if (s === "qa") return "qa";
+  if (s === "chief" || s === "closing" || s === "triage" || s === "architect") return "chief";
+  return "";
+}
+
+export function completePreviousStageAgents(
+  agents: AgentRuntime[],
+  activeStage: string,
+  now = Date.now()
+): void {
+  const targetGroup = normalizeStageGroup(activeStage);
+  if (!targetGroup) return;
+  for (const a of agents) {
+    if (a.status === "running" && agentRoleStageGroup(a.role) !== targetGroup) {
+      updateAgentRuntimeStatus(a, "done", "", now);
+    }
+  }
+}
+
+export function transitionAgentToRunning(
+  agents: AgentRuntime[],
+  target: AgentRuntime,
+  tool?: string,
+  now = Date.now()
+): void {
+  const targetGroup = agentRoleStageGroup(target.role);
+  for (const a of agents) {
+    if (a !== target && a.status === "running" && agentRoleStageGroup(a.role) !== targetGroup) {
+      updateAgentRuntimeStatus(a, "done", "", now);
+    }
+  }
+  updateAgentRuntimeStatus(target, "running", tool, now);
+}
+
+export function stopRunningAgentRuntimes(
+  agents: AgentRuntime[],
+  finalStatus: "done" | "idle" | "error" = "done",
+  erroredAuthor?: string,
+  erroredLabel?: string,
+  now = Date.now()
+): void {
+  const matchedErrored =
+    finalStatus === "error" && (erroredAuthor || erroredLabel)
+      ? matchAgentRuntime(agents, erroredAuthor || "", erroredLabel)
+      : undefined;
+  for (const a of agents) {
+    if (a.status === "running") {
+      if (finalStatus === "error") {
+        const isErroredAgent = matchedErrored ? a === matchedErrored : true;
+        updateAgentRuntimeStatus(a, isErroredAgent ? "error" : "done", "", now);
+      } else {
+        updateAgentRuntimeStatus(a, finalStatus, "", now);
+      }
+    } else {
+      a.runningSince = undefined;
+      if (a.tool) a.tool = "";
+    }
+  }
 }
 
 export function roleLabelPt(role: string): string {

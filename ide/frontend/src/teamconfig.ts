@@ -123,15 +123,23 @@ export async function openTeamMemoryFile() {
   }
 }
 
-function renderMissionAgentStatusContent(agent: AgentRuntime): string {
-  if (agent.status === "running") {
+function effectiveMissionAgentStatus(agent: AgentRuntime, laneRunning: boolean): AgentRuntime["status"] {
+  if (agent.status === "running" && !laneRunning) {
+    return "done";
+  }
+  return agent.status;
+}
+
+function renderMissionAgentStatusContent(agent: AgentRuntime, laneRunning = Boolean(activeLane()?.running)): string {
+  const status = effectiveMissionAgentStatus(agent, laneRunning);
+  if (status === "running") {
     const elapsed = agent.runningSince
       ? ` há <span class="mc-agent-elapsed" data-agent-running-since="${agent.runningSince}">${formatElapsedDuration(Date.now() - agent.runningSince)}</span>`
       : "";
     return `${icons.spinner} rodando${elapsed}`;
   }
-  if (agent.status === "done") return "concluído";
-  if (agent.status === "error") return "erro";
+  if (status === "done") return "concluído";
+  if (status === "error") return "erro";
   return "pronto";
 }
 
@@ -162,16 +170,18 @@ export function renderMissionBoardHtml(): string {
 
       <div class="mission-grid">
         ${agents.map((a) => {
+          const laneRunning = Boolean(lane?.running);
+          const effStatus = effectiveMissionAgentStatus(a, laneRunning);
           const pct = lane?.sessionTotalTokens ? Math.min(100, Math.round((a.tokens / sessTotal) * 100)) : 0;
           return `
-            <div class="mc-agent-card ${a.status}" data-mc-card="${escapeHtml(a.name)}">
+            <div class="mc-agent-card ${effStatus}" data-mc-card="${escapeHtml(a.name)}">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
                 <div>
                   <div style="font-size:13px;font-weight:700;color:var(--text)">${escapeHtml(a.name)}</div>
                   <div class="dim">${escapeHtml(roleLabelPt(a.role))}</div>
                 </div>
-                <span class="status-pill ${a.status}" data-mc-pill="${escapeHtml(a.name)}">
-                  ${renderMissionAgentStatusContent(a)}
+                <span class="status-pill ${effStatus}" data-mc-pill="${escapeHtml(a.name)}">
+                  ${renderMissionAgentStatusContent(a, laneRunning)}
                 </span>
               </div>
 
@@ -240,15 +250,17 @@ export function updateMissionBoardIfOpen() {
   if (summaryEl) {
     summaryEl.innerHTML = `Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(lane?.sessionTotalTokens)} tok</strong> · Projeto: <strong>${exactTokens(projTotal)} tok</strong>`;
   }
+  const laneRunning = Boolean(lane?.running);
   for (const a of agents) {
+    const effStatus = effectiveMissionAgentStatus(a, laneRunning);
     const pct = lane?.sessionTotalTokens ? Math.min(100, Math.round((a.tokens / sessTotal) * 100)) : 0;
     const esc = CSS.escape(a.name);
     const card = root.querySelector<HTMLElement>(`[data-mc-card="${esc}"]`);
-    if (card) card.className = `mc-agent-card ${a.status}`;
+    if (card) card.className = `mc-agent-card ${effStatus}`;
     const pill = root.querySelector<HTMLElement>(`[data-mc-pill="${esc}"]`);
     if (pill) {
-      pill.className = `status-pill ${a.status}`;
-      pill.innerHTML = renderMissionAgentStatusContent(a);
+      pill.className = `status-pill ${effStatus}`;
+      pill.innerHTML = renderMissionAgentStatusContent(a, laneRunning);
     }
     const sel = root.querySelector<HTMLSelectElement>(`[data-mc-agent-model="${esc}"]`);
     if (sel) sel.disabled = !!lane?.running;

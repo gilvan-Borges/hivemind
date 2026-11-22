@@ -68,14 +68,22 @@ var neverCompactInTurnTools = map[string]bool{
 // Budget controls one compaction pass.
 type Budget struct {
 	// ContextWindow is the model's token window. Zero falls back to
-	// DefaultContextWindow.
+	// DefaultContextWindow (unless ContextWindowFn returns > 0).
 	ContextWindow int
+	// ContextWindowFn optionally resolves the active model's token window
+	// dynamically per call (e.g. after Jev routing or mid-run failover).
+	ContextWindowFn func() int
 	// KeepRecent is the minimum number of recent tool results kept verbatim.
 	// Zero falls back to defaultKeepToolResults.
 	KeepRecent int
 }
 
 func (b Budget) window() int {
+	if b.ContextWindowFn != nil {
+		if w := b.ContextWindowFn(); w > 0 {
+			return w
+		}
+	}
 	if b.ContextWindow > 0 {
 		return b.ContextWindow
 	}

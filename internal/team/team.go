@@ -160,7 +160,7 @@ func DefaultSettings() Settings {
 		RequireMainMergeApproval: &reqMain,
 		MaxQALoops:               3,
 		MaxDynamicDevs:           5,
-		MaxDevCalls:              80,
+		MaxDevCalls:              120,
 		MaxDevExploreCalls:       40,
 		MaxDevInputTokens:        1_500_000,
 		BaseBranch:               "main",
@@ -193,13 +193,13 @@ func (s Settings) EffectiveMaxDynamicDevs() int {
 	return s.MaxDynamicDevs
 }
 
-// EffectiveMaxDevCalls returns the hard per-round LLM call cap for a single
-// developer agent (default 80, range 20..300). The orchestrator aborts the run
+// EffectiveMaxDevCalls returns the hard per-round tool/LLM call cap for a single
+// developer agent (default 120, range 20..300). The orchestrator aborts the run
 // with a clear error when a dev exceeds it without finishing, preventing
 // token-burning loops like endless read/search spirals.
 func (s Settings) EffectiveMaxDevCalls() int {
 	if s.MaxDevCalls <= 0 {
-		return 80
+		return 120
 	}
 	if s.MaxDevCalls < 20 {
 		return 20

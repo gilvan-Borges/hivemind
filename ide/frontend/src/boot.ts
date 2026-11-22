@@ -6,7 +6,7 @@ import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
 import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
-import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, syncDynamicDevsInLane, updateAgentStatus } from "./lanes";
+import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, stopLaneRunningAgents, syncDynamicDevsInLane, syncStageAgents, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { handleResidentLaneEvent, openResidentTab, refreshResidentStatus } from "./resident";
 import { installRenderGuardFlushHooks, renderGuard } from "./render-guard";
@@ -91,9 +91,11 @@ export async function boot() {
         lane.doneStages.push(lane.stage);
       }
       lane.stage = ev.stage;
+      syncStageAgents(lane, ev.stage);
     }
 
     if (ev.kind === "stage") {
+      if (ev.stage) syncStageAgents(lane, ev.stage);
       updateAgentStatus(lane, ev.author, ev.label, "running");
       noteActivity({ laneId: lane.id, kind: "stage", stage: ev.stage, label: ev.label, author: ev.author });
     } else if (ev.kind === "model_route" || ev.kind === "provider_failover") {
@@ -153,6 +155,7 @@ export async function boot() {
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      stopLaneRunningAgents(lane, "done");
       const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       lane.messages.push({
         id: planId,
@@ -167,6 +170,7 @@ export async function boot() {
     } else if (ev.kind === "sdd_gate") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      stopLaneRunningAgents(lane, "done");
       const gateId = `gate-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       lane.messages.push({
         id: gateId,
@@ -201,6 +205,9 @@ export async function boot() {
     } else if (ev.kind === "handoff") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      if (ev.author || ev.label) {
+        updateAgentStatus(lane, ev.author || "", ev.label, "done", "");
+      }
       lane.messages.push({
         id: `ho-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         kind: "handoff",
@@ -281,21 +288,36 @@ export async function boot() {
         const ag = matchAgentRuntime(lane.agents, ev.author, msgLabel);
         const keepStream = (current: string, incoming: string) =>
           current.includes("[[hmtool:") && !incoming.includes("[[hmtool:");
-        if (last && last.kind === "chief" && last.label === msgLabel && ev.partial) {
+        const findPendingChiefInTurn = (): ChatMessage | undefined => {
+          for (let i = lane.messages.length - 1; i >= 0; i--) {
+            const m = lane.messages[i];
+            if (m.kind === "user" || m.kind === "handoff" || m.kind === "plan" || m.kind === "approval") {
+              break;
+            }
+            if (m.kind === "chief" && m.label === msgLabel) {
+              return m.tokens ? undefined : m;
+            }
+          }
+          return undefined;
+        };
+        const pendingChief = !ev.partial ? findPendingChiefInTurn() : undefined;
+        if (last && last.kind === "chief" && last.label === msgLabel && ev.partial && !last.tokens) {
           last.text = sanitizeAssistantText(`${last.text}${sanitized}`);
           stampChiefModel(last, ag);
           if (!last.text) lane.messages.pop();
-        } else if (!ev.partial && last && last.kind === "chief" && last.label === msgLabel) {
-          if (keepStream(last.text, sanitized)) {
+        } else if (!ev.partial && pendingChief) {
+          if (keepStream(pendingChief.text, sanitized)) {
             const summary = sanitized.trim();
-            if (summary && !last.text.includes(summary)) {
-              last.text = last.text.endsWith("\n") ? `${last.text}\n${summary}` : `${last.text}\n\n${summary}`;
+            if (summary && !pendingChief.text.includes(summary)) {
+              pendingChief.text = pendingChief.text.endsWith("\n")
+                ? `${pendingChief.text}\n${summary}`
+                : `${pendingChief.text}\n\n${summary}`;
             }
           } else {
-            last.text = sanitized;
+            pendingChief.text = sanitized;
           }
-          if (evTok) last.tokens = evTok;
-          stampChiefModel(last, ag);
+          if (evTok) pendingChief.tokens = evTok;
+          stampChiefModel(pendingChief, ag);
         } else if (sanitized.trim() !== "" || ev.partial) {
           const created: ChatMessage = {
             id: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -311,6 +333,7 @@ export async function boot() {
     } else if (ev.kind === "error") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      stopLaneRunningAgents(lane, "error", ev.author, ev.label);
       const errText = String(ev.text || "Erro desconhecido");
       const isUserCancel = Boolean(lane.canceledByUser) && /context canceled|canceled/i.test(errText);
       const prevMsg = lane.messages[lane.messages.length - 1];
@@ -337,10 +360,7 @@ export async function boot() {
         lane.doneStages.push(lane.stage);
       }
       lane.stage = "";
-      lane.agents.forEach((a) => {
-        if (a.status === "running") a.status = "done";
-        a.tool = "";
-      });
+      stopLaneRunningAgents(lane, "done");
       const lastMsg = lane.messages[lane.messages.length - 1];
       let cardId = "";
       if (wasSolo && lastMsg && lastMsg.kind === "chief") {
@@ -499,6 +519,9 @@ export async function boot() {
       const autoLane = state.lanes.find((l) => l.id === "lane-autoreview");
       if (autoLane) {
         autoLane.running = payload.state === "reviewing";
+        if (!autoLane.running) {
+          stopLaneRunningAgents(autoLane, "done");
+        }
         renderLaneBarOnly();
       }
       updateStatusBar();

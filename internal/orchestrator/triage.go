@@ -245,8 +245,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	}
 	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
 		contextx.NewCompactionCallback(contextx.Budget{
-			ContextWindow: agentContextWindow(chief),
-			KeepRecent:    keepInTurn,
+			ContextWindow:   agentContextWindow(chief),
+			ContextWindowFn: r.dynamicAgentContextWindow(chief.Name, chief),
+			KeepRecent:      keepInTurn,
 		}),
 	}
 	triageAgent, err := llmagent.New(llmagent.Config{

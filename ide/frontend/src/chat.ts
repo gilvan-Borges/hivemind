@@ -8,7 +8,7 @@ import { bindDesignModeEvents, formatDesignModeContext, loadDesignModePages, ren
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar, setProjectPermissionMode, updateTeamStatusPills } from "./explorer";
 import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
-import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, toggleSplitLanes } from "./lanes";
+import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, stopLaneRunningAgents, toggleSplitLanes } from "./lanes";
 import { renderModalLayer } from "./modals";
 import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
 import { api, setStatus, state, toastError } from "./state";
@@ -1728,6 +1728,7 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
     lane.running = false;
     lane.canceledByUser = false;
     lane.stage = "";
+    stopLaneRunningAgents(lane, "done");
     markToolsDone(lane);
     markThinkingDone(lane);
     notifyLaneIdle(lane.id);
@@ -1755,6 +1756,7 @@ export async function cancelActiveLane(forRedirect = false) {
     }
   }
   await backend.CancelRun(lane.id);
+  stopLaneRunningAgents(lane, "done");
   markToolsDone(lane);
   markThinkingDone(lane);
   lane.messages.push({

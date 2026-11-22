@@ -26,7 +26,33 @@ func agentContextWindow(a team.Agent) int {
 	if entry, ok := jev.DefaultStaticCatalog().Lookup(prov, mod); ok && entry.ContextLength > 0 {
 		return int(entry.ContextLength)
 	}
+	lowMod := strings.ToLower(mod)
+	if prov == "agy" && (strings.Contains(lowMod, "gemini") || strings.Contains(lowMod, "argon") || strings.Contains(lowMod, "carbon")) {
+		return 1_000_000
+	}
+	if prov == "agy" || prov == "jev" {
+		return 200_000
+	}
 	return 0
+}
+
+func (r *Runner) dynamicAgentContextWindow(adkName string, a team.Agent) func() int {
+	return func() int {
+		if r != nil {
+			prov, mod := r.resolveAuthorRoute(adkName)
+			if prov != "" && mod != "" {
+				if r.Catalog != nil {
+					if entry, ok := r.Catalog.Snapshot().Lookup(prov, mod); ok && entry.ContextLength > 0 {
+						return int(entry.ContextLength)
+					}
+				}
+				if w := agentContextWindow(team.Agent{Provider: prov, Model: mod}); w > 0 {
+					return w
+				}
+			}
+		}
+		return agentContextWindow(a)
+	}
 }
 
 // newRepeatReadGuardCallback returns a BeforeToolCallback that prevents an agent
@@ -128,11 +154,18 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 }
 
 // newDevExploreBudgetCallbacks cria uma dupla BeforeTool/AfterTool em 2 camadas para o Dev:
-// avisa ao aproximar-se do limite antes da 1ª edição e faz soft-block redirecionando para
-// write_file/edit_file antes que o hard-abort de maxExplore seja atingido.
-func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.BeforeToolCallback, llmagent.AfterToolCallback) {
+// 1. Controla a exploração inicial (avisa ao aproximar-se de softBlockAt antes da 1ª edição e faz
+//    soft-block redirecionando para write_file/edit_file antes do hard-abort de maxExplore).
+// 2. Controla o orçamento total de chamadas da rodada (maxCalls): avisa em warnWrapCallsAt e faz
+//    soft-wrapup em softWrapCallsAt para que o Dev encerre o turno com resumo e entregue a
+//    worktree ao QA em vez de estourar o hard-abort após já ter escrito código.
+func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int, maxCallsOpt ...int) (llmagent.BeforeToolCallback, llmagent.AfterToolCallback) {
 	if maxExplore <= 0 {
 		maxExplore = 40
+	}
+	maxCalls := 120
+	if len(maxCallsOpt) > 0 && maxCallsOpt[0] > 0 {
+		maxCalls = maxCallsOpt[0]
 	}
 	softBlockAt := maxExplore - 12
 	if softBlockAt > maxExplore-2 {
@@ -156,6 +189,18 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 		softWarnAt = softBlockAt
 	}
 
+	softWrapCallsAt := maxCalls - 14
+	if maxCalls <= 25 {
+		softWrapCallsAt = maxCalls - 4
+	}
+	if softWrapCallsAt < 4 {
+		softWrapCallsAt = maxCalls - 1
+	}
+	warnWrapCallsAt := softWrapCallsAt - 12
+	if warnWrapCallsAt < softWrapCallsAt/2 {
+		warnWrapCallsAt = softWrapCallsAt / 2
+	}
+
 	initRound := 0
 	if roundFn != nil {
 		initRound = roundFn()
@@ -165,6 +210,7 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 		mu           sync.Mutex
 		seenRound    = initRound
 		exploreCalls int
+		totalCalls   int
 		writes       int
 	)
 
@@ -175,6 +221,7 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 		if cur := roundFn(); cur != seenRound {
 			seenRound = cur
 			exploreCalls = 0
+			totalCalls = 0
 			writes = 0
 		}
 	}
@@ -184,9 +231,24 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 			return nil, nil
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		mu.Lock()
+		syncRoundLocked()
+		totalCalls++
+		curTotal := totalCalls
+		curWrites := writes
+		mu.Unlock()
+
+		// Se o orçamento total da rodada chegou ao teto de wrap-up (e o dev já escreveu arquivos
+		// ou está tentando mais uma leitura/busca), bloqueia novas ferramentas para forçar o
+		// encerramento limpo do turno e passagem imediata para o QA.
+		if curTotal > softWrapCallsAt && (curWrites > 0 || !devWriteTools[name]) {
+			return map[string]any{
+				"text": fmt.Sprintf("ORÇAMENTO DE FERRAMENTAS DA RODADA CONCLUÍDO (%d/%d chamadas utilizadas, %d escrita(s) aplicadas na worktree): PARE de chamar ferramentas agora. NÃO execute novas leituras, buscas ou comandos — responda IMEDIATAMENTE apenas com o resumo final do que você implementou para que o orquestrador entregue a worktree ao QA.", curTotal-1, maxCalls, curWrites),
+			}, nil
+		}
+
 		if devWriteTools[name] {
 			mu.Lock()
-			syncRoundLocked()
 			writes++
 			exploreCalls = 0
 			mu.Unlock()
@@ -194,7 +256,6 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 		}
 		if devExploreTools[name] {
 			mu.Lock()
-			syncRoundLocked()
 			var blocked bool
 			var cur int
 			if writes == 0 {
@@ -217,18 +278,24 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.
 			return nil, nil
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
-		if !devExploreTools[name] {
-			return nil, nil
-		}
 		mu.Lock()
 		syncRoundLocked()
-		shouldWarn := writes == 0 && exploreCalls >= softWarnAt && exploreCalls <= softBlockAt
-		cur := exploreCalls
+		shouldWarnExplore := devExploreTools[name] && writes == 0 && exploreCalls >= softWarnAt && exploreCalls <= softBlockAt
+		curExplore := exploreCalls
+		shouldWarnTotal := totalCalls >= warnWrapCallsAt && totalCalls <= softWrapCallsAt
+		curTotal := totalCalls
 		mu.Unlock()
-		if !shouldWarn {
+		if !shouldWarnExplore && !shouldWarnTotal {
 			return nil, nil
 		}
-		warn := fmt.Sprintf("[AVISO DE ORÇAMENTO DO DEV: %d/%d leituras antes da 1ª edição — pare de explorar amplamente e comece a criar/editar arquivos com write_file/edit_file já no próximo turno.]", cur, softBlockAt)
+		var notices []string
+		if shouldWarnExplore {
+			notices = append(notices, fmt.Sprintf("[AVISO DE ORÇAMENTO DO DEV: %d/%d leituras antes da 1ª edição — pare de explorar amplamente e comece a criar/editar arquivos com write_file/edit_file já no próximo turno.]", curExplore, softBlockAt))
+		}
+		if shouldWarnTotal {
+			notices = append(notices, fmt.Sprintf("[AVISO DE ENCERRAMENTO DA RODADA: %d/%d chamadas de ferramentas utilizadas nesta rodada — conclua a edição atual imediatamente e encerre o turno com seu resumo final para entregar a worktree ao QA.]", curTotal, softWrapCallsAt))
+		}
+		warn := strings.Join(notices, "\n")
 		out := make(map[string]any, len(result)+1)
 		for k, v := range result {
 			out[k] = v

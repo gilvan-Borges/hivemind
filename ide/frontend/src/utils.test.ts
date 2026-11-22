@@ -105,8 +105,71 @@ describe("tempo de atividade dos agentes", () => {
     expect(agent.tool).toBe("read_file");
 
     updateAgentRuntimeStatus(agent, "done", "", 3_000);
+    expect(agent.runningSince).toBeUndefined();
+    expect(agent.tool).toBe("");
     updateAgentRuntimeStatus(agent, "running", undefined, 4_000);
     expect(agent.runningSince).toBe(4_000);
+  });
+
+  it("encerra o timer do chefe quando o dev entra em execução e para todos os agentes em erro/fim", async () => {
+    const { completePreviousStageAgents, stopRunningAgentRuntimes, transitionAgentToRunning } = await import("./utils");
+    const chefe: AgentRuntime = {
+      name: "chefe",
+      role: "architect",
+      model: "agy",
+      status: "idle",
+      inTokens: 0,
+      outTokens: 0,
+      tokens: 0,
+      calls: 0,
+    };
+    const dev: AgentRuntime = {
+      name: "dev",
+      role: "developer",
+      model: "agy",
+      status: "idle",
+      inTokens: 0,
+      outTokens: 0,
+      tokens: 0,
+      calls: 0,
+    };
+    const qa: AgentRuntime = {
+      name: "qa",
+      role: "qa",
+      model: "agy",
+      status: "idle",
+      inTokens: 0,
+      outTokens: 0,
+      tokens: 0,
+      calls: 0,
+    };
+    const agents = [chefe, dev, qa];
+
+    transitionAgentToRunning(agents, chefe, "read_file", 1_000);
+    expect(chefe.status).toBe("running");
+    expect(chefe.runningSince).toBe(1_000);
+
+    // Handoff para o Dev: o Chefe para imediatamente de contar tempo e passa para "done"
+    transitionAgentToRunning(agents, dev, "search_text", 5_000);
+    expect(chefe.status).toBe("done");
+    expect(chefe.runningSince).toBeUndefined();
+    expect(chefe.tool).toBe("");
+    expect(dev.status).toBe("running");
+    expect(dev.runningSince).toBe(5_000);
+
+    // Transição de stage para QA: o Dev encerra e o QA assume
+    completePreviousStageAgents(agents, "qa", 9_000);
+    expect(dev.status).toBe("done");
+    expect(dev.runningSince).toBeUndefined();
+
+    // Se o Dev voltar a rodar e ocorrer erro na execução, todos param de contar tempo
+    transitionAgentToRunning(agents, dev, "read_file", 10_000);
+    stopRunningAgentRuntimes(agents, "error", "dev", "Desenvolvedor", 12_000);
+    expect(dev.status).toBe("error");
+    expect(dev.runningSince).toBeUndefined();
+    expect(dev.tool).toBe("");
+    expect(chefe.status).toBe("done");
+    expect(qa.status).toBe("idle");
   });
 });
 
