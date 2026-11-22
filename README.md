@@ -141,6 +141,10 @@ powershell -File .\scripts\build-installer.ps1
 
 O script gera `dist\hivemind.exe` e `dist\HiveMindSetup-x64.exe`. Se o Inno Setup não estiver instalado, a mensagem do script indica `winget install --id JRSoftware.InnoSetup -e`.
 
+### Releases automáticas
+
+Todo **push na `main`** que passar no **HiveMind CI** dispara o workflow **Release**: builda o instalador Windows, CLI (linux/windows/darwin) e relay, e publica uma [GitHub Release](https://github.com/gilvan-Borges/hivemind/releases) (tag `v{VERSION}-{sha}`, marcada como Latest). Também dá para disparar manualmente em Actions → Release → Run workflow.
+
 ### Testes locais
 
 ```powershell

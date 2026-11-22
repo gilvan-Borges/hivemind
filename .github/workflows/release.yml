@@ -1,0 +1,230 @@
+# Publica GitHub Release automaticamente depois do CI passar na main.
+# Cada push bem-sucedido na main gera uma release baixável (Latest).
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["HiveMind CI"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: release-main
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    name: Instalador Windows
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: windows-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      full_sha: ${{ steps.meta.outputs.full_sha }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout do commit aprovado pelo CI
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            ide/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ide/frontend/package-lock.json
+
+      - name: Instalar Wails CLI e Inno Setup
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+          echo "$(go env GOPATH)/bin" >> $env:GITHUB_PATH
+          choco install innosetup -y --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+
+      - name: Metadados da release
+        id: meta
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          # HEAD do checkout (commit da main que passou no CI), nao o SHA do workflow_run
+          full_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=8 HEAD)"
+          # Tag unica por commit: v0.2.0-3262c331
+          tag="v${version}-${short_sha}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "full_sha=${full_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Build instalador + CLI Windows
+        shell: pwsh
+        run: |
+          powershell -File .\scripts\build-installer.ps1 -SkipTests
+
+      - name: Empacotar artefatos Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item dist\HiveMindSetup-x64.exe release-assets\
+          Copy-Item dist\hivemind.exe release-assets\hivemind-windows-amd64.exe
+          Copy-Item dist\checksums.txt release-assets\
+          Copy-Item dist\manifest.json release-assets\
+          if (Test-Path ide\build\bin\hivemind-ide.exe) {
+            Copy-Item ide\build\bin\hivemind-ide.exe release-assets\hivemind-ide-windows-amd64.exe
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets/
+          if-no-files-found: error
+
+  build-cli:
+    name: CLI ${{ matrix.goos }}/${{ matrix.goarch }}
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            out: hivemind-linux-amd64
+          - goos: darwin
+            goarch: amd64
+            out: hivemind-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            out: hivemind-darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+      - name: Compilar CLI
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          pkg="github.com/gilvan-Borges/HiveMind/internal/version"
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X ${pkg}.Version=${version} -X ${pkg}.Commit=${GITHUB_SHA::8} -X ${pkg}.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "dist/${{ matrix.out }}" ./cmd/hivemind
+          sha256sum "dist/${{ matrix.out }}" | tee "dist/${{ matrix.out }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/${{ matrix.out }}
+            dist/${{ matrix.out }}.sha256
+
+  build-relay:
+    name: Relay linux/${{ matrix.goarch }}
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+      - name: Compilar relay
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          pkg="github.com/gilvan-Borges/HiveMind/internal/version"
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X ${pkg}.Version=${version} -X ${pkg}.Commit=${GITHUB_SHA::8} -X ${pkg}.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "dist/hivemind-relay-linux-${{ matrix.goarch }}" ./cmd/hivemind-relay
+          sha256sum "dist/hivemind-relay-linux-${{ matrix.goarch }}" | tee "dist/hivemind-relay-linux-${{ matrix.goarch }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-linux-${{ matrix.goarch }}
+          path: |
+            dist/hivemind-relay-linux-${{ matrix.goarch }}
+            dist/hivemind-relay-linux-${{ matrix.goarch }}.sha256
+
+  publish:
+    name: Publicar GitHub Release
+    needs: [build-installer, build-cli, build-relay]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Baixar artefatos
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Listar assets
+        run: find release-assets -type f | sort
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-installer.outputs.tag }}
+          name: HiveMind v${{ needs.build-installer.outputs.version }} (${{ needs.build-installer.outputs.short_sha }})
+          target_commitish: ${{ needs.build-installer.outputs.full_sha }}
+          generate_release_notes: true
+          make_latest: true
+          body: |
+            Build automático da `main` após CI verde.
+
+            - Versão: `${{ needs.build-installer.outputs.version }}`
+            - Commit: `${{ needs.build-installer.outputs.short_sha }}`
+
+            ### Windows
+            - `HiveMindSetup-x64.exe` — instalador (IDE + CLI)
+            - `hivemind-windows-amd64.exe` — CLI
+            - `hivemind-ide-windows-amd64.exe` — IDE avulsa
+
+            ### CLI / Relay
+            Binários Linux/macOS e relay incluídos nos Assets.
+            Confira `checksums.txt` / `*.sha256`.
+          files: |
+            release-assets/**
