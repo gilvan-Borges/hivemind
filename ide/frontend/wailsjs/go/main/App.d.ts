@@ -387,6 +387,8 @@ export function StartRunWithImages(arg1:string,arg2:string,arg3:string,arg4:stri
 
 export function StartRunWithOptions(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:Array<remote.ImageInput>):Promise<orchestrator.Result>;
 
+export function SteerRun(arg1:string,arg2:string):Promise<boolean>;
+
 export function StopActiveAutoReview(arg1:string):Promise<boolean>;
 
 export function SubmitAgyOAuthCode(arg1:string,arg2:string):Promise<modelx.ProfilesOverview>;

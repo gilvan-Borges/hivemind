@@ -2191,6 +2191,7 @@ export namespace orchestrator {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    cachedReadTokens?: number;
 	    costMicroUsd?: number;
 	    costByAgent?: AgentCost[];
 	    costByRole?: RoleCost[];
@@ -2213,6 +2214,7 @@ export namespace orchestrator {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.cachedReadTokens = source["cachedReadTokens"];
 	        this.costMicroUsd = source["costMicroUsd"];
 	        this.costByAgent = this.convertValues(source["costByAgent"], AgentCost);
 	        this.costByRole = this.convertValues(source["costByRole"], RoleCost);
@@ -3201,8 +3203,12 @@ export namespace team {
 	    max_dev_calls?: number;
 	    max_dev_explore_calls?: number;
 	    max_dev_input_tokens?: number;
+	    model_call_timeout_seconds?: number;
 	    max_tokens?: number;
+	    max_run_cost_usd?: number;
 	    in_turn_keep_tool_results?: number;
+	    max_subagent_calls?: number;
+	    max_subagent_llm_calls?: number;
 	    review_model?: string;
 	    inline_model?: string;
 	    auto_review?: AutoReviewSettings;
@@ -3234,8 +3240,12 @@ export namespace team {
 	        this.max_dev_calls = source["max_dev_calls"];
 	        this.max_dev_explore_calls = source["max_dev_explore_calls"];
 	        this.max_dev_input_tokens = source["max_dev_input_tokens"];
+	        this.model_call_timeout_seconds = source["model_call_timeout_seconds"];
 	        this.max_tokens = source["max_tokens"];
+	        this.max_run_cost_usd = source["max_run_cost_usd"];
 	        this.in_turn_keep_tool_results = source["in_turn_keep_tool_results"];
+	        this.max_subagent_calls = source["max_subagent_calls"];
+	        this.max_subagent_llm_calls = source["max_subagent_llm_calls"];
 	        this.review_model = source["review_model"];
 	        this.inline_model = source["inline_model"];
 	        this.auto_review = this.convertValues(source["auto_review"], AutoReviewSettings);

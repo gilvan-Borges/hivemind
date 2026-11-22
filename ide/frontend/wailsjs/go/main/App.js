@@ -746,6 +746,10 @@ export function StartRunWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, ar
   return window['go']['main']['App']['StartRunWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
 }
 
+export function SteerRun(arg1, arg2) {
+  return window['go']['main']['App']['SteerRun'](arg1, arg2);
+}
+
 export function StopActiveAutoReview(arg1) {
   return window['go']['main']['App']['StopActiveAutoReview'](arg1);
 }
