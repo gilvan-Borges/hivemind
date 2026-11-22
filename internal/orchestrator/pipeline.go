@@ -118,7 +118,7 @@ func (r *Runner) checkDevGuard(ev *session.Event, labels map[string]string) erro
 	if maxExplore := r.Project.Settings.EffectiveMaxDevExploreCalls(); b.explore >= maxExplore && b.writes == 0 {
 		return fmt.Errorf("desempenho do dev %q: %d buscas/leituras seguidas sem editar NENHUM arquivo — padrão de loop exploratório detectado; execução interrompida antes de queimar mais tokens. A fatia provavelmente está grande ou ambígua demais: reduza o escopo no dev_tasks ou especifique os arquivos/trechos exatos no plano do Chefe.", ev.Author, b.explore)
 	}
-	if maxInput := r.Project.Settings.EffectiveMaxDevInputTokens(); b.inputTokens > maxInput {
+	if maxInput := r.Project.Settings.EffectiveMaxDevInputTokens(); maxInput > 0 && b.inputTokens > maxInput {
 		return fmt.Errorf("orçamento do dev %q: %d tokens de entrada nesta rodada (limite %d) sem concluir a entrega — execução interrompida. Reduza o escopo da fatia ou troque o modelo do dev por um mais barato/rápido.", ev.Author, b.inputTokens, maxInput)
 	}
 	return nil

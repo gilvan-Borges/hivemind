@@ -104,6 +104,18 @@ func TestDevGuardAbortsInputTokenBudgetAndResetsOnQA(t *testing.T) {
 	}
 }
 
+func TestDevGuardInputTokenBudgetDisabledByDefault(t *testing.T) {
+	r := &Runner{Project: team.File{Settings: team.DefaultSettings()}}
+	r.resetDevBudgets()
+	labels := map[string]string{"dev_1": "Desenvolvedor · dev_1"}
+
+	for i := 0; i < 30; i++ {
+		if err := r.checkDevGuard(devUsageEvent("dev_1", 100_000), labels); err != nil {
+			t.Fatalf("default settings must not abort dev by raw input-token sum (call %d): %v", i+1, err)
+		}
+	}
+}
+
 func TestDevGuardIgnoresNonDevStages(t *testing.T) {
 	cfg := team.DefaultSettings()
 	cfg.MaxDevExploreCalls = 8

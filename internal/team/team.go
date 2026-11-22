@@ -174,7 +174,6 @@ func DefaultSettings() Settings {
 		MaxDynamicDevs:           5,
 		MaxDevCalls:              120,
 		MaxDevExploreCalls:       40,
-		MaxDevInputTokens:        1_500_000,
 		BaseBranch:               "main",
 		ShellAllowlist:           append([]string(nil), DefaultAllowlist...),
 		ConfirmShell:             &confirm,
@@ -237,11 +236,14 @@ func (s Settings) EffectiveMaxDevExploreCalls() int {
 	return s.MaxDevExploreCalls
 }
 
-// EffectiveMaxDevInputTokens returns the per-round input-token budget of a dev
-// (default 1,500,000, range 200,000..10,000,000).
+// EffectiveMaxDevInputTokens returns the per-round input-token budget of a dev.
+// Zero (default) disables the hard input-token cutoff so large multi-step tasks
+// are governed by max_dev_calls, max_dev_explore_calls and optional
+// max_run_cost_usd instead of aborting mid-delivery. When explicitly set (> 0),
+// values clamp to 200,000..10,000,000.
 func (s Settings) EffectiveMaxDevInputTokens() int64 {
 	if s.MaxDevInputTokens <= 0 {
-		return 1_500_000
+		return 0
 	}
 	if s.MaxDevInputTokens < 200_000 {
 		return 200_000
