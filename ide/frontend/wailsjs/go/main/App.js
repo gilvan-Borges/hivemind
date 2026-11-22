@@ -390,6 +390,10 @@ export function OrbDismissNotice(arg1) {
   return window['go']['main']['App']['OrbDismissNotice'](arg1);
 }
 
+export function OrbHide() {
+  return window['go']['main']['App']['OrbHide']();
+}
+
 export function OrbPushNotice(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
   return window['go']['main']['App']['OrbPushNotice'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
 }
@@ -546,6 +550,10 @@ export function ResidentSessionMessages(arg1) {
   return window['go']['main']['App']['ResidentSessionMessages'](arg1);
 }
 
+export function ResidentSetEnabled(arg1) {
+  return window['go']['main']['App']['ResidentSetEnabled'](arg1);
+}
+
 export function ResidentSetEventTriggers(arg1) {
   return window['go']['main']['App']['ResidentSetEventTriggers'](arg1);
 }
@@ -556,6 +564,14 @@ export function ResidentSetExperimentalUnisolated(arg1) {
 
 export function ResidentSetIsolatedSandbox(arg1) {
   return window['go']['main']['App']['ResidentSetIsolatedSandbox'](arg1);
+}
+
+export function ResidentSetJevFailover(arg1) {
+  return window['go']['main']['App']['ResidentSetJevFailover'](arg1);
+}
+
+export function ResidentSetOrbEnabled(arg1) {
+  return window['go']['main']['App']['ResidentSetOrbEnabled'](arg1);
 }
 
 export function ResidentSetRoutineEnabled(arg1, arg2) {

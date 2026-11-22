@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -802,4 +803,124 @@ func CloseOwnGitHubItem(ctx context.Context, workspace, kind string, number int)
 		return fmt.Errorf("falha ao fechar issue #%d: %w", number, err)
 	}
 	return nil
+}
+
+// PREventItem representa um evento cronológico recente (revisão, comentário geral ou inline) de um PR.
+type PREventItem struct {
+	Kind      string `json:"kind"` // "approved" | "changes_requested" | "review_comment" | "comment" | "review"
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	Path      string `json:"path,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+// PullRequestActivityDetail reúne metadados e os últimos eventos/comentários de um PR para inspeção rápida.
+type PullRequestActivityDetail struct {
+	Number             int           `json:"number"`
+	Body               string        `json:"body,omitempty"`
+	ChangedFiles       int           `json:"changedFiles,omitempty"`
+	Additions          int           `json:"additions,omitempty"`
+	Deletions          int           `json:"deletions,omitempty"`
+	RequestedReviewers []string      `json:"requestedReviewers,omitempty"`
+	Events             []PREventItem `json:"events"`
+	TotalEvents        int           `json:"totalEvents"`
+}
+
+// BuildPullRequestActivityDetail agrega revisões e comentários em ordem cronológica decrescente.
+func BuildPullRequestActivityDetail(detail githubx.PullRequestDetail, maxEvents int) PullRequestActivityDetail {
+	events := make([]PREventItem, 0, len(detail.Reviews)+len(detail.ReviewComments)+len(detail.IssueComments))
+	for _, r := range detail.Reviews {
+		state := strings.ToUpper(strings.TrimSpace(r.State))
+		body := strings.TrimSpace(r.Body)
+		if state == "COMMENTED" && body == "" {
+			// Comentários inline já chegam em ReviewComments; evita entradas vazias duplicadas.
+			continue
+		}
+		kind := "review"
+		switch state {
+		case "APPROVED":
+			kind = "approved"
+		case "CHANGES_REQUESTED":
+			kind = "changes_requested"
+		case "COMMENTED":
+			kind = "comment"
+		}
+		events = append(events, PREventItem{
+			Kind:      kind,
+			Author:    strings.TrimSpace(r.Author),
+			Body:      body,
+			CreatedAt: strings.TrimSpace(r.SubmittedAt),
+		})
+	}
+	for _, c := range detail.ReviewComments {
+		events = append(events, PREventItem{
+			Kind:      "review_comment",
+			Author:    strings.TrimSpace(c.Author),
+			Body:      strings.TrimSpace(c.Body),
+			Path:      strings.TrimSpace(c.Path),
+			Line:      c.Line,
+			CreatedAt: strings.TrimSpace(c.CreatedAt),
+		})
+	}
+	for _, c := range detail.IssueComments {
+		events = append(events, PREventItem{
+			Kind:      "comment",
+			Author:    strings.TrimSpace(c.Author),
+			Body:      strings.TrimSpace(c.Body),
+			CreatedAt: strings.TrimSpace(c.CreatedAt),
+		})
+	}
+
+	sort.SliceStable(events, func(i, j int) bool {
+		ti := parseGHTime(events[i].CreatedAt)
+		tj := parseGHTime(events[j].CreatedAt)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return events[i].CreatedAt > events[j].CreatedAt
+	})
+
+	total := len(events)
+	if maxEvents > 0 && len(events) > maxEvents {
+		events = events[:maxEvents]
+	}
+	return PullRequestActivityDetail{
+		Number:             detail.Number,
+		Body:               strings.TrimSpace(detail.Body),
+		ChangedFiles:       detail.ChangedFiles,
+		Additions:          detail.Additions,
+		Deletions:          detail.Deletions,
+		RequestedReviewers: detail.RequestedReviewers,
+		Events:             events,
+		TotalEvents:        total,
+	}
+}
+
+// GetProjectPullRequestDetail carrega revisões, comentários e estatísticas recentes de um PR sob demanda.
+func GetProjectPullRequestDetail(ctx context.Context, workspace string, number int) (PullRequestActivityDetail, error) {
+	if number <= 0 {
+		return PullRequestActivityDetail{}, fmt.Errorf("número de PR inválido: %d", number)
+	}
+	g := gitx.Local{}
+	if !g.IsRepo(ctx, workspace) {
+		return PullRequestActivityDetail{}, fmt.Errorf("esta pasta não é um repositório Git")
+	}
+	remoteURL, err := g.RemoteURL(ctx, workspace)
+	if err != nil {
+		return PullRequestActivityDetail{}, err
+	}
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
+	if !ok {
+		return PullRequestActivityDetail{}, fmt.Errorf("remote origin não é GitHub")
+	}
+	client := githubx.Detect(owner, repo)
+	if !client.Enabled() {
+		return PullRequestActivityDetail{}, fmt.Errorf("GitHub não está configurado. Configure o Conector GitHub Nativo ou autentique o `gh`")
+	}
+	detail, err := client.GetPullRequest(ctx, number)
+	if err != nil {
+		return PullRequestActivityDetail{}, err
+	}
+	return BuildPullRequestActivityDetail(detail, 12), nil
 }

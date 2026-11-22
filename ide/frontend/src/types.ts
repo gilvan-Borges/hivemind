@@ -531,6 +531,26 @@ export interface ProjectIssue {
   isMine?: boolean;
 }
 
+export interface PREventItem {
+  kind: "approved" | "changes_requested" | "review_comment" | "comment" | "review" | string;
+  author: string;
+  body: string;
+  path?: string;
+  line?: number;
+  createdAt?: string;
+}
+
+export interface PullRequestActivityDetail {
+  number: number;
+  body?: string;
+  changedFiles?: number;
+  additions?: number;
+  deletions?: number;
+  requestedReviewers?: string[];
+  events: PREventItem[];
+  totalEvents: number;
+}
+
 export interface ProjectPullRequest {
   number: number;
   title: string;
@@ -1241,6 +1261,7 @@ export interface WailsBackendApp {
   RollbackWorktreeCheckpoint?(workspace: string, wtDir: string, checkpointID: string): Promise<void>;
   ListIssues(workspace: string): Promise<ProjectIssue[]>;
   ListPullRequests(workspace: string): Promise<ProjectPullRequest[]>;
+  GetPullRequestDetail?(workspace: string, number: number): Promise<PullRequestActivityDetail>;
   CloseOwnGitHubItem(workspace: string, kind: "pr" | "issue", number: number): Promise<void>;
   GitBlameFile?(workspace: string, relPath: string): Promise<BlameLine[]>;
   GitFileHistory?(workspace: string, relPath: string, limit: number): Promise<FileCommitEntry[]>;

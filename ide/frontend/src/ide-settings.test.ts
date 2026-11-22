@@ -136,4 +136,18 @@ describe("Configurações Globais da IDE (ide-settings)", () => {
     expect(shellSrc).toContain("openIdeSettingsTab");
     expect(shellSrc).not.toContain('id="act-wizard"');
   });
+
+  it("alinha todos os itens do menu lateral à esquerda sem herdar justify-content: center", async () => {
+    const html = renderIdeSettingsPageHtml();
+    expect((html.match(/class="ide-settings-nav-ico"/g) || []).length).toBe(5);
+    expect((html.match(/class="ide-settings-nav-label"/g) || []).length).toBe(5);
+
+    const mod = "node:fs/promises";
+    const { readFile } = (await import(/* @vite-ignore */ mod)) as {
+      readFile: (path: URL, encoding: string) => Promise<string>;
+    };
+    const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+    const navBtnBlock = css.match(/\.ide-settings-nav-btn\s*\{[^}]*\}/);
+    expect(navBtnBlock?.[0]).toContain("justify-content: flex-start;");
+  });
 });

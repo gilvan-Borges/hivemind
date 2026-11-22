@@ -1,4 +1,5 @@
 import type { Mood } from "../companion/logic";
+import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "../chat-timeline";
 import { icons } from "../icons";
 import { renderMarkdownStreamed } from "../markdown";
 import { escapeHtml } from "../utils";
@@ -270,7 +271,7 @@ export function renderOrbMsgHtml(m: OrbResidentMessage): string {
     `;
   }
   const body = m.kind === "chief"
-    ? renderMarkdownStreamed(`orb-${m.id}`, m.text)
+    ? renderMarkdownStreamed(`orb-${m.id}`, sanitizeAssistantText(m.text))
     : escapeHtml(m.text);
   return `
     <div class="orb-msg role-${escapeHtml(m.kind)}" data-msg-id="${escapeHtml(m.id)}">
@@ -279,7 +280,11 @@ export function renderOrbMsgHtml(m: OrbResidentMessage): string {
   `;
 }
 
-export function renderOrbChatListHtml(resident: OrbResidentState | undefined, loading: boolean): string {
+export function renderOrbChatListHtml(
+  resident: OrbResidentState | undefined,
+  loading: boolean,
+  expandedIds?: ReadonlySet<string>,
+): string {
   if (loading) {
     return `
       <div class="orb-chat-skeleton" aria-live="polite">
@@ -304,7 +309,34 @@ export function renderOrbChatListHtml(resident: OrbResidentState | undefined, lo
       </div>
     `;
   }
-  return msgs.map(renderOrbMsgHtml).join("");
+  const timeline = groupConversationItems(msgs, Boolean(resident?.running));
+  return timeline
+    .map((item) => {
+      if (item.kind === "activity") {
+        const sum = summarizeActivityGroup(
+          item.messages,
+          item.active,
+          Date.now(),
+          (t) => t.toolDetail ? `${t.toolName || "ação"} · ${t.toolDetail}` : (t.toolName || t.text || "Executando"),
+        );
+        const isOpen = Boolean(expandedIds?.has(item.id));
+        const inner = item.messages.map(renderOrbMsgHtml).join("");
+        return `
+          <details class="activity-fold orb-activity-fold ${item.active ? "is-active" : ""}" data-orb-activity-fold="${escapeHtml(item.id)}" ${isOpen ? "open" : ""}>
+            <summary class="activity-fold-summary">
+              ${item.active ? `<span class="activity-fold-spin">${icons.spinner}</span>` : ""}
+              <span class="activity-fold-title">${escapeHtml(sum.title)}</span>
+              ${sum.elapsedText ? `<span class="activity-fold-elapsed">${escapeHtml(sum.elapsedText)}</span>` : ""}
+              <span class="spacer"></span>
+              <span class="activity-fold-chev">${icons.chevronDown}</span>
+            </summary>
+            <div class="activity-fold-body">${inner}</div>
+          </details>
+        `;
+      }
+      return renderOrbMsgHtml(item.message);
+    })
+    .join("");
 }
 
 export function renderOrbApprovalDockHtml(resident: OrbResidentState | undefined): string {
@@ -339,7 +371,7 @@ export function renderOrbComposerHtml(resident: OrbResidentState | undefined, dr
   return `
     <div class="orb-composer" id="orb-composer">
       <div class="orb-approval-dock" id="orb-approval-dock">${renderOrbApprovalDockHtml(resident)}</div>
-      <textarea id="orb-chat-input" rows="2" placeholder="${
+      <textarea id="orb-chat-input" rows="1" placeholder="${
         loading
           ? "Conectando ao Agent Hive..."
           : running
@@ -442,6 +474,18 @@ export function mountOrbWindow(): void {
   let residentLoaded = false;
   let draftInput = "";
   let dragCleanup: (() => void) | null = null;
+  const orbExpandedGroups = new Set<string>();
+
+  const bindOrbFoldToggles = (scope: ParentNode = document): void => {
+    scope.querySelectorAll<HTMLDetailsElement>("details[data-orb-activity-fold]").forEach((det) => {
+      det.addEventListener("toggle", () => {
+        const gid = det.dataset.orbActivityFold || "";
+        if (!gid) return;
+        if (det.open) orbExpandedGroups.add(gid);
+        else orbExpandedGroups.delete(gid);
+      });
+    });
+  };
 
   const cleanupLife = () => {
     if (life) {
@@ -460,10 +504,10 @@ export function mountOrbWindow(): void {
   const bindComposerEvents = (): void => {
     const input = document.getElementById("orb-chat-input") as HTMLTextAreaElement | null;
     if (!input) return;
+    autoResizeTextarea(input, 22, 132);
     input.addEventListener("input", () => {
       draftInput = input.value;
-      input.style.height = "auto";
-      input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+      autoResizeTextarea(input, 22, 132);
     });
     input.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey) {
@@ -482,7 +526,7 @@ export function mountOrbWindow(): void {
       const input = document.getElementById("orb-chat-input") as HTMLTextAreaElement | null;
       if (input) {
         input.value = "";
-        input.style.height = "auto";
+        autoResizeTextarea(input, 22, 132);
       }
     }
     void orbApi()?.SendHiveMessage?.(text, ws);
@@ -490,6 +534,7 @@ export function mountOrbWindow(): void {
 
   const bindChatTabEvents = (): void => {
     bindComposerEvents();
+    bindOrbFoldToggles(host);
     document.getElementById("orb-send")?.addEventListener("click", () => sendMessage());
     document.getElementById("orb-cancel")?.addEventListener("click", () => {
       void orbApi()?.CancelHiveTurn?.();
@@ -659,7 +704,7 @@ export function mountOrbWindow(): void {
       activeTab === "chat"
         ? `
           <div class="orb-chat">
-            <div class="orb-chat-list" id="orb-chat-list">${renderOrbChatListHtml(resident, !residentLoaded)}</div>
+            <div class="orb-chat-list" id="orb-chat-list">${renderOrbChatListHtml(resident, !residentLoaded, orbExpandedGroups)}</div>
             ${renderOrbComposerHtml(resident, draftInput, !residentLoaded)}
           </div>
         `
@@ -876,7 +921,8 @@ export function mountOrbWindow(): void {
     if (sub) sub.innerHTML = orbStatusLine(resident);
     const list = document.getElementById("orb-chat-list");
     if (list) {
-      list.innerHTML = renderOrbChatListHtml(resident, !residentLoaded);
+      list.innerHTML = renderOrbChatListHtml(resident, !residentLoaded, orbExpandedGroups);
+      bindOrbFoldToggles(list);
       autoscrollChat();
     }
     const dock = document.getElementById("orb-approval-dock");

@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -334,8 +336,9 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 	args = append(args, "--json-schema", schema)
 
 	var (
-		finalEnv  agyEnvelope
-		sawResult bool
+		finalEnv    agyEnvelope
+		sawResult   bool
+		deltaFilter agyDecisionDeltaFilter
 	)
 	handleLine := func(line string) bool {
 		ev, ok := parseStreamLine([]byte(line))
@@ -344,10 +347,10 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		}
 		switch ev.Type {
 		case "delta":
-			if ev.Text != "" {
+			if text := deltaFilter.Push(ev.Text); text != "" {
 				yield(&model.LLMResponse{
 					Partial: true,
-					Content: genai.NewContentFromText(ev.Text, genai.RoleModel),
+					Content: genai.NewContentFromText(text, genai.RoleModel),
 				}, nil)
 			}
 		case "tool":
@@ -416,6 +419,296 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		return nil, fmt.Errorf("agy devolveu status %s: %s", finalEnv.Status, truncateText(msg, 500))
 	}
 	return finalEnv.toResponse(true)
+}
+
+type agyDeltaMode uint8
+
+const (
+	deltaModeUnknown agyDeltaMode = iota
+	deltaModePlain
+	deltaModeJSON
+	deltaModeDone
+)
+
+type agyJSONScanState uint8
+
+const (
+	jsonObjExpectKey agyJSONScanState = iota
+	jsonObjKey
+	jsonObjExpectColon
+	jsonObjExpectVal
+	jsonInTextString
+	jsonSkipVal
+	jsonObjAfterVal
+)
+
+// agyDecisionDeltaFilter extrai incrementalmente apenas o campo "text" quando o
+// stream do `agy --json-schema` emite o envelope JSON `{"text":...,"tool_calls":[...]}`,
+// evitando vazamento de JSON bruto no chat e mantendo texto simples intacto.
+type agyDecisionDeltaFilter struct {
+	mode       agyDeltaMode
+	state      agyJSONScanState
+	leadSpaces strings.Builder
+
+	keyBuf    strings.Builder
+	strEsc    bool
+	strEscU   int
+	strHex    [4]byte
+	hiSurr    rune
+	targetKey bool
+
+	skipInStr bool
+	skipEsc   bool
+	skipNest  int
+}
+
+func isJSONSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
+}
+
+func hexVal(b byte) (rune, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return rune(b - '0'), true
+	case b >= 'a' && b <= 'f':
+		return rune(b-'a') + 10, true
+	case b >= 'A' && b <= 'F':
+		return rune(b-'A') + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isHighSurrogate(r rune) bool {
+	return r >= 0xD800 && r <= 0xDBFF
+}
+
+func isLowSurrogate(r rune) bool {
+	return r >= 0xDC00 && r <= 0xDFFF
+}
+
+func (f *agyDecisionDeltaFilter) Push(chunk string) string {
+	if chunk == "" {
+		return ""
+	}
+	switch f.mode {
+	case deltaModeDone:
+		return ""
+	case deltaModePlain:
+		return chunk
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(chunk); i++ {
+		b := chunk[i]
+		if f.mode == deltaModeUnknown {
+			if isJSONSpace(b) {
+				f.leadSpaces.WriteByte(b)
+				continue
+			}
+			if b != '{' {
+				f.mode = deltaModePlain
+				out.WriteString(f.leadSpaces.String())
+				f.leadSpaces.Reset()
+				out.WriteString(chunk[i:])
+				return out.String()
+			}
+			f.leadSpaces.Reset()
+			f.mode = deltaModeJSON
+			f.state = jsonObjExpectKey
+			continue
+		}
+
+		if f.mode == deltaModeDone {
+			break
+		}
+
+		f.stepJSON(b, &out)
+	}
+	return out.String()
+}
+
+func (f *agyDecisionDeltaFilter) flushSurrogate(dst *strings.Builder) {
+	if f.hiSurr != 0 {
+		dst.WriteRune(utf8.RuneError)
+		f.hiSurr = 0
+	}
+}
+
+func (f *agyDecisionDeltaFilter) stepStringByte(b byte, dst *strings.Builder) (done bool) {
+	if f.strEscU > 0 {
+		idx := 4 - f.strEscU
+		f.strHex[idx] = b
+		f.strEscU--
+		if f.strEscU == 0 {
+			var r rune
+			ok := true
+			for k := 0; k < 4; k++ {
+				v, vok := hexVal(f.strHex[k])
+				if !vok {
+					ok = false
+					break
+				}
+				r = (r << 4) | v
+			}
+			if !ok {
+				f.flushSurrogate(dst)
+				dst.WriteRune(utf8.RuneError)
+				return false
+			}
+			if f.hiSurr != 0 {
+				if isLowSurrogate(r) {
+					dst.WriteRune(utf16.DecodeRune(f.hiSurr, r))
+					f.hiSurr = 0
+					return false
+				}
+				f.flushSurrogate(dst)
+			}
+			if isHighSurrogate(r) {
+				f.hiSurr = r
+				return false
+			}
+			dst.WriteRune(r)
+		}
+		return false
+	}
+
+	if f.strEsc {
+		f.strEsc = false
+		if b == 'u' {
+			f.strEscU = 4
+			return false
+		}
+		f.flushSurrogate(dst)
+		switch b {
+		case '"', '\\', '/':
+			dst.WriteByte(b)
+		case 'b':
+			dst.WriteByte('\b')
+		case 'f':
+			dst.WriteByte('\f')
+		case 'n':
+			dst.WriteByte('\n')
+		case 'r':
+			dst.WriteByte('\r')
+		case 't':
+			dst.WriteByte('\t')
+		default:
+			dst.WriteByte(b)
+		}
+		return false
+	}
+
+	if b == '\\' {
+		f.strEsc = true
+		return false
+	}
+	if b == '"' {
+		f.flushSurrogate(dst)
+		return true
+	}
+	f.flushSurrogate(dst)
+	dst.WriteByte(b)
+	return false
+}
+
+func (f *agyDecisionDeltaFilter) stepJSON(b byte, out *strings.Builder) {
+	switch f.state {
+	case jsonObjExpectKey:
+		if isJSONSpace(b) || b == ',' {
+			return
+		}
+		if b == '"' {
+			f.keyBuf.Reset()
+			f.strEsc = false
+			f.strEscU = 0
+			f.hiSurr = 0
+			f.state = jsonObjKey
+			return
+		}
+		if b == '}' {
+			f.mode = deltaModeDone
+		}
+	case jsonObjKey:
+		if f.stepStringByte(b, &f.keyBuf) {
+			f.targetKey = f.keyBuf.String() == "text"
+			f.state = jsonObjExpectColon
+		}
+	case jsonObjExpectColon:
+		if isJSONSpace(b) {
+			return
+		}
+		if b == ':' {
+			f.state = jsonObjExpectVal
+		}
+	case jsonObjExpectVal:
+		if isJSONSpace(b) {
+			return
+		}
+		if f.targetKey && b == '"' {
+			f.strEsc = false
+			f.strEscU = 0
+			f.hiSurr = 0
+			f.state = jsonInTextString
+			return
+		}
+		f.state = jsonSkipVal
+		f.skipInStr = false
+		f.skipEsc = false
+		f.skipNest = 0
+		f.stepJSON(b, out)
+	case jsonInTextString:
+		if f.stepStringByte(b, out) {
+			f.mode = deltaModeDone
+		}
+	case jsonSkipVal:
+		if f.skipInStr {
+			if f.skipEsc {
+				f.skipEsc = false
+				return
+			}
+			if b == '\\' {
+				f.skipEsc = true
+				return
+			}
+			if b == '"' {
+				f.skipInStr = false
+				if f.skipNest == 0 {
+					f.state = jsonObjAfterVal
+				}
+			}
+			return
+		}
+		switch b {
+		case '"':
+			f.skipInStr = true
+		case '{', '[':
+			f.skipNest++
+		case '}', ']':
+			if f.skipNest > 0 {
+				f.skipNest--
+				if f.skipNest == 0 {
+					f.state = jsonObjAfterVal
+				}
+			} else if b == '}' {
+				f.mode = deltaModeDone
+			}
+		case ',':
+			if f.skipNest == 0 {
+				f.state = jsonObjExpectKey
+			}
+		}
+	case jsonObjAfterVal:
+		if isJSONSpace(b) {
+			return
+		}
+		switch b {
+		case ',':
+			f.state = jsonObjExpectKey
+		case '}':
+			f.mode = deltaModeDone
+		}
+	}
 }
 
 type streamError struct {

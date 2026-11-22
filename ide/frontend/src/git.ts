@@ -1,7 +1,8 @@
 import { fileBadge, icons } from "./icons";
-import type { AutoReviewSettings, AutoReviewStatus, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, TeamLane, WorkspaceGitRepo } from "./types";
+import type { AutoReviewSettings, AutoReviewStatus, ChatMessage, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, PullRequestActivityDetail, TeamLane, WorkspaceGitRepo } from "./types";
 import { escapeHtml, formatTokens } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
+import { autoResizeTextarea } from "./chat-timeline";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindConflictResolutionEvents, refreshConflictedFiles, renderConflictsSectionHtml } from "./git-history";
 import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./explorer";
@@ -118,6 +119,54 @@ export function selectActiveGitRepo(repoRoot: string) {
   }
 }
 
+const FILE_WRITE_TOOL_NAMES = new Set([
+  "write_file",
+  "edit_file",
+  "create_file",
+  "delete_file",
+  "rename_file",
+  "apply_patch",
+  "patch_file",
+]);
+
+function normalizeDiffPath(raw: string): string {
+  const firstLine = String(raw || "").split("\n")[0].trim();
+  const withoutRange = firstLine.replace(/(?:#L\d+(?:-L?\d+)?|:L?\d+(?:-L?\d+)?)$/i, "");
+  return withoutRange
+    .replace(/\\/g, "/")
+    .replace(/^(?:\.\/|\/)+/, "")
+    .toLowerCase();
+}
+
+export function collectTurnEditedFiles(messages: ChatMessage[]): Set<string> {
+  const edited = new Set<string>();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.kind === "user") break;
+    if (m.kind === "tool" && FILE_WRITE_TOOL_NAMES.has((m.toolName || "").toLowerCase())) {
+      const p = normalizeDiffPath(m.toolDetail || "");
+      if (p) edited.add(p);
+    } else if (m.kind === "chief" && m.text) {
+      for (const match of m.text.matchAll(/\[\[hmtool:(?:write|edit):([^\]]+)\]\]/gi)) {
+        const p = normalizeDiffPath(match[1] || "");
+        if (p) edited.add(p);
+      }
+    }
+  }
+  return edited;
+}
+
+export function filterTurnDiffs<T extends { path: string }>(allDiffs: T[], messages: ChatMessage[]): T[] {
+  const edited = collectTurnEditedFiles(messages);
+  if (edited.size === 0) return [];
+  const editedArr = Array.from(edited);
+  return allDiffs.filter((d) => {
+    const dn = normalizeDiffPath(d.path);
+    if (!dn) return false;
+    return editedArr.some((ep) => dn === ep || dn.endsWith(`/${ep}`) || ep.endsWith(`/${dn}`));
+  });
+}
+
 export async function refreshDiffsAndSummarize(lane: TeamLane) {
   await refreshDiffs();
   const repos = getEffectiveGitRepos();
@@ -127,17 +176,18 @@ export async function refreshDiffsAndSummarize(lane: TeamLane) {
       path: r.relPath ? `${r.relPath}/${d.path}` : d.path,
     }))
   );
-  if (allDiffs.length === 0) return;
+  const turnDiffs = filterTurnDiffs(allDiffs, lane.messages);
+  if (turnDiffs.length === 0) return;
   const last = lane.messages[lane.messages.length - 1];
   if (last && last.kind === "diff") return;
-  const totalAdd = allDiffs.reduce((s, d) => s + d.added, 0);
-  const totalRem = allDiffs.reduce((s, d) => s + d.removed, 0);
+  const totalAdd = turnDiffs.reduce((s, d) => s + d.added, 0);
+  const totalRem = turnDiffs.reduce((s, d) => s + d.removed, 0);
   lane.messages.push({
     id: `diff-${Date.now()}`,
     kind: "diff",
-    label: `${allDiffs.length} arquivo(s) alterado(s) (+${totalAdd} / -${totalRem})`,
+    label: `${turnDiffs.length} arquivo(s) alterado(s) (+${totalAdd} / -${totalRem})`,
     text: "",
-    diffItems: allDiffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed })),
+    diffItems: turnDiffs.map((d) => ({ path: d.path, added: d.added, removed: d.removed })),
   });
   if (lane.id === activeLane()?.id) {
     scheduleChatFlush();
@@ -527,6 +577,102 @@ export function renderGitGraphSectionHtml(): string {
   `;
 }
 
+export function formatPrRelativeTime(iso?: string, nowMs = Date.now()): string {
+  const raw = (iso || "").trim();
+  if (!raw) return "";
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) return "";
+  const diffSec = Math.max(0, Math.floor((nowMs - ts) / 1000));
+  if (diffSec < 60) return "agora";
+  const mins = Math.floor(diffSec / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  return new Date(ts).toLocaleDateString("pt-BR");
+}
+
+function formatPrEventKind(kind: string): { label: string; cls: string } {
+  switch (kind) {
+    case "approved":
+      return { label: "Aprovou", cls: "is-approved" };
+    case "changes_requested":
+      return { label: "Pediu ajustes", cls: "is-changes" };
+    case "review_comment":
+      return { label: "Comentário no código", cls: "is-inline" };
+    case "comment":
+      return { label: "Comentou", cls: "is-comment" };
+    default:
+      return { label: "Revisão", cls: "is-comment" };
+  }
+}
+
+export function renderPrDetailsDrawerHtml(
+  pr: ProjectPullRequest,
+  entry?: { open: boolean; loading: boolean; error: string; data?: PullRequestActivityDetail },
+): string {
+  if (!entry?.open) return "";
+  if (entry.loading && !entry.data) {
+    return `<div class="pr-details-drawer"><div class="dim">${icons.spinner} Carregando últimos eventos do PR…</div></div>`;
+  }
+  if (entry.error && !entry.data) {
+    return `
+      <div class="pr-details-drawer">
+        <div class="dim">${escapeHtml(entry.error)}</div>
+        <div><button type="button" class="mini" data-reload-pr-details="${pr.number}">Tentar novamente</button></div>
+      </div>
+    `;
+  }
+  const d = entry.data;
+  if (!d) return "";
+  const hasStats = Boolean(d.changedFiles || d.additions || d.deletions);
+  const events = Array.isArray(d.events) ? d.events : [];
+  return `
+    <div class="pr-details-drawer" data-pr-details-panel="${pr.number}">
+      <div class="pr-details-meta">
+        ${hasStats ? `
+          <span class="pr-details-stats">
+            <span>${d.changedFiles || 0} arq</span>
+            <span class="is-add">+${d.additions || 0}</span>
+            <span class="is-rem">-${d.deletions || 0}</span>
+          </span>
+        ` : ""}
+        ${d.requestedReviewers && d.requestedReviewers.length > 0
+          ? `<span>Revisores: ${d.requestedReviewers.map((r) => `@${escapeHtml(r)}`).join(", ")}</span>`
+          : ""}
+        <div class="spacer"></div>
+        <button type="button" class="icon-btn" data-reload-pr-details="${pr.number}" title="Atualizar eventos deste PR" ${entry.loading ? "disabled" : ""}>
+          ${entry.loading ? icons.spinner : icons.refresh}
+        </button>
+      </div>
+      ${events.length === 0
+        ? `<div class="dim">Nenhum comentário ou revisão registrado ainda.</div>${d.body ? `<div class="pr-desc-preview">${escapeHtml(d.body)}</div>` : ""}`
+        : `
+          <div class="pr-events-list">
+            ${events.map((ev) => {
+              const badge = formatPrEventKind(ev.kind);
+              const when = formatPrRelativeTime(ev.createdAt);
+              const loc = ev.path ? `${ev.path}${ev.line && ev.line > 0 ? `:L${ev.line}` : ""}` : "";
+              return `
+                <div class="pr-event-item">
+                  <div class="pr-event-head">
+                    <span class="pr-event-badge ${badge.cls}">${escapeHtml(badge.label)}</span>
+                    ${ev.author ? `<span class="pr-event-author">@${escapeHtml(ev.author)}</span>` : ""}
+                    ${when ? `<span class="pr-event-time">${escapeHtml(when)}</span>` : ""}
+                  </div>
+                  ${loc ? `<div class="pr-event-loc" title="${escapeHtml(loc)}">${escapeHtml(loc)}</div>` : ""}
+                  ${ev.body ? `<div class="pr-event-body">${escapeHtml(ev.body)}</div>` : ""}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `
+      }
+    </div>
+  `;
+}
+
 export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { showResponseBadge?: boolean; showMineBadge?: boolean; showWaitingBadge?: boolean }): string {
   const showResp = Boolean((opts?.showResponseBadge || (!pr.isMine && pr.needsAttention)) && pr.myResponse);
   const respPill = showResp
@@ -559,6 +705,9 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
           ? `<span class="flow-pill pending">Aguardando revisão</span>`
           : ""
     : "";
+  const detailEntry = state.prDetails[pr.number];
+  const detailOpen = Boolean(detailEntry?.open);
+  const whenLabel = formatPrRelativeTime(pr.lastActivityAt || pr.updatedAt);
   return `
     <div class="issue-card pr-card">
       <div class="pr-card-top">
@@ -569,15 +718,21 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
         ${respPill}
         ${decisionPill}
         ${pr.author ? `<span class="dim" style="font-size:10.5px">@${escapeHtml(pr.author)}</span>` : ""}
+        ${whenLabel ? `<span class="pr-card-time" title="Última atividade">${escapeHtml(whenLabel)}</span>` : ""}
       </div>
       <div class="pr-card-title">${escapeHtml(pr.title)}</div>
       ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
-      ${pr.needsAttention && pr.lastActivitySnippet ? `<div class="pr-activity-snippet" title="${escapeHtml(pr.lastActivitySnippet)}">${pr.lastActivityAuthor ? `<strong>@${escapeHtml(pr.lastActivityAuthor)}:</strong> ` : ""}${escapeHtml(pr.lastActivitySnippet)}</div>` : ""}
+      ${!detailOpen && pr.lastActivitySnippet ? `<div class="pr-activity-snippet" title="${escapeHtml(pr.lastActivitySnippet)}">${pr.lastActivityAuthor ? `<strong>@${escapeHtml(pr.lastActivityAuthor)}:</strong> ` : ""}${escapeHtml(pr.lastActivitySnippet)}</div>` : ""}
       <div class="pr-card-actions">
         <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${pr.isMine ? "Trabalhar c/ Equipe" : "Revisar c/ Equipe"}</span></button>
+        <button type="button" class="mini pr-details-btn ${detailOpen ? "active" : ""}" data-toggle-pr-details="${pr.number}" aria-expanded="${detailOpen ? "true" : "false"}" title="Ver últimos comentários, revisões e arquivos do PR">
+          ${detailOpen ? icons.chevronDown : icons.chevronRight}
+          <span>Detalhes</span>
+        </button>
         <button class="mini" data-open-pr-url="${escapeHtml(pr.url)}" title="Abrir no navegador">${icons.openInNew}</button>
         ${pr.isMine ? `<button class="mini danger" data-close-pr="${pr.number}" title="Fechar meu PR no GitHub">${icons.trash}</button>` : ""}
       </div>
+      ${renderPrDetailsDrawerHtml(pr, detailEntry)}
     </div>
   `;
 }
@@ -909,9 +1064,12 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
   } else if (activeGitTab === "prs_issues") {
     const loadingAny = state.prs.loading || state.issues.loading;
     tabContentHtml = `
-      <div class="git-section" style="padding:10px">
+      <div class="git-section" id="git-prs-section" style="padding:10px">
         <div class="git-section-head">
-          <span>Pull Requests (${state.prs.list.length})</span>
+          <button type="button" class="scm-collapse-btn" id="btn-toggle-prs-section" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
+            ${state.prsCollapsed ? icons.chevronRight : icons.chevronDown}
+            <span>Pull Requests (${state.prs.list.length})</span>
+          </button>
           <div style="display:flex;gap:5px">
             ${hasGit ? `<button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>` : ""}
             <button class="mini" id="btn-load-prs-issues" ${loadingAny ? "disabled" : ""}>
@@ -920,19 +1078,21 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
             </button>
           </div>
         </div>
-        <div id="git-prs-list">
-          ${state.prs.loading && !state.prs.loadedOnce
-            ? `<div class="dim">${icons.spinner} Carregando PRs…</div>`
-            : !state.prs.loadedOnce
-              ? `<div class="dim">Clique em "Carregar" para buscar PRs e Issues.</div>`
-              : state.prs.list.length === 0
-                ? `<div class="dim">Nenhum Pull Request aberto.</div>`
-                : state.prs.list.map((pr, idx) => renderPrCardHtml(pr, idx, { showResponseBadge: true })).join("")
-          }
-        </div>
+        ${state.prsCollapsed ? "" : `
+          <div id="git-prs-list">
+            ${state.prs.loading && !state.prs.loadedOnce
+              ? `<div class="dim">${icons.spinner} Carregando PRs…</div>`
+              : !state.prs.loadedOnce
+                ? `<div class="dim">Clique em "Carregar" para buscar PRs e Issues.</div>`
+                : state.prs.list.length === 0
+                  ? `<div class="dim">Nenhum Pull Request aberto.</div>`
+                  : state.prs.list.map((pr, idx) => renderPrCardHtml(pr, idx, { showResponseBadge: true })).join("")
+            }
+          </div>
+        `}
       </div>
 
-      <div class="git-section" style="padding:10px">
+      <div class="git-section" id="git-issues-section" style="padding:10px">
         ${(() => {
           const allIssues = state.issues.list.map((iss, idx) => ({ iss, idx }));
           const jiraCount = allIssues.filter((x) => x.iss.source === "jira").length;
@@ -962,7 +1122,10 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
             : (savedJiraProj || detectedJiraKeys[0] || "");
           return `
             <div class="git-section-head" style="gap:6px;flex-wrap:wrap">
-              <span>Minhas tasks & issues (${countLabel})</span>
+              <button type="button" class="scm-collapse-btn" id="btn-toggle-issues-section" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
+                ${state.issuesCollapsed ? icons.chevronRight : icons.chevronDown}
+                <span>Minhas tasks & issues (${countLabel})</span>
+              </button>
               ${state.jiraStatus?.connected && state.jiraProjects.length > 0 ? `
                 <select id="git-quick-jira-project" title="Projeto Jira vinculado a este repositório" style="font-size:10.5px;padding:2px 6px;max-width:148px;height:22px">
                   <option value="" ${!activeJiraProj ? "selected" : ""}>Auto (pelo repo)</option>
@@ -974,38 +1137,40 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
                 <span class="tok-pill" title="Projeto Jira vinculado automaticamente a este repositório">Jira: ${escapeHtml(activeJiraProj)}</span>
               ` : ""}
             </div>
-            ${allIssues.length > 0 ? `
-              <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
-                <input id="issues-filter-input" value="${escapeHtml(state.issuesFilterQuery)}" placeholder="Filtrar por chave ou título…" style="width:100%;font-size:11.5px;padding:4px 8px" />
-                ${hasBothSources ? `
-                  <div style="display:flex;gap:4px;flex-wrap:wrap">
-                    <button type="button" class="mini ${activeSource === "" ? "primary" : "ghost"}" data-issue-source="">Todas (${allIssues.length})</button>
-                    <button type="button" class="mini ${activeSource === "jira" ? "primary" : "ghost"}" data-issue-source="jira">Jira${activeJiraProj ? ` · ${escapeHtml(activeJiraProj)}` : ""} (${jiraCount})</button>
-                    <button type="button" class="mini ${activeSource === "github" ? "primary" : "ghost"}" data-issue-source="github">GitHub (${ghCount})</button>
-                  </div>
-                ` : ""}
-                ${statuses.length > 1 ? `
-                  <div style="display:flex;gap:4px;flex-wrap:wrap">
-                    <button type="button" class="mini ${activeStatus === "" ? "primary" : "ghost"}" data-issue-status="">Todos status</button>
-                    ${statuses.map((st) => `
-                      <button type="button" class="mini ${activeStatus === st ? "primary" : "ghost"}" data-issue-status="${escapeHtml(st)}">${escapeHtml(st)}</button>
-                    `).join("")}
-                  </div>
-                ` : ""}
+            ${state.issuesCollapsed ? "" : `
+              ${allIssues.length > 0 ? `
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+                  <input id="issues-filter-input" value="${escapeHtml(state.issuesFilterQuery)}" placeholder="Filtrar por chave ou título…" style="width:100%;font-size:11.5px;padding:4px 8px" />
+                  ${hasBothSources ? `
+                    <div style="display:flex;gap:4px;flex-wrap:wrap">
+                      <button type="button" class="mini ${activeSource === "" ? "primary" : "ghost"}" data-issue-source="">Todas (${allIssues.length})</button>
+                      <button type="button" class="mini ${activeSource === "jira" ? "primary" : "ghost"}" data-issue-source="jira">Jira${activeJiraProj ? ` · ${escapeHtml(activeJiraProj)}` : ""} (${jiraCount})</button>
+                      <button type="button" class="mini ${activeSource === "github" ? "primary" : "ghost"}" data-issue-source="github">GitHub (${ghCount})</button>
+                    </div>
+                  ` : ""}
+                  ${statuses.length > 1 ? `
+                    <div style="display:flex;gap:4px;flex-wrap:wrap">
+                      <button type="button" class="mini ${activeStatus === "" ? "primary" : "ghost"}" data-issue-status="">Todos status</button>
+                      ${statuses.map((st) => `
+                        <button type="button" class="mini ${activeStatus === st ? "primary" : "ghost"}" data-issue-status="${escapeHtml(st)}">${escapeHtml(st)}</button>
+                      `).join("")}
+                    </div>
+                  ` : ""}
+                </div>
+              ` : ""}
+              <div id="git-issues-list">
+                ${state.issues.loading && !state.issues.loadedOnce
+                  ? `<div class="dim">${icons.spinner} Carregando suas tasks…</div>`
+                  : !state.issues.loadedOnce
+                    ? `<div class="dim">Aguardando carregamento…</div>`
+                    : allIssues.length === 0
+                      ? `<div class="dim">Nenhuma task atribuída a você encontrada.</div>`
+                      : filtered.length === 0
+                        ? `<div class="dim">Nenhuma task corresponde ao filtro atual.</div>`
+                        : filtered.map(({ iss, idx }) => renderIssueCardHtml(iss, idx)).join("")
+                }
               </div>
-            ` : ""}
-            <div id="git-issues-list">
-              ${state.issues.loading && !state.issues.loadedOnce
-                ? `<div class="dim">${icons.spinner} Carregando suas tasks…</div>`
-                : !state.issues.loadedOnce
-                  ? `<div class="dim">Aguardando carregamento…</div>`
-                  : allIssues.length === 0
-                    ? `<div class="dim">Nenhuma task atribuída a você encontrada.</div>`
-                    : filtered.length === 0
-                      ? `<div class="dim">Nenhuma task corresponde ao filtro atual.</div>`
-                      : filtered.map(({ iss, idx }) => renderIssueCardHtml(iss, idx)).join("")
-              }
-            </div>
+            `}
           `;
         })()}
       </div>
@@ -1312,6 +1477,77 @@ export async function runGitScmAction(action: string, repoRoot?: string) {
     }
   } finally {
     if (state.sidebarView === "git") renderLeftSidebar();
+  }
+}
+
+function rerenderGitSidebarAnchored(anchorSelector?: string) {
+  const sidebar = document.getElementById("left-sidebar");
+  const prevBody = sidebar?.querySelector<HTMLElement>(".sidebar-body");
+  const prevAnchor = anchorSelector && sidebar ? sidebar.querySelector<HTMLElement>(anchorSelector) : null;
+  const anchorOffset =
+    prevBody && prevAnchor
+      ? prevAnchor.getBoundingClientRect().top - prevBody.getBoundingClientRect().top
+      : null;
+
+  renderLeftSidebar();
+
+  if (anchorSelector && anchorOffset !== null && sidebar) {
+    const nextBody = sidebar.querySelector<HTMLElement>(".sidebar-body");
+    const nextAnchor = sidebar.querySelector<HTMLElement>(anchorSelector);
+    if (nextBody && nextAnchor) {
+      const nextOffset = nextAnchor.getBoundingClientRect().top - nextBody.getBoundingClientRect().top;
+      nextBody.scrollTop = Math.max(0, nextBody.scrollTop + (nextOffset - anchorOffset));
+    }
+  }
+}
+
+async function fetchPrDetails(prNumber: number, force = false) {
+  const backend = api();
+  if (!state.project || !prNumber) return;
+  const cur = state.prDetails[prNumber];
+  if (cur?.loading) return;
+  if (!force && cur?.data) {
+    state.prDetails[prNumber] = { ...cur, open: true };
+    rerenderGitSidebarAnchored();
+    return;
+  }
+  const targetRoot = getActiveGitRepo()?.root || state.project.root;
+  const projectKey = normalizePathKey(state.project.root);
+  state.prDetails[prNumber] = { open: true, loading: true, error: "", data: cur?.data };
+  rerenderGitSidebarAnchored();
+
+  if (!backend?.GetPullRequestDetail) {
+    state.prDetails[prNumber] = {
+      open: true,
+      loading: false,
+      error: "Detalhes de eventos indisponíveis nesta compilação da IDE.",
+      data: cur?.data,
+    };
+    rerenderGitSidebarAnchored();
+    return;
+  }
+
+  try {
+    const detail = await withTimeout(
+      backend.GetPullRequestDetail(targetRoot, prNumber),
+      15000,
+      `carregar eventos do PR #${prNumber}`,
+    );
+    if (!state.project || normalizePathKey(state.project.root) !== projectKey) return;
+    const stillOpen = state.prDetails[prNumber]?.open ?? true;
+    state.prDetails[prNumber] = { open: stillOpen, loading: false, error: "", data: detail };
+  } catch (err: any) {
+    if (!state.project || normalizePathKey(state.project.root) !== projectKey) return;
+    const stillOpen = state.prDetails[prNumber]?.open ?? true;
+    state.prDetails[prNumber] = {
+      open: stillOpen,
+      loading: false,
+      error: err?.message || "Falha ao carregar eventos do PR.",
+      data: cur?.data,
+    };
+  }
+  if (state.sidebarView === "git") {
+    rerenderGitSidebarAnchored();
   }
 }
 
@@ -1700,17 +1936,58 @@ export function bindGitSidebarEvents() {
   document.getElementById("btn-comment-jira")?.addEventListener("click", () => void commentJiraAction());
   document.getElementById("menu-comment-jira")?.addEventListener("click", () => void commentJiraAction());
 
+  document.getElementById("btn-toggle-prs-section")?.addEventListener("click", () => {
+    state.prsCollapsed = !state.prsCollapsed;
+    rerenderGitSidebarAnchored();
+  });
+  document.getElementById("btn-toggle-issues-section")?.addEventListener("click", () => {
+    state.issuesCollapsed = !state.issuesCollapsed;
+    rerenderGitSidebarAnchored("#git-issues-section");
+  });
+
+  document.querySelectorAll("[data-toggle-pr-details]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const num = parseInt((btn as HTMLElement).dataset.togglePrDetails || "0", 10);
+      if (!num) return;
+      const cur = state.prDetails[num];
+      if (cur?.open) {
+        state.prDetails[num] = { ...cur, open: false };
+        rerenderGitSidebarAnchored();
+        return;
+      }
+      if (cur?.data) {
+        state.prDetails[num] = { ...cur, open: true };
+        rerenderGitSidebarAnchored();
+        return;
+      }
+      void fetchPrDetails(num, false);
+    });
+  });
+
+  document.querySelectorAll("[data-reload-pr-details]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const num = parseInt((btn as HTMLElement).dataset.reloadPrDetails || "0", 10);
+      if (num) void fetchPrDetails(num, true);
+    });
+  });
+
   document.getElementById("btn-load-prs-issues")?.addEventListener("click", () => {
+    state.prDetails = {};
     if (state.project?.branch) void loadGitHubPRs();
     void loadProjectIssues();
   });
-  document.getElementById("btn-load-flow")?.addEventListener("click", () => void loadGitHubPRs());
+  document.getElementById("btn-load-flow")?.addEventListener("click", () => {
+    state.prDetails = {};
+    void loadGitHubPRs();
+  });
 
   const issuesFilterEl = document.getElementById("issues-filter-input") as HTMLInputElement | null;
   issuesFilterEl?.addEventListener("input", () => {
     const pos = issuesFilterEl.selectionStart ?? issuesFilterEl.value.length;
     state.issuesFilterQuery = issuesFilterEl.value;
-    renderLeftSidebar();
+    rerenderGitSidebarAnchored("#git-issues-section");
     const nextEl = document.getElementById("issues-filter-input") as HTMLInputElement | null;
     if (nextEl) {
       nextEl.focus();
@@ -1739,13 +2016,13 @@ export function bindGitSidebarEvents() {
       const src = ((btn as HTMLElement).dataset.issueSource || "") as "" | "jira" | "github";
       state.issuesSourceFilter = src;
       state.issuesStatusFilter = "";
-      renderLeftSidebar();
+      rerenderGitSidebarAnchored("#git-issues-section");
     });
   });
   document.querySelectorAll("[data-issue-status]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.issuesStatusFilter = (btn as HTMLElement).dataset.issueStatus || "";
-      renderLeftSidebar();
+      rerenderGitSidebarAnchored("#git-issues-section");
     });
   });
 
@@ -1927,6 +2204,7 @@ export function bindGitSidebarEvents() {
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
       if (chatInput) {
         chatInput.value = state.draftObjective;
+        autoResizeTextarea(chatInput);
         chatInput.focus();
       }
       setStatus(`PR #${pr.number} carregado no chat do Chefe.`);
@@ -1943,7 +2221,7 @@ export function bindGitSidebarEvents() {
       } else {
         state.expandedIssueSubtasks.add(key);
       }
-      renderLeftSidebar();
+      rerenderGitSidebarAnchored("#git-issues-section");
     });
   });
 
@@ -1953,7 +2231,7 @@ export function bindGitSidebarEvents() {
       const parentKey = ((btn as HTMLElement).dataset.filterParentKey || "").trim();
       if (!parentKey) return;
       state.issuesFilterQuery = state.issuesFilterQuery.trim().toUpperCase() === parentKey.toUpperCase() ? "" : parentKey;
-      renderLeftSidebar();
+      rerenderGitSidebarAnchored("#git-issues-section");
     });
   });
 
@@ -1989,6 +2267,7 @@ export function bindGitSidebarEvents() {
     const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
     if (chatInput) {
       chatInput.value = state.draftObjective;
+      autoResizeTextarea(chatInput);
       chatInput.focus();
     }
     setStatus(`Issue ${issueKey} carregada no chat do Chefe.`);

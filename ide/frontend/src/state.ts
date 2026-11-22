@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, IdeSettingsSection, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, UpdateCheckResult, WailsBackendApp, WorkspaceGitRepo } from "./types";
+import type { AIUsageReport, AgyModel, AgyStatus, AutoReviewStatus, BottomDrawerTab, ConfirmDialogState, CursorCLIStatus, EditorTab, FileDiff, FileNode, GitGraphCommit, GitHubStatus, GitSubTab, IdeSettingsSection, ImageAttachment, InlineAIStatus, InlineEditResponse, JiraConnectorStatus, JiraProject, LSPStatus, MCPServerInfo, MobileBridgeStatus, MobilePairing, OpenCodeStatus, OpenRouterModelInfo, PermissionMode, ProblemItem, ProfilesOverview, ProjectInfo, ProjectIssue, ProjectPullRequest, ProjectWorkspaceContext, ProviderHealthView, ProvidersScanReport, PullRequestActivityDetail, RelayLinkCode, RelayStatus, RunMode, SessionSummary, SidebarView, SkillAssignment, SkillInfo, TeamLane, TerminalEntry, TextSearchMatch, UpdateCheckResult, WailsBackendApp, WorkspaceGitRepo } from "./types";
 import { renderModalLayer } from "./modals";
 
 declare global {
@@ -186,6 +186,9 @@ export const state = {
     loading: false,
     loadedOnce: false,
   },
+  prsCollapsed: false,
+  issuesCollapsed: false,
+  prDetails: {} as Record<number, { open: boolean; loading: boolean; error: string; data?: PullRequestActivityDetail }>,
   gitGraph: {
     commits: [] as GitGraphCommit[],
     loading: false,
@@ -406,6 +409,7 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.sessionsSummary = ctx.sessionsSummary;
   state.issues = ctx.issues;
   state.prs = ctx.prs;
+  state.prDetails = {};
   state.gitGraph = ctx.gitGraph;
   state.gitTab = ctx.gitTab;
   state.autoReview = ctx.autoReview ?? null;

@@ -518,8 +518,8 @@ export function renderIdeSettingsPageHtml(): string {
         <nav class="ide-settings-nav" aria-label="Seções de Configurações da IDE">
           ${navItems.map((item) => `
             <button type="button" class="ide-settings-nav-btn ${section === item.id ? "active" : ""}" data-ide-settings-sec="${item.id}">
-              ${item.icon}
-              <span>${escapeHtml(item.label)}</span>
+              <span class="ide-settings-nav-ico">${item.icon}</span>
+              <span class="ide-settings-nav-label">${escapeHtml(item.label)}</span>
               ${item.badge || ""}
             </button>
           `).join("")}

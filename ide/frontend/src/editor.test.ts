@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { countLinesFast, parseDiffHunks, renderLineNumbers, renderSplitDiffHtml, renderUnifiedDiffHtml } from "./editor";
-import type { FileDiff } from "./types";
+import { countLinesFast, parseDiffHunks, renderCommitDetailHtml, renderLineNumbers, renderSplitDiffHtml, renderUnifiedDiffHtml } from "./editor";
+import type { CommitDetail, FileDiff } from "./types";
 
 function makeDiff(lines: Array<{ kind: string; text: string }>): FileDiff {
   return {
@@ -83,5 +83,63 @@ describe("contadores de linha", () => {
   it("renderLineNumbers gera numeração 1..N", () => {
     expect(renderLineNumbers("a\nb\nc")).toBe("1\n2\n3");
     expect(renderLineNumbers("")).toBe("1");
+  });
+});
+
+describe("readOnly diff & Commit Viewer", () => {
+  const { hunks } = parseDiffHunks(
+    makeDiff([
+      { kind: "hunk", text: "@@ -1,2 +1,2 @@" },
+      { kind: "context", text: " igual" },
+      { kind: "removed", text: "-saiu" },
+      { kind: "added", text: "+entrou" },
+    ])
+  );
+
+  it("readOnly omite botão Reverter bloco nos diffs unificado e split", () => {
+    expect(renderUnifiedDiffHtml(hunks, { readOnly: true })).not.toContain("diff-hunk-revert");
+    expect(renderSplitDiffHtml(hunks, { readOnly: true })).not.toContain("diff-hunk-revert");
+  });
+
+  it("renderCommitDetailHtml separa arquivo/pasta, omite reverter e recolhe após os 3 primeiros quando há >6 arquivos", () => {
+    const files: FileDiff[] = Array.from({ length: 8 }, (_, idx) => ({
+      path: `service/src/main/java/com/acme/File${idx + 1}.java`,
+      status: "M",
+      added: idx + 1,
+      removed: 1,
+      lines: [
+        { kind: "hunk", text: "@@ -1,1 +1,2 @@" },
+        { kind: "context", text: " class A {}" },
+        { kind: "added", text: "+// added" },
+      ],
+    }));
+    const cd: CommitDetail = {
+      hash: "0baf17758deadbeef",
+      short: "0baf1775",
+      author: "Autor Teste",
+      date: "14 hours ago",
+      subject: "feat(auth): exemplo",
+      files,
+    };
+    const html = renderCommitDetailHtml(cd, "unified");
+    expect(html).toContain("0baf1775");
+    expect(html).toContain("8 arquivo(s) alterado(s)");
+    expect(html).toContain("+36");
+    expect(html).toContain("-8");
+    expect(html).not.toContain("diff-hunk-revert");
+    expect(html).toContain("File1.java");
+    expect(html).toContain("service/src/main/java/com/acme");
+    expect((html.match(/<details class="commit-file-card" open>/g) || []).length).toBe(3);
+    expect((html.match(/<details class="commit-file-card" >/g) || []).length).toBe(5);
+  });
+
+  it("styles.css garante flex-shrink: 0 no commit-file-card para não esmagar arquivos no scroll", async () => {
+    const mod = "node:fs/promises";
+    const { readFile } = (await import(/* @vite-ignore */ mod)) as {
+      readFile: (path: URL, encoding: string) => Promise<string>;
+    };
+    const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+    const cardBlock = css.match(/\.commit-file-card\s*\{[^}]*\}/);
+    expect(cardBlock?.[0]).toContain("flex-shrink: 0;");
   });
 });

@@ -1,4 +1,5 @@
 import { icons } from "./icons";
+import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus } from "./types";
 import { escapeHtml } from "./utils";
@@ -11,6 +12,8 @@ import { noteActivity, publishNotice } from "./companion/host";
 export const RESIDENT_TAB_KEY = "hive:resident";
 
 export type ResidentSubTab = "chat" | "memory" | "security" | "audit";
+
+const residentExpandedGroups = new Set<string>();
 
 export const residentState = {
   status: null as ResidentStatus | null,
@@ -291,22 +294,64 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
     if (target1) {
       target1.resolved = /recusada|negada/i.test(String(ev.text || "")) ? "denied" : "approved";
     }
+  } else if (ev.kind === "text" && ev.thought && ev.text) {
+    let th: ChatMessage | undefined;
+    for (let i = target.messages.length - 1; i >= 0; i--) {
+      const m = target.messages[i];
+      if (m.kind === "user") break;
+      if (m.kind === "thinking" && m.active) {
+        th = m;
+        break;
+      }
+    }
+    if (!th) {
+      th = {
+        id: `res-th-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        kind: "thinking",
+        label: "Pensando",
+        text: "",
+        active: true,
+        startedAt: Date.now(),
+      };
+      target.messages.push(th);
+    }
+    if (ev.partial) {
+      th.text += String(ev.text);
+    } else {
+      th.text = th.text ? `${th.text}\n\n${ev.text}` : String(ev.text);
+    }
   } else if (ev.kind === "text" && !ev.thought && ev.text) {
+    const now = Date.now();
+    for (const m of target.messages) {
+      if (m.kind === "thinking" && m.active) {
+        m.active = false;
+        if (m.startedAt && !m.durationMs) m.durationMs = Math.max(1000, now - m.startedAt);
+      }
+    }
+    const sanitized = sanitizeAssistantText(String(ev.text));
+    if (!sanitized) return;
     const last = target.messages[target.messages.length - 1];
     const fromOrb = String(ev.origin || "") === "orb";
     if (last && last.kind === "chief" && ev.partial) {
-      last.text += String(ev.text);
+      last.text = sanitizeAssistantText(`${last.text}${sanitized}`);
     } else if (last && last.kind === "chief" && !ev.partial) {
-      last.text = String(ev.text);
-    } else {
+      last.text = sanitized;
+    } else if (sanitized.trim() !== "" || ev.partial) {
       target.messages.push({
         id: `res-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         kind: "chief",
-        label: fromOrb ? "Agent Hive" : String(ev.label || "Hive Residente"),
-        text: String(ev.text),
+        label: fromOrb ? "Agent Hive" : String(ev.label || "Agent Hive"),
+        text: sanitized,
       });
     }
   } else if (ev.kind === "error") {
+    const now = Date.now();
+    for (const m of target.messages) {
+      if (m.kind === "thinking" && m.active) {
+        m.active = false;
+        if (m.startedAt && !m.durationMs) m.durationMs = Math.max(1000, now - m.startedAt);
+      }
+    }
     target.running = false;
     if (target.status) target.status.state = "ocioso";
     target.messages.push({
@@ -316,6 +361,13 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
       text: String(ev.text || "Erro no Agent Hive"),
     });
   } else if (ev.kind === "finish") {
+    const now = Date.now();
+    for (const m of target.messages) {
+      if (m.kind === "thinking" && m.active) {
+        m.active = false;
+        if (m.startedAt && !m.durationMs) m.durationMs = Math.max(1000, now - m.startedAt);
+      }
+    }
     target.running = false;
     if (target.status) target.status.state = "ocioso";
     if (String(ev.origin || "") === "routine") {
@@ -436,8 +488,36 @@ export function renderResidentViewHtml(): string {
   `;
 }
 
+function renderResidentActivityRowHtml(m: ChatMessage): string {
+  if (m.kind === "thinking") {
+    if (!m.text.trim()) return "";
+    return `<div class="activity-thought-prose md-prose">${renderMarkdownStreamed(`${m.id}:think`, m.text)}</div>`;
+  }
+  if (m.kind === "tool") {
+    const risk = formatRiskBadge(m.riskTier);
+    return `
+      <div class="activity-tool-row" data-msg-id="${escapeHtml(m.id)}">
+        ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
+        <span class="msg-badge badge-tool">${escapeHtml(m.toolName || m.text)}</span>
+        <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
+        ${m.toolDetail ? `<span class="activity-tool-detail">${escapeHtml(m.toolDetail)}</span>` : ""}
+      </div>
+    `;
+  }
+  if (m.kind === "system" && m.text.trim()) {
+    return `
+      <div class="activity-meta-row" data-msg-id="${escapeHtml(m.id)}">
+        <span class="activity-meta-label">${escapeHtml(m.label || "Sistema")}</span>
+        <span class="activity-meta-text">${escapeHtml(m.text)}</span>
+      </div>
+    `;
+  }
+  return "";
+}
+
 function renderResidentChatHtml(enabled = true): string {
-  const msgsHtml = residentState.messages.length === 0
+  const timeline = groupConversationItems(residentState.messages, residentState.running);
+  const msgsHtml = timeline.length === 0
     ? `
       <div class="chat-empty-state">
         <div class="chat-empty-icon">${icons.brandHero}</div>
@@ -445,17 +525,36 @@ function renderResidentChatHtml(enabled = true): string {
         <div class="chat-empty-sub">Leitura local no workspace é direta e auditada. Escrita de arquivos, execução de binários na allowlist (sempre em sandbox com argv explícito, sem sh -c) e rede na allowlist exigem sua aprovação no cartão abaixo.</div>
       </div>
     `
-    : residentState.messages.map((m) => {
-        if (m.kind === "tool") {
-          const risk = formatRiskBadge(m.riskTier);
+    : timeline.map((item) => {
+        if (item.kind === "activity") {
+          const sum = summarizeActivityGroup(
+            item.messages,
+            item.active,
+            Date.now(),
+            (toolMsg) => toolMsg.toolDetail ? `${toolMsg.toolName || "ação"} · ${toolMsg.toolDetail}` : (toolMsg.toolName || toolMsg.text || "Executando"),
+          );
+          const isOpen = residentExpandedGroups.has(item.id);
+          const bodyRows = item.messages.map(renderResidentActivityRowHtml).filter(Boolean).join("");
+          const bodyHtml = bodyRows || `<div class="activity-meta-row"><span class="activity-meta-text">${escapeHtml(sum.title)}</span></div>`;
+          const elapsedHtml = sum.elapsedText
+            ? `<span class="activity-fold-elapsed" ${sum.activeStartedAt ? `data-thinking-started="${sum.activeStartedAt}"` : ""}>${escapeHtml(sum.elapsedText)}</span>`
+            : "";
           return `
-            <div class="msg-card role-tool" data-msg-id="${escapeHtml(m.id)}">
-              <span class="msg-badge badge-tool">${escapeHtml(m.toolName || m.text)}</span>
-              <span class="resident-badge ${risk.css}">${escapeHtml(risk.label)}</span>
-              <span class="dim">${escapeHtml(m.toolDetail || "")}</span>
+            <div class="activity-fold-wrap" data-tl-key="act:${escapeHtml(item.id)}">
+              <details class="activity-fold ${item.active ? "is-active" : ""}" data-res-activity-fold="${escapeHtml(item.id)}" ${isOpen ? "open" : ""}>
+                <summary class="activity-fold-summary">
+                  ${item.active ? `<span class="activity-fold-spin">${icons.spinner}</span>` : ""}
+                  <span class="activity-fold-title">${escapeHtml(sum.title)}</span>
+                  ${elapsedHtml}
+                  <span class="spacer"></span>
+                  <span class="activity-fold-chev">${icons.chevronDown}</span>
+                </summary>
+                <div class="activity-fold-body">${bodyHtml}</div>
+              </details>
             </div>
           `;
         }
+        const m = item.message;
         if (m.kind === "approval") {
           const risk = formatRiskBadge(m.riskTier);
           const decided = m.resolved === "approved"
@@ -482,7 +581,7 @@ function renderResidentChatHtml(enabled = true): string {
             </div>
           `;
         }
-        const body = m.kind === "chief" ? renderMarkdownStreamed(m.id, m.text) : escapeHtml(m.text);
+        const body = m.kind === "chief" ? renderMarkdownStreamed(m.id, sanitizeAssistantText(m.text)) : escapeHtml(m.text);
         return `
           <div class="msg-card role-${m.kind}" data-msg-id="${escapeHtml(m.id)}">
             <span class="msg-badge badge-${m.kind}">${escapeHtml(m.label)}</span>
@@ -523,12 +622,14 @@ function renderResidentChatHtml(enabled = true): string {
     <div class="resident-chat-body" id="res-chat-scroll">${msgsHtml}</div>
     <div class="resident-composer">
       ${approvalDockHtml}
-      <textarea id="res-chat-input" rows="2" placeholder="Peça ao Hive Residente para inspecionar, editar arquivos ou rodar um binário autorizado na sandbox… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
-      <div class="resident-composer-actions">
-        <span class="dim">Auditoria fsync antes de cada efeito · escrita/execução exigem aprovação + sandbox do SO · saída cercada contra prompt injection</span>
-        <div class="spacer"></div>
-        <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
-        <button type="button" class="primary" id="btn-res-send" ${residentState.running || !enabled ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+      <div class="composer-box">
+        <textarea id="res-chat-input" rows="1" placeholder="Peça ao Agent Hive para inspecionar, editar arquivos ou rodar um binário autorizado na sandbox… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
+        <div class="resident-composer-actions">
+          <span class="dim">Sandbox + auditoria fsync · escrita/execução pedem aprovação</span>
+          <div class="spacer"></div>
+          <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
+          <button type="button" class="primary composer-send" id="btn-res-send" ${residentState.running || !enabled ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
+        </div>
       </div>
     </div>
   `;
@@ -818,9 +919,20 @@ export function bindResidentViewEvents(): void {
     rerenderResidentIfOpen();
   });
 
+  document.querySelectorAll<HTMLDetailsElement>("details[data-res-activity-fold]").forEach((det) => {
+    det.addEventListener("toggle", () => {
+      const gid = det.dataset.resActivityFold || "";
+      if (!gid) return;
+      if (det.open) residentExpandedGroups.add(gid);
+      else residentExpandedGroups.delete(gid);
+    });
+  });
+
   const chatInput = document.getElementById("res-chat-input") as HTMLTextAreaElement | null;
+  autoResizeTextarea(chatInput);
   chatInput?.addEventListener("input", () => {
     residentState.draftInput = chatInput.value;
+    autoResizeTextarea(chatInput);
   });
 
   const sendTurn = async () => {

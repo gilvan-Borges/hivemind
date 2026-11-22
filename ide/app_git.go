@@ -382,6 +382,13 @@ func (a *App) ListPullRequests(workspace string) ([]idecore.ProjectPullRequest, 
 	return prs, err
 }
 
+// GetPullRequestDetail fetches stats and latest chronological reviews/comments for one PR on demand.
+func (a *App) GetPullRequestDetail(workspace string, number int) (idecore.PullRequestActivityDetail, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return idecore.GetProjectPullRequestDetail(ctx, workspace, number)
+}
+
 // CloseOwnGitHubItem closes a GitHub PR ("pr") or issue ("issue") opened by the authenticated user.
 func (a *App) CloseOwnGitHubItem(workspace, kind string, number int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -331,6 +331,27 @@ export function renderLeftSidebar() {
   // refresh): any async render deferred by the guard is now satisfied.
   notifyRegionRendered("left-sidebar");
 
+  const sameView = sidebar.dataset.renderedView === state.sidebarView;
+  const sameGitTab = state.sidebarView !== "git" || sidebar.dataset.renderedGitTab === state.gitTab;
+  const preserveScroll = sameView && sameGitTab;
+  const prevScrollTop = preserveScroll
+    ? (sidebar.querySelector<HTMLElement>(".sidebar-body")?.scrollTop ?? 0)
+    : 0;
+  sidebar.dataset.renderedView = state.sidebarView;
+  sidebar.dataset.renderedGitTab = state.sidebarView === "git" ? state.gitTab : "";
+
+  try {
+    renderLeftSidebarInner(sidebar);
+  } finally {
+    if (preserveScroll && prevScrollTop > 0) {
+      const nextBody = sidebar.querySelector<HTMLElement>(".sidebar-body");
+      if (nextBody) nextBody.scrollTop = prevScrollTop;
+    }
+  }
+}
+
+function renderLeftSidebarInner(sidebar: HTMLElement) {
+
   const proj = state.project;
   const lane = activeLane();
   const teams = proj?.teamConfig?.teams || [];

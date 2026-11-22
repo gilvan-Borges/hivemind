@@ -1,6 +1,6 @@
 import { fileBadge, icons } from "./icons";
 import { renderMarkdownLite } from "./markdown";
-import type { EditorTab, FileDiff } from "./types";
+import type { CommitDetail, EditorTab, FileDiff } from "./types";
 import { escapeHtml } from "./utils";
 import { highlightActiveTreeRow, refreshExplorerTree } from "./explorer";
 import { refreshDiffs } from "./git";
@@ -12,6 +12,7 @@ import { api, askConfirm, setStatus, state, toastError } from "./state";
 import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
+import { autoResizeTextarea } from "./chat-timeline";
 import { closeInlineEdit, ghostButtonTitle, openInlineEdit, renderInlineEditBar, scheduleGhostText, syncEditorInlineReview, toggleGhostText } from "./inline-ai";
 import { bindFileGitInspectEvents, openFileGitInspect, renderFileGitInspectPanelHtml } from "./git-history";
 import { applyDiagnosticsToActiveEditor, notifyLSPDidClose, notifyLSPDidOpen, notifyLSPDidSave, scheduleLSPDidChange } from "./lsp";
@@ -141,6 +142,7 @@ export function sendEditorSelectionToChief() {
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
   if (chatInput) {
     chatInput.value = state.draftObjective;
+    autoResizeTextarea(chatInput);
     chatInput.focus();
     chatInput.selectionStart = chatInput.selectionEnd = chatInput.value.length;
   }
@@ -318,27 +320,46 @@ export function parseDiffHunks(diff: FileDiff): { headers: string[]; hunks: Diff
   return { headers, hunks };
 }
 
-export function renderUnifiedDiffHtml(hunks: DiffHunkParsed[]): string {
+export function renderUnifiedDiffHtml(hunks: DiffHunkParsed[], opts?: { readOnly?: boolean }): string {
   if (hunks.length === 0) {
     return `<div class="dim" style="padding:12px">Sem blocos de diff para exibir.</div>`;
   }
+  const readOnly = Boolean(opts?.readOnly);
   return hunks
-    .map(
-      (h, idx) => `
+    .map((h, idx) => {
+      let oldLine = h.oldStart;
+      let newLine = h.newStart;
+      const linesHtml = h.lines
+        .map((ln) => {
+          let oldNum = "";
+          let newNum = "";
+          if (ln.kind === "removed") {
+            oldNum = String(oldLine++);
+          } else if (ln.kind === "added") {
+            newNum = String(newLine++);
+          } else {
+            oldNum = String(oldLine++);
+            newNum = String(newLine++);
+          }
+          return `<div class="diff-line ${ln.kind}"><span class="diff-ln-num">${oldNum}</span><span class="diff-ln-num">${newNum}</span><span class="diff-ln-code">${escapeHtml(ln.text)}</span></div>`;
+        })
+        .join("");
+      return `
       <div class="diff-hunk-bar">
         <span>${escapeHtml(h.header)}</span>
-        <button class="diff-hunk-revert" data-revert-hunk="${idx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>
+        ${readOnly ? "" : `<button class="diff-hunk-revert" data-revert-hunk="${idx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>`}
       </div>
-      ${h.lines.map((ln) => `<div class="diff-line ${ln.kind}">${escapeHtml(ln.text)}</div>`).join("")}
-    `
-    )
+      ${linesHtml}
+    `;
+    })
     .join("");
 }
 
-export function renderSplitDiffHtml(hunks: DiffHunkParsed[]): string {
+export function renderSplitDiffHtml(hunks: DiffHunkParsed[], opts?: { readOnly?: boolean }): string {
   if (hunks.length === 0) {
     return `<div class="dim" style="padding:12px">Sem blocos de diff para exibir.</div>`;
   }
+  const readOnly = Boolean(opts?.readOnly);
   const sections: string[] = [];
   for (let hIdx = 0; hIdx < hunks.length; hIdx++) {
     const h = hunks[hIdx];
@@ -392,12 +413,74 @@ export function renderSplitDiffHtml(hunks: DiffHunkParsed[]): string {
     sections.push(`
       <div class="diff-hunk-bar">
         <span>${escapeHtml(h.header)}</span>
-        <button class="diff-hunk-revert" data-revert-hunk="${hIdx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>
+        ${readOnly ? "" : `<button class="diff-hunk-revert" data-revert-hunk="${hIdx}" title="Reverter somente este bloco (git apply --reverse)">Reverter bloco</button>`}
       </div>
       <table class="diff-split-table"><tbody>${rows.join("")}</tbody></table>
     `);
   }
   return `<div class="diff-split-wrap">${sections.join("")}</div>`;
+}
+
+function splitCommitFilePath(rawPath: string): { fileName: string; dirPart: string } {
+  const norm = rawPath.replace(/\\/g, "/");
+  const idx = norm.lastIndexOf("/");
+  if (idx < 0) return { fileName: norm, dirPart: "" };
+  return { fileName: norm.slice(idx + 1), dirPart: norm.slice(0, idx) };
+}
+
+export function renderCommitDetailHtml(cd: CommitDetail, diffMode: "unified" | "split" = "unified"): string {
+  const totalAdded = cd.files.reduce((sum, f) => sum + (f.added || 0), 0);
+  const totalRemoved = cd.files.reduce((sum, f) => sum + (f.removed || 0), 0);
+  const isSplit = diffMode === "split";
+  const expandLimit = cd.files.length <= 6 ? cd.files.length : 3;
+
+  return `
+    <div class="commit-view-page">
+      <div class="commit-header-card">
+        <div class="tc-title-row">
+          ${icons.commit}
+          <h2>${escapeHtml(cd.subject)}</h2>
+          <span class="tok-pill">${escapeHtml(cd.short)}</span>
+        </div>
+        <div class="dim">${escapeHtml(cd.author)} · ${escapeHtml(cd.date)} · ${cd.files.length} arquivo(s) alterado(s) · <span class="commit-stat-add">+${totalAdded}</span> <span class="commit-stat-rem">-${totalRemoved}</span></div>
+        ${cd.body ? `<pre class="commit-body-pre">${escapeHtml(cd.body)}</pre>` : ""}
+        <div class="commit-toolbar">
+          <button type="button" class="mini ${!isSplit ? "primary" : ""}" id="btn-commit-diff-unified">Unificado</button>
+          <button type="button" class="mini ${isSplit ? "primary" : ""}" id="btn-commit-diff-split">Lado a Lado</button>
+          <span class="spacer"></span>
+          <button type="button" class="mini ghost" id="btn-commit-expand-all">Expandir todos</button>
+          <button type="button" class="mini ghost" id="btn-commit-collapse-all">Recolher todos</button>
+        </div>
+      </div>
+      ${cd.files
+        .map((f, idx) => {
+          const { hunks } = parseDiffHunks(f);
+          const { fileName, dirPart } = splitCommitFilePath(f.path);
+          const autoOpen = idx < expandLimit;
+          const bodyHtml = isSplit
+            ? renderSplitDiffHtml(hunks, { readOnly: true })
+            : `<div class="diff-lines commit-diff-lines">${renderUnifiedDiffHtml(hunks, { readOnly: true })}</div>`;
+          return `
+            <details class="commit-file-card" ${autoOpen ? "open" : ""}>
+              <summary class="commit-file-head" title="${escapeHtml(f.path)}">
+                <span class="commit-file-chev">${icons.chevronRight}</span>
+                <span class="commit-file-path">
+                  <span class="commit-file-name">${escapeHtml(fileName)}</span>
+                  ${dirPart ? `<span class="commit-file-dir">${escapeHtml(dirPart)}</span>` : ""}
+                </span>
+                <span class="commit-file-stats">
+                  <span class="is-add">+${f.added}</span>
+                  <span class="is-rem">-${f.removed}</span>
+                </span>
+                <button type="button" class="mini ghost commit-open-file-btn" data-commit-open-file="${escapeHtml(f.path)}" title="Abrir arquivo atual no editor">Abrir</button>
+              </summary>
+              <div class="commit-file-body">${bodyHtml}</div>
+            </details>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
 }
 
 export function countLinesFast(text: string): number {
@@ -687,35 +770,35 @@ export function renderEditorBody() {
 
   if (activeTab.kind === "commit" && activeTab.commitDetail) {
     const cd = activeTab.commitDetail;
-    body.innerHTML = `
-      <div class="commit-view-page">
-        <div class="tc-header">
-          <div>
-            <div class="tc-title-row">
-              ${icons.commit}
-              <h2>${escapeHtml(cd.subject)}</h2>
-              <span class="tok-pill">${escapeHtml(cd.short)}</span>
-            </div>
-            <div class="dim">${escapeHtml(cd.author)} · ${escapeHtml(cd.date)} · ${cd.files.length} arquivo(s) alterado(s)</div>
-            ${cd.body ? `<pre class="commit-body-pre">${escapeHtml(cd.body)}</pre>` : ""}
-          </div>
-        </div>
-        ${cd.files.map((f) => {
-          const { hunks } = parseDiffHunks(f);
-          return `
-            <div class="commit-file-card">
-              <div class="commit-file-head">
-                <span style="font-family:var(--mono);font-size:12px;font-weight:600">${escapeHtml(f.path)}</span>
-                <span class="spacer"></span>
-                <span style="color:var(--green);font-family:var(--mono);font-size:11px">+${f.added}</span>
-                <span style="color:var(--red);font-family:var(--mono);font-size:11px">-${f.removed}</span>
-              </div>
-              <div class="diff-lines">${renderUnifiedDiffHtml(hunks)}</div>
-            </div>
-          `;
-        }).join("")}
-      </div>
-    `;
+    body.innerHTML = renderCommitDetailHtml(cd, state.diffViewMode);
+    document.getElementById("btn-commit-diff-unified")?.addEventListener("click", () => {
+      state.diffViewMode = "unified";
+      renderEditorBody();
+    });
+    document.getElementById("btn-commit-diff-split")?.addEventListener("click", () => {
+      state.diffViewMode = "split";
+      renderEditorBody();
+    });
+    document.getElementById("btn-commit-expand-all")?.addEventListener("click", () => {
+      body.querySelectorAll<HTMLDetailsElement>("details.commit-file-card").forEach((d) => {
+        d.open = true;
+      });
+    });
+    document.getElementById("btn-commit-collapse-all")?.addEventListener("click", () => {
+      body.querySelectorAll<HTMLDetailsElement>("details.commit-file-card").forEach((d) => {
+        d.open = false;
+      });
+    });
+    body.querySelectorAll<HTMLButtonElement>("[data-commit-open-file]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const filePath = btn.dataset.commitOpenFile || "";
+        if (!filePath) return;
+        const name = filePath.split("/").pop() || filePath;
+        void openFileInEditor(filePath, name);
+      });
+    });
     return;
   }
 

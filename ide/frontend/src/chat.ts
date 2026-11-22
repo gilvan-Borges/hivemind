@@ -1,4 +1,5 @@
 import { icons } from "./icons";
+import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownLite, renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, PermissionMode, RunMode, TeamLane } from "./types";
 import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatMicroUsd, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
@@ -20,6 +21,7 @@ export let mentionTimer = 0;
 
 const laneIdleWaiters = new Map<string, Array<() => void>>();
 const laneRedirecting = new Set<string>();
+const expandedActivityGroups = new Set<string>();
 
 function notifyLaneIdle(laneId: string) {
   const list = laneIdleWaiters.get(laneId);
@@ -137,7 +139,7 @@ export function renderRightPane() {
       <div class="composer-box">
         <div id="composer-design-chip">${renderDesignModeChipHtml()}</div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
-        <textarea id="chat-input" rows="3" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
+        <textarea id="chat-input" rows="1" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
         <div class="composer-footer">
           <div class="composer-mode-bar" id="composer-mode-bar"></div>
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
@@ -154,7 +156,10 @@ export function renderRightPane() {
   `;
 
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
-  if (chatInput) chatInput.value = state.draftObjective;
+  if (chatInput) {
+    chatInput.value = state.draftObjective;
+    autoResizeTextarea(chatInput);
+  }
 
   renderComposerModeBar();
   renderLaneBarOnly();
@@ -700,6 +705,141 @@ export function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
   };
 }
 
+function formatActiveToolSummary(m: ChatMessage): string {
+  const spec = formatMinimalToolStep(m);
+  if (spec.fileName) return `${spec.verb} ${spec.fileName}`;
+  return `${spec.verb} ${spec.targetText || m.toolName || m.text}`.trim();
+}
+
+function renderMinimalToolHtml(m: ChatMessage, wasOpen: boolean, subOpenId?: string): string {
+  const spec = formatMinimalToolStep(m);
+  const durLabel = formatToolDuration(m.durationMs);
+  const hasDrawer = Boolean(m.toolDetail || m.toolOutput);
+  const agentChip = m.solo === false && m.label
+    ? `<span class="tool-agent-tag">${escapeHtml(m.label.split("·")[0].trim())}</span>`
+    : "";
+
+  let contentHtml = "";
+  if (spec.fileName && spec.filePath) {
+    const lang = toolLangBadge(spec.fileName);
+    contentHtml = `
+      ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
+      <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
+      <span class="tool-lang-badge ${lang.cls}">${escapeHtml(lang.label)}</span>
+      <button type="button" class="tool-file-link" data-open-chat-file="${escapeHtml(spec.filePath)}" title="Abrir ${escapeHtml(spec.filePath)} no editor">${escapeHtml(spec.fileName)}</button>
+      ${spec.fileSub ? `<span class="tool-file-sub">${escapeHtml(spec.fileSub)}</span>` : ""}
+      ${agentChip}
+    `;
+  } else {
+    contentHtml = `
+      ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
+      <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
+      <span class="tool-step-target">${escapeHtml(spec.targetText || m.text)}</span>
+      ${agentChip}
+    `;
+  }
+
+  if (!hasDrawer) {
+    return `<div class="tool-minimal-row">${contentHtml}${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}</div>`;
+  }
+
+  const drawerLines: string[] = [];
+  if (m.toolDetail) drawerLines.push(`Args: ${m.toolDetail}`);
+  if (m.toolOutput) drawerLines.push(`Saída:\n${m.toolOutput}`);
+  const subAttr = subOpenId ? ` data-sub-open-id="${escapeHtml(subOpenId)}"` : "";
+  return `
+    <details class="tool-minimal-details"${subAttr} ${wasOpen ? "open" : ""}>
+      <summary class="tool-minimal-row">
+        ${contentHtml}
+        ${spec.expandChevron ? `<span class="tool-step-chev">${icons.chevronRight}</span>` : `<span class="tool-step-chev hover-only">${icons.chevronRight}</span>`}
+        ${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}
+      </summary>
+      <div class="tool-drawer">${escapeHtml(drawerLines.join("\n\n"))}</div>
+    </details>
+  `;
+}
+
+function renderActivityRowHtml(m: ChatMessage, openSubIds: Set<string>): string {
+  if (m.kind === "thinking") {
+    if (!m.text.trim()) return "";
+    return `<div class="activity-thought-prose md-prose" data-msg-id="${escapeHtml(m.id)}">${renderMarkdownStreamed(`${m.id}:think`, m.text)}</div>`;
+  }
+  if (m.kind === "system") {
+    if (!m.text.trim()) return "";
+    return `
+      <div class="activity-meta-row" data-msg-id="${escapeHtml(m.id)}">
+        <span class="activity-meta-label">${escapeHtml(m.label)}</span>
+        <span class="activity-meta-text">${escapeHtml(m.text)}</span>
+      </div>
+    `;
+  }
+  if (m.kind === "handoff") {
+    const wasOpen = openSubIds.has(m.id);
+    return `
+      <details class="activity-handoff-row" data-msg-id="${escapeHtml(m.id)}" data-sub-open-id="${escapeHtml(m.id)}" ${wasOpen ? "open" : ""}>
+        <summary>${icons.team}<span>${escapeHtml(m.label)}</span></summary>
+        <div class="handoff-body md-prose">${renderMarkdownLite(m.text)}</div>
+      </details>
+    `;
+  }
+  if (m.kind === "tool") {
+    return `
+      <div class="msg-card role-tool tool-minimal" data-msg-id="${escapeHtml(m.id)}">
+        ${renderMinimalToolHtml(m, openSubIds.has(m.id), m.id)}
+      </div>
+    `;
+  }
+  return "";
+}
+
+function updateActivityGroupElement(el: HTMLElement, groupId: string, msgs: ChatMessage[], active: boolean) {
+  const digest = `${groupId}|${active ? 1 : 0}|${msgs.map(messageDigest).join(";;")}`;
+  if (el.dataset.digest === digest) return;
+  el.dataset.digest = digest;
+
+  const openSubIds = new Set<string>();
+  el.querySelectorAll<HTMLElement>("[data-sub-open-id]").forEach((node) => {
+    if (node.hasAttribute("open") && node.dataset.subOpenId) {
+      openSubIds.add(node.dataset.subOpenId);
+    }
+  });
+  const isOpen = expandedActivityGroups.has(groupId)
+    || Boolean(el.querySelector("details.activity-fold")?.hasAttribute("open"));
+
+  const sum = summarizeActivityGroup(msgs, active, Date.now(), formatActiveToolSummary);
+  const elapsedHtml = sum.elapsedText
+    ? `<span class="activity-fold-elapsed" ${sum.activeStartedAt ? `data-thinking-started="${sum.activeStartedAt}"` : ""}>${escapeHtml(sum.elapsedText)}</span>`
+    : "";
+  const rowsHtml = msgs.map((m) => renderActivityRowHtml(m, openSubIds)).filter(Boolean).join("");
+  const bodyHtml = rowsHtml || `<div class="activity-meta-row"><span class="activity-meta-text">${escapeHtml(sum.title)}</span></div>`;
+
+  el.className = "activity-fold-wrap";
+  el.innerHTML = `
+    <details class="activity-fold ${active ? "is-active" : ""}" data-activity-fold="${escapeHtml(groupId)}" ${isOpen ? "open" : ""}>
+      <summary class="activity-fold-summary">
+        ${active ? `<span class="activity-fold-spin">${icons.spinner}</span>` : ""}
+        <span class="activity-fold-title">${escapeHtml(sum.title)}</span>
+        ${elapsedHtml}
+        <span class="spacer"></span>
+        <span class="activity-fold-chev">${icons.chevronDown}</span>
+      </summary>
+      <div class="activity-fold-body">${bodyHtml}</div>
+    </details>
+  `;
+  el.querySelector<HTMLDetailsElement>("details.activity-fold")?.addEventListener("toggle", (ev) => {
+    const det = ev.currentTarget as HTMLDetailsElement;
+    if (det.open) expandedActivityGroups.add(groupId);
+    else expandedActivityGroups.delete(groupId);
+  });
+}
+
+function createActivityGroupElement(groupId: string, msgs: ChatMessage[], active: boolean): HTMLElement {
+  const div = document.createElement("div");
+  div.className = "activity-fold-wrap";
+  updateActivityGroupElement(div, groupId, msgs, active);
+  return div;
+}
+
 export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const digest = messageDigest(m);
   if (el.dataset.digest === digest) return;
@@ -734,52 +874,8 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
 
   if (m.kind === "tool") {
     el.className = "msg-card role-tool tool-minimal";
-    const spec = formatMinimalToolStep(m);
-    const durLabel = formatToolDuration(m.durationMs);
-    const hasDrawer = Boolean(m.toolDetail || m.toolOutput);
     const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
-    const agentChip = m.solo === false && m.label
-      ? `<span class="tool-agent-tag">${escapeHtml(m.label.split("·")[0].trim())}</span>`
-      : "";
-
-    let contentHtml = "";
-    if (spec.fileName && spec.filePath) {
-      const lang = toolLangBadge(spec.fileName);
-      contentHtml = `
-        ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
-        <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
-        <span class="tool-lang-badge ${lang.cls}">${escapeHtml(lang.label)}</span>
-        <button type="button" class="tool-file-link" data-open-chat-file="${escapeHtml(spec.filePath)}" title="Abrir ${escapeHtml(spec.filePath)} no editor">${escapeHtml(spec.fileName)}</button>
-        ${spec.fileSub ? `<span class="tool-file-sub">${escapeHtml(spec.fileSub)}</span>` : ""}
-        ${agentChip}
-      `;
-    } else {
-      contentHtml = `
-        ${m.active ? `<span class="tool-step-spin">${icons.spinner}</span>` : ""}
-        <span class="tool-step-verb">${escapeHtml(spec.verb)}</span>
-        <span class="tool-step-target">${escapeHtml(spec.targetText || m.text)}</span>
-        ${agentChip}
-      `;
-    }
-
-    if (!hasDrawer) {
-      el.innerHTML = `<div class="tool-minimal-row">${contentHtml}${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}</div>`;
-      return;
-    }
-
-    const drawerLines: string[] = [];
-    if (m.toolDetail) drawerLines.push(`Args: ${m.toolDetail}`);
-    if (m.toolOutput) drawerLines.push(`Saída:\n${m.toolOutput}`);
-    el.innerHTML = `
-      <details class="tool-minimal-details" ${wasOpen ? "open" : ""}>
-        <summary class="tool-minimal-row">
-          ${contentHtml}
-          ${spec.expandChevron ? `<span class="tool-step-chev">${icons.chevronRight}</span>` : `<span class="tool-step-chev hover-only">${icons.chevronRight}</span>`}
-          ${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}
-        </summary>
-        <div class="tool-drawer">${escapeHtml(drawerLines.join("\n\n"))}</div>
-      </details>
-    `;
+    el.innerHTML = renderMinimalToolHtml(m, wasOpen);
     return;
   }
 
@@ -941,7 +1037,7 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   const laneNow = activeLane();
   const streamOpen = Boolean(laneNow?.running && laneNow.messages[laneNow.messages.length - 1]?.id === m.id);
   const bodyHtml = m.kind === "chief"
-    ? renderAssistantBody(m.text, streamOpen, m.id)
+    ? renderAssistantBody(sanitizeAssistantText(m.text), streamOpen, m.id)
     : m.kind === "system"
       ? renderMarkdownLite(m.text)
       : escapeHtml(m.text);
@@ -969,18 +1065,46 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
   });
 }
 
-function syncMessagesContainer(box: HTMLElement, lane: TeamLane) {
-  if (lane.messages.length > 0) {
+function syncTimelineContainer(box: HTMLElement, lane: TeamLane) {
+  const items = groupConversationItems(lane.messages, lane.running);
+  if (items.length > 0) {
     box.querySelector(".chat-empty-state")?.remove();
   }
-  for (const m of lane.messages) {
-    const existing = box.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(m.id)}"]`);
-    if (existing) {
-      updateMessageElement(existing, m);
+  const existingByKey = new Map<string, HTMLElement>();
+  Array.from(box.children).forEach((child) => {
+    const el = child as HTMLElement;
+    if (el.dataset.tlKey) existingByKey.set(el.dataset.tlKey, el);
+  });
+  const desiredKeys = new Set<string>();
+  items.forEach((item, idx) => {
+    const key = item.kind === "activity" ? `act:${item.id}` : `msg:${item.message.id}`;
+    desiredKeys.add(key);
+    let el = existingByKey.get(key);
+    if (!el) {
+      el = item.kind === "activity"
+        ? createActivityGroupElement(item.id, item.messages, item.active)
+        : createMessageElement(item.message);
+      el.dataset.tlKey = key;
+    } else if (item.kind === "activity") {
+      updateActivityGroupElement(el, item.id, item.messages, item.active);
     } else {
-      box.appendChild(createMessageElement(m));
+      updateMessageElement(el, item.message);
     }
-  }
+    const curAtIdx = box.children[idx] as HTMLElement | undefined;
+    if (curAtIdx !== el) {
+      box.insertBefore(el, curAtIdx ?? null);
+    }
+  });
+  Array.from(box.children).forEach((child) => {
+    const el = child as HTMLElement;
+    if (el.classList.contains("chat-empty-state")) return;
+    const key = el.dataset.tlKey || "";
+    if (!desiredKeys.has(key)) el.remove();
+  });
+}
+
+function syncMessagesContainer(box: HTMLElement, lane: TeamLane) {
+  syncTimelineContainer(box, lane);
 }
 
 export function rebuildChatMessagesFull() {
@@ -994,11 +1118,7 @@ export function rebuildChatMessagesFull() {
         sb.innerHTML = `<div class="chat-empty-state dim" style="padding:18px">Aguardando mensagens desta lane…</div>`;
         return;
       }
-      const frag = document.createDocumentFragment();
-      for (const m of targetLane.messages) {
-        frag.appendChild(createMessageElement(m));
-      }
-      sb.appendChild(frag);
+      syncTimelineContainer(sb, targetLane);
     });
   }
 
@@ -1029,6 +1149,7 @@ export function rebuildChatMessagesFull() {
         const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
         if (input) {
           input.value = prompt;
+          autoResizeTextarea(input);
           input.focus();
           input.selectionStart = input.selectionEnd = prompt.length;
         }
@@ -1037,11 +1158,7 @@ export function rebuildChatMessagesFull() {
     box.appendChild(empty);
     return;
   }
-  const frag = document.createDocumentFragment();
-  for (const m of lane.messages) {
-    frag.appendChild(createMessageElement(m));
-  }
-  box.appendChild(frag);
+  syncTimelineContainer(box, lane);
   renderChatApprovalDock();
   scrollChatIfAuto();
 }
@@ -1258,6 +1375,7 @@ export function renderMentionPopup() {
       const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
       if (chatInput) {
         chatInput.value = state.draftObjective;
+        autoResizeTextarea(chatInput);
         chatInput.focus();
       }
       renderMentionPopup();
@@ -1377,6 +1495,7 @@ export function bindRightStaticEvents() {
   const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;
   chatInput?.addEventListener("input", () => {
     state.draftObjective = chatInput.value;
+    autoResizeTextarea(chatInput);
     const m = state.draftObjective.match(/@([^\s@]*)$/);
     if (mentionTimer) window.clearTimeout(mentionTimer);
     if (m && state.project) {
@@ -1503,7 +1622,10 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
       text: "Modos & Atalhos:\n- **Auto / Direto / Planejar / Squad** — controle se responde em 1 agente, pede aprovação do plano ou roda todos os Devs em paralelo\n- **Quadro (`Ctrl+Shift+A`)** — painel em tempo real dos agentes + troca rápida de modelo LLM\n- **Memória (`.hivemind/MEMORY.md`)** — contexto persistente compartilhado por todo o time\n- `Ctrl+K` — Paleta de Comandos | `Ctrl+P` — Buscar Arquivo | `Ctrl+Shift+F` — Busca no Código | `Ctrl+L` — Enviar seleção",
     });
     state.draftObjective = "";
-    if (chatInput) chatInput.value = "";
+    if (chatInput) {
+      chatInput.value = "";
+      autoResizeTextarea(chatInput);
+    }
     flushChatUpdates();
     return;
   }
@@ -1532,7 +1654,10 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
     state.draftObjective = "";
     state.draftImages = [];
     state.mentionResults = [];
-    if (chatInput) chatInput.value = "";
+    if (chatInput) {
+      chatInput.value = "";
+      autoResizeTextarea(chatInput);
+    }
     renderComposerImages();
     renderMentionPopup();
   }

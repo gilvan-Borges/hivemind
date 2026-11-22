@@ -209,6 +209,8 @@ export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
 
 export function OrbDismissNotice(arg1:string):Promise<void>;
 
+export function OrbHide():Promise<void>;
+
 export function OrbPushNotice(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string,arg8:string):Promise<void>;
 
 export function OrbRunning():Promise<boolean>;
@@ -287,11 +289,17 @@ export function ResidentSaveSoul(arg1:string):Promise<void>;
 
 export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
 
+export function ResidentSetEnabled(arg1:boolean):Promise<resident.Status>;
+
 export function ResidentSetEventTriggers(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetExperimentalUnisolated(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetIsolatedSandbox(arg1:boolean):Promise<resident.Status>;
+
+export function ResidentSetJevFailover(arg1:boolean):Promise<resident.Status>;
+
+export function ResidentSetOrbEnabled(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetRoutineEnabled(arg1:string,arg2:boolean):Promise<void>;
 

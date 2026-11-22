@@ -2773,6 +2773,9 @@ export namespace resident {
 	}
 	export class Status {
 	    state: string;
+	    enabled: boolean;
+	    orbEnabled: boolean;
+	    jevFailover: boolean;
 	    readOnly: boolean;
 	    accountId: string;
 	    workstream: string;
@@ -2805,6 +2808,9 @@ export namespace resident {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
+	        this.enabled = source["enabled"];
+	        this.orbEnabled = source["orbEnabled"];
+	        this.jevFailover = source["jevFailover"];
 	        this.readOnly = source["readOnly"];
 	        this.accountId = source["accountId"];
 	        this.workstream = source["workstream"];

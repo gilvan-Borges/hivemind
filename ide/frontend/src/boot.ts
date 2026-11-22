@@ -1,6 +1,7 @@
 import type { AgentRuntime, ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext, TeamLane } from "./types";
 import { chipForAgent, describeModelRoute, exactTokens, formatMicroUsd, matchAgentRuntime } from "./utils";
 import { renderRightPane, renderTokenBar, scheduleChatFlush } from "./chat";
+import { sanitizeAssistantText } from "./chat-timeline";
 import { renderEditorBody, renderEditorTabs } from "./editor";
 import { queueFileSystemRefresh, renderLeftSidebar, updateTeamStatusPills } from "./explorer";
 import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummarize, updateGitActivityBadge } from "./git";
@@ -262,39 +263,50 @@ export async function boot() {
     } else if (ev.kind === "tool_result") {
       markToolsDone(lane, ev.detail || "", ev.toolName);
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
-      markToolsDone(lane);
-      markThinkingDone(lane);
-      updateAgentStatus(lane, ev.author, ev.label, "running", "");
-      const last = lane.messages[lane.messages.length - 1];
-      const msgLabel = ev.label || ev.author || "Chefe";
-      const evTok = !ev.partial && ev.tokens ? Number(ev.tokens) : undefined;
-      const ag = matchAgentRuntime(lane.agents, ev.author, msgLabel);
-      const keepStream = (current: string, incoming: string) =>
-        current.includes("[[hmtool:") && !incoming.includes("[[hmtool:");
-      if (last && last.kind === "chief" && last.label === msgLabel && ev.partial) {
-        last.text += ev.text;
-        stampChiefModel(last, ag);
-      } else if (!ev.partial && last && last.kind === "chief" && last.label === msgLabel) {
-        if (keepStream(last.text, ev.text)) {
-          const summary = String(ev.text || "").trim();
-          if (summary && !last.text.includes(summary)) {
-            last.text = last.text.endsWith("\n") ? `${last.text}\n${summary}` : `${last.text}\n\n${summary}`;
+      const sanitized = sanitizeAssistantText(String(ev.text));
+      if (!sanitized) {
+        if (!ev.partial) {
+          const tail = lane.messages[lane.messages.length - 1];
+          if (tail && tail.kind === "chief" && sanitizeAssistantText(tail.text).trim() === "") {
+            lane.messages.pop();
           }
-        } else {
-          last.text = ev.text;
         }
-        if (evTok) last.tokens = evTok;
-        stampChiefModel(last, ag);
       } else {
-        const created: ChatMessage = {
-          id: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          kind: "chief",
-          label: msgLabel,
-          text: ev.text,
-          tokens: evTok,
-        };
-        stampChiefModel(created, ag);
-        lane.messages.push(created);
+        markToolsDone(lane);
+        markThinkingDone(lane);
+        updateAgentStatus(lane, ev.author, ev.label, "running", "");
+        const last = lane.messages[lane.messages.length - 1];
+        const msgLabel = ev.label || ev.author || "Chefe";
+        const evTok = !ev.partial && ev.tokens ? Number(ev.tokens) : undefined;
+        const ag = matchAgentRuntime(lane.agents, ev.author, msgLabel);
+        const keepStream = (current: string, incoming: string) =>
+          current.includes("[[hmtool:") && !incoming.includes("[[hmtool:");
+        if (last && last.kind === "chief" && last.label === msgLabel && ev.partial) {
+          last.text = sanitizeAssistantText(`${last.text}${sanitized}`);
+          stampChiefModel(last, ag);
+          if (!last.text) lane.messages.pop();
+        } else if (!ev.partial && last && last.kind === "chief" && last.label === msgLabel) {
+          if (keepStream(last.text, sanitized)) {
+            const summary = sanitized.trim();
+            if (summary && !last.text.includes(summary)) {
+              last.text = last.text.endsWith("\n") ? `${last.text}\n${summary}` : `${last.text}\n\n${summary}`;
+            }
+          } else {
+            last.text = sanitized;
+          }
+          if (evTok) last.tokens = evTok;
+          stampChiefModel(last, ag);
+        } else if (sanitized.trim() !== "" || ev.partial) {
+          const created: ChatMessage = {
+            id: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            kind: "chief",
+            label: msgLabel,
+            text: sanitized,
+            tokens: evTok,
+          };
+          stampChiefModel(created, ag);
+          lane.messages.push(created);
+        }
       }
     } else if (ev.kind === "error") {
       markToolsDone(lane);
