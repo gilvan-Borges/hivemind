@@ -70,3 +70,28 @@ injeção inline do `GuidanceBlock` em `guidanceForRole`/`nativeSkillGuide` por
   ajustado de `.hivemind/intake` para `.hivemind/spillover/intake` para
   reaproveitar o carve-out `AllowSpilloverRead` sem enfraquecer o isolamento
   de `.hivemind/team.yaml`, sessões e worktrees.
+
+## Emenda 2 — Subagentes Efêmeros (`spawn_subagent`), Deduplicação de Reminders e Unificação em `read_skill` (PR #56)
+
+Ao integrar o PR #56 (OpenCode) sobre a `main`:
+
+- **O que entrou do PR #56:**
+  1. **Subagentes efêmeros somente-leitura (`spawn_subagent` / scouts)**: sessão
+     in-memory isolada, toolset estritamente read-only (`tools.ForReadOnly`),
+     profundidade 1 por construção, cotas `max_subagent_calls` e
+     `max_subagent_llm_calls`, herdando rota, papel de custo e desconto do
+     chamador com contadores de tokens sincronizados (`costMu`).
+  2. **Deduplicação de `<system-reminder>` (`filterReminderBlocks`)**: blocos
+     grandes (`chief_plan`, dossiê, `dev_reports`, `qa_report`, `git status`,
+     `TeamBoard`) só são re-injetados quando o hash mudou ou quando o texto
+     atual deixou de constar no transcript pós-compactação.
+- **O que foi descartado por conflito/sobreposição (`load_skill` / `skill_tools.go`):**
+  - O PR #56 propunha uma segunda ferramenta `load_skill` acoplada ao
+    `orchestrator.Runner` e mantinha skills fixadas (`skill_assignments`) com
+    corpo inline.
+  - **Motivo da escolha por `read_skill` (PR #55):** `read_skill` vive em
+    `internal/tools` (reutilizável fora do orquestrador), já participa da
+    micro-compactação in-turn do `contextx` (`compactableInTurnTools`), conta
+    com bloqueio anti-loop na 2ª leitura idêntica (`context_guard`), preserva o
+    sinal dos `triggers:` em `StubBlockForObjective` e evita expor duas tools
+    sinônimas (`read_skill` e `load_skill`) ao modelo.

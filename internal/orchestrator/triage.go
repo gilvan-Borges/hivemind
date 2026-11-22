@@ -232,6 +232,11 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	triageInstr := r.buildTriageInstructions(ctx, chief, runMode, maxDevs)
 
 	adkName := names.ADK(chief.Name + "_triage")
+	// O Chefe também pode pesquisar com subagente efêmero (contexto limpo) sem
+	// queimar seu próprio orçamento de exploração na triagem.
+	if sp, pErr := r.newSpawnSubagentTool(chief, adkName, toolRoot); pErr == nil {
+		allTools = append(allTools, sp)
+	}
 	beforeToolCBs := []llmagent.BeforeToolCallback{
 		newRepeatReadGuardCallback(),
 	}

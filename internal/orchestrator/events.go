@@ -89,10 +89,12 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	if u.CachedContentTokenCount > 0 {
 		cachedRead = int64(u.CachedContentTokenCount)
 	}
+	r.costMu.Lock()
 	r.turnInputTokens += int64(inTok)
 	r.turnOutputTokens += int64(outTok)
 	r.turnTotalTokens += int64(totTok)
 	r.turnCachedRead += cachedRead
+	r.costMu.Unlock()
 
 	label := labels[ev.Author]
 	if label == "" {
@@ -100,9 +102,7 @@ func (r *Runner) recordUsage(ev *session.Event, labels map[string]string) {
 	}
 
 	prov, mod := r.resolveAuthorRoute(ev.Author)
-	r.resolvedChoiceMu.Lock()
-	disc := r.routedDiscount[strings.ToLower(strings.TrimSpace(ev.Author))]
-	r.resolvedChoiceMu.Unlock()
+	disc := r.resolveAuthorDiscount(ev.Author)
 	costMicro, costRole := r.recordCallCost(ev.Author, label, prov, mod, int64(inTok), int64(outTok), cachedRead, disc)
 
 	if prov != "" {
@@ -214,6 +214,12 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 }
 
 func inferStage(author, label string) string {
+	a := strings.ToLower(strings.TrimSpace(author))
+	// Scouts são subagentes efêmeros: nunca contam como dev (guard de orçamento)
+	// nem como QA (reset de budgets), mesmo quando o chamador é um deles.
+	if strings.HasPrefix(a, "scout_") {
+		return "scout"
+	}
 	l := strings.ToLower(author + " " + label)
 	switch {
 	case strings.Contains(l, "fecho"):
