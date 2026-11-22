@@ -16,13 +16,77 @@ permissions:
   contents: write
 
 jobs:
-  build-installer:
-    name: Instalador Windows
+  detect:
+    name: Detector de Release
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Checkout do commit aprovado pelo CI
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
+
+      - name: Avaliar se o commit exige nova Release
+        id: check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "reason=Disparo manual (workflow_dispatch)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          subject="$(git log -1 --pretty=%s)"
+          body="$(git log -1 --pretty=%B)"
+          echo "Commit: ${subject}"
+
+          # 1. Marcadores explícitos para pular release
+          if echo "${body}" | grep -qiE '\[(skip release|no release|release skip)\]'; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Marcador [skip release] no commit" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 2. Prefixos Conventional Commits que não alteram binário de produção
+          if echo "${subject}" | grep -qiE '^(docs|test|tests|chore|ci|style)(\([^)]*\))?!?:'; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Commit de docs/test/chore/ci (${subject})" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 3. Inspeção dos arquivos alterados: ignora docs, specs, testes e metadados
+          changed="$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)"
+          if [ -z "${changed}" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "reason=Sem diff anterior disponível" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          prod_files="$(echo "${changed}" | grep -vE '^(docs/|\.specify/|\.agents/|\.cursor/|\.github/|examples/|README\.md$|SECURITY\.md$|AGENTS\.md$|LICENSE$|\.gitignore$|.*\.md$|.*_test\.go$|.*\.test\.ts$)' || true)"
+          if [ -z "${prod_files}" ]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Apenas documentação, specs ou testes foram alterados" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Arquivos de produção alterados:"
+          echo "${prod_files}"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "reason=Arquivos de código/build alterados" >> "$GITHUB_OUTPUT"
+
+  build-installer:
+    name: Instalador Windows
+    needs: [detect]
+    if: needs.detect.outputs.should_release == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     outputs:
@@ -98,11 +162,8 @@ jobs:
 
   build-cli:
     name: CLI ${{ matrix.goos }}/${{ matrix.goarch }}
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+    needs: [detect]
+    if: needs.detect.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -147,11 +208,8 @@ jobs:
 
   build-relay:
     name: Relay linux/${{ matrix.goarch }}
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+    needs: [detect]
+    if: needs.detect.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

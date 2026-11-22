@@ -5,10 +5,26 @@ on:
     branches:
       - main
       - hivemind-cli-go
+    paths-ignore:
+      - "docs/**"
+      - ".specify/**"
+      - ".agents/**"
+      - ".cursor/**"
+      - "examples/**"
+      - "*.md"
+      - "LICENSE"
   pull_request:
     branches:
       - main
       - hivemind-cli-go
+    paths-ignore:
+      - "docs/**"
+      - ".specify/**"
+      - ".agents/**"
+      - ".cursor/**"
+      - "examples/**"
+      - "*.md"
+      - "LICENSE"
   workflow_dispatch:
 
 permissions:
