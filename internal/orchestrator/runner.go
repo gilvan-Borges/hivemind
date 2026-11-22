@@ -76,32 +76,36 @@ type Attachment struct {
 
 // Runner executes one team against a workspace.
 type Runner struct {
-	Workspace          string
-	Project            team.File
-	Team               team.Team
-	Git                gitx.Git
-	GitHub             githubx.Client
-	Jira               jirax.Client
-	Sessions           *sessionx.Store
-	Models             map[string]model.LLM
-	NewModel           func(ctx context.Context, a team.Agent) (model.LLM, error)
-	Confirm            shellx.Confirmer
-	Approve            func(prompt string) bool
-	MCP                *mcpx.Host
-	Out                ioWriter
-	Err                ioWriter
-	Streaming          agent.StreamingMode
-	ExternalWorkers    *workerx.AdapterRegistry
-	OnEvent            func(Event)
-	EnableTriage       bool
-	EnableClosingChief bool
-	ReviewRoot         string
-	LaneID             string
-	NativeSkills       []skillx.Skill
-	NativeSkillsRoot   string
-	Catalog            *jev.CatalogStore
+	Workspace           string
+	Project             team.File
+	Team                team.Team
+	Git                 gitx.Git
+	GitHub              githubx.Client
+	Jira                jirax.Client
+	Sessions            *sessionx.Store
+	Models              map[string]model.LLM
+	NewModel            func(ctx context.Context, a team.Agent) (model.LLM, error)
+	Confirm             shellx.Confirmer
+	Approve             func(prompt string) bool
+	MCP                 *mcpx.Host
+	Out                 ioWriter
+	Err                 ioWriter
+	Streaming           agent.StreamingMode
+	ExternalWorkers     *workerx.AdapterRegistry
+	OnEvent             func(Event)
+	EnableTriage        bool
+	EnableClosingChief  bool
+	ReviewRoot          string
+	LaneID              string
+	NativeSkills        []skillx.Skill
+	NativeSkillsRoot    string
+	Catalog             *jev.CatalogStore
 	LiveRoundtableModel model.LLM
-	RaceCandidateExec  func(ctx context.Context, idx int, wtDir, objective string) (summary string, costMicroUSD int64, totalTokens int64, err error)
+	// CompactionModel optionally overrides the cheap route used by the
+	// context summary tier (tests inject modelx.Scripted; production leaves
+	// it nil and the route resolves through Jev like every other call).
+	CompactionModel   model.LLM
+	RaceCandidateExec func(ctx context.Context, idx int, wtDir, objective string) (summary string, costMicroUSD int64, totalTokens int64, err error)
 
 	autoReviewMode    bool
 	resumedSession    bool
@@ -194,7 +198,7 @@ type Result struct {
 	NestedDeliveries  []NestedDelivery `json:"nestedDeliveries,omitempty"`
 	InputTokens       int64            `json:"inputTokens"`
 	OutputTokens      int64            `json:"outputTokens"`
-	TotalTokens        int64            `json:"totalTokens"`
+	TotalTokens       int64            `json:"totalTokens"`
 	CachedReadTokens  int64            `json:"cachedReadTokens,omitempty"`
 	CostMicroUSD      int64            `json:"costMicroUsd,omitempty"`
 	CostByAgent       []AgentCost      `json:"costByAgent,omitempty"`
@@ -414,14 +418,13 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 				}
 				return result, guardErr
 			}
-			if tot := r.currentTotalTokens(); r.Project.Settings.MaxTokens > 0 && tot > r.Project.Settings.MaxTokens {
-				budgetErr := fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", tot, r.Project.Settings.MaxTokens)
+			if guardErr := r.checkRunBudget(); guardErr != nil {
 				r.populateUsageMetrics(&result)
 				r.printUsageSummary(result, r.Err, "uso até parar: ")
 				if r.OnEvent != nil {
-					r.OnEvent(Event{Kind: "error", Text: budgetErr.Error()})
+					r.OnEvent(Event{Kind: "error", Text: guardErr.Error()})
 				}
-				return result, budgetErr
+				return result, guardErr
 			}
 		}
 		if ev == nil || ev.Partial || ev.LLMResponse.Content == nil {

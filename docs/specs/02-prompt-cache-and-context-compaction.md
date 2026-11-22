@@ -69,6 +69,15 @@ A compactação in-turn (3.3) age sobre o que **já entrou** no transcript. O sp
 5. Redação: formatos óbvios de credenciais (`sk-…`, `ghp_…`, `AKIA…`, JWT) são mascarados antes da gravação em disco e no preview.
 6. Retenção: varredura no máximo 1x/hora por raiz; arquivos com mais de 7 dias são removidos.
 
+### 3.6 Sumário de Contexto por LLM no Corte Estrutural (`internal/contextx/summary.go`)
+A compactação determinística preserva bytes, não semântica: um meio de turno reduzido a previews perde o fio da meada. No tier de `75%`, os payloads substituídos por preview são destilados em um resumo corrido por uma chamada de modelo barato (rota Jev com hint `context_summary`; Dev/QA apenas):
+
+1. **Delta puro com rastreio por ID:** `SummaryState` marca os `FunctionResponse.ID` cobertos pelo resumo — só o que envelheceu da janela ativa gera nova chamada; a projeção é reconstruída por request, então sem o delta o custo seria por chamada.
+2. **Iterativo:** o resumo atual entra no próximo prompt com instrução de preservar e ampliar; seções fixas e teto de 16 KiB; entradas limitadas a cabeça 4k + cauda 1,5k (diagnósticos ficam no fim) e lote de 160 KiB.
+3. **Fail-open + escada de cooldown (60s/300s/900s):** modelo fora do ar não vira imposto por request; a compactação determinística continua sendo a única autoridade.
+4. **Injeção na cauda:** `<system-reminder><context_summary>…</system-reminder>` clonado no último Content — mesmo prefixo estável de sempre, histórico em disco intacto.
+5. **Orçamento por execução em USD:** `settings.max_run_cost_usd` (default 0 = off, piso 1 centavo) aborta o run com erro acionável quando o custo acumulado excede o teto — complementa `max_tokens`, que não enxerga um loop de QA caro e curto em tokens.
+
 ---
 
 ## 4. Critérios de Aceite
