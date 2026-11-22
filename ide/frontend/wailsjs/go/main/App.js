@@ -210,6 +210,10 @@ export function GetProviderProfilesOverview(arg1) {
   return window['go']['main']['App']['GetProviderProfilesOverview'](arg1);
 }
 
+export function GetPullRequestDetail(arg1, arg2) {
+  return window['go']['main']['App']['GetPullRequestDetail'](arg1, arg2);
+}
+
 export function GetRecentProjects() {
   return window['go']['main']['App']['GetRecentProjects']();
 }

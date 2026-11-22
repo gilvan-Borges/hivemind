@@ -119,6 +119,8 @@ export function GetProviderHealth():Promise<Array<jev.ProviderHealthView>>;
 
 export function GetProviderProfilesOverview(arg1:string):Promise<modelx.ProfilesOverview>;
 
+export function GetPullRequestDetail(arg1:string,arg2:number):Promise<idecore.PullRequestActivityDetail>;
+
 export function GetRecentProjects():Promise<Array<string>>;
 
 export function GetWorkspaceGitRepos(arg1:string):Promise<Array<idecore.WorkspaceGitRepo>>;
