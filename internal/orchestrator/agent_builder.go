@@ -142,14 +142,26 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		// older oversized tool outputs (>6 KiB) inside Dev/QA subagents to cut token burn.
 		subagentEntryCap = 6 * 1024
 	}
+	// Context summary tier (Spec 02 §3.6): Dev/QA run long tool loops, so
+	// their aggressive compaction distills dropped payloads into a running
+	// summary via one cheap Jev call (fail-open, cooldown-laddered).
+	var summaryState *contextx.SummaryState
+	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {
+		summaryState = contextx.NewSummaryState()
+	}
+	compactionBudget := contextx.Budget{
+		ContextWindow:     agentContextWindow(a),
+		ContextWindowFn:   r.dynamicAgentContextWindow(adkName, a),
+		KeepRecent:        r.Project.Settings.EffectiveInTurnKeepToolResults(),
+		OnCompact:         r.compactionStatsCallback(adkName, label),
+		MaxToolEntryBytes: subagentEntryCap,
+		SummaryState:      summaryState,
+	}
+	if summaryState != nil {
+		compactionBudget.Summarizer = r.newCompactionSummarizer(adkName, label, root)
+	}
 	beforeModelCBs := []llmagent.BeforeModelCallback{
-		contextx.NewCompactionCallback(contextx.Budget{
-			ContextWindow:     agentContextWindow(a),
-			ContextWindowFn:   r.dynamicAgentContextWindow(adkName, a),
-			KeepRecent:        r.Project.Settings.EffectiveInTurnKeepToolResults(),
-			OnCompact:         r.compactionStatsCallback(adkName, label),
-			MaxToolEntryBytes: subagentEntryCap,
-		}),
+		contextx.NewCompactionCallback(compactionBudget),
 		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}
 	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {

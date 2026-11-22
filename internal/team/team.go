@@ -131,6 +131,11 @@ type Settings struct {
 	MaxDevInputTokens        int64              `yaml:"max_dev_input_tokens,omitempty" json:"max_dev_input_tokens,omitempty"`
 	ModelCallTimeoutSeconds  int                `yaml:"model_call_timeout_seconds,omitempty" json:"model_call_timeout_seconds,omitempty"`
 	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	// MaxRunCostUSD aborta a execução quando o custo estimado acumulado
+	// (todos os agentes, cache aplicado) excede este valor em dólares.
+	// Zero (default) mantém o comportamento sem orçamento em USD: o único
+	// teto continua sendo max_tokens/max_llm_calls.
+	MaxRunCostUSD            float64            `yaml:"max_run_cost_usd,omitempty" json:"max_run_cost_usd,omitempty"`
 	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
 	// MaxSubagentCalls limita quantos subagentes efêmeros (scouts) um mesmo
 	// agente pode disparar por execução; MaxSubagentLLMCalls limita as chamadas
@@ -307,6 +312,20 @@ func (s Settings) EffectiveMaxSubagentLLMCalls() int {
 		return 24
 	}
 	return s.MaxSubagentLLMCalls
+}
+
+// EffectiveMaxRunCostUSD returns the run-wide cost ceiling in micro-USD
+// (0 = disabled). Values below one cent are floored to it so a typo like
+// 0.001 cannot abort every run on the first cheap call.
+func (s Settings) EffectiveMaxRunCostUSD() int64 {
+	if s.MaxRunCostUSD <= 0 {
+		return 0
+	}
+	micro := int64(s.MaxRunCostUSD * 1_000_000)
+	if micro < 10_000 {
+		micro = 10_000
+	}
+	return micro
 }
 
 // EffectivePermissionMode returns the normalized permission mode (default "governed").

@@ -121,6 +121,18 @@ Campos opcionais em `settings` do `.hivemind/team.yaml`:
 - `in_turn_keep_tool_results: int` (padrão `6`, `0` usa padrão) — quantas respostas recentes de ferramenta permanecem íntegras no prompt durante o mesmo turno.
 - `review_model: string` (opcional) — permite escolher um modelo mais rápido/econômico (ex.: `opencode-go:glm-5.3` ou `agy:gemini-3.8-flash-medium`) especificamente quando o turno for revisão de PR, sem alterar o modelo padrão do Chefe para arquitetura/implementação.
 
+#### B.4 Sumário de Contexto por LLM no Corte Estrutural (`internal/contextx/summary.go`)
+Quando o uso estimado passa de `75%` da janela (tier de corte estrutural), os payloads que saem da vista por preview são destilados em um **resumo corrido** por uma única chamada de modelo barato (rota Jev, hint `context_summary`):
+- **Delta puro:** o `SummaryState` marca por `FunctionResponse.ID` o que o resumo já cobre — só payloads novos geram chamada (a projeção é reconstruída por chamada; sem isso o custo seria por request).
+- **Iterativo:** o resumo atual entra no próximo prompt ("PRESERVE e amplie"), seções fixas (Ações concluídas / Em andamento / Estado atual / Decisões e pendências), teto de 16 KiB.
+- **Anti-thrash:** escada de cooldown 60s → 300s → 900s após falha do modelo; falha é **fail-open** (a compactação determinística permanece a única autoridade perdedora de nada).
+- **Injeção:** o resumo vai ao final do último Content como `<system-reminder><context_summary>…</context_summary></system-reminder>`, mesma semântica de projeção não-destrutiva do resto da compactação. Ligado para Dev/QA (loops longos de ferramenta); outros papéis seguem só determinístico.
+- Entradas do resumo: cabeça 4.000 + cauda 1.500 caracteres por payload (diagnósticos ficam no fim); lote limitado a 160 KiB.
+
+#### B.5 Orçamento por Execução em USD (`max_run_cost_usd`)
+Campos opcionais em `settings` do `.hivemind/team.yaml`:
+- `max_run_cost_usd: float` (default `0` = desativado) — aborta a execução com erro acionável quando o custo estimado acumulado do run (todos os agentes, cache aplicado, `jev.ComputeCostMicroUSD`) excede o valor em dólares; piso de 1 centavo para proteger contra typos. Mensagem orienta: reduzir `max_qa_loops`, trocar para modelo mais barato ou ajustar o teto. Complementa `max_tokens`: um loop de QA em modelo caro pode queimar dólares sem estourar tokens.
+
 ---
 
 ### Parte C — Melhorias Colaterais de Monorepo (`ide/internal/idecore`)

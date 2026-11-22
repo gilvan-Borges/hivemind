@@ -9,9 +9,11 @@
 package contextx
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -35,8 +37,8 @@ const (
 	SummaryThresholdPct = 0.75
 
 	defaultKeepToolResults  = 8
-	microCompactThreshold   = 600  // bytes; payloads at or below this stay verbatim
-	summaryCompactThreshold = 300  // bytes for the aggressive pass
+	microCompactThreshold   = 600 // bytes; payloads at or below this stay verbatim
+	summaryCompactThreshold = 300 // bytes for the aggressive pass
 	microPreviewBytes       = 420
 	summaryPreviewBytes     = 240
 )
@@ -98,6 +100,13 @@ type Budget struct {
 	// threshold fires (Codex subagent_default_context_limits pattern). Zero disables
 	// the proactive per-entry cap.
 	MaxToolEntryBytes int
+	// Summarizer optionally distills the payloads replaced by the aggressive
+	// structural cut (>= SummaryThresholdPct) into a running summary via a cheap
+	// auxiliary model call. nil keeps the deterministic-only behavior.
+	Summarizer Summarizer
+	// SummaryState tracks the running summary and its cooldown ladder for one
+	// agent run. Required with Summarizer (nil disables the summary tier).
+	SummaryState *SummaryState
 }
 
 func (b Budget) window() int {
@@ -211,14 +220,21 @@ func appendArgValue(b *strings.Builder, v any) {
 // MicroThresholdPct of the model window (token-aware, Spec 02 §3.3), and
 // escalates to the aggressive cut at SummaryThresholdPct.
 func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
-	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		compacted, bytesSaved := CompactRequest(req, b)
+	return func(actx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		ctx := context.Background()
+		if actx != nil {
+			ctx = actx
+		}
+		compacted, bytesSaved, summary := compactRequestContext(ctx, req, b)
 		if compacted > 0 && b.OnCompact != nil {
 			b.OnCompact(Stats{
 				Compacted:   compacted,
 				BytesSaved:  bytesSaved,
 				TokensSaved: (bytesSaved + 3) / 4,
 			})
+		}
+		if summary {
+			injectSummary(req, b.SummaryState)
 		}
 		return nil, nil
 	}
@@ -262,13 +278,21 @@ func ContextWindowGuidance(req *model.LLMRequest, b Budget) string {
 // CompactRequest applies one non-destructive compaction pass over req and
 // reports how many payloads were compacted and how many bytes were saved.
 func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved int) {
+	compacted, saved, _ := compactRequestContext(context.Background(), req, b)
+	return compacted, saved
+}
+
+// compactRequestContext is the ctx-aware pass: when the summary tier fires it
+// also distills the replaced payloads (third return true when a running
+// summary exists and should ride the tail reminder).
+func compactRequestContext(ctx context.Context, req *model.LLMRequest, b Budget) (compactedCount, bytesSaved int, summary bool) {
 	if req == nil || len(req.Contents) == 0 {
-		return 0, 0
+		return 0, 0, false
 	}
 	window := b.window()
 	est := EstimateRequestTokens(req)
 	if est <= 0 {
-		return 0, 0
+		return 0, 0, false
 	}
 	ratio := float64(est) / float64(window)
 	if ratio < MicroThresholdPct {
@@ -276,15 +300,17 @@ func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved
 		// older oversized tool outputs when MaxToolEntryBytes is configured
 		// (subagent_default_context_limits).
 		if b.MaxToolEntryBytes > 0 {
-			return capOversizedOlderToolOutputs(req, b.MaxToolEntryBytes)
+			c, s := capOversizedOlderToolOutputs(req, b.MaxToolEntryBytes)
+			return c, s, false
 		}
-		return 0, 0
+		return 0, 0, false
 	}
 
 	keepRecent := b.keepRecent()
 	compactThreshold := microCompactThreshold
 	previewBytes := microPreviewBytes
-	if ratio >= SummaryThresholdPct {
+	summaryTier := ratio >= SummaryThresholdPct
+	if summaryTier {
 		// Structural cut: keep only the 2 most recent tool results verbatim
 		// and squeeze harder (Spec 02: 75% summary tier).
 		if keepRecent > 2 {
@@ -293,7 +319,15 @@ func CompactRequest(req *model.LLMRequest, b Budget) (compactedCount, bytesSaved
 		compactThreshold = summaryCompactThreshold
 		previewBytes = summaryPreviewBytes
 	}
-	return compactLLMRequestInTurn(req, keepRecent, compactThreshold, previewBytes)
+	compacted, saved, entries := compactLLMRequestInTurn(req, keepRecent, compactThreshold, previewBytes)
+	if summaryTier {
+		// Distill what the structural cut is hiding from the model; the
+		// deterministic projection stays authoritative and the state ladder
+		// keeps a broken summarizer from becoming a per-call tax.
+		summarizePending(ctx, b, b.SummaryState, entries, time.Now())
+		return compacted, saved, b.SummaryState.current() != ""
+	}
+	return compacted, saved, false
 }
 
 // capOversizedOlderToolOutputs applies head-and-tail truncation to older (non-latest-turn)
@@ -410,8 +444,9 @@ type toolRespLoc struct {
 // compactLLMRequestInTurn replaces older, large FunctionResponse payloads in
 // req.Contents with compact previews + metadata notes, cloning only the
 // modified Content/Part/FunctionResponse structs so the underlying session
-// history is untouched.
-func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent, compactThreshold, previewBytes int) (compactedCount int, bytesSaved int) {
+// history is untouched. The original bytes of every replaced payload are
+// returned so the summary tier can distill them before they leave the view.
+func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent, compactThreshold, previewBytes int) (compactedCount int, bytesSaved int, entries []CompactedEntry) {
 	callTargets := make(map[string]string)
 	var responses []toolRespLoc
 	var calls []toolRespLoc
@@ -439,7 +474,7 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent, compactThreshold
 		}
 	}
 	if len(responses) <= keepRecent && len(calls) <= keepRecent {
-		return 0, 0
+		return 0, 0, nil
 	}
 
 	toCompactResp := make(map[int]map[int]bool)
@@ -509,6 +544,22 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent, compactThreshold
 						newParts = append(newParts, origContent.Parts[:pi]...)
 						contentChanged = true
 					}
+					// Keep the original bytes for the summary tier before the
+					// preview replaces them in the projection. Fall back to a
+					// stable position key when FunctionResponse.ID is empty so
+					// SummaryState still marks the payload as covered.
+					if raw, rawOK := fr.Response["text"].(string); rawOK && raw != "" {
+						entryID := fr.ID
+						if entryID == "" {
+							entryID = fmt.Sprintf("%s#%d:%d", fr.Name, ci, pi)
+						}
+						entries = append(entries, CompactedEntry{
+							ID:    entryID,
+							Tool:  strings.ToLower(strings.TrimSpace(fr.Name)),
+							Label: callTargets[fr.ID],
+							Text:  capEntryText(raw),
+						})
+					}
 					partCopy := *origPart
 					frCopy := *fr
 					frCopy.Response = newResp
@@ -556,7 +607,7 @@ func compactLLMRequestInTurn(req *model.LLMRequest, keepRecent, compactThreshold
 		}
 	}
 
-	return compactedCount, bytesSaved
+	return compactedCount, bytesSaved, entries
 }
 
 func compactFunctionCallArgs(fc *genai.FunctionCall, compactThreshold int) (map[string]any, int, bool) {

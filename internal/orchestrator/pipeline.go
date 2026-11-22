@@ -21,6 +21,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
@@ -45,6 +46,26 @@ var devWriteTools = map[string]bool{
 
 func (r *Runner) resetDevBudgets() {
 	r.devBudgets = map[string]*devTurnBudget{}
+}
+
+// checkRunBudget enforces the run-wide token and USD ceilings on the event
+// stream. Tokens were already gated here; the USD ceiling closes the gap
+// where a QA loop on an expensive model burns dollars while staying under
+// max_tokens (cost is measured per call, but the budget is only enforced now).
+func (r *Runner) checkRunBudget() error {
+	if tot := r.currentTotalTokens(); r.Project.Settings.MaxTokens > 0 && tot > r.Project.Settings.MaxTokens {
+		return fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", tot, r.Project.Settings.MaxTokens)
+	}
+	if maxMicro := r.Project.Settings.EffectiveMaxRunCostUSD(); maxMicro > 0 {
+		r.costMu.Lock()
+		spent := r.turnCostMicroUSD
+		r.costMu.Unlock()
+		if spent > maxMicro {
+			return fmt.Errorf("orçamento de custo por execução atingido (%s > %s) — reduza max_qa_loops, troque para um modelo mais barato ou ajuste max_run_cost_usd",
+				jev.FormatMicroUSD(spent), jev.FormatMicroUSD(maxMicro))
+		}
+	}
+	return nil
 }
 
 // checkDevGuard enforces per-dev performance budgets on the event stream.
