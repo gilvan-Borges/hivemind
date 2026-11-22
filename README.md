@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/hivemind-ide-equipe.png" width="900" alt="HiveMind IDE — Equipe IA com Chefe, Dev, QA e Fecho" />
+  <img src="docs/screenshots/hivemind-quadro-equipe.png" width="900" alt="HiveMind IDE — Quadro Multiagente e Equipe IA lado a lado" />
 </p>
 
 ---
@@ -66,8 +66,20 @@ flowchart TB
 | **HiveMind-App** | Android | Controlar a IDE na LAN ou via relay — [repositório companion](https://github.com/gilvan-Borges/HiveMind-App) |
 | **`hivemind-relay`** | VPS / Oracle Always Free | Túnel de saída HTTPS/WSS: app ↔ IDE de qualquer rede |
 
+### Quadro Multiagente
+
+Chefe, Dev e QA no mesmo quadro — provedor e modelo por papel, memória do projeto e histórico de sessão.
+
 <p align="center">
-  <img src="docs/screenshots/hivemind-ide-chat.png" width="840" alt="Painel Equipe IA — prompt, modos Auto e Full Acesso, atalhos Chefe → Dev → QA → Fecho" />
+  <img src="docs/screenshots/hivemind-quadro-multiagente.png" width="900" alt="Quadro de Controle Multiagente — Chefe, Dev e QA prontos" />
+</p>
+
+### Controle de Código · PRs
+
+PRs e issues na IDE. **Trabalhar c/ Equipe** manda o time resolver o PR sem sair do HiveMind.
+
+<p align="center">
+  <img src="docs/screenshots/hivemind-git-prs.png" width="900" alt="Controle de Código — PRs e Trabalhar com Equipe" />
 </p>
 
 ### Destaques que vendem o produto
