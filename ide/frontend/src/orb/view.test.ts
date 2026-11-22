@@ -156,3 +156,21 @@ describe("orbResidentMessages (normalização do snapshot Go)", () => {
     expect(orbResidentMessages(resident({ messages: [{ id: "z", kind: "user", text: "oi" }] }))).toHaveLength(1);
   });
 });
+
+describe("Orb window CSS cascade", () => {
+  it("keeps html, body, #app inside @layer base so Orb transparency overrides --bg-frame", async () => {
+    const mod = "node:fs/promises";
+    const { readFile } = (await import(/* @vite-ignore */ mod)) as {
+      readFile: (path: URL, encoding: string) => Promise<string>;
+    };
+    const css = (await readFile(new URL("../styles.css", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+    const layerBaseIdx = css.indexOf("@layer base {");
+    const rootAppIdx = css.indexOf("html,\nbody,\n#app {");
+
+    expect(layerBaseIdx).toBeGreaterThan(-1);
+    expect(rootAppIdx).toBeGreaterThan(layerBaseIdx);
+
+    const orbAppBlock = css.match(/body\.is-orb-mode\s+#app\s*\{[^}]*\}/);
+    expect(orbAppBlock?.[0]).toContain("background: transparent !important;");
+  });
+});

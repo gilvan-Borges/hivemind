@@ -87,6 +87,9 @@
   --sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+/* Modularização: fundações (scrollbars, inputs, resets de controles). */
+@layer base {
+
 * {
   box-sizing: border-box;
 }
@@ -107,9 +110,6 @@ body,
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
-
-/* Modularização: fundações (scrollbars, inputs, resets de controles). */
-@layer base {
 
 /* Dark scrollbars */
 ::-webkit-scrollbar {
@@ -6760,7 +6760,7 @@ body.is-orb-mode {
 body.is-orb-mode #app {
   width: 100vw;
   height: 100vh;
-  background: transparent;
+  background: transparent !important;
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
@@ -6769,6 +6769,7 @@ body.is-orb-mode #app {
   position: relative;
   width: 100%;
   height: 100%;
+  background: transparent;
   display: grid;
   place-items: center;
   cursor: grab;
