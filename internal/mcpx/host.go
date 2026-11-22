@@ -8,10 +8,39 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // lookPath resolve o binário do servidor stdio. Testes substituem.
 var lookPath = exec.LookPath
+
+// Bounding for one tool call against a remote server. A stalled MCP process
+// (deadlock, network hang, infinite loop in the server) must fail the call
+// instead of holding the agent loop indefinitely.
+const (
+	// DefaultCallTimeout bounds one tool call when the server config does not
+	// override it.
+	DefaultCallTimeout = 120 * time.Second
+	minCallTimeout     = 5 * time.Second
+	maxCallTimeout     = 600 * time.Second
+)
+
+// callTimeoutFor clamps one server's per-call timeout override. Zero or
+// negative values fall back to the default; anything above the ceiling is
+// capped so a bad override cannot disable bounding entirely.
+func callTimeoutFor(s *Server) time.Duration {
+	if s == nil || s.TimeoutSeconds <= 0 {
+		return DefaultCallTimeout
+	}
+	d := time.Duration(s.TimeoutSeconds) * time.Second
+	if d < minCallTimeout {
+		return minCallTimeout
+	}
+	if d > maxCallTimeout {
+		return maxCallTimeout
+	}
+	return d
+}
 
 // session é a fatia do cliente MCP que o Host precisa. Os testes substituem o dial.
 type session interface {
@@ -193,18 +222,30 @@ func (h *Host) EnableForTask(ctx context.Context, name string) (string, error) {
 	return fmt.Sprintf("%s ligado nesta execução.", name), nil
 }
 
-// Call invoca uma ferramenta. Servidor desligado não é chamado.
+// Call invoca uma ferramenta. Servidor desligado não é chamado. Cada chamada
+// tem um teto de tempo (timeout_seconds do servidor, default 120s, teto
+// 600s): um servidor MCP travado devolve erro em vez de segurar a rodada do
+// agente indefinidamente.
 func (h *Host) Call(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
 	if h == nil {
 		return "", fmt.Errorf("MCP não está ativo nesta execução")
 	}
 	h.mu.Lock()
 	sess := h.live[serverName]
+	var srv *Server
+	for i := range h.servers {
+		if h.servers[i].Name == serverName {
+			srv = &h.servers[i]
+			break
+		}
+	}
 	h.mu.Unlock()
 	if sess == nil {
 		return "", fmt.Errorf("servidor %s está desligado; use mcp_enable_server se a tarefa precisar dele", serverName)
 	}
-	return sess.Call(ctx, toolName, args)
+	callCtx, cancel := context.WithTimeout(ctx, callTimeoutFor(srv))
+	defer cancel()
+	return sess.Call(callCtx, toolName, args)
 }
 
 // ExposedTools devolve só ferramentas de servidores ligados agora.

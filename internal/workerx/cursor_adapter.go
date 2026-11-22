@@ -134,6 +134,7 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 		mu         sync.Mutex
 		lastResult string
 		failedMsg  string
+		lastUsage  *modelx.CursorUsage
 		wg         sync.WaitGroup
 	)
 	wg.Add(1)
@@ -169,7 +170,12 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 			if notice.ToolName != "" && cb.OnTool != nil {
 				cb.OnTool(notice.ToolName, notice.ToolPath)
 			}
-			if notice.Text != "" {
+			if notice.Usage != nil {
+			mu.Lock()
+			lastUsage = notice.Usage
+			mu.Unlock()
+		}
+		if notice.Text != "" {
 				if notice.Final {
 					mu.Lock()
 					lastResult = notice.Text
@@ -192,6 +198,7 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 	mu.Lock()
 	resText := strings.TrimSpace(lastResult)
 	failText := strings.TrimSpace(failedMsg)
+	usage := lastUsage
 	mu.Unlock()
 
 	if doneEv, ok := reg.Get(req.DispatchID); ok {
@@ -201,6 +208,7 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 		if resText != "" && strings.TrimSpace(doneEv.Summary) == "" {
 			doneEv.Summary = resText
 		}
+		doneEv.Usage = usageReportFrom(req.Model, usage)
 		return doneEv, nil
 	}
 
@@ -213,9 +221,9 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 			detail = waitErr.Error()
 		}
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-			return DoneEvent{DispatchID: req.DispatchID, TaskID: req.TaskID, Outcome: "aborted", Summary: "tempo limite excedido"}, fmt.Errorf("cursor worker excedeu %s", timeout)
+			return DoneEvent{DispatchID: req.DispatchID, TaskID: req.TaskID, Outcome: "aborted", Summary: "tempo limite excedido", Usage: usageReportFrom(req.Model, usage)}, fmt.Errorf("cursor worker excedeu %s", timeout)
 		}
-		return DoneEvent{DispatchID: req.DispatchID, TaskID: req.TaskID, Outcome: "failed", Summary: detail}, fmt.Errorf("cursor worker falhou: %s", detail)
+		return DoneEvent{DispatchID: req.DispatchID, TaskID: req.TaskID, Outcome: "failed", Summary: detail, Usage: usageReportFrom(req.Model, usage)}, fmt.Errorf("cursor worker falhou: %s", detail)
 	}
 
 	// Fallback if CLI completed cleanly without calling /done HTTP endpoint.
@@ -230,9 +238,29 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 		Outcome:       "success",
 		Summary:       resText,
 		FilesModified: guardRes.Modified,
+		Usage:         usageReportFrom(req.Model, usage),
 	}
 	reg.AcceptDone(doneEv)
 	return doneEv, nil
+}
+
+// usageReportFrom converts one parsed CLI usage record into the ledger-facing
+// UsageReport. nil usage yields nil so the event stream stays unchanged for
+// CLIs that do not report tokens.
+func usageReportFrom(model string, u *modelx.CursorUsage) *UsageReport {
+	if u == nil {
+		return nil
+	}
+	rep := &UsageReport{
+		Model:           model,
+		InputTokens:     u.InputTokens,
+		OutputTokens:    u.OutputTokens,
+		CacheReadTokens: u.CacheReadTokens,
+	}
+	if u.CostUSD != nil {
+		rep.CostMicroUSD = int64(*u.CostUSD * 1_000_000)
+	}
+	return rep
 }
 
 type cappedBuffer struct {

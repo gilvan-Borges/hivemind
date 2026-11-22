@@ -26,12 +26,16 @@ func (r *Runner) compactionStatsCallback(author, label string) func(contextx.Sta
 		if r.OnEvent == nil || s.Compacted <= 0 {
 			return
 		}
+		detail := fmt.Sprintf("%d saídas antigas compactadas · ~%d tokens poupados", s.Compacted, s.TokensSaved)
+		if s.Semantic {
+			detail = fmt.Sprintf("compacção semântica: %d turnos antigos substituídos por resumo · ~%d tokens poupados", s.Compacted, s.TokensSaved)
+		}
 		r.OnEvent(Event{
 			Kind:   "compact",
 			Stage:  inferStage(author, label),
 			Author: author,
 			Label:  label,
-			Detail: fmt.Sprintf("%d saídas antigas compactadas · ~%d tokens poupados", s.Compacted, s.TokensSaved),
+			Detail: detail,
 			Tokens: int32(s.TokensSaved),
 		})
 	}

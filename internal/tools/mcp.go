@@ -72,6 +72,9 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 		if err != nil {
 			return textResult{}, err
 		}
+		if strings.EqualFold(name, "playwright") {
+			msg += "\nUso econômico do browser: prefira browser_snapshot (árvore de acessibilidade estrutural, determinística e barata em tokens) para entender a página; tire screenshot apenas quando cores/layout forem essenciais; reaproveite refs do snapshot para click/fill em vez de navegar de novo; re-chame snapshot somente depois de ações que mudam a página."
+		}
 		return textResult{Text: msg + "\n" + formatMCPList(d.MCP.Snapshot()) + schemaBlock(d.MCP.ExposedTools(), name)}, nil
 	})
 	if err != nil {

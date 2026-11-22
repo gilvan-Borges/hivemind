@@ -33,7 +33,7 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind              string                   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route", "provider_failover", "provider_exhausted", "compact"
+	Kind              string                   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route", "provider_failover", "provider_exhausted", "compact", "worker_usage"
 	Stage             string                   `json:"stage,omitempty"`
 	Author            string                   `json:"author,omitempty"`
 	Label             string                   `json:"label,omitempty"`
@@ -65,6 +65,19 @@ type Event struct {
 	FromRole          string                   `json:"fromRole,omitempty"`
 	ToRole            string                   `json:"toRole,omitempty"`
 	Origin            string                   `json:"origin,omitempty"`
+}
+
+// clampInt32 bounds one int64 token counter to the event stream's int32
+// fields without silently wrapping around on pathological values.
+func clampInt32(v int64) int32 {
+	const maxI32 = int64(1<<31 - 1)
+	if v > maxI32 {
+		return int32(maxI32)
+	}
+	if v < -maxI32 {
+		return int32(-maxI32)
+	}
+	return int32(v)
 }
 
 // Attachment represents an image or file attached by the user in chat.

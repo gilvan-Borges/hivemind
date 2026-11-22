@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"iter"
 	"strings"
@@ -345,6 +347,11 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 }
 
 func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent, qa bool, outputKey string, keys []string) llmagent.BeforeModelCallback {
+	// Per-agent record of the state keys already injected in earlier turns.
+	// An unchanged key whose full value is still verbatim in the request
+	// history is re-sent as a one-line pointer instead of a full copy: long
+	// runs used to repeat the same multi-KiB chief plan on every turn.
+	lastKeyDigest := make(map[string]string, len(keys))
 	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 		if req == nil {
 			return nil, nil
@@ -386,6 +393,22 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		if qa && worktreeEmpty {
 			b.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
 		}
+		var historyText string
+		if len(keys) > 0 {
+			var hist strings.Builder
+			for _, c := range req.Contents {
+				if c == nil {
+					continue
+				}
+				for _, p := range c.Parts {
+					if p != nil && p.Text != "" {
+						hist.WriteString(p.Text)
+						hist.WriteByte('\n')
+					}
+				}
+			}
+			historyText = hist.String()
+		}
 		for _, k := range keys {
 			if a.Role == team.RoleDeveloper && hasQAFeedback && k == outputKey {
 				continue
@@ -398,6 +421,12 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			if text == "" {
 				continue
 			}
+			digest := keyContentDigest(text)
+			if lastKeyDigest[k] == digest && strings.Contains(historyText, text) {
+				fmt.Fprintf(&b, "[%s] inalterado desde o turno anterior — o valor completo já está no histórico acima; releia de lá ou peça via state se precisar do texto integral.\n\n", k)
+				continue
+			}
+			lastKeyDigest[k] = digest
 			fmt.Fprintf(&b, "[%s]\n%s\n\n", k, text)
 		}
 		if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
@@ -421,6 +450,13 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		appendSystemReminder(req, reminder)
 		return nil, nil
 	}
+}
+
+// keyContentDigest fingerprints one state-key value so the reminder callback
+// can tell "unchanged since last turn" apart from a genuinely new plan.
+func keyContentDigest(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
 
 func appendSystemReminder(req *model.LLMRequest, reminder string) {

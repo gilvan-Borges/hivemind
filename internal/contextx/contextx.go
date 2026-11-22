@@ -9,6 +9,7 @@
 package contextx
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -64,6 +65,18 @@ var neverCompactInTurnTools = map[string]bool{
 	"qa_approve":         true,
 	"qa_request_changes": true,
 	"sdd_docs_ready":     true,
+	// The enable flow is the audit trail of which MCP server the user
+	// approved for this task; a preview would hide that record.
+	"mcp_enable_server": true,
+}
+
+// compactableToolName reports whether one older FunctionResponse payload may
+// be replaced by a compact preview. Besides the fixed read/search/diff set,
+// every MCP tool response qualifies: mcp_call and the direct wrappers are
+// named mcp_<server>_<tool>, and remote payloads are re-fetchable by calling
+// the tool again, so stale copies only burn request tokens.
+func compactableToolName(name string) bool {
+	return compactableInTurnTools[name] || strings.HasPrefix(name, "mcp_")
 }
 
 // Stats reports what one compaction pass saved, so the orchestrator can emit
@@ -77,6 +90,9 @@ type Stats struct {
 	// TokensSaved is the conservative token estimate of BytesSaved using
 	// the same bytes/4 heuristic as EstimateRequestTokens.
 	TokensSaved int
+	// Semantic marks a pass that replaced the old conversation head with an
+	// LLM-generated summary carrier (SummarizeOldTurns) instead of previews.
+	Semantic bool
 }
 
 // Budget controls one compaction pass.
@@ -98,6 +114,12 @@ type Budget struct {
 	// threshold fires (Codex subagent_default_context_limits pattern). Zero disables
 	// the proactive per-entry cap.
 	MaxToolEntryBytes int
+	// Summarizer, when set, is called once the request crosses the summary
+	// tier (75%) with a rendered transcript of the old conversation head; the
+	// returned summary replaces that head in the request projection. The
+	// persisted session history is never touched: the summary is a projection
+	// carrier, and any summarizer failure falls back to the heuristic cut.
+	Summarizer func(ctx context.Context, transcript string) (string, error)
 }
 
 func (b Budget) window() int {
@@ -209,9 +231,16 @@ func appendArgValue(b *strings.Builder, v any) {
 // large read/search/diff tool outputs inside the active turn without mutating
 // the persisted session history. The pass only runs once the request is over
 // MicroThresholdPct of the model window (token-aware, Spec 02 §3.3), and
-// escalates to the aggressive cut at SummaryThresholdPct.
+// escalates to the aggressive cut at SummaryThresholdPct. When Budget carries
+// a Summarizer, the summary tier first attempts one semantic pass that
+// replaces the old conversation head with a summary carrier.
 func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
-	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+	return func(actx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		if st, applied := SummarizeOldTurns(actx, req, b); applied {
+			if b.OnCompact != nil {
+				b.OnCompact(st)
+			}
+		}
 		compacted, bytesSaved := CompactRequest(req, b)
 		if compacted > 0 && b.OnCompact != nil {
 			b.OnCompact(Stats{
@@ -222,6 +251,212 @@ func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
 		}
 		return nil, nil
 	}
+}
+
+// SummarizedConversationTag opens the synthetic carrier that replaces the old
+// conversation head. A request whose leading content already carries the tag
+// is skipped by SummarizeOldTurns, so the pass is self-limiting.
+const SummarizedConversationTag = "<conversa_anterior_resumida>"
+
+const (
+	// semanticTailContents is the minimum verbatim tail kept by the semantic
+	// pass: the model must still see the freshest tool exchanges and the
+	// current turn to keep working.
+	semanticTailContents = 6
+	// semanticTranscriptMaxBytes bounds the transcript handed to the
+	// summarizer (~24k tokens): enough signal, one bounded call.
+	semanticTranscriptMaxBytes = 96 * 1024
+	// semanticSummaryMaxBytes caps the returned summary defensively so a
+	// misbehaving summarizer cannot inflate the request instead of shrinking it.
+	semanticSummaryMaxBytes = 12 * 1024
+	// semanticPartPreviewBytes bounds each single part inside the transcript.
+	semanticPartPreviewBytes = 600
+)
+
+// SummarizeOldTurns replaces the old conversation head of the request
+// projection with one synthetic user content carrying an LLM-generated
+// summary, keeping a verbatim tail of the most recent contents. It is the
+// semantic tier of compaction: previews keep byte fragments, the summary keeps
+// meaning. The persisted session transcript is never modified; a summarizer
+// failure simply returns applied=false so the heuristic structural cut in
+// CompactRequest still bounds the request.
+func SummarizeOldTurns(ctx context.Context, req *model.LLMRequest, b Budget) (Stats, bool) {
+	if req == nil || len(req.Contents) < semanticTailContents+2 || b.Summarizer == nil {
+		return Stats{}, false
+	}
+	if ContextUsageRatio(req, b) < SummaryThresholdPct {
+		return Stats{}, false
+	}
+	if head := firstContentText(req); strings.Contains(head, SummarizedConversationTag) {
+		// Already summarized once: a second pass would summarize the summary.
+		return Stats{}, false
+	}
+
+	cut := summarizeCutIndex(req)
+	if cut < 2 {
+		return Stats{}, false
+	}
+	transcript := renderConversationTranscript(req.Contents[:cut])
+	if strings.TrimSpace(transcript) == "" {
+		return Stats{}, false
+	}
+	summary, err := b.Summarizer(ctx, transcript)
+	if err != nil {
+		// Fail-open: the heuristic cut below still bounds the request.
+		return Stats{}, false
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return Stats{}, false
+	}
+	summary = strx.TruncateBytes(summary, semanticSummaryMaxBytes, "\n[resumo truncado pelo teto defensivo]")
+
+	savedBytes := contentsTextBytes(req.Contents[:cut])
+	block := SummarizedConversationTag + "\n" +
+		"Resumo da conversa anterior desta sessão. Os turnos antigos foram compactados semanticamente na visão enviada ao modelo; o transcript completo permanece registrado na sessão. Use este resumo como estado consolidado do que já foi feito:\n\n" +
+		summary + "\n\n" +
+		"Orientação: não refaça trabalho já concluído; se precisar do conteúdo integral de um ponto citado, releia pontualmente com read_file em vez de varrer o repositório.\n" +
+		"</conversa_anterior_resumida>"
+	carrier := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: block}},
+	}
+	next := make([]*genai.Content, 0, 1+len(req.Contents)-cut)
+	next = append(next, carrier)
+	next = append(next, req.Contents[cut:]...)
+	req.Contents = next
+	return Stats{
+		Compacted:   cut,
+		BytesSaved:  savedBytes,
+		TokensSaved: (savedBytes + 3) / 4,
+		Semantic:    true,
+	}, true
+}
+
+// summarizeCutIndex picks the head/tail boundary for the semantic pass. The
+// tail keeps the most recent semanticTailContents contents, moved back when
+// needed so no FunctionCall ends up in the head while its FunctionResponse
+// stays in the tail (orphaned calls break strict providers).
+func summarizeCutIndex(req *model.LLMRequest) int {
+	cut := len(req.Contents) - semanticTailContents
+	if cut < 1 {
+		return 0
+	}
+	for {
+		respondedInHead := make(map[string]bool)
+		for _, c := range req.Contents[:cut] {
+			if c == nil {
+				continue
+			}
+			for _, p := range c.Parts {
+				if p != nil && p.FunctionResponse != nil && p.FunctionResponse.ID != "" {
+					respondedInHead[p.FunctionResponse.ID] = true
+				}
+			}
+		}
+		splitAt := -1
+		for i := cut - 1; i >= 0; i-- {
+			c := req.Contents[i]
+			if c == nil {
+				continue
+			}
+			for _, p := range c.Parts {
+				if p != nil && p.FunctionCall != nil && p.FunctionCall.ID != "" && !respondedInHead[p.FunctionCall.ID] {
+					splitAt = i
+					break
+				}
+			}
+			if splitAt >= 0 {
+				break
+			}
+		}
+		if splitAt < 1 {
+			return cut
+		}
+		if splitAt <= 1 {
+			// The conversation is one long tool exchange: no safe head to
+			// summarize.
+			return 0
+		}
+		cut = splitAt
+	}
+}
+
+// renderConversationTranscript flattens contents into a bounded, role-tagged
+// transcript for the summarizer call. Function arguments and tool results get
+// short previews: the summary needs the gist, not the bytes.
+func renderConversationTranscript(contents []*genai.Content) string {
+	var b strings.Builder
+	for _, c := range contents {
+		if c == nil {
+			continue
+		}
+		role := "user"
+		if c.Role != "" {
+			role = c.Role
+		}
+		for _, p := range c.Parts {
+			if p == nil {
+				continue
+			}
+			switch {
+			case p.FunctionCall != nil:
+				fc := p.FunctionCall
+				fmt.Fprintf(&b, "tool_call %s", fc.Name)
+				if len(fc.Args) > 0 {
+					args := fmt.Sprint(fc.Args)
+					fmt.Fprintf(&b, " %s", strx.TruncateBytes(args, 240, "…"))
+				}
+				b.WriteString("\n")
+			case p.FunctionResponse != nil:
+				fr := p.FunctionResponse
+				text := fmt.Sprint(fr.Response)
+				fmt.Fprintf(&b, "tool_result %s: %s\n", fr.Name, strx.TruncateBytes(text, semanticPartPreviewBytes, "…"))
+			case p.Text != "":
+				fmt.Fprintf(&b, "%s: %s\n", role, strx.TruncateBytes(p.Text, 4*semanticPartPreviewBytes, "…"))
+			}
+		}
+	}
+	out := b.String()
+	if len(out) > semanticTranscriptMaxBytes {
+		// Keep the most recent slice: it carries the state closest to now.
+		tail := out[len(out)-semanticTranscriptMaxBytes:]
+		for len(tail) > 0 && (tail[0]&0xC0) == 0x80 {
+			tail = tail[1:]
+		}
+		return "[início do transcript omitido pelo teto]\n" + tail
+	}
+	return out
+}
+
+// firstContentText returns the concatenated text parts of the first content.
+func firstContentText(req *model.LLMRequest) string {
+	if req == nil || len(req.Contents) == 0 || req.Contents[0] == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range req.Contents[0].Parts {
+		if p != nil && p.Text != "" {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
+}
+
+// contentsTextBytes sums the text bytes of the contents being replaced.
+func contentsTextBytes(contents []*genai.Content) int {
+	total := 0
+	for _, c := range contents {
+		if c == nil {
+			continue
+		}
+		for _, p := range c.Parts {
+			if p != nil {
+				total += len(p.Text)
+			}
+		}
+	}
+	return total
 }
 
 // ContextUsageRatio returns the estimated fraction (0.0..1.0+) of the model's
@@ -336,7 +571,7 @@ func capOversizedOlderToolOutputs(req *model.LLMRequest, maxEntryBytes int) (com
 			if origPart != nil && origPart.FunctionResponse != nil {
 				fr := origPart.FunctionResponse
 				name := strings.ToLower(strings.TrimSpace(fr.Name))
-				if !neverCompactInTurnTools[name] && compactableInTurnTools[name] {
+				if !neverCompactInTurnTools[name] && compactableToolName(name) {
 					if rawText, ok := fr.Response["text"].(string); ok && len(rawText) > maxEntryBytes {
 						trimmed := truncateHeadTailTokenAware(rawText, maxEntryBytes)
 						if len(trimmed) < len(rawText) {
@@ -603,7 +838,7 @@ func compactFunctionResponseMap(fr *genai.FunctionResponse, callTarget string, c
 		return nil, 0, false
 	}
 	name := strings.ToLower(strings.TrimSpace(fr.Name))
-	if neverCompactInTurnTools[name] || !compactableInTurnTools[name] {
+	if neverCompactInTurnTools[name] || !compactableToolName(name) {
 		return nil, 0, false
 	}
 	// Never compact error responses so the model can still diagnose failures.

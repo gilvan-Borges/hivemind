@@ -95,6 +95,9 @@ func (d Deps) shellAllowlist() []string {
 const unsandboxedWarning = "SEM SANDBOX: este comando roda na sessão do host, sem isolamento. O ambiente não leva segredos do cofre."
 
 func (d Deps) runShell(ctx context.Context, command, relDir string, unsandboxed bool) (string, error) {
+	if pat, denied := repoSandboxDenyMatch(d.Root, command); denied {
+		return "", fmt.Errorf("política de sandbox do repositório (.hivemind/sandbox.json, deny_commands): comando bloqueado pelo padrão %q. O arquivo do repo só pode restringir, nunca liberar", pat)
+	}
 	if d.shellBlocksGitWrite() {
 		if blocked, what := shellx.IsCommitOrPRCommand(command); blocked {
 			if !d.canCommitAndManagePR() {

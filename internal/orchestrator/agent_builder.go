@@ -133,6 +133,9 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 			KeepRecent:        r.Project.Settings.EffectiveInTurnKeepToolResults(),
 			OnCompact:         r.compactionStatsCallback(adkName, label),
 			MaxToolEntryBytes: subagentEntryCap,
+			// Semantic tier: at the 75% threshold the old head is replaced by
+			// one consolidated summary carrier (fail-open to the heuristic cut).
+			Summarizer: r.newConversationSummarizer(a),
 		}),
 		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}
