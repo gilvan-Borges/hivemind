@@ -31,7 +31,7 @@ const (
 	defaultMaxReviewExploreCalls = 6
 	// defaultMaxTriageExploreCalls caps repository exploration calls by the Triage Chief
 	// before it must call delegate_to_squad (OpenAI Codex / Swarm fast-router pattern).
-	defaultMaxTriageExploreCalls = 12
+	defaultMaxTriageExploreCalls = 8
 )
 
 var (
@@ -44,6 +44,11 @@ func extractReviewPRNumber(objective string) int {
 	text := strings.TrimSpace(objective)
 	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
 		text = text[idx+len("[Objetivo do Usuário]"):]
+	}
+	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nTask pai:", "\nFonte:"} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			text = strings.TrimSpace(text[:idx])
+		}
 	}
 	m := prNumberRegex.FindStringSubmatch(text)
 	if len(m) < 2 {

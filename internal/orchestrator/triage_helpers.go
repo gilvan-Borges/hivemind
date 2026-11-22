@@ -33,7 +33,8 @@ func appendTextToFirstPart(msg *genai.Content, extra string) *genai.Content {
 	return &genai.Content{Role: msg.Role, Parts: clonedParts}
 }
 
-func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira, isAutoReview bool) ([]tool.Tool, error) {
+func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira, isAutoReview bool, isDirectOpt ...bool) ([]tool.Tool, error) {
+	isDirect := len(isDirectOpt) > 0 && isDirectOpt[0]
 	if sddDocs {
 		return tools.ForRole(team.RoleProjectManager, tools.Deps{
 			Root:                 r.Workspace,
@@ -70,10 +71,19 @@ func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira
 			MCP:                  r.MCP,
 		})
 	}
-	return tools.ForRole(team.RoleProjectManager, tools.Deps{
+	role := team.RoleProjectManager
+	disableGitWrite := true
+	if isDirect {
+		// In Direto (1 Agente) mode, the single agent is a full executor (like Antigravity/Cursor)
+		// and must have write_file, edit_file, and git tools so it can implement tasks directly
+		// instead of looping forever in read-only tools.
+		role = team.RoleArchitect
+		disableGitWrite = false
+	}
+	return tools.ForRole(role, tools.Deps{
 		Root:                   toolRoot,
 		Settings:               r.Project.Settings,
-		DisableGitWrite:        true,
+		DisableGitWrite:        disableGitWrite,
 		DisableMerge:           isAutoReview,
 		ReviewCommentOnly:      isAutoReview && r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only",
 		AllowReadOnlyTestShell: isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests(),
@@ -389,10 +399,14 @@ REGRAS ABSOLUTAS DESTE MODO:
 	case "direct":
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Chefe da equipe (%s) operando em MODO DIRETO (1 agente, sem delegar ao squad).
-Inspecione arquivos/git/PRs se necessário e responda diretamente ao usuário com clareza, profundidade técnica e objetividade.
-%s`,
-			chief.Instructions, chief.Name, govRules)
+Você é o Agente Executor (%s) operando em MODO DIRETO (1 Único Agente, estilo Antigravity / Cursor — sem delegar ao squad).
+REGRAS DE EXECUÇÃO RÁPIDA E CIRÚRGICA:
+1. Se o usuário fez uma pergunta, pediu análise ou revisão de PR: faça no máximo 1 lote curto de leituras/buscas (3 a 5 chamadas) e responda direto.
+2. Se o usuário pediu para resolver uma issue, implementar feature ou corrigir código: VOCÊ MESMO implementa os arquivos e testes diretamente neste turno usando write_file (arquivos novos) e edit_file (arquivos existentes)!
+3. PROIBIDO EXPLORAR EM LOOP: NÃO leia spec.md, plan.md ou tasks.md inteiros de 400 em 400 linhas e NÃO liste nem inspecione PRs antigos (github_list_prs / github_pr_files) durante uma tarefa de implementação. Use search_text com o código da regra/método (ex.: RN-..., nome da classe/evento), leia apenas os 2 a 4 arquivos alvo (orçamento máximo de 8 leituras antes da 1ª edição) e comece IMEDIATAMENTE a criar/editar código com write_file / edit_file já no 2º turno.
+4. DEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare para procurar em outros PRs — implemente todos os contratos, eventos, serviços, consumidores e testes unitários da tarefa atual de forma desacoplada e compilável agora mesmo.
+5. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado.`,
+			chief.Instructions, chief.Name)
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
 

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/contextx"
+	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -642,4 +643,37 @@ func TestTriageTurnIsolationDropsStaleHistoryAndStopsPostDelegateLoop(t *testing
 		t.Fatalf("2nd post-delegate call must force TurnComplete to stop git_status/git_diff loops, got resp=%v err=%v", resp2, err)
 	}
 }
+
+func TestDirectModeHasWriteToolsAndJiraIssueNeverTriggersPRReview(t *testing.T) {
+	jiraPrompt := "Resolver issue PROJ-1056 — 017-T014 · Auth: auditoria e e-mail das decisões\n" +
+		"Task pai: PROJ-1042 — Spec 017 — Validação facial do engenheiro (KYC, D-170)\n\n" +
+		"Descrição:\nTask do SDD: revisão humana e auditoria.\nFonte:\nspecs/017/tasks.md (PR #639)"
+
+	if githubx.IsExplicitReviewObjective(jiraPrompt) {
+		t.Fatal("Jira implementation task mentioning 'revisão humana' and '(PR #639)' must NOT trigger PR review mode")
+	}
+	if prNum := extractReviewPRNumber(jiraPrompt); prNum != 0 {
+		t.Fatalf("extractReviewPRNumber on Jira task should be 0, got %d", prNum)
+	}
+	if !githubx.IsExplicitReviewObjective("Revisar PR #639") || extractReviewPRNumber("Revisar PR #639") != 639 {
+		t.Fatal("explicit 'Revisar PR #639' must still be detected as PR review #639")
+	}
+
+	r := &Runner{
+		Workspace: t.TempDir(),
+		Project:   team.File{Settings: team.DefaultSettings()},
+	}
+	directTools, err := r.buildTriageBaseTools(r.Workspace, "", false, false, false, true)
+	if err != nil {
+		t.Fatalf("buildTriageBaseTools(direct=true) failed: %v", err)
+	}
+	seenTools := map[string]bool{}
+	for _, tl := range directTools {
+		seenTools[tl.Name()] = true
+	}
+	if !seenTools["write_file"] || !seenTools["edit_file"] {
+		t.Fatalf("Direto (1 Agente) mode MUST expose write_file and edit_file, got tools=%v", seenTools)
+	}
+}
+
 

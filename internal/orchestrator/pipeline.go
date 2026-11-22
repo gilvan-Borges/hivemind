@@ -32,6 +32,8 @@ type devTurnBudget struct {
 var devExploreTools = map[string]bool{
 	"read_file": true, "search_text": true, "find_files": true, "list_dir": true,
 	"git_status": true, "git_diff": true, "git_log": true,
+	"github_list_prs": true, "github_pr_files": true, "github_get_pr": true, "github_pr_diff": true,
+	"jira_get": true, "jira_search": true,
 }
 
 var devWriteTools = map[string]bool{

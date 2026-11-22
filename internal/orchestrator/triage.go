@@ -201,7 +201,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}
 
-	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview)
+	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, runMode == "direct")
 	if err != nil {
 		return false, "", err
 	}
@@ -240,7 +240,11 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, revAfter)
-	} else if !sddDocs && !sddJira && runMode != "direct" {
+	} else if runMode == "direct" {
+		dirBefore, dirAfter := newDevExploreBudgetCallbacks(20, nil, 30)
+		beforeToolCBs = append([]llmagent.BeforeToolCallback{dirBefore}, beforeToolCBs...)
+		afterToolCBs = append(afterToolCBs, dirAfter)
+	} else if !sddDocs && !sddJira {
 		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, defaultMaxTriageExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, triAfter)

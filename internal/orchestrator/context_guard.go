@@ -149,21 +149,21 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 				}, nil
 			}
 
-		case "search_text":
+		case "search_text", "find_files", "list_dir", "github_list_prs", "github_pr_files":
 			q := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["query"])))
+			pat := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["pattern"])))
+			num := parseIntArg(args["number"])
 			p := normPath(args["path"])
 			g := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["glob"])))
-			if q != "" && q != "<nil>" {
-				key := fmt.Sprintf("%s::%s::%s", q, p, g)
-				mu.Lock()
-				searchCalls[key]++
-				n := searchCalls[key]
-				mu.Unlock()
-				if n >= 2 {
-					return map[string]any{
-						"text": fmt.Sprintf("AVISO ANTI-LOOP: você já executou search_text(%q) neste mesmo escopo. NÃO repita a mesma busca — avance com os resultados já obtidos.", q),
-					}, nil
-				}
+			key := fmt.Sprintf("%s::%s::%s::%d::%s::%s", name, q, pat, num, p, g)
+			mu.Lock()
+			searchCalls[key]++
+			n := searchCalls[key]
+			mu.Unlock()
+			if n >= 2 {
+				return map[string]any{
+					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já executou %s com os mesmos parâmetros neste turno. NÃO repita a mesma busca/listagem — avance imediatamente com os resultados já obtidos (write_file/edit_file ou delegate_to_squad).", name),
+				}, nil
 			}
 		}
 		return nil, nil
@@ -185,6 +185,9 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int, maxCallsOp
 		maxCalls = maxCallsOpt[0]
 	}
 	softBlockAt := maxExplore - 12
+	if softBlockAt > 12 {
+		softBlockAt = 12
+	}
 	if softBlockAt > maxExplore-2 {
 		softBlockAt = maxExplore - 2
 	}

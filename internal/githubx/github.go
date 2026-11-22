@@ -1276,8 +1276,28 @@ func Detect(owner, repo string) Client {
 // variant lives in remote.go as ParseRemoteForHost / ParseRemoteForConfiguredHosts.
 
 // IsExplicitReviewObjective reports whether the user's prompt explicitly asks to review a PR.
+// It inspects only the user's command header (stripping pre-injected MEMORY.md and Jira issue
+// descriptions) so domain terms like "revisão humana (KYC)" or "Fonte: ... (PR #639)" inside
+// a Jira issue never falsely trigger PR review mode on an implementation task.
 func IsExplicitReviewObjective(objective string) bool {
-	low := strings.ToLower(objective)
+	text := strings.TrimSpace(objective)
+	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
+	}
+	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nTask pai:", "\nFonte:"} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			text = strings.TrimSpace(text[:idx])
+		}
+	}
+	low := strings.ToLower(text)
+	for _, impl := range []string{
+		"resolver issue", "resolva a issue", "resolver task", "resolver tarefa",
+		"implementar ", "implemente ",
+	} {
+		if strings.Contains(low, impl) {
+			return false
+		}
+	}
 	for _, kw := range []string{
 		"revisar", "revise", "revisão", "revisao",
 		"code review", "fazer review", "faça review", "faca review",
