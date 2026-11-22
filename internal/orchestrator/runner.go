@@ -33,7 +33,7 @@ import (
 
 // Event is a structured live update emitted by Runner when OnEvent is set.
 type Event struct {
-	Kind              string                   `json:"kind"` // "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route", "provider_failover", "provider_exhausted", "compact"
+	Kind              string                   `json:"kind"` // "session", "stage", "handoff", "devs_scaled", "usage", "text", "tool_call", "tool_result", "finish", "error", "plan_ready", "approval_required", "sdd_gate", "qa_pending", "model_route", "provider_failover", "provider_exhausted", "compact"
 	Stage             string                   `json:"stage,omitempty"`
 	Author            string                   `json:"author,omitempty"`
 	Label             string                   `json:"label,omitempty"`
@@ -322,6 +322,11 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	result.SessionID = sess.ID()
 	ctx = modelx.WithSessionID(ctx, sess.ID())
+	// Emit early so the remote Hub/App can bind sessionId before the turn ends
+	// (mobile StartRun returns Accepted asynchronously).
+	if r.OnEvent != nil {
+		r.OnEvent(Event{Kind: "session", Text: sess.ID(), Label: "session"})
+	}
 
 	if raceCount, isRace := ParseRaceCount(runMode); isRace {
 		return r.runRace(ctx, req, sess, objective, key, raceCount)

@@ -7,6 +7,20 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 )
 
+func TestHubRegisterRunKeepsSessionWhenBlank(t *testing.T) {
+	hub := NewHub()
+	hub.RegisterRun("l1", "C:/w", "principal", "obj1", "sess-keep", "auto")
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "finish", Text: "ok"}})
+	hub.RegisterRun("l1", "C:/w", "principal", "obj2", "", "auto")
+	if got := hub.LaneSessionID("l1"); got != "sess-keep" {
+		t.Fatalf("sessionId deveria permanecer sess-keep, veio %q", got)
+	}
+	hub.HandleLaneEvent(LaneEvent{LaneID: "l1", Team: "principal", Event: orchestrator.Event{Kind: "session", Text: "sess-early"}})
+	if got := hub.LaneSessionID("l1"); got != "sess-early" {
+		t.Fatalf("evento session deveria atualizar id, veio %q", got)
+	}
+}
+
 func TestHubRunLifecycle(t *testing.T) {
 	hub := NewHub()
 	hub.RegisterRun("l1", "C:/w", "principal", "objetivo", "sess-1", "plan")

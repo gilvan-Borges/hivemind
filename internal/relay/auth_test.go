@@ -453,3 +453,18 @@ func TestQRTicketPersistsAndRespectsLoginBlocked(t *testing.T) {
 		t.Fatalf("expected 401 on second redeem, got %d", again.StatusCode)
 	}
 }
+func TestClientIPPrefersRightmostXFF(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("X-Forwarded-For", "198.51.100.1, 203.0.113.50")
+	got := clientIP(req)
+	if got != "203.0.113.50" {
+		t.Fatalf("clientIP=%q want rightmost 203.0.113.50", got)
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	req2.RemoteAddr = "127.0.0.1:1"
+	req2.Header.Set("X-Forwarded-For", "198.51.100.77")
+	if clientIP(req2) != "198.51.100.77" {
+		t.Fatalf("single-hop XFF should still apply")
+	}
+}

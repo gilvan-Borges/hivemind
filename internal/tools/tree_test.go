@@ -29,6 +29,32 @@ func buildTreeFixture(t *testing.T) string {
 	return root
 }
 
+func TestListTreeSkipsSymlinkDirs(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret-outside.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink indisponível neste ambiente: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ok.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := Deps{Root: root}
+	out, err := d.listTree(listTreeArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "secret-outside") {
+		t.Fatalf("symlink dir não deve enumerar fora do jail, saída:\n%s", out)
+	}
+	if !strings.Contains(out, "ok.go") {
+		t.Fatalf("arquivo normal deveria aparecer, saída:\n%s", out)
+	}
+}
+
 func TestListTreeRendersSkeleton(t *testing.T) {
 	root := buildTreeFixture(t)
 	d := Deps{Root: root}

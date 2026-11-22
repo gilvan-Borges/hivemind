@@ -761,11 +761,17 @@ func clientIP(r *http.Request) string {
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	// Loopback peer ⇒ same-host reverse proxy. Prefer the rightmost XFF hop
+	// (appended by the trusted edge). Leftmost is client-controlled and must
+	// not key rate limits.
 	if isLoopback(host) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first := strings.TrimSpace(strings.Split(xff, ",")[0])
-			if ip := net.ParseIP(first); ip != nil {
-				return ip.String()
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				hop := strings.TrimSpace(parts[i])
+				if ip := net.ParseIP(hop); ip != nil {
+					return ip.String()
+				}
 			}
 		}
 	}
