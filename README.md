@@ -1,132 +1,131 @@
 <p align="center">
-  <img src="assets/brand/hivemind-logo-horizontal.png" alt="HiveMind" width="460" />
+  <img src="assets/brand/hivemind-logo-horizontal.png" alt="HiveMind" width="400" />
+</p>
+
+<h1 align="center">HiveMind</h1>
+
+<p align="center">
+  <em>Um time de agentes de software no seu PC — planeja, implementa, revisa e abre PR.</em><br />
+  Local-first: motor no desktop, sandbox no SO, sem gateway que roda o seu código na nuvem.
 </p>
 
 <p align="center">
-  <strong>Um time de agentes de verdade — no PC, no terminal e no bolso.</strong><br/>
-  Você descreve o objetivo. O Chefe planeja. Os Devs fatiam. O QA valida.<br/>
-  Diffs, PRs, Jira e sandbox no sistema operacional. Sem “copilot que só sugere”.
+  <a href="https://github.com/gilvan-Borges/hivemind/releases/latest"><strong>Download</strong></a>
+  · Windows
+  · CLI Linux / macOS
+  · <a href="https://github.com/gilvan-Borges/HiveMind-App">Android</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/gilvan-Borges/hivemind/releases/latest"><img src="https://img.shields.io/github/v/release/gilvan-Borges/hivemind?label=Download&logo=github&color=C6A15B" alt="Latest release" /></a>
+  <a href="https://github.com/gilvan-Borges/hivemind/releases/latest"><img src="https://img.shields.io/github/v/release/gilvan-Borges/hivemind?label=latest&logo=github&color=C6A15B" alt="release" /></a>
   <a href="https://github.com/gilvan-Borges/hivemind/actions/workflows/ci.yml"><img src="https://github.com/gilvan-Borges/hivemind/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/gilvan-Borges/hivemind/actions/workflows/release.yml"><img src="https://github.com/gilvan-Borges/hivemind/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go" />
-  <img src="https://img.shields.io/badge/Licen%C3%A7a-Apache_2.0-blue.svg" alt="Apache 2.0" />
-</p>
-
-<p align="center">
-  <a href="#instala%C3%A7%C3%A3o-em-2-minutos">Instalar</a> ·
-  <a href="#o-que-o-hivemind-faz">O que faz</a> ·
-  <a href="#remote--app-android">Remote + App</a> ·
-  <a href="#relay-fora-da-lan-oracle--vps">Relay</a> ·
-  <a href="#documenta%C3%A7%C3%A3o">Docs</a>
+  <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" />
 </p>
 
 ---
 
-## Por que HiveMind?
+O HiveMind não é um chat colado no editor. É um **escritório multiagente**: Chefe (arquiteto), desenvolvedores em worktrees paralelas, QA com loop real, Git/Jira nativos e ferramentas MCP. Você descreve o objetivo; o time executa no repositório aberto na IDE ou na CLI.
 
-Ferramentas de IA costumam ser **um chat**. O HiveMind é um **escritório**: arquiteto, desenvolvedores em paralelo, QA com loop real, revisão de PR, Git/Jira nativos e execução em sandbox do SO.
+Ele só oferece uma ação quando o papel pode fazê-la. Dev não mergeia PR. QA não inventa “testes passaram”. Commit e PR ficam com Chefe/Arquiteto — ou com você na UI.
 
-```mermaid
-flowchart TB
-  YOU([Você: o objetivo]) --> CHIEF[Chefe / Arquiteto]
-  CHIEF --> PLAN{Modo}
-  PLAN -->|Auto| SQUAD[Squad paralelo]
-  PLAN -->|Planejar| GATE[Gate humano]
-  PLAN -->|SDD| SPECS[Specs → Jira → ondas]
-  GATE --> SQUAD
-  SPECS --> SQUAD
-  SQUAD --> DEV1[Dev worktree A]
-  SQUAD --> DEV2[Dev worktree B]
-  SQUAD --> DEV3[Dev worktree N]
-  DEV1 --> QA[QA]
-  DEV2 --> QA
-  DEV3 --> QA
-  QA -->|aprovado| CLOSE[Chefe · Fecho / PR]
-  QA -->|ajustes| DEV1
 ```
-
-**O motor fica no seu PC.** Modelos, segredos e o repositório não viajam para um “gateway mágico”. O celular e o relay só mandam ordens cifradas — quem executa é a IDE na sua máquina.
-
----
-
-## O que o HiveMind faz
-
-| Frente | Para quem | O que entrega |
-| --- | --- | --- |
-| **HiveMind IDE** | Windows desktop | Editor, chat multimodal, time multiagente, Git/PR, Jira, MCP, uso de IAs, Remote Bridge |
-| **CLI `hivemind`** | Terminal (Win / Linux / macOS) | TUI Bubble Tea, `run`, `doctor`, `team`, `serve`, mesmos agentes |
-| **HiveMind-App** | Android | Controlar a IDE na LAN ou via relay — [repositório companion](https://github.com/gilvan-Borges/HiveMind-App) |
-| **`hivemind-relay`** | VPS / Oracle Always Free | Túnel de saída HTTPS/WSS: app ↔ IDE de qualquer rede |
-
-### Destaques que vendem o produto
-
-- **Time de verdade** — Chefe, Devs em worktrees isoladas, QA com `qa_approve` / `qa_request_changes`
-- **Jev** — roteador de modelo com circuit breaker e telemetria de cota
-- **Sandbox fechada** — AppContainer/Job Object (Windows), bubblewrap (Linux), Seatbelt (macOS)
-- **MCP nativo** — Context7, Code Review Graph e outros no host compartilhado ([docs/MCP.md](docs/MCP.md))
-- **Pool de contas** — várias Antigravity / OpenCode / Cursor por organização Git
-- **Revisão automática de PR** — lane dedicada (opt-in)
-- **Remote** — QR na LAN ou relay E2EE fora de casa
-
-```mermaid
-mindmap
-  root((HiveMind))
-    IDE
-      Chat + prints
-      Squad paralelo
-      Git · PR · Jira
-      Uso e limites das IAs
-    CLI
-      TUI interativa
-      run objetivo
-      doctor
-      serve headless
-    Segurança
-      Sandbox SO
-      Cofre DPAPI / Keychain
-      Bridge desligado por padrão
-    Alcance
-      LAN :47890
-      Relay WSS
-      App Android
+ você ──▶ Chefe ─┬─ Auto ──────────────────────────────┐
+                 ├─ Planejar (gate humano) ─────────────┤
+                 └─ SDD (specs → Jira → ondas) ─────────┼─▶ Devs (worktrees) ─▶ QA ─▶ Fecho / PR
+                                                        │
+ IDE · CLI · MCP · Jev · sandbox SO ◀───────────────────┘
+        │
+        ├─ LAN :47890 ──▶ HiveMind-App (Android)
+        └─ WSS saída ──▶ hivemind-relay ──▶ App (qualquer rede)
 ```
 
 ---
 
-## Instalação em 2 minutos
+## IDE
 
-### Windows (recomendado)
+Desktop Windows (Go + Wails). Abre na pasta do projeto, chat multimodal com prints, time ao vivo, diffs, commit/PR, Jira, terminal, MCP e página de **Uso & Limites das IAs** (uma conta do Pool = um cartão de cota).
 
-1. Abra a **[Latest Release](https://github.com/gilvan-Borges/hivemind/releases/latest)**
-2. Baixe **`HiveMindSetup-x64.exe`**
-3. Confira o SHA-256 em `checksums.txt` (opcional, mas certo)
-4. Instale e abra **HiveMind IDE**
+- **Modos:** Auto (triagem), Direto, Planejar (feature / SDD com gates), Squad.
+- **Quadro multiagente:** modelos por papel, lane paralela, handoffs e telemetria de tokens.
+- **Git & Issues:** branch, diff, commit, push, PR, comentários Jira/GitHub — na barra e na paleta.
+- **Pool de contas:** várias Antigravity (`agy`), OpenCode, Cursor CLI, OpenRouter… por organização Git.
+- **Revisão automática de PR:** lane dedicada, opt-in (sem merge automático no modo auto).
 
-Pronto. A CLI `hivemind` também entra no PATH pelo instalador.
+Detalhes de build: [ide/README.md](ide/README.md).
 
-> Cada push verde na `main` publica uma Release automática (workflow **Release**). Sempre use a **Latest**.
+---
 
-### CLI rápida (Linux / macOS / Windows)
+## CLI
 
-Na mesma Release:
-
-| Arquivo | Plataforma |
-| --- | --- |
-| `hivemind-windows-amd64.exe` | Windows |
-| `hivemind-linux-amd64` | Linux x86_64 |
-| `hivemind-darwin-amd64` / `hivemind-darwin-arm64` | macOS Intel / Apple Silicon |
+O mesmo orquestrador no terminal (Windows, Linux, macOS).
 
 ```bash
-chmod +x hivemind-linux-amd64
-./hivemind-linux-amd64 version
-./hivemind-linux-amd64 doctor
+hivemind doctor
+hivemind team create --name padrao
+hivemind                          # TUI
+hivemind run "adicionar healthcheck"
+hivemind serve                    # Remote Bridge headless + QR
 ```
 
-### Compilar do zero (contribuidores)
+Comandos públicos: `run`, `team`, `agent`, `session`, `jira`, `git`, `mcp`, `doctor`, `serve`, `version`.
+
+---
+
+## Squad e orquestração
+
+| Peça | Função |
+| --- | --- |
+| **Chefe / Arquiteto** | Triagem, plano, fecho, commit/PR |
+| **Devs** | Worktrees isoladas, `edit_file`, sem commit |
+| **QA** | Testes + `qa_approve` / `qa_request_changes` |
+| **Jev** | Roteamento de modelo, circuit breaker, cotas (opt-in) |
+| **Sandbox** | AppContainer/Job Object · bubblewrap · Seatbelt |
+| **MCP** | Context7 e Code Review Graph ligados; outros opt-in — [docs/MCP.md](docs/MCP.md) |
+
+Provedores: `agy`, OpenCode, Gemini/Vertex, Anthropic, OpenAI, OpenRouter, Cursor (`agent`). Sem `GOOGLE_API_KEY` e com `agy` no PATH, time novo prefere **agy**.
+
+---
+
+## Remote e mobile
+
+**Android.** O [HiveMind-App](https://github.com/gilvan-Borges/HiveMind-App) controla a IDE. Na IDE, ligue o **Remote Bridge** (desligado por padrão) e escaneie o QR `hivemind://pair`. Token bearer de 256 bits; só dispositivos pareados. Na mesma Wi‑Fi não precisa de servidor.
+
+**Fora da LAN.** IDE e celular abrem só **conexão de saída** para o `hivemind-relay`. O relay encaminha ciphertext; o motor continua no PC. Sem porta aberta no roteador de casa.
+
+```
+ App ──wss──▶ Relay (Caddy :443 → 127.0.0.1:8787) ◀──wss── IDE
+```
+
+Guia Oracle Always Free: [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md) · Contrato: [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md).
+
+### Relay em 6 passos (resumo)
+
+1. VM Ubuntu + Security List/`iptables` com TCP **80** e **443**
+2. DNS `A` → IP público
+3. Baixe `hivemind-relay-linux-amd64` (ou `arm64`) na [Latest Release](https://github.com/gilvan-Borges/hivemind/releases/latest) — não compile na Micro de 1 GB
+4. Instale binário + `/etc/hivemind-relay.env` + unit [`deploy/relay/hivemind-relay.service`](deploy/relay/hivemind-relay.service)
+5. Caddy com [`deploy/relay/Caddyfile`](deploy/relay/Caddyfile) → `curl https://relay.seudominio/api/v1/health`
+6. IDE → Acesso remoto → login → ligar túnel; app na mesma conta escolhe a IDE `online`
+
+---
+
+## Install
+
+A [latest release](https://github.com/gilvan-Borges/hivemind/releases/latest) traz:
+
+| Asset | Uso |
+| --- | --- |
+| `HiveMindSetup-x64.exe` | Instalador Windows (IDE + CLI no PATH) |
+| `hivemind-windows-amd64.exe` | CLI Windows avulsa |
+| `hivemind-linux-*` / `hivemind-darwin-*` | CLI Unix |
+| `hivemind-relay-linux-*` | Relay na VPS |
+| `checksums.txt` / `manifest.json` | SHA-256 |
+
+Todo push verde na `main` gera uma Release automática (tag `v{VERSION}-{sha}`, marcada Latest).
+
+**Compilar local (Windows):**
 
 ```powershell
 git clone https://github.com/gilvan-Borges/hivemind.git
@@ -134,222 +133,60 @@ cd hivemind
 powershell -File .\scripts\build-installer.ps1
 ```
 
-Requisitos: Go **1.26+**, Node **20+**, Wails **v2.17.1**, Inno Setup 6. Detalhes em [ide/README.md](ide/README.md).
+Go 1.26+, Node 20+, [Wails v2.17.1](https://wails.io/), Inno Setup 6.
+
+**CLI só:**
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o hivemind ./cmd/hivemind
+./hivemind version
+```
 
 ---
 
-## Primeiros passos
+## Primeiro uso
 
 ```powershell
 cd C:\projetos\meu-app
 hivemind doctor
 hivemind team create --name padrao
 hivemind
-# ou
-hivemind run "adicionar um endpoint de healthcheck"
 ```
 
-Na IDE: abra a pasta do projeto → descreva o objetivo → modo **Auto**, **Planejar** ou **SDD**.
+Ou abra a pasta na IDE e diga o objetivo. Exemplo de time: [examples/team.yaml](examples/team.yaml). Config do projeto: `.hivemind/team.yaml` (gitignore).
 
-### Configurar modelos
-
-1. Na IDE: **Chaves de API** / **Pool de Contas**
-2. Ligue Antigravity (`agy`), OpenCode, Cursor CLI, OpenRouter, etc.
-3. Acompanhe cotas em **Uso & Limites das IAs** (página central)
-
-Sem `GOOGLE_API_KEY` e com `agy` no PATH, times novos preferem **agy**.
-
-Exemplo de time: [examples/team.yaml](examples/team.yaml). Config do projeto: `.hivemind/team.yaml` (gitignore).
+Chaves e Pool de Contas ficam na config do usuário (`%APPDATA%\HiveMind`), fora do Git. Variável de ambiente, se existir, prevalece.
 
 ---
 
-## Arquitetura (visão de produto)
+## Privacidade e dados
 
-```mermaid
-flowchart LR
-  subgraph desk [Seu PC]
-    IDE[HiveMind IDE]
-    CLI[CLI]
-    ORCH[Orquestrador ADK]
-    JEV[Jev]
-    RES[Residente]
-    SB[Sandbox]
-    MCP[Host MCP]
-    BR[Remote Bridge]
-  end
-  RELAY[hivemind-relay<br/>VPS]
-  APP[HiveMind-App]
+Tudo que importa fica na máquina: repositório, modelos, cofre de segredos, telemetria local de tokens. O bridge e o cliente do relay **nascem desligados**. O relay não executa agentes e não lê o plaintext do plano de dados (NaCl box). Shell dos agentes limpa env de tokens/senhas. No Windows, segredos do residente usam Credential Manager + DPAPI.
 
-  IDE --> ORCH
-  CLI --> ORCH
-  ORCH --> JEV
-  IDE --> RES --> SB
-  IDE --> MCP
-  CLI --> MCP
-  IDE --> BR
-  CLI -->|hivemind serve| BR
-  BR -->|LAN :47890| APP
-  IDE -.->|WSS saída| RELAY
-  APP -.->|WSS saída| RELAY
-```
-
-O **relay não executa agentes**. Ele autentica, encaminha quadros cifrados e lista seus PCs. Código, modelos e segredos ficam no desktop.
+Ver [SECURITY.md](SECURITY.md).
 
 ---
 
-## Remote + App Android
+## Desenvolvimento
 
-### A) Mesma Wi‑Fi (LAN) — zero servidor
-
-```mermaid
-sequenceDiagram
-  participant IDE as HiveMind IDE
-  participant Phone as HiveMind-App
-  IDE->>IDE: Liga Remote Bridge :47890
-  IDE->>Phone: QR hivemind://pair + token
-  Phone->>IDE: HTTPS / SSE na LAN
-  Note over IDE,Phone: Motor de agentes continua no PC
-```
-
-1. Na IDE, ative o chip / painel **Mobile / Remote Bridge**
-2. Escaneie o QR `hivemind://pair` no app
-3. Token bearer de 256 bits; bridge nasce **desligado** até você ligar
-
-Headless sem janela:
+Módulo Go (`github.com/gilvan-Borges/HiveMind`), IDE em `ide/` (Wails + TypeScript/Vite), ADK Go no orquestrador. CI em Ubuntu e Windows; Release publica os binários.
 
 ```powershell
-hivemind serve
+go test ./...
+cd ide\frontend && npm ci && npm test && npm run build
+cd .. && go test ./internal/idecore/...
 ```
-
-Sobe o bridge, mostra o QR no terminal. `Ctrl+C` encerra.
-
-### B) Fora de casa — Relay
-
-IDE e celular só fazem **conexão de saída** (WSS). Você **não** abre porta no roteador de casa.
-
-Contrato: [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md) · Guia completo: [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md)
-
----
-
-## Relay fora da LAN (Oracle / VPS)
-
-Resumo operacional. Para Always Free Oracle, use o guia longo acima.
-
-```mermaid
-flowchart TB
-  subgraph internet [Internet]
-    APP[App Android]
-    IDE[IDE no PC]
-  end
-  subgraph vps [Sua VPS]
-    CADDY[Caddy :443 TLS]
-    RELAY[hivemind-relay<br/>127.0.0.1:8787]
-    CADDY --> RELAY
-  end
-  APP -->|wss| CADDY
-  IDE -->|wss| CADDY
-```
-
-### 1. VM + portas
-
-- Ubuntu 24.04 · shape Always Free (ex.: `VM.Standard.E2.1.Micro` x86) ou Ampere (`arm64`)
-- Security List **e** `iptables`: TCP **80** e **443** (não exponha 8787)
-
-### 2. DNS
-
-Registro `A` → IP público (`relay.seudominio.com` ou DuckDNS).
-
-### 3. Binário
-
-Baixe `hivemind-relay-linux-amd64` (ou `arm64`) da [Release](https://github.com/gilvan-Borges/hivemind/releases/latest) — **não compile na Micro de 1 GB**.
-
-```bash
-sudo useradd --system --create-home --home-dir /var/lib/hivemind-relay --shell /usr/sbin/nologin hivemind
-sudo install -m 0755 ./hivemind-relay-linux-amd64 /usr/local/bin/hivemind-relay
-sudo install -d -m 0700 -o hivemind -g hivemind /var/lib/hivemind-relay
-```
-
-### 4. Ambiente + systemd
-
-```bash
-sudo tee /etc/hivemind-relay.env >/dev/null <<'EOF'
-HIVEMIND_RELAY_ADDR=127.0.0.1:8787
-HIVEMIND_RELAY_DATA=/var/lib/hivemind-relay
-HIVEMIND_RELAY_PUBLIC_URL=https://relay.seudominio.com
-HIVEMIND_SEED_EMAIL=voce@exemplo.com
-HIVEMIND_SEED_PASSWORD=
-EOF
-sudo chmod 600 /etc/hivemind-relay.env
-```
-
-Unit: [`deploy/relay/hivemind-relay.service`](deploy/relay/hivemind-relay.service)
-
-```bash
-sudo cp deploy/relay/hivemind-relay.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now hivemind-relay
-sudo journalctl -u hivemind-relay -n 40 --no-pager
-```
-
-Senha gerada aparece uma vez no journal / `initial-password.txt` — copie e apague.
-
-### 5. Caddy (HTTPS)
-
-```bash
-# instale o Caddy (ver guia Oracle)
-sudo cp deploy/relay/Caddyfile /etc/caddy/Caddyfile   # ajuste o hostname
-sudo systemctl reload caddy
-curl -sS https://relay.seudominio.com/api/v1/health
-```
-
-### 6. Ligar IDE + app
-
-1. IDE → **Acesso remoto** → URL do relay + e-mail/senha → **Entrar**
-2. **Ligar acesso remoto** (WebSocket de saída)
-3. App: mesma conta → escolher a IDE `online` → trocar chaves públicas E2EE
-
-Docker (host com RAM): `docker build -f deploy/relay/Dockerfile -t hivemind-relay .` — na Micro, prefira binário + Caddy no host.
-
----
-
-## Estrutura do repositório
-
-| Caminho | Conteúdo |
-| --- | --- |
-| `cmd/` | `hivemind`, `hivemind-relay` |
-| `ide/` | IDE desktop (Go + Wails + TypeScript) |
-| `internal/` | Orquestrador, Jev, MCP, residente, sandbox, modelos, Git/GitHub/Jira |
-| `relaywire/` | Contrato app ↔ relay ↔ IDE |
-| `deploy/relay/` | Dockerfile, Caddyfile, systemd |
-| `scripts/` | Instalador Windows |
-| `docs/` | Specs e guias |
-| `.agents/skills/` | Skills do time |
-| `.github/workflows/` | CI + Release automática |
-
----
-
-## Documentação
 
 | Doc | Assunto |
 | --- | --- |
-| [docs/MCP.md](docs/MCP.md) | Host MCP e skills |
-| [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md) | Provedor Cursor CLI |
+| [docs/MCP.md](docs/MCP.md) | MCP e skills |
+| [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md) | Provedor Cursor |
 | [docs/SPEC_JEV_ORQUESTRADOR.md](docs/SPEC_JEV_ORQUESTRADOR.md) | Jev |
-| [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md) | Agente residente |
-| [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md) | Contrato do relay |
-| [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md) | Relay na Oracle Always Free |
-| [docs/SPEC_APP_MOBILE_NATIVO.md](docs/SPEC_APP_MOBILE_NATIVO.md) | App + bridge |
+| [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md) | Residente |
+| [docs/SPEC_RELAY.md](docs/SPEC_RELAY.md) | Relay |
+| [docs/GUIA_ORACLE_RELAY.md](docs/GUIA_ORACLE_RELAY.md) | Oracle Always Free |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Roadmap |
-| [ide/README.md](ide/README.md) | Build da IDE |
-| [HiveMind-App](https://github.com/gilvan-Borges/HiveMind-App) | Cliente Android |
-
----
-
-## Segurança (em uma frase e um pouco mais)
-
-Bridge e relay **nascem desligados**. Segredos de provedor ficam fora do Git (`api-keys.json` / cofre). Shell dos agentes limpa env de tokens. Residente usa Credential Manager + DPAPI no Windows (Keychain / Secret Service nos outros). O relay **não** vê o plaintext do plano de dados (NaCl box).
-
-Relatório responsável: ver [SECURITY.md](SECURITY.md).
+| [ide/README.md](ide/README.md) | IDE |
 
 ---
 
@@ -357,10 +194,6 @@ Relatório responsável: ver [SECURITY.md](SECURITY.md).
 
 [Apache License 2.0](LICENSE).
 
----
-
 <p align="center">
-  <img src="assets/brand/hivemind-icon.png" alt="" width="64" /><br/>
-  <strong>Baixe. Abra o projeto. Descreva o objetivo.</strong><br/>
-  <a href="https://github.com/gilvan-Borges/hivemind/releases/latest">→ Latest Release</a>
+  <a href="https://github.com/gilvan-Borges/hivemind/releases/latest">→ Baixar a Latest Release</a>
 </p>
