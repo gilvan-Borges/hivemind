@@ -99,10 +99,13 @@ type Runner struct {
 	NativeSkills       []skillx.Skill
 	NativeSkillsRoot   string
 	Catalog            *jev.CatalogStore
+	LiveRoundtableModel model.LLM
 	RaceCandidateExec  func(ctx context.Context, idx int, wtDir, objective string) (summary string, costMicroUSD int64, totalTokens int64, err error)
 
 	autoReviewMode    bool
 	resumedSession    bool
+	roundtableMu      sync.Mutex
+	roundtableCalls   int
 	integration       string
 	deliveryRoot      string
 	deliveryBranch    string
@@ -452,6 +455,9 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 
 func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx context.Context) {
 	r.resumedSession = false
+	r.roundtableMu.Lock()
+	r.roundtableCalls = 0
+	r.roundtableMu.Unlock()
 	r.integration = ""
 	r.deliveryRoot = ""
 	r.deliveryBranch = ""

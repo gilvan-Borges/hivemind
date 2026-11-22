@@ -695,6 +695,8 @@ export function formatMinimalToolStep(m: ChatMessage): MinimalToolRowSpec {
   if (name === "jira_comment") return { verb: active ? "Comentando" : "Comentou", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
   if (name === "jira_transition") return { verb: active ? "Movendo" : "Moveu", targetText: `Jira ${rawArg || ""}`.trim(), expandChevron: true };
   if (name === "delegate_to_squad") return { verb: active ? "Acionando" : "Acionou", targetText: "equipe paralela", expandChevron: true };
+  if (name === "ask_chief") return { verb: active ? "Consultando" : "Consultou", targetText: `Chefe na Mesa Redonda${rawArg ? ` · ${rawArg}` : ""}`, expandChevron: true };
+  if (name === "share_team_note") return { verb: active ? "Alinhando" : "Alinhou", targetText: `Mesa Redonda${rawArg ? ` · ${rawArg}` : ""}`, expandChevron: true };
   if (name === "qa_approve") return { verb: "Aprovou", targetText: rawArg || "validação de QA", expandChevron: true };
   if (name === "qa_request_changes") return { verb: "Pediu ajustes", targetText: rawArg || "QA → Devs", expandChevron: true };
 
@@ -1207,15 +1209,15 @@ export function syncComposerButtons() {
   if (sendBtn) {
     sendBtn.disabled = false;
     sendBtn.innerHTML = running
-      ? `${icons.send}<span>Redirecionar</span>`
+      ? `${icons.send}<span>Orientar ao Vivo</span>`
       : `${icons.send}<span>Enviar</span>`;
     sendBtn.title = running
-      ? "Interrompe a execução atual imediatamente e envia sua nova instrução"
+      ? "Envia direcionamento em tempo real para a Mesa Redonda (Chefe, Dev e QA) sem interromper a execução"
       : "Enviar tarefa para a equipe (Enter)";
   }
   if (chatInput) {
     chatInput.placeholder = running
-      ? "Equipe trabalhando… digite para interromper e redirecionar, ou clique em Parar"
+      ? "Mesa Redonda ao vivo… digite para orientar o Dev/Chefe em tempo real (ex.: 'mexa no arquivo X'), ou clique em Parar"
       : "Descreva a tarefa para a equipe… (Ctrl+V cola print, Ctrl+L envia seleção, @arquivo, /ajuda)";
   }
   renderChatApprovalDock();
@@ -1598,6 +1600,36 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   }
 
   if (lane.running) {
+    // Se a execução já está rodando e o usuário enviou um texto de orientação sem anexos,
+    // injeta o direcionamento ao vivo na Mesa Redonda (SteerRun) sem matar o trabalho atual do Dev!
+    if (text && attached.length === 0 && typeof (backend as any).SteerRun === "function") {
+      try {
+        const steered = await (backend as any).SteerRun(lane.id, text);
+        if (steered) {
+          const chatInputLive = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+          lane.messages.push({
+            id: `usr-${Date.now()}`,
+            kind: "user",
+            label: "Usuário · Mesa Redonda ao Vivo",
+            text,
+          });
+          if (!isOverride) {
+            state.draftObjective = "";
+            state.mentionResults = [];
+            if (chatInputLive) {
+              chatInputLive.value = "";
+              autoResizeTextarea(chatInputLive);
+            }
+            renderMentionPopup();
+          }
+          setStatus("Direcionamento enviado ao vivo para a Mesa Redonda.");
+          flushChatUpdates();
+          return;
+        }
+      } catch {
+        // Fallback para redirecionamento tradicional caso a execução tenha acabado de encerrar
+      }
+    }
     if (laneRedirecting.has(lane.id)) return;
     laneRedirecting.add(lane.id);
     try {

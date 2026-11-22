@@ -156,6 +156,11 @@ func (a *App) CancelRun(laneID string) bool {
 	return a.sessions.Cancel(laneID)
 }
 
+// SteerRun sends a live roundtable directive into an active run on laneID without cancelling it.
+func (a *App) SteerRun(laneID, message string) bool {
+	return a.sessions.Steer(laneID, message)
+}
+
 // RunCommand executes a command inside workspace for the integrated IDE terminal (Ctrl+J),
 // streaming stdout/stderr lines in real time via Wails event "hivemind:terminal-output".
 func (a *App) RunCommand(workspace, command string) (idecore.CommandOutput, error) {

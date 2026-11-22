@@ -133,26 +133,39 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	}
 	var afterToolCBs []llmagent.AfterToolCallback
 	if a.Role == team.RoleDeveloper {
+		roundFn := func() int {
+			r.handoffMu.Lock()
+			defer r.handoffMu.Unlock()
+			return r.qaLoopIter
+		}
 		devExpBefore, devExpAfter := newDevExploreBudgetCallbacks(
 			r.Project.Settings.EffectiveMaxDevExploreCalls(),
-			func() int {
-				r.handoffMu.Lock()
-				defer r.handoffMu.Unlock()
-				return r.qaLoopIter
-			},
+			roundFn,
 			r.Project.Settings.EffectiveMaxDevCalls(),
 		)
 		beforeToolCBs = append(beforeToolCBs, devExpBefore)
-		afterToolCBs = append(afterToolCBs, devExpAfter)
+		afterToolCBs = append(afterToolCBs, devExpAfter, r.newLiveRoundtableSupervisorCallback(a, adkName, root, roundFn))
 		if guard := newOwnedPathsGuardCallback(root, adkName, ownedPaths, r.sharedBoard); guard != nil {
 			beforeToolCBs = append(beforeToolCBs, guard)
 		}
+		if askTool, aErr := r.newAskChiefTool(a, adkName, root); aErr == nil {
+			roleTools = append(roleTools, askTool)
+		}
 		if r.sharedBoard != nil {
-			if noteTool, nErr := newShareTeamNoteTool(adkName, r.sharedBoard); nErr == nil {
+			if noteTool, nErr := newShareTeamNoteTool(adkName, r.sharedBoard, r.OnEvent); nErr == nil {
 				roleTools = append(roleTools, noteTool)
 			}
 			if touchCB := newTeamBoardTouchCallback(root, adkName, r.sharedBoard); touchCB != nil {
 				afterToolCBs = append(afterToolCBs, touchCB)
+			}
+		}
+	} else if a.Role == team.RoleQA {
+		if askTool, aErr := r.newAskChiefTool(a, adkName, root); aErr == nil {
+			roleTools = append(roleTools, askTool)
+		}
+		if r.sharedBoard != nil {
+			if noteTool, nErr := newShareTeamNoteTool(adkName, r.sharedBoard, r.OnEvent); nErr == nil {
+				roleTools = append(roleTools, noteTool)
 			}
 		}
 	}
@@ -211,6 +224,8 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 						if r.Out != nil && r.Err != nil {
 							fmt.Fprintf(r.Err, "aviso: %s\n", msg)
 						}
+					} else {
+						r.runQARoundtableMediation(tctx, a, root, args, result)
 					}
 				}
 				return nil, nil

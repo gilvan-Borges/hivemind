@@ -15,31 +15,152 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 )
 
-// TeamNote is a structured contract or coordination signal published between developers
-// sharing the same conversation worktree.
+// TeamNote is a structured contract or coordination signal published between developers,
+// QA, and the Chief sharing the same conversation worktree.
 type TeamNote struct {
 	Author  string
+	To      string
 	Topic   string
 	Content string
+}
+
+// TeamDirective is a high-priority live steering instruction issued during the
+// Roundtable by the Chief or User to redirect an active agent in real time.
+type TeamDirective struct {
+	From      string
+	To        string
+	Content   string
+	delivered map[string]bool
 }
 
 // TeamBoard holds live in-memory team awareness for a single run:
 //   - which file/directory slices each developer owns
 //   - which files each developer actually modified (recorded automatically)
+//   - recent tool actions per agent so the Chief can inspect what a Dev has been doing
+//   - live Roundtable directives from the Chief or User
 //   - concise contract/interface notes published via share_team_note
 type TeamBoard struct {
-	mu      sync.RWMutex
-	order   []string
-	owners  map[string][]string
-	touched map[string][]string
-	notes   []TeamNote
+	mu         sync.RWMutex
+	order      []string
+	owners     map[string][]string
+	touched    map[string][]string
+	trail      map[string][]string
+	notes      []TeamNote
+	directives []TeamDirective
 }
 
 func newTeamBoard() *TeamBoard {
 	return &TeamBoard{
 		owners:  make(map[string][]string),
 		touched: make(map[string][]string),
+		trail:   make(map[string][]string),
 	}
+}
+
+func (b *TeamBoard) RecordActivity(agentName, action string) {
+	if b == nil {
+		return
+	}
+	ag := strings.TrimSpace(agentName)
+	act := strings.TrimSpace(action)
+	if ag == "" || act == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	list := b.trail[ag]
+	if len(list) > 0 && list[len(list)-1] == act {
+		return
+	}
+	list = append(list, act)
+	if len(list) > 12 {
+		list = append([]string(nil), list[len(list)-12:]...)
+	}
+	b.trail[ag] = list
+}
+
+func (b *TeamBoard) RecentActivity(agentName string) []string {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	list := b.trail[strings.TrimSpace(agentName)]
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]string, len(list))
+	copy(out, list)
+	return out
+}
+
+func (b *TeamBoard) PublishDirective(from, to, content string) {
+	if b == nil {
+		return
+	}
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	if from == "" {
+		from = "chefe"
+	}
+	if to == "" {
+		to = "todos"
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.directives = append(b.directives, TeamDirective{
+		From:      from,
+		To:        to,
+		Content:   content,
+		delivered: make(map[string]bool),
+	})
+}
+
+func directiveMatchesAgent(target, agentName string) bool {
+	t := strings.ToLower(strings.TrimSpace(target))
+	a := strings.ToLower(strings.TrimSpace(agentName))
+	if t == "" || t == "todos" || t == "all" || t == "*" || t == a {
+		return true
+	}
+	if t == "dev" && strings.HasPrefix(a, "dev") {
+		return true
+	}
+	if t == "qa" && strings.HasPrefix(a, "qa") {
+		return true
+	}
+	return false
+}
+
+func (b *TeamBoard) PendingDirectivesFor(agentName string, markDelivered bool) []TeamDirective {
+	if b == nil {
+		return nil
+	}
+	ag := strings.ToLower(strings.TrimSpace(agentName))
+	if ag == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []TeamDirective
+	for i := range b.directives {
+		d := &b.directives[i]
+		if !directiveMatchesAgent(d.To, ag) || d.delivered[ag] {
+			continue
+		}
+		if markDelivered {
+			d.delivered[ag] = true
+		}
+		out = append(out, TeamDirective{
+			From:    d.From,
+			To:      d.To,
+			Content: d.Content,
+		})
+	}
+	return out
 }
 
 func (b *TeamBoard) RegisterOwner(agentName string, paths []string) {
@@ -73,7 +194,7 @@ func (b *TeamBoard) RecordTouch(agentName, relSlash string) {
 	b.touched[agentName] = append(b.touched[agentName], rel)
 }
 
-func (b *TeamBoard) PublishNote(author, topic, content string) {
+func (b *TeamBoard) PublishNote(author, topic, content string, toOpt ...string) {
 	if b == nil {
 		return
 	}
@@ -86,17 +207,23 @@ func (b *TeamBoard) PublishNote(author, topic, content string) {
 	if topic == "" {
 		topic = "contrato"
 	}
+	to := "todos"
+	if len(toOpt) > 0 && strings.TrimSpace(toOpt[0]) != "" {
+		to = strings.TrimSpace(toOpt[0])
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// Update existing note with same author+topic so repeated publishes stay compact.
 	for i := range b.notes {
 		if b.notes[i].Author == author && strings.EqualFold(b.notes[i].Topic, topic) {
+			b.notes[i].To = to
 			b.notes[i].Content = content
 			return
 		}
 	}
 	b.notes = append(b.notes, TeamNote{
 		Author:  author,
+		To:      to,
 		Topic:   topic,
 		Content: content,
 	})
@@ -111,7 +238,7 @@ func (b *TeamBoard) SummaryFor(currentAgent string) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if len(b.order) == 0 && len(b.touched) == 0 && len(b.notes) == 0 {
+	if len(b.order) == 0 && len(b.touched) == 0 && len(b.notes) == 0 && len(b.directives) == 0 {
 		return ""
 	}
 
@@ -153,13 +280,33 @@ func (b *TeamBoard) SummaryFor(currentAgent string) string {
 		}
 	}
 
+	if len(b.directives) > 0 {
+		var dirLines []string
+		for _, d := range b.directives {
+			if currentAgent == "" || directiveMatchesAgent(d.To, currentAgent) {
+				dirLines = append(dirLines, fmt.Sprintf("- [%s → %s]: %s", d.From, d.To, d.Content))
+			}
+		}
+		if len(dirLines) > 0 {
+			if out.Len() > 0 {
+				out.WriteString("\n")
+			}
+			out.WriteString("[🧭 Mesa Redonda ao Vivo — Direcionamentos do Chefe & Time]\n")
+			out.WriteString(strings.Join(dirLines, "\n"))
+		}
+	}
+
 	if len(b.notes) > 0 {
 		if out.Len() > 0 {
 			out.WriteString("\n")
 		}
 		out.WriteString("[Contratos & Notas Publicadas entre Devs]\n")
 		for _, n := range b.notes {
-			fmt.Fprintf(&out, "- [%s · %s]: %s\n", n.Author, n.Topic, n.Content)
+			toTag := ""
+			if strings.TrimSpace(n.To) != "" && !strings.EqualFold(n.To, "todos") {
+				toTag = " → " + n.To
+			}
+			fmt.Fprintf(&out, "- [%s%s · %s]: %s\n", n.Author, toTag, n.Topic, n.Content)
 		}
 	}
 	return strings.TrimSpace(out.String())
@@ -354,22 +501,44 @@ func newTeamBoardTouchCallback(root, agentName string, board *TeamBoard) llmagen
 	}
 }
 
-func newShareTeamNoteTool(agentName string, board *TeamBoard) (tool.Tool, error) {
+func newShareTeamNoteTool(agentName string, board *TeamBoard, onEventOpt ...func(Event)) (tool.Tool, error) {
+	var onEvent func(Event)
+	if len(onEventOpt) > 0 {
+		onEvent = onEventOpt[0]
+	}
 	type shareArgs struct {
-		Topic   string `json:"topic" jsonschema:"Assunto curto (ex.: contrato-api, schema, tipos, aviso-build)."`
-		Content string `json:"content" jsonschema:"Nota concisa com assinatura, rota, tipo ou decisão que os outros devs precisam saber."`
+		To      string `json:"to,omitempty" jsonschema:"Destinatário opcional na Mesa Redonda (ex.: todos, chefe, qa, dev_1, dev_2). Padrão: todos."`
+		Topic   string `json:"topic" jsonschema:"Assunto curto (ex.: contrato-api, schema, tipos, aviso-build, duvida)."`
+		Content string `json:"content" jsonschema:"Mensagem ou nota concisa com assinatura, rota, tipo, contrato ou alinhamento para o time em tempo real."`
 	}
 	type shareRes struct {
 		OK bool `json:"ok"`
 	}
 	return functiontool.New(functiontool.Config{
 		Name:        "share_team_note",
-		Description: "Publica uma nota curta ou contrato de interface na memória compartilhada em tempo real para os outros devs da mesma worktree.",
+		Description: "Envia uma mensagem ou contrato de interface ao vivo na Mesa Redonda para os outros Devs, QA e Chefe na mesma worktree.",
 	}, func(_ agent.Context, args shareArgs) (shareRes, error) {
 		if strings.TrimSpace(args.Content) == "" {
 			return shareRes{OK: false}, fmt.Errorf("informe content na nota")
 		}
-		board.PublishNote(agentName, args.Topic, args.Content)
+		target := strings.TrimSpace(args.To)
+		if target == "" {
+			target = "todos"
+		}
+		board.PublishNote(agentName, args.Topic, args.Content, target)
+		if onEvent != nil {
+			topicLabel := strings.TrimSpace(args.Topic)
+			if topicLabel == "" {
+				topicLabel = "alinhamento"
+			}
+			onEvent(Event{
+				Kind:   "handoff",
+				Stage:  inferStage(agentName, agentName),
+				Author: agentName,
+				Label:  fmt.Sprintf("Mesa Redonda · %s → %s (%s)", agentName, target, topicLabel),
+				Text:   strings.TrimSpace(args.Content),
+			})
+		}
 		return shareRes{OK: true}, nil
 	})
 }

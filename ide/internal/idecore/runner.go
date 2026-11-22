@@ -264,6 +264,7 @@ type pendingApproval struct {
 type SessionManager struct {
 	mu          sync.Mutex
 	cancels     map[string]context.CancelFunc
+	runners     map[string]*orchestrator.Runner
 	approvals   map[string]pendingApproval
 	approvalSeq uint64
 	mcpPool     *runtime.MCPPool
@@ -283,10 +284,25 @@ func (m *SessionManager) noteHostSignal(kind string) {
 func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	return &SessionManager{
 		cancels:   make(map[string]context.CancelFunc),
+		runners:   make(map[string]*orchestrator.Runner),
 		approvals: make(map[string]pendingApproval),
 		mcpPool:   runtime.NewMCPPool(),
 		Emit:      emit,
 	}
+}
+
+// Steer injects a live roundtable directive into an active run on laneID without cancelling it.
+func (m *SessionManager) Steer(laneID, message string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	r := m.runners[laneID]
+	m.mu.Unlock()
+	if r == nil {
+		return false
+	}
+	return r.Steer("Usuário (Tech Lead)", message)
 }
 
 // ReleaseWorkspace closes any pooled warm MCP host associated with workspaceDir.
@@ -806,6 +822,7 @@ func (m *SessionManager) RunTurnWithOptions(
 		cancel()
 		m.mu.Lock()
 		delete(m.cancels, laneID)
+		delete(m.runners, laneID)
 		pending := m.denyLaneApprovalsLocked(laneID)
 		m.mu.Unlock()
 		for _, ch := range pending {
@@ -902,6 +919,9 @@ func (m *SessionManager) RunTurnWithOptions(
 		OnEvent:            recordLaneEvent,
 	})
 	defer mcpCleanup()
+	m.mu.Lock()
+	m.runners[laneID] = runner
+	m.mu.Unlock()
 	res, runErr := runner.Run(ctx, orchestrator.Request{
 		Objective:   fullObjective,
 		JiraKey:     jiraKey,
@@ -1038,6 +1058,7 @@ func (m *SessionManager) RunAutoReviewTurn(
 		cancel()
 		m.mu.Lock()
 		delete(m.cancels, laneID)
+		delete(m.runners, laneID)
 		pending := m.denyLaneApprovalsLocked(laneID)
 		m.mu.Unlock()
 		for _, ch := range pending {
