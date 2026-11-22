@@ -61,12 +61,23 @@ func (r *Runner) dynamicAgentContextWindow(adkName string, a team.Agent) func() 
 // modifying the file in between, or repeating the same github_pr_diff / search_text).
 // Any edit_file or write_file on that path resets its read counter immediately.
 func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
+	return newRepeatReadGuardCallbackWithRound(nil)
+}
+
+// newRepeatReadGuardCallbackWithRound behaves like newRepeatReadGuardCallback and
+// also resets all per-round inspection counters whenever roundFn() advances (e.g.
+// when the pipeline moves to a new Dev->QA iteration after qa_request_changes).
+func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeToolCallback {
 	var mu sync.Mutex
 	reads := make(map[string]int)
 	fileTotalReads := make(map[string]int)
 	diffCalls := make(map[string]int)
 	searchCalls := make(map[string]int)
 	gitInspectCalls := make(map[string]int)
+	lastRound := -1
+	if roundFn != nil {
+		lastRound = roundFn()
+	}
 
 	normPath := func(raw any) string {
 		s := strings.TrimSpace(fmt.Sprint(raw))
@@ -79,6 +90,19 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 	return func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
 		if tl == nil {
 			return nil, nil
+		}
+		if roundFn != nil {
+			cur := roundFn()
+			mu.Lock()
+			if cur != lastRound {
+				clear(reads)
+				clear(fileTotalReads)
+				clear(diffCalls)
+				clear(searchCalls)
+				clear(gitInspectCalls)
+				lastRound = cur
+			}
+			mu.Unlock()
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
 		switch name {

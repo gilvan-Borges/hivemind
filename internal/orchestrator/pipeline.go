@@ -393,12 +393,14 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 
 		worktreeEmpty := false
 		var worktreeStatus string
+		var worktreeDiffHash string
 		if r.Git != nil && r.deliveryRoot != "" && (qa || a.Role == team.RoleDeveloper) {
 			checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			st, stErr := r.compositeStatus(checkCtx)
+			st, dHash, ok := r.worktreeFingerprint(checkCtx)
 			cancel()
-			if stErr == nil {
-				worktreeStatus = strings.TrimSpace(st)
+			if ok {
+				worktreeStatus = st
+				worktreeDiffHash = dHash
 				if worktreeStatus == "" {
 					worktreeEmpty = true
 				}
@@ -414,11 +416,13 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			if worktreeEmpty {
 				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.\n\n")
 			} else {
-				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar.\n\n")
+				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar. Se após inspecionar o código você concluir que o QA se enganou e nenhuma edição é necessária, NÃO encerre em silêncio: chame `ask_chief` para mediação ou justifique explicitamente com evidência de código/teste.\n\n")
 			}
 		}
 		if qa && worktreeEmpty {
 			fixed.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
+		} else if qa && r.qaHasLastStatus && r.qaLoopIter > 0 && worktreeStatus == r.qaLastStatus && worktreeDiffHash != "" && worktreeDiffHash == r.qaLastDiffHash {
+			fixed.WriteString("[WORKTREE INALTERADA DESDE A ÚLTIMA REPROVAÇÃO]\nNenhum arquivo foi modificado pelo Dev desde o último qa_request_changes. NÃO reexecute a suíte inteira de testes no código idêntico: verifique a justificativa do Dev — se ele demonstrou com evidência que seu apontamento anterior estava incorreto, chame qa_approve; caso contrário, chame qa_request_changes imediatamente em 1 turno.\n\n")
 		}
 
 		// Blocos grandes (git status, state keys, TeamBoard): deduplicados.
@@ -582,6 +586,41 @@ func (r *Runner) compositeStatus(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
+// worktreeFingerprint returns the trimmed composite status and a sha256 hex
+// digest of git diff in the delivery worktree so consecutive QA rounds can
+// distinguish real edits inside already-modified files from an untouched tree.
+func (r *Runner) worktreeFingerprint(ctx context.Context) (string, string, bool) {
+	if r.Git == nil || r.deliveryRoot == "" {
+		return "", "", false
+	}
+	st, err := r.compositeStatus(ctx)
+	if err != nil {
+		return "", "", false
+	}
+	status := strings.TrimSpace(st)
+	var diffHash string
+	if diff, dErr := safeGitDiff(r.Git, ctx, r.deliveryRoot); dErr == nil {
+		sum := sha256.Sum256([]byte(diff))
+		diffHash = fmt.Sprintf("%x", sum[:8])
+	}
+	return status, diffHash, true
+}
+
+func safeGitDiff(g interface {
+	Diff(context.Context, string) (string, error)
+}, ctx context.Context, dir string) (diff string, err error) {
+	if g == nil {
+		return "", fmt.Errorf("nil git")
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			diff = ""
+			err = fmt.Errorf("git diff unsupported: %v", r)
+		}
+	}()
+	return g.Diff(ctx, dir)
+}
+
 // recordQAStall counts consecutive QA rejections without changes in the delivery worktree.
 func (r *Runner) recordQAStall(parentCtx context.Context) string {
 	if r.Git == nil || r.deliveryRoot == "" {
@@ -592,15 +631,17 @@ func (r *Runner) recordQAStall(parentCtx context.Context) string {
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
-	status, err := r.compositeStatus(ctx)
-	if err != nil {
+	status, diffHash, ok := r.worktreeFingerprint(ctx)
+	if !ok {
 		return ""
 	}
 	defer func() {
 		r.qaHasLastStatus = true
 		r.qaLastStatus = status
+		r.qaLastDiffHash = diffHash
 	}()
-	if !r.qaHasLastStatus || status != r.qaLastStatus {
+	changed := !r.qaHasLastStatus || status != r.qaLastStatus || (diffHash != "" && diffHash != r.qaLastDiffHash)
+	if changed {
 		r.qaStallCount = 0
 		return ""
 	}

@@ -141,6 +141,7 @@ type Runner struct {
 	agentCosts        map[string]*AgentCost
 	roleCosts         map[string]*RoleCost
 	qaLastStatus      string
+	qaLastDiffHash    string
 	qaHasLastStatus   bool
 	qaStallCount      int
 	qaStallFired      bool

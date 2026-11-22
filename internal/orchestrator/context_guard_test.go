@@ -625,6 +625,19 @@ func TestIsResumeSquadPromptTyposAndRepeatGitInspectGuard(t *testing.T) {
 	if res, _ := guard(nil, gitStatus, nil); res != nil {
 		t.Fatalf("git_status after write_file should pass again, got %v", res)
 	}
+
+	round := 0
+	roundGuard := newRepeatReadGuardCallbackWithRound(func() int { return round })
+	if res, _ := roundGuard(nil, gitDiff, nil); res != nil {
+		t.Fatalf("round 0 1st git_diff should pass, got %v", res)
+	}
+	if res, _ := roundGuard(nil, gitDiff, nil); res == nil {
+		t.Fatal("round 0 2nd git_diff should hit AVISO ANTI-LOOP")
+	}
+	round = 1
+	if res, _ := roundGuard(nil, gitDiff, nil); res != nil {
+		t.Fatalf("round 1 1st git_diff after QA loop advance must pass, got %v", res)
+	}
 }
 
 func TestTriageTurnIsolationDropsStaleHistoryAndStopsPostDelegateLoop(t *testing.T) {

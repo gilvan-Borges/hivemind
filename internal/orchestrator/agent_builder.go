@@ -167,8 +167,13 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	if a.Role == team.RoleDeveloper || a.Role == team.RoleQA {
 		beforeModelCBs = append([]llmagent.BeforeModelCallback{r.handoffModelGuard(a.Role)}, beforeModelCBs...)
 	}
+	roundFn := func() int {
+		r.handoffMu.Lock()
+		defer r.handoffMu.Unlock()
+		return r.qaLoopIter
+	}
 	beforeToolCBs := []llmagent.BeforeToolCallback{
-		newRepeatReadGuardCallback(),
+		newRepeatReadGuardCallbackWithRound(roundFn),
 	}
 	// Spillover guard (Spec 02): oversized tool outputs are persisted under
 	// <root>/.hivemind/spillover and replaced inline by a head+tail preview
@@ -181,11 +186,6 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		&toolspill.Monitor{},
 	))
 	if a.Role == team.RoleDeveloper {
-		roundFn := func() int {
-			r.handoffMu.Lock()
-			defer r.handoffMu.Unlock()
-			return r.qaLoopIter
-		}
 		devExpBefore, devExpAfter := newDevExploreBudgetCallbacks(
 			r.Project.Settings.EffectiveMaxDevExploreCalls(),
 			roundFn,
