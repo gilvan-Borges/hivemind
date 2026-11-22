@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 )
 
 func initTestRepoWithFile(t *testing.T, dir, filename, content string) {
@@ -102,5 +104,47 @@ func TestDiscoverGitRepos_ContainerWorkspaceWithoutRootGit(t *testing.T) {
 	}
 	if repos[0].IsRoot || repos[1].IsRoot {
 		t.Fatalf("neither nested repo should have IsRoot=true")
+	}
+}
+
+func TestDiscoverGitReposWithActiveWorktree_PromotesSingleActiveWorktree(t *testing.T) {
+	root := t.TempDir()
+	initTestRepoWithFile(t, root, "README.md", "hello\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	g := gitx.Local{}
+	wt1 := filepath.Join(root, ".hivemind", "worktrees", "lane-1")
+	if _, err := g.Run(ctx, root, "worktree", "add", "-b", "feat/lane-1", wt1); err != nil {
+		t.Fatalf("worktree add wt1: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wt1, "README.md"), []byte("hello\nworktree edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1 active worktree + clean root => promotes wt1 with its branch and diffs.
+	repos, err := DiscoverGitReposWithActiveWorktree(ctx, root)
+	if err != nil {
+		t.Fatalf("DiscoverGitReposWithActiveWorktree failed: %v", err)
+	}
+	if len(repos) != 1 || filepath.Clean(repos[0].Root) != filepath.Clean(wt1) || repos[0].Branch != "feat/lane-1" {
+		t.Fatalf("expected single active worktree promoted, got: %+v", repos)
+	}
+	if len(repos[0].Diffs) != 1 || repos[0].Diffs[0].Path != "README.md" {
+		t.Fatalf("expected worktree diff, got: %+v", repos[0].Diffs)
+	}
+
+	// Adding a 2nd parallel active worktree falls back to the root repository.
+	wt2 := filepath.Join(root, ".hivemind", "worktrees", "lane-2")
+	if _, err := g.Run(ctx, root, "worktree", "add", "-b", "feat/lane-2", wt2); err != nil {
+		t.Fatalf("worktree add wt2: %v", err)
+	}
+	repos, err = DiscoverGitReposWithActiveWorktree(ctx, root)
+	if err != nil {
+		t.Fatalf("DiscoverGitReposWithActiveWorktree (2 wts) failed: %v", err)
+	}
+	if len(repos) != 1 || filepath.Clean(repos[0].Root) != filepath.Clean(root) {
+		t.Fatalf("expected fallback to root with 2 active worktrees, got: %+v", repos)
 	}
 }

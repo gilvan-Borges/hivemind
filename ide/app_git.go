@@ -54,7 +54,7 @@ func (a *App) GetDiff(workspace string) ([]idecore.FileDiff, error) {
 func (a *App) GetWorkspaceGitRepos(workspace string) ([]idecore.WorkspaceGitRepo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return idecore.DiscoverGitRepos(ctx, workspace)
+	return idecore.DiscoverGitReposWithActiveWorktree(ctx, workspace)
 }
 
 // CommitChanges commits (and optionally pushes) workspace changes.

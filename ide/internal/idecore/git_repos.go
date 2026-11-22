@@ -152,3 +152,52 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 
 	return repos, nil
 }
+
+// DiscoverGitReposWithActiveWorktree returns DiscoverGitRepos, and when the
+// workspace has a single clean root repository with exactly one active
+// non-main worktree (single-team execution), promotes that worktree as the
+// active repo entry so the Changes tab displays live worktree edits instead of
+// an empty base branch. Falls back to the root repository whenever there are
+// zero or multiple active worktrees, or when the root itself has local edits.
+func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string) ([]WorkspaceGitRepo, error) {
+	repos, err := DiscoverGitRepos(ctx, workspaceDir)
+	if err != nil || len(repos) != 1 || !repos[0].IsRoot || len(repos[0].Diffs) > 0 {
+		return repos, err
+	}
+	rootPath := filepath.Clean(repos[0].Root)
+	wts, wtErr := gitx.ListWorktrees(ctx, gitx.Local{}, rootPath)
+	if wtErr != nil || len(wts) == 0 {
+		return repos, nil
+	}
+	var active []gitx.WorktreeInfo
+	for _, wt := range wts {
+		if wt.IsMain || wt.Prunable || wt.Orphan || strings.TrimSpace(wt.Path) == "" {
+			continue
+		}
+		if strings.EqualFold(filepath.Clean(wt.Path), rootPath) {
+			continue
+		}
+		if info, statErr := os.Stat(wt.Path); statErr != nil || !info.IsDir() {
+			continue
+		}
+		active = append(active, wt)
+	}
+	if len(active) != 1 {
+		return repos, nil
+	}
+	wt := active[0]
+	wtDiffs, diffErr := WorkspaceDiff(ctx, wt.Path)
+	if diffErr != nil || wtDiffs == nil {
+		wtDiffs = []FileDiff{}
+	}
+	branch := strings.TrimSpace(wt.Branch)
+	if branch == "" {
+		branch = CurrentBranch(ctx, wt.Path)
+	}
+	repos[0].Root = wt.Path
+	if branch != "" {
+		repos[0].Branch = branch
+	}
+	repos[0].Diffs = wtDiffs
+	return repos, nil
+}
