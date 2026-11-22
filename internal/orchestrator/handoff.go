@@ -22,8 +22,8 @@ import (
 
 const (
 	handoffObjectiveMax = 4 << 10
-	handoffFactMax      = 500
-	handoffFactsMax     = 8
+	handoffFactMax      = 1500
+	handoffFactsMax     = 32
 	handoffDiffMax      = 2 << 10
 )
 

@@ -31,7 +31,7 @@ const (
 	defaultMaxReviewExploreCalls = 6
 	// defaultMaxTriageExploreCalls caps repository exploration calls by the Triage Chief
 	// before it must call delegate_to_squad (OpenAI Codex / Swarm fast-router pattern).
-	defaultMaxTriageExploreCalls = 6
+	defaultMaxTriageExploreCalls = 12
 )
 
 var (

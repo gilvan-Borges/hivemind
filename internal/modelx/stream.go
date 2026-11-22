@@ -402,6 +402,12 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		}
 		return nil, fmt.Errorf("agy encerrou com código %d: %s", code, truncateText(firstNonEmpty(detail, errString(runErr)), 500))
 	}
+	if tail := deltaFilter.Flush(); tail != "" {
+		yield(&model.LLMResponse{
+			Partial: true,
+			Content: genai.NewContentFromText(tail, genai.RoleModel),
+		}, nil)
+	}
 	if !sawResult || finalEnv.Status == "" {
 		// Sem evento result parseável: cai no texto acumulado dos deltas.
 		if finalEnv.Response == "" {
@@ -444,11 +450,15 @@ const (
 
 // agyDecisionDeltaFilter extrai incrementalmente apenas o campo "text" quando o
 // stream do `agy --json-schema` emite o envelope JSON `{"text":...,"tool_calls":[...]}`,
-// evitando vazamento de JSON bruto no chat e mantendo texto simples intacto.
+// inclusive após prosa inicial ou dentro de cercas markdown, evitando vazamento de JSON bruto no chat.
 type agyDecisionDeltaFilter struct {
 	mode       agyDeltaMode
 	state      agyJSONScanState
 	leadSpaces strings.Builder
+	fenceBuf   strings.Builder
+	inFence    bool
+	plainProbe strings.Builder
+	probing    bool
 
 	keyBuf    strings.Builder
 	strEsc    bool
@@ -464,6 +474,71 @@ type agyDecisionDeltaFilter struct {
 
 func isJSONSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
+}
+
+func checkFencePrefix(s string) (readyAfterNL bool, valid bool) {
+	if s == "" || s[0] != '`' {
+		return false, false
+	}
+	ticks := 0
+	for ticks < len(s) && s[ticks] == '`' {
+		ticks++
+	}
+	if ticks > 3 {
+		return false, false
+	}
+	if ticks < 3 {
+		return false, len(s) == ticks
+	}
+	rest := s[3:]
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 {
+		trimmed := strings.ToLower(strings.TrimLeft(strings.TrimRight(rest, "\r"), " \t"))
+		if trimmed == "" || strings.HasPrefix("json", trimmed) {
+			return false, true
+		}
+		if strings.TrimRight(trimmed, " \t") == "json" {
+			return false, true
+		}
+		return false, false
+	}
+	header := strings.ToLower(strings.TrimSpace(rest[:nl]))
+	if header != "" && header != "json" {
+		return false, false
+	}
+	after := rest[nl+1:]
+	for i := 0; i < len(after); i++ {
+		if !isJSONSpace(after[i]) {
+			return false, false
+		}
+	}
+	return true, true
+}
+
+func matchAgyEnvelopeStart(buf string) (matched bool, possible bool) {
+	if len(buf) == 0 || buf[0] != '{' || len(buf) > 40 {
+		return false, false
+	}
+	rest := strings.TrimLeft(buf[1:], " \t\r\n")
+	if rest == "" {
+		return false, true
+	}
+	for _, target := range []string{`"text"`, `"tool_calls"`} {
+		if strings.HasPrefix(target, rest) && len(rest) < len(target) {
+			return false, true
+		}
+		if strings.HasPrefix(rest, target) {
+			after := strings.TrimLeft(rest[len(target):], " \t\r\n")
+			if after == "" {
+				return false, true
+			}
+			if after[0] == ':' {
+				return true, true
+			}
+			return false, false
+		}
+	}
+	return false, false
 }
 
 func hexVal(b byte) (rune, bool) {
@@ -487,31 +562,132 @@ func isLowSurrogate(r rune) bool {
 	return r >= 0xDC00 && r <= 0xDFFF
 }
 
+func (f *agyDecisionDeltaFilter) stepPlainByte(b byte, out *strings.Builder) {
+	if f.probing {
+		f.plainProbe.WriteByte(b)
+		matched, possible := matchAgyEnvelopeStart(f.plainProbe.String())
+		if matched {
+			probeTail := f.plainProbe.String()[1:]
+			f.plainProbe.Reset()
+			f.probing = false
+			f.mode = deltaModeJSON
+			f.state = jsonObjExpectKey
+			for j := 0; j < len(probeTail); j++ {
+				if f.mode == deltaModeDone {
+					break
+				}
+				f.stepJSON(probeTail[j], out)
+			}
+			return
+		}
+		if !possible {
+			if b == '{' {
+				prev := f.plainProbe.String()
+				out.WriteString(prev[:len(prev)-1])
+				f.plainProbe.Reset()
+				f.plainProbe.WriteByte('{')
+			} else {
+				out.WriteString(f.plainProbe.String())
+				f.plainProbe.Reset()
+				f.probing = false
+			}
+		}
+		return
+	}
+	if b == '{' {
+		f.probing = true
+		f.plainProbe.Reset()
+		f.plainProbe.WriteByte('{')
+		return
+	}
+	out.WriteByte(b)
+}
+
+func (f *agyDecisionDeltaFilter) Flush() string {
+	switch f.mode {
+	case deltaModeUnknown:
+		s := f.leadSpaces.String() + f.fenceBuf.String()
+		f.leadSpaces.Reset()
+		f.fenceBuf.Reset()
+		f.inFence = false
+		if s != "" {
+			f.mode = deltaModePlain
+		}
+		return s
+	case deltaModePlain:
+		if f.probing {
+			s := f.plainProbe.String()
+			f.plainProbe.Reset()
+			f.probing = false
+			return s
+		}
+	}
+	return ""
+}
+
 func (f *agyDecisionDeltaFilter) Push(chunk string) string {
 	if chunk == "" {
 		return ""
 	}
-	switch f.mode {
-	case deltaModeDone:
+	if f.mode == deltaModeDone {
 		return ""
-	case deltaModePlain:
-		return chunk
 	}
 
 	var out strings.Builder
 	for i := 0; i < len(chunk); i++ {
 		b := chunk[i]
+		if f.mode == deltaModePlain {
+			f.stepPlainByte(b, &out)
+			continue
+		}
 		if f.mode == deltaModeUnknown {
+			if f.inFence {
+				readyAfterNL, prevValid := checkFencePrefix(f.fenceBuf.String())
+				if b == '{' && readyAfterNL && prevValid {
+					f.leadSpaces.Reset()
+					f.fenceBuf.Reset()
+					f.inFence = false
+					f.mode = deltaModeJSON
+					f.state = jsonObjExpectKey
+					continue
+				}
+				f.fenceBuf.WriteByte(b)
+				if _, valid := checkFencePrefix(f.fenceBuf.String()); valid {
+					continue
+				}
+				f.inFence = false
+				pending := f.leadSpaces.String() + f.fenceBuf.String()
+				f.leadSpaces.Reset()
+				f.fenceBuf.Reset()
+				f.mode = deltaModePlain
+				for j := 0; j < len(pending); j++ {
+					if f.mode == deltaModeJSON || f.mode == deltaModeDone {
+						if f.mode == deltaModeJSON {
+							f.stepJSON(pending[j], &out)
+						}
+						continue
+					}
+					f.stepPlainByte(pending[j], &out)
+				}
+				continue
+			}
 			if isJSONSpace(b) {
 				f.leadSpaces.WriteByte(b)
 				continue
 			}
+			if b == '`' {
+				f.inFence = true
+				f.fenceBuf.Reset()
+				f.fenceBuf.WriteByte('`')
+				continue
+			}
 			if b != '{' {
 				f.mode = deltaModePlain
-				out.WriteString(f.leadSpaces.String())
+				pending := f.leadSpaces.String()
 				f.leadSpaces.Reset()
-				out.WriteString(chunk[i:])
-				return out.String()
+				out.WriteString(pending)
+				f.stepPlainByte(b, &out)
+				continue
 			}
 			f.leadSpaces.Reset()
 			f.mode = deltaModeJSON

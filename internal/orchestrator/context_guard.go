@@ -126,3 +126,120 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 		return nil, nil
 	}
 }
+
+// newDevExploreBudgetCallbacks cria uma dupla BeforeTool/AfterTool em 2 camadas para o Dev:
+// avisa ao aproximar-se do limite antes da 1ª edição e faz soft-block redirecionando para
+// write_file/edit_file antes que o hard-abort de maxExplore seja atingido.
+func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int) (llmagent.BeforeToolCallback, llmagent.AfterToolCallback) {
+	if maxExplore <= 0 {
+		maxExplore = 40
+	}
+	softBlockAt := maxExplore - 12
+	if softBlockAt > maxExplore-2 {
+		softBlockAt = maxExplore - 2
+	}
+	if softBlockAt < 6 {
+		if maxExplore-1 < 6 {
+			softBlockAt = maxExplore - 1
+		} else {
+			softBlockAt = 6
+		}
+	}
+	if softBlockAt < 1 {
+		softBlockAt = 1
+	}
+	softWarnAt := softBlockAt - 8
+	if softWarnAt < 3 {
+		softWarnAt = 3
+	}
+	if softWarnAt > softBlockAt {
+		softWarnAt = softBlockAt
+	}
+
+	initRound := 0
+	if roundFn != nil {
+		initRound = roundFn()
+	}
+
+	var (
+		mu           sync.Mutex
+		seenRound    = initRound
+		exploreCalls int
+		writes       int
+	)
+
+	syncRoundLocked := func() {
+		if roundFn == nil {
+			return
+		}
+		if cur := roundFn(); cur != seenRound {
+			seenRound = cur
+			exploreCalls = 0
+			writes = 0
+		}
+	}
+
+	before := func(_ agent.Context, tl tool.Tool, _ map[string]any) (map[string]any, error) {
+		if tl == nil {
+			return nil, nil
+		}
+		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		if devWriteTools[name] {
+			mu.Lock()
+			syncRoundLocked()
+			writes++
+			exploreCalls = 0
+			mu.Unlock()
+			return nil, nil
+		}
+		if devExploreTools[name] {
+			mu.Lock()
+			syncRoundLocked()
+			var blocked bool
+			var cur int
+			if writes == 0 {
+				exploreCalls++
+				cur = exploreCalls
+				blocked = cur > softBlockAt
+			}
+			mu.Unlock()
+			if blocked {
+				return map[string]any{
+					"text": fmt.Sprintf("ORÇAMENTO DE EXPLORAÇÃO DO DEV ATINGIDO (%d leituras/buscas seguidas sem editar nenhum arquivo): PARE de explorar novos arquivos agora. Você já tem contexto suficiente em [chief_plan], [chief_context_brief] e nas leituras anteriores. Comece IMEDIATAMENTE a implementar código usando write_file (arquivos novos) ou edit_file (arquivos existentes) — assim que criar ou editar o primeiro arquivo, leituras pontuais voltam a ser liberadas e o limite rígido (%d) não interromperá a execução.", cur-1, maxExplore),
+				}, nil
+			}
+		}
+		return nil, nil
+	}
+
+	after := func(_ agent.Context, tl tool.Tool, _ map[string]any, result map[string]any, err error) (map[string]any, error) {
+		if err != nil || tl == nil || result == nil {
+			return nil, nil
+		}
+		name := strings.ToLower(strings.TrimSpace(tl.Name()))
+		if !devExploreTools[name] {
+			return nil, nil
+		}
+		mu.Lock()
+		syncRoundLocked()
+		shouldWarn := writes == 0 && exploreCalls >= softWarnAt && exploreCalls <= softBlockAt
+		cur := exploreCalls
+		mu.Unlock()
+		if !shouldWarn {
+			return nil, nil
+		}
+		warn := fmt.Sprintf("[AVISO DE ORÇAMENTO DO DEV: %d/%d leituras antes da 1ª edição — pare de explorar amplamente e comece a criar/editar arquivos com write_file/edit_file já no próximo turno.]", cur, softBlockAt)
+		out := make(map[string]any, len(result)+1)
+		for k, v := range result {
+			out[k] = v
+		}
+		if txt, ok := result["text"].(string); ok {
+			out["text"] = txt + "\n\n" + warn
+		} else {
+			out["budget_warning"] = warn
+		}
+		return out, nil
+	}
+
+	return before, after
+}

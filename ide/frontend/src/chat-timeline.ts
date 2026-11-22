@@ -2,7 +2,9 @@ import type { ChatMessage } from "./types";
 import { formatElapsedDuration } from "./utils";
 
 const AGY_ENVELOPE_PREFIX_RE = /^\{\s*"(?:text|tool_calls)"\s*:/;
+const AGY_ENVELOPE_ANY_RE = /\{\s*"(?:text|tool_calls)"\s*:/;
 const AGY_TEXT_VALUE_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)/;
+const ORPHAN_TOOL_CALL_ANCHOR_RE = /(?:^|\r?\n)\s*(?:\[\s*\{|\},?\s*\{|\{\s*"(?:arguments|id|name)"\s*:|"(?:call-[^"\n]{0,48}|[^"\n]{1,48})"\s*,\s*"(?:name|arguments|id)"\s*:)|(?:\[\s*\{|\},?\s*\{)\s*"(?:arguments|id|name)"\s*:|"[^"\n]{1,48}","(?:name|arguments|id)"\s*:/;
 
 function decodeSimpleJsonFragment(escaped: string): string {
   return escaped
@@ -15,23 +17,16 @@ function decodeSimpleJsonFragment(escaped: string): string {
     .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-/**
- * Remove vazamentos defensivos do envelope JSON `{"text":...,"tool_calls":[...]}`
- * caso algum backend antigo ou chunk parcial chegue no frontend.
- * Preserva chunks parciais de texto comum sem fazer `.trim()`.
- */
-export function sanitizeAssistantText(raw: string | undefined | null): string {
-  const input = String(raw ?? "");
-  if (!input) return "";
-  const trimmed = input.trim();
-  if (!trimmed.startsWith("{")) return input;
-
-  const looksLikeAgyEnvelope =
-    trimmed.includes('"tool_calls"') || AGY_ENVELOPE_PREFIX_RE.test(trimmed);
-  if (!looksLikeAgyEnvelope) return input;
+function extractAgyEnvelopeText(rawEnvelope: string): string | null {
+  let candidate = rawEnvelope.trim();
+  if (!candidate.startsWith("{")) return null;
+  candidate = candidate.replace(/\s*```\s*$/, "").trimEnd();
+  if (!(candidate.includes('"tool_calls"') || AGY_ENVELOPE_PREFIX_RE.test(candidate))) {
+    return null;
+  }
 
   try {
-    const parsed = JSON.parse(trimmed) as unknown;
+    const parsed = JSON.parse(candidate) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const rec = parsed as Record<string, unknown>;
       const keys = Object.keys(rec);
@@ -44,17 +39,83 @@ export function sanitizeAssistantText(raw: string | undefined | null): string {
       }
     }
   } catch {
-    // JSON incompleto em streaming parcial: extrai apenas a porção de "text" se já iniciada.
-    const partialMatch = trimmed.match(AGY_TEXT_VALUE_RE);
+    const partialMatch = candidate.match(AGY_TEXT_VALUE_RE);
     if (partialMatch) {
       return decodeSimpleJsonFragment(partialMatch[1]);
     }
-    if (AGY_ENVELOPE_PREFIX_RE.test(trimmed) || trimmed.startsWith('{"')) {
+    if (AGY_ENVELOPE_PREFIX_RE.test(candidate) || candidate.startsWith('{"')) {
       return "";
     }
   }
+  return null;
+}
 
-  return input;
+function stripOrphanToolCallsTail(input: string): string {
+  const hasArgs = /"arguments"\s*:\s*\{/.test(input);
+  const hasName = /"name"\s*:\s*"/.test(input);
+  const hasIdOrClose = /"id"\s*:\s*"/.test(input) || /\}\s*\]\s*\}?\s*$/.test(input);
+  if (!hasArgs || !hasName || !hasIdOrClose) {
+    return input;
+  }
+  const anchor = input.match(ORPHAN_TOOL_CALL_ANCHOR_RE);
+  if (!anchor || anchor.index === undefined) {
+    return input;
+  }
+  return input.slice(0, anchor.index).trimEnd();
+}
+
+/**
+ * Remove vazamentos defensivos do envelope JSON `{"text":...,"tool_calls":[...]}`
+ * (puro, cercado por markdown, após prosa inicial ou caudas órfãs de tool_calls).
+ * Preserva chunks parciais de texto comum e JSON normal de resposta sem fazer `.trim()`.
+ */
+export function sanitizeAssistantText(raw: string | undefined | null): string {
+  const input = String(raw ?? "");
+  if (!input) return "";
+
+  const trimmed = input.trim();
+  if (trimmed.startsWith("```")) {
+    const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)(?:\s*```\s*)?$/i);
+    if (fenceMatch) {
+      const inner = fenceMatch[1];
+      const extracted = extractAgyEnvelopeText(inner);
+      if (extracted !== null) {
+        return extracted;
+      }
+    }
+  }
+
+  if (trimmed.startsWith("{")) {
+    const extracted = extractAgyEnvelopeText(trimmed);
+    if (extracted !== null) {
+      return extracted;
+    }
+  }
+
+  const embeddedMatch = input.match(AGY_ENVELOPE_ANY_RE);
+  if (embeddedMatch && embeddedMatch.index !== undefined) {
+    const jsonStart = embeddedMatch.index;
+    const extracted = extractAgyEnvelopeText(input.slice(jsonStart));
+    if (extracted !== null) {
+      let prefix = input.slice(0, jsonStart);
+      prefix = prefix.replace(/(?:^|\r?\n)```(?:json)?\s*$/i, "");
+      if (prefix.trim() === "") {
+        return extracted;
+      }
+      if (extracted.trim() === "") {
+        return prefix.trimEnd();
+      }
+      if (prefix.trim() === extracted.trim() || prefix.trimEnd().endsWith(extracted.trim())) {
+        return prefix.trimEnd();
+      }
+      if (prefix.endsWith("\n") || prefix.endsWith(" ")) {
+        return prefix + extracted;
+      }
+      return `${prefix.trimEnd()}\n${extracted}`;
+    }
+  }
+
+  return stripOrphanToolCallsTail(input);
 }
 
 export interface TimelineSourceMessage {

@@ -114,6 +114,63 @@ func TestAgyDecisionDeltaFilter(t *testing.T) {
 			t.Fatalf("got = %q", out.String())
 		}
 	})
+
+	t.Run("prosa inicial seguida de envelope tool_calls nao vaza JSON", func(t *testing.T) {
+		raw := `Analisando a arquitetura...{"text":"","tool_calls":[{"id":"call-5","name":"read_file","arguments":{"path":"src/OrderEvent.java"}}]}`
+		for _, step := range []int{1, 3, 7, len(raw)} {
+			var f agyDecisionDeltaFilter
+			var out strings.Builder
+			for i := 0; i < len(raw); i += step {
+				end := i + step
+				if end > len(raw) {
+					end = len(raw)
+				}
+				out.WriteString(f.Push(raw[i:end]))
+			}
+			out.WriteString(f.Flush())
+			if out.String() != "Analisando a arquitetura..." {
+				t.Fatalf("step=%d vazou ou corrompeu texto: %q", step, out.String())
+			}
+		}
+	})
+
+	t.Run("envelope em cerca markdown extrai apenas text sem vazar JSON", func(t *testing.T) {
+		raw := "```json\n{\"text\":\"Ok\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}]}\n```"
+		for _, step := range []int{1, 3, 7, len(raw)} {
+			var f agyDecisionDeltaFilter
+			var out strings.Builder
+			for i := 0; i < len(raw); i += step {
+				end := i + step
+				if end > len(raw) {
+					end = len(raw)
+				}
+				out.WriteString(f.Push(raw[i:end]))
+			}
+			out.WriteString(f.Flush())
+			if out.String() != "Ok" {
+				t.Fatalf("step=%d got = %q, want %q", step, out.String(), "Ok")
+			}
+		}
+	})
+
+	t.Run("json comum dentro de prosa passa intacto apos Flush", func(t *testing.T) {
+		raw := `Resposta: {"status":"ok"}`
+		for _, step := range []int{1, 4, len(raw)} {
+			var f agyDecisionDeltaFilter
+			var out strings.Builder
+			for i := 0; i < len(raw); i += step {
+				end := i + step
+				if end > len(raw) {
+					end = len(raw)
+				}
+				out.WriteString(f.Push(raw[i:end]))
+			}
+			out.WriteString(f.Flush())
+			if out.String() != raw {
+				t.Fatalf("step=%d got = %q, want %q", step, out.String(), raw)
+			}
+		}
+	})
 }
 
 func mustRead(t *testing.T, path string) []byte {

@@ -61,3 +61,24 @@ func TestRecordQAStallNeedsDeliveryRoot(t *testing.T) {
 		t.Fatalf("sem deliveryRoot não deveria agir: %q", got)
 	}
 }
+
+func TestRecordQAStallEmptyWorktreeGivesOneRetryThenStops(t *testing.T) {
+	r := &Runner{Git: fakeStatusGit{status: ""}, deliveryRoot: "wt"}
+
+	// 1ª reprovação com worktree vazia: registra estado inicial e dá 1 chance ao Dev.
+	if got := r.recordQAStall(context.Background()); got != "" {
+		t.Fatalf("primeira reprovação com worktree vazia deveria dar 1 chance: %q", got)
+	}
+	if r.qaStallFired {
+		t.Fatal("qaStallFired não deve disparar na 1ª reprovação")
+	}
+
+	// 2ª reprovação consecutiva ainda vazia: interrompe na hora em vez de girar 3 rodadas vazias.
+	got := r.recordQAStall(context.Background())
+	if !strings.Contains(got, "sem nenhuma alteração nova") || !strings.Contains(got, "interrompido") {
+		t.Fatalf("segunda reprovação consecutiva ainda vazia deveria interromper o ciclo: %q", got)
+	}
+	if !r.qaStallFired {
+		t.Fatal("qaStallFired deve estar true após interrupção")
+	}
+}

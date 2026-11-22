@@ -1,11 +1,15 @@
 package orchestrator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -111,5 +115,81 @@ func TestDevGuardIgnoresNonDevStages(t *testing.T) {
 		if err := r.checkDevGuard(devToolEvent("chefe", "read_file"), labels); err != nil {
 			t.Fatalf("chief exploration must not be limited by dev guard: read %d -> %v", i+1, err)
 		}
+	}
+}
+
+func TestDevExploreBudgetCallbacksWarnSoftBlockAndResetOnWrite(t *testing.T) {
+	newStub := func(name string) tool.Tool {
+		built, err := functiontool.New(functiontool.Config{
+			Name:        name,
+			Description: name,
+		}, func(_ agent.Context, _ struct{}) (map[string]any, error) {
+			return map[string]any{"text": "ok"}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
+	}
+	readTool := newStub("read_file")
+	searchTool := newStub("search_text")
+	editTool := newStub("edit_file")
+	writeTool := newStub("write_file")
+
+	round := 0
+	// maxExplore=20 -> softBlockAt=8 (20-12=8), softWarnAt=3 (3..8 warn, >8 block)
+	before, after := newDevExploreBudgetCallbacks(20, func() int { return round })
+
+	for i := 1; i <= 2; i++ {
+		res, err := before(nil, readTool, nil)
+		if err != nil || res != nil {
+			t.Fatalf("read %d before softWarnAt should not block: res=%+v err=%v", i, res, err)
+		}
+		ares, aerr := after(nil, readTool, nil, map[string]any{"text": "conteudo"}, nil)
+		if aerr != nil || ares != nil {
+			t.Fatalf("read %d before softWarnAt should not attach warning: res=%+v err=%v", i, ares, aerr)
+		}
+	}
+
+	for i := 3; i <= 8; i++ {
+		tl := readTool
+		if i%2 == 0 {
+			tl = searchTool
+		}
+		res, err := before(nil, tl, nil)
+		if err != nil || res != nil {
+			t.Fatalf("explore %d <= softBlockAt should pass: res=%+v err=%v", i, res, err)
+		}
+		ares, aerr := after(nil, tl, nil, map[string]any{"text": "conteudo"}, nil)
+		if aerr != nil || ares == nil || !strings.Contains(fmt.Sprint(ares["text"]), "[AVISO DE ORÇAMENTO DO DEV") {
+			t.Fatalf("explore %d should append budget warning in AfterToolCallback, got res=%+v err=%v", i, ares, aerr)
+		}
+	}
+
+	// 9th explore call exceeds softBlockAt=8 -> BeforeToolCallback blocks cleanly.
+	blocked, err := before(nil, readTool, nil)
+	if err != nil || blocked == nil || !strings.Contains(fmt.Sprint(blocked["text"]), "ORÇAMENTO DE EXPLORAÇÃO DO DEV ATINGIDO") {
+		t.Fatalf("expected soft-block redirect after softBlockAt, got res=%+v err=%v", blocked, err)
+	}
+
+	// Editing resets exploration counter and unlocks subsequent reads.
+	if res, err := before(nil, editTool, nil); err != nil || res != nil {
+		t.Fatalf("edit_file must pass and reset: res=%+v err=%v", res, err)
+	}
+	if res, err := before(nil, readTool, nil); err != nil || res != nil {
+		t.Fatalf("read_file after edit_file must be unlocked: res=%+v err=%v", res, err)
+	}
+
+	// Exhaust again and confirm round increment (new QA loop round) resets budget too.
+	_, _ = before(nil, writeTool, nil) // writes > 0 stays unlocked within same round, next round resets cleanly
+	round = 1
+	for i := 1; i <= 8; i++ {
+		if res, err := before(nil, readTool, nil); err != nil || res != nil {
+			t.Fatalf("new round read %d <= softBlockAt must be allowed: res=%+v err=%v", i, res, err)
+		}
+	}
+	blocked2, _ := before(nil, searchTool, nil)
+	if blocked2 == nil || !strings.Contains(fmt.Sprint(blocked2["text"]), "ORÇAMENTO DE EXPLORAÇÃO DO DEV ATINGIDO") {
+		t.Fatalf("expected soft-block again in round 1 after 8 explores, got %+v", blocked2)
 	}
 }

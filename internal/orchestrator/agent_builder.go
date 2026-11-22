@@ -132,6 +132,13 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	}
 	var afterToolCBs []llmagent.AfterToolCallback
 	if a.Role == team.RoleDeveloper {
+		devExpBefore, devExpAfter := newDevExploreBudgetCallbacks(r.Project.Settings.EffectiveMaxDevExploreCalls(), func() int {
+			r.handoffMu.Lock()
+			defer r.handoffMu.Unlock()
+			return r.qaLoopIter
+		})
+		beforeToolCBs = append(beforeToolCBs, devExpBefore)
+		afterToolCBs = append(afterToolCBs, devExpAfter)
 		if guard := newOwnedPathsGuardCallback(root, adkName, ownedPaths, r.sharedBoard); guard != nil {
 			beforeToolCBs = append(beforeToolCBs, guard)
 		}

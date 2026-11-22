@@ -258,7 +258,6 @@ func (r *Runner) newTriageDelegateTool(
 			}
 		}
 		r.updateStateChecked(sess, stateUpdates)
-		r.sealHandoff(sess.ID())
 
 		resolved := r.resolveDynamicDevs()
 		if r.OnEvent != nil {
@@ -352,7 +351,7 @@ func (r *Runner) buildTriageInstructions(ctx context.Context, chief team.Agent, 
   • Se o PR for DE TERCEIRO: só aprove/revise/comente quando houver pedido de revisão; use github_pr_files/github_pr_diff para inspecionar o diff completo e github_review_pr para enviar o parecer.
 - Só mescle (github_merge_pr) APÓS aprovação do revisor: em homolog pode mesclar direto; em main a ferramenta pede permissão ao usuário.
 - INVESTIGAÇÃO ECONÔMICA NO PROJETO: prefira search_text e find_files em vez de múltiplas chamadas list_dir, e use read_file com start_line/end_line ao inspecionar arquivos grandes.
-- DOSSIÊ DE HANDOFF PARA O DEV (context_brief): sempre que chamar delegate_to_squad, preencha OBRIGATORIAMENTE "context_brief" com os fatos concretos que você JÁ leu (assinaturas exatas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, regras RN críticas e caminhos de arquivos). Esse dossiê é salvo em .hivemind/handoff/ e entregue direto ao Dev e ao QA para evitar que eles releiam a spec/plano inteiros.`
+- DOSSIÊ DE HANDOFF PARA O DEV (context_brief): sempre que chamar delegate_to_squad, preencha OBRIGATORIAMENTE "context_brief" com os fatos concretos que você JÁ leu (assinaturas exatas de classes/interfaces/métodos, campos de DTO, códigos HTTP/erro, regras RN críticas e caminhos de arquivos). Esse dossiê é salvo em .hivemind/handoff/ e entregue direto ao Dev e ao QA para evitar que eles releiam a spec/plano inteiros. Se alguma task pré-requisito ainda não estiver integrada na branch, registre também no "context_brief" os caminhos exatos e a estratégia de desacoplamento para o Dev implementar os contratos/serviços/testes imediatamente sem travar.`
 
 	if r.reviewRequested {
 		govRules += `

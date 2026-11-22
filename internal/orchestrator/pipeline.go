@@ -180,7 +180,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		if !r.sharedDevWorktree {
 			scopeDesc = "worktree isolada"
 		}
-		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPROIBIDO ENCERRAR SEM CÓDIGO: em tarefas de implementação, nunca finalize a rodada apenas analisando ou listando pendências sem criar ou editar arquivos.\nDEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare de mãos vazias — implemente todos os contratos, eventos, serviços, consumers e testes unitários da SUA fatia de forma desacoplada e compilável e documente o ponto de acoplamento no resumo.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 		if hint := r.nestedWorktreesPromptHint(); hint != "" {
 			extra += "\n" + hint
 		}
@@ -346,11 +346,40 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		if req == nil {
 			return nil, nil
 		}
+		var qaFeedback string
+		if rawFB, err := ctx.ReadonlyState().Get("qa_feedback"); err == nil && rawFB != nil {
+			qaFeedback = strings.TrimSpace(fmt.Sprint(rawFB))
+		}
+		hasQAFeedback := qaFeedback != ""
+
+		worktreeEmpty := false
+		if r.Git != nil && r.deliveryRoot != "" && (qa || (a.Role == team.RoleDeveloper && hasQAFeedback)) {
+			checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			st, stErr := r.compositeStatus(checkCtx)
+			cancel()
+			if stErr == nil && strings.TrimSpace(st) == "" {
+				worktreeEmpty = true
+			}
+		}
+
 		var b strings.Builder
 		if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
 			b.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
 		}
+		if a.Role == team.RoleDeveloper && hasQAFeedback {
+			if worktreeEmpty {
+				b.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.\n\n")
+			} else {
+				b.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar.\n\n")
+			}
+		}
+		if qa && worktreeEmpty {
+			b.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
+		}
 		for _, k := range keys {
+			if a.Role == team.RoleDeveloper && hasQAFeedback && k == outputKey {
+				continue
+			}
 			v, err := ctx.ReadonlyState().Get(k)
 			if err != nil || v == nil {
 				continue
@@ -450,13 +479,20 @@ func (r *Runner) recordQAStall(parentCtx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	defer func() { r.qaLastStatus = status }()
-	if status != r.qaLastStatus {
+	defer func() {
+		r.qaHasLastStatus = true
+		r.qaLastStatus = status
+	}()
+	if !r.qaHasLastStatus || status != r.qaLastStatus {
 		r.qaStallCount = 0
 		return ""
 	}
 	r.qaStallCount++
-	if r.qaStallCount < 2 {
+	limit := 2
+	if strings.TrimSpace(status) == "" {
+		limit = 1
+	}
+	if r.qaStallCount < limit {
 		return ""
 	}
 	r.qaStallCount = 0

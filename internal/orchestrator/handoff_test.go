@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -224,5 +225,34 @@ func TestHandoffTruncatesMultibyteUTF8Cleanly(t *testing.T) {
 	slices := sanitizeSlices([]string{longFact})
 	if len(slices) != 1 || !utf8.ValidString(slices[0]) || len(slices[0]) > handoffFactMax {
 		t.Fatalf("sanitizeSlices produziu UTF-8 inválido: %#v", slices)
+	}
+}
+
+func TestSealHandoffPreservesMultiLineContextBrief(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("HIVEMIND_DATA_DIR", t.TempDir())
+
+	lines := make([]string, 0, 20)
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("contrato-%02d: src/acme/OrderEvent%02d.java#L1-L40 -> topic=acme.order.v1", i, i))
+	}
+	brief := strings.Join(lines, "\n")
+
+	r := &Runner{
+		Workspace:         ws,
+		chiefPlan:         "Implementar publicacao e consumo de OrderEvent para PROJ-123.",
+		chiefContextBrief: brief,
+		devSlices:         []string{"Criar OrderEvent, publisher e consumer no modulo notifications/audit."},
+	}
+	r.sealHandoff("run-brief")
+
+	gotLines := strings.Split(r.chiefContextBrief, "\n")
+	if len(gotLines) < 20 {
+		t.Fatalf("chiefContextBrief foi truncado prematuramente para %d linhas (esperado >= 20): %q", len(gotLines), r.chiefContextBrief)
+	}
+	for _, want := range lines {
+		if !strings.Contains(r.chiefContextBrief, want) {
+			t.Fatalf("faltou linha do dossiê no handoff: %q", want)
+		}
 	}
 }

@@ -131,6 +131,7 @@ type Runner struct {
 	agentCosts        map[string]*AgentCost
 	roleCosts         map[string]*RoleCost
 	qaLastStatus      string
+	qaHasLastStatus   bool
 	qaStallCount      int
 	qaStallFired      bool
 	qaLoopIter        int
@@ -474,7 +475,15 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.turnTotalTokens = 0
 	r.resetTurnCosts()
 	r.qaLastStatus = ""
+	r.qaHasLastStatus = false
 	r.qaStallCount = 0
+	r.qaStallFired = false
+	r.qaLoopIter = 0
+	r.handoffMu.Lock()
+	r.handoffTo = ""
+	r.handoffHash = ""
+	r.handoffEdges = nil
+	r.handoffMu.Unlock()
 	r.hasImages = hasImageAttachments(atts)
 	r.jevRepo = r.resolveRepoKey(ctx)
 	r.resetDevBudgets()

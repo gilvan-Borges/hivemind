@@ -35,6 +35,27 @@ describe("sanitizeAssistantText", () => {
     expect(sanitizeAssistantText('{"status":"ok","count":3}')).toBe('{"status":"ok","count":3}');
     expect(sanitizeAssistantText("Vou ver o ")).toBe("Vou ver o ");
   });
+
+  it("remove envelope embutido após prosa e evita duplicar o texto", () => {
+    const raw =
+      'Lendo arquivos...{"text":"Lendo arquivos...","tool_calls":[{"id":"call-1","name":"read_file","arguments":{"path":"OrderEvent.java"}}]}';
+    expect(sanitizeAssistantText(raw)).toBe("Lendo arquivos...");
+  });
+
+  it("remove fragmento órfão de cauda de tool_calls sem abrir chaves", () => {
+    const raw =
+      '"call-5","name":"read_file"},{"arguments":{"end_line":120,"path":"src/OrderEvent.java","start_line":1},"id":"call-6","name":"read_file"}]}';
+    expect(sanitizeAssistantText(raw)).toBe("");
+
+    const withProse =
+      'Consultando módulo.\n"call-5","name":"read_file"},{"arguments":{"end_line":120,"path":"src/OrderEvent.java","start_line":1},"id":"call-6","name":"read_file"}]}';
+    expect(sanitizeAssistantText(withProse)).toBe("Consultando módulo.");
+  });
+
+  it("extrai text e remove tool_calls quando envelope vem em cerca markdown", () => {
+    const fenced = '```json\n{"text":"Ok","tool_calls":[{"id":"1","name":"list_dir","arguments":{}}]}\n```';
+    expect(sanitizeAssistantText(fenced)).toBe("Ok");
+  });
 });
 
 describe("groupConversationItems", () => {

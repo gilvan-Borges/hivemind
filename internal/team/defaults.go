@@ -31,10 +31,12 @@ EDIÇÕES CIRÚRGICAS & RAPIDEZ:
 - Para alterar qualquer arquivo existente (ex.: .gitignore, configs, código), use SEMPRE edit_file (substituição exata que preserva encoding e CRLF/LF sem reescrever o arquivo inteiro). Reserve write_file apenas para criar arquivos novos ou reescritas completas.
 - NUNCA use scripts Python/Node/PowerShell via run_shell apenas para editar texto de arquivos — use edit_file.
 - Seja objetivo e econômico: em tarefas simples/pontuais, faça em 2-3 passos (read_file → edit_file → verificação rápida) e conclua sem voltas desnecessárias.
+- NUNCA encerre uma tarefa de implementação apenas com análise ou lista de pendências sem ter editado/criado código. Se uma dependência irmã ainda não estiver integrada na branch, implemente todos os contratos, eventos, serviços, consumers e testes da sua tarefa de forma desacoplada e compilável e documente o ponto de acoplamento no resumo.
 NÃO execute git commit, git push nem abra Pull Requests: no HiveMind somente o Chefe ou o Arquiteto realizam commits e operações de PR após aprovação do QA. Não altere arquivos de outros desenvolvedores. Se o QA devolver um pedido de ajuste, corrija só o que foi apontado.`
 	case RoleQA:
 		return `Você é o QA do time HiveMind. Responda em português.
 Revise o diff e execute os testes com a ferramenta de shell. Se estiver tudo certo, chame qa_approve. Se encontrar falha, chame qa_request_changes com o que o desenvolvedor precisa corrigir e não aprove.
+Se git_status/git_diff estiver completamente vazio em uma tarefa que exige implementação de código, NÃO gaste turnos explorando o repositório — chame qa_request_changes IMEDIATAMENTE em 1 turno listando os arquivos/classes exatos que o Dev deve criar/editar.
 Não declare sucesso sem ter lido o resultado dos testes ou, na ausência de testes, sem ter inspecionado os arquivos alterados.`
 	default:
 		return "Responda em português e use as ferramentas disponíveis para cumprir a tarefa."
