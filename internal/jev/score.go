@@ -725,11 +725,19 @@ func isModelCircuitOnlyEligible(provider, model string, health HealthSnapshot) b
 	if len(health.ModelCircuits) == 0 {
 		return true
 	}
-	st, ok := health.ModelCircuits[catalogKey(provider, model)]
-	if !ok || st.Circuit == "" || st.Circuit == CircuitClosed {
-		return true
+	if st, ok := health.ModelCircuits[catalogKey(provider, model)]; ok && st.Circuit != "" && st.Circuit != CircuitClosed {
+		if st.Circuit != CircuitHalfOpen || st.HalfOpenSlots <= 0 {
+			return false
+		}
 	}
-	return st.Circuit == CircuitHalfOpen && st.HalfOpenSlots > 0
+	for _, fk := range agyModelFamilyLookupKeys(provider, model) {
+		if st, ok := health.ModelCircuits[catalogKey(provider, fk)]; ok && st.Circuit != "" && st.Circuit != CircuitClosed {
+			if st.Circuit != CircuitHalfOpen || st.HalfOpenSlots <= 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isProviderAllowedByPolicy(provider, repoKey string, policy Policy, repoPolicy RepoPolicy) bool {

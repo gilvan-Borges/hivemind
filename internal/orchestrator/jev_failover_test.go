@@ -709,6 +709,299 @@ func TestJevCursorDirtyWorktreeRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestJevAgyClaudeCreditsExhaustedSkipsClaudeFamilyAndContinues(t *testing.T) {
+	pol := jev.DefaultPolicy()
+	pol.Enabled = true
+	pol.AutoEscalateUSD = 0.02
+	cat := jev.NewCatalogStore(filepath.Join(t.TempDir(), "catalog.json"), nil)
+	cat.MergeSource("agy", []jev.ModelEntry{
+		{
+			Provider:      "agy",
+			Model:         "agy:claude-opus-5-5-medium",
+			ContextLength: 200_000,
+			Quality:       0.99,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy:claude-opus-5-5-high",
+			ContextLength: 200_000,
+			Quality:       0.97,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy:claude-sonnet-4-6-high",
+			ContextLength: 200_000,
+			Quality:       0.95,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy:gemini-4-neon-high",
+			ContextLength: 1_000_000,
+			Quality:       0.91,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy",
+			ContextLength: 200_000,
+			Quality:       0.76,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierCheap,
+		},
+	})
+	hs := jev.NewHealthStore(filepath.Join(t.TempDir(), "health.json"), pol.Cooldown)
+
+	var calledModels []string
+	var events []Event
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy:      &pol,
+		Catalog:     cat,
+		HealthStore: hs,
+		Creds:       func() map[string]bool { return map[string]bool{"agy": true} },
+		BuildModel: func(_ context.Context, _, mod string) (model.LLM, error) {
+			calledModels = append(calledModels, mod)
+			if strings.Contains(mod, "claude") {
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					return nil, errors.New("agy esgotou a quota/créditos (429 RESOURCE_EXHAUSTED). Your AI credits balance is too low to continue.")
+				}}, nil
+			}
+			return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+				return modelx.Text("ok de " + mod), nil
+			}}, nil
+		},
+		OnEvent: func(ev Event) { events = append(events, ev) },
+	})
+
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{Step: "dev_coding", InputTokens: 30_000, NeedsTools: true})
+	llm, err := factory(ctx, team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotText string
+	var gotErr error
+	for r, gErr := range llm.GenerateContent(ctx, &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("implemente", genai.RoleUser)},
+	}, false) {
+		if gErr != nil {
+			gotErr = gErr
+		}
+		if r != nil && r.Content != nil && len(r.Content.Parts) > 0 {
+			gotText = r.Content.Parts[0].Text
+		}
+	}
+	if gotErr != nil {
+		t.Fatalf("expected transparent failover to gemini without returning error, got %v (called=%v)", gotErr, calledModels)
+	}
+	if gotText != "ok de agy:gemini-4-neon-high" {
+		t.Fatalf("got %q, want %q (called=%v)", gotText, "ok de agy:gemini-4-neon-high", calledModels)
+	}
+	for _, m := range calledModels {
+		if m == "agy:claude-opus-5-5-high" || m == "agy:claude-sonnet-4-6-high" {
+			t.Fatalf("must NOT waste hop calling exhausted claude sibling %q (called=%v)", m, calledModels)
+		}
+	}
+	snap := hs.Snapshot(nil, nil)
+	if snap.Circuits["agy"].Circuit == jev.CircuitOpen {
+		t.Fatalf("agy provider circuit must remain closed when only claude credits ran out: %+v", snap.Circuits["agy"])
+	}
+}
+
+func TestJevMultiHopFailoverAcrossModelsAndProviders(t *testing.T) {
+	pol := jev.DefaultPolicy()
+	pol.Enabled = true
+	pol.AutoEscalateUSD = 0.02
+	cat := jev.NewCatalogStore(filepath.Join(t.TempDir(), "catalog.json"), nil)
+	cat.MergeSource("agy", []jev.ModelEntry{
+		{
+			Provider:      "agy",
+			Model:         "agy:claude-opus-5-5-high",
+			ContextLength: 200_000,
+			Quality:       0.99,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy:gemini-4-neon-high",
+			ContextLength: 1_000_000,
+			Quality:       0.91,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierMid,
+		},
+		{
+			Provider:      "agy",
+			Model:         "agy",
+			ContextLength: 200_000,
+			Quality:       0.76,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassCLIAccount,
+			Tier:          jev.TierCheap,
+		},
+	})
+	cat.MergeSource("opencode", []jev.ModelEntry{
+		{
+			Provider:           "opencode",
+			Model:              "opencode-go:deepseek-v4.1-flash",
+			ContextLength:      128_000,
+			PromptMicroUSD:     0.12,
+			CompletionMicroUSD: 0.25,
+			Capabilities:       jev.Capabilities{Tools: true},
+			DataClass:          jev.DataClassHTTPAPI,
+			Tier:               jev.TierCheap,
+			Quality:            0.68,
+		},
+	})
+	hs := jev.NewHealthStore(filepath.Join(t.TempDir(), "health.json"), pol.Cooldown)
+
+	var builtSeq []string
+	var events []Event
+	factory := NewJevModelFactory(JevFactoryOptions{
+		Policy:      &pol,
+		Catalog:     cat,
+		HealthStore: hs,
+		Creds:       func() map[string]bool { return map[string]bool{"agy": true, "opencode": true} },
+		BuildModel: func(_ context.Context, prov, mod string) (model.LLM, error) {
+			builtSeq = append(builtSeq, prov+":"+mod)
+			switch mod {
+			case "agy:claude-opus-5-5-high":
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					return nil, errors.New("HTTP 503 Service Unavailable")
+				}}, nil
+			case "agy:gemini-4-neon-high":
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					return nil, errors.New("agy esgotou a quota/créditos (429 RESOURCE_EXHAUSTED)")
+				}}, nil
+			case "agy":
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					return nil, errors.New("HTTP 503 Service Unavailable")
+				}}, nil
+			default:
+				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+					return modelx.Text("ok final de " + mod), nil
+				}}, nil
+			}
+		},
+		OnEvent: func(ev Event) { events = append(events, ev) },
+	})
+
+	ctx := withJevRouteHint(context.Background(), jevRouteHint{Step: "dev_coding", InputTokens: 30_000, NeedsTools: true})
+	llm, err := factory(ctx, team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotText string
+	var gotErr error
+	for r, gErr := range llm.GenerateContent(ctx, &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("implemente", genai.RoleUser)},
+	}, false) {
+		if gErr != nil {
+			gotErr = gErr
+		}
+		if r != nil && r.Content != nil && len(r.Content.Parts) > 0 {
+			gotText = r.Content.Parts[0].Text
+		}
+	}
+	if gotErr != nil {
+		t.Fatalf("expected multi-hop failover to recover cleanly on 4th candidate, got %v (seq=%v)", gotErr, builtSeq)
+	}
+	if gotText != "ok final de opencode-go:deepseek-v4.1-flash" {
+		t.Fatalf("got %q, want ok from opencode (seq=%v)", gotText, builtSeq)
+	}
+
+	var failoverCount int
+	for _, ev := range events {
+		if ev.Kind == "provider_failover" {
+			failoverCount++
+		}
+	}
+	if failoverCount != 3 {
+		t.Fatalf("expected 3 provider_failover events across 4 candidates, got %d (%+v)", failoverCount, events)
+	}
+
+	// Second call on the same wrapper must route directly to the surviving winner.
+	builtSeq = nil
+	for r, gErr := range llm.GenerateContent(ctx, &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("próximo passo", genai.RoleUser)},
+	}, false) {
+		if gErr != nil {
+			t.Fatalf("second call failed: %v", gErr)
+		}
+		if r != nil && r.Content != nil && len(r.Content.Parts) > 0 {
+			gotText = r.Content.Parts[0].Text
+		}
+	}
+	if len(builtSeq) != 0 {
+		t.Fatalf("second call should reuse current winner without rebuilding models, builtSeq=%v", builtSeq)
+	}
+	if !strings.Contains(llm.Name(), "opencode-go:deepseek-v4.1-flash") {
+		t.Fatalf("expected wrapper Name() to reflect winning route, got %q", llm.Name())
+	}
+
+	// Verify bounded loop terminates when ALL candidates fail (does not loop forever).
+	cat2, hs2, pol2 := newTwoProviderTestEnv(t, 0.02)
+	extra := make([]jev.ModelEntry, 0, 8)
+	for i := 0; i < 8; i++ {
+		extra = append(extra, jev.ModelEntry{
+			Provider:      "openrouter",
+			Model:         "cheap/fail-" + string(rune('a'+i)),
+			ContextLength: 128_000,
+			Quality:       0.90 - float64(i)*0.01,
+			Free:          true,
+			Capabilities:  jev.Capabilities{Tools: true},
+			DataClass:     jev.DataClassHTTPAPI,
+			Tier:          jev.TierCheap,
+		})
+	}
+	cat2.MergeSource("openrouter", extra)
+	var allFailCalls atomic.Int32
+	factory2 := NewJevModelFactory(JevFactoryOptions{
+		Policy:      &pol2,
+		Catalog:     cat2,
+		HealthStore: hs2,
+		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true} },
+		BuildModel: func(_ context.Context, _, mod string) (model.LLM, error) {
+			return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {
+				allFailCalls.Add(1)
+				return nil, errors.New("HTTP 429 Too Many Requests")
+			}}, nil
+		},
+	})
+	llm2, err := factory2(context.Background(), team.Agent{Name: "dev", Role: team.RoleDeveloper, Provider: "jev", Model: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boundErr error
+	for _, gErr := range llm2.GenerateContent(context.Background(), &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("oi", genai.RoleUser)},
+	}, false) {
+		if gErr != nil {
+			boundErr = gErr
+		}
+	}
+	if boundErr == nil {
+		t.Fatal("expected error when all models fail")
+	}
+	if got := allFailCalls.Load(); got != maxFailoverHops+1 {
+		t.Fatalf("expected exactly %d bounded attempts (1 + maxFailoverHops), got %d", maxFailoverHops+1, got)
+	}
+}
+
 func BenchmarkJevWrapperPassThrough(b *testing.B) {
 	cat := jev.NewCatalogStore(filepath.Join(b.TempDir(), "catalog.json"), nil)
 	pol := jev.DefaultPolicy()

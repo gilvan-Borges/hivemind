@@ -18,14 +18,15 @@ import (
 type ErrorClass string
 
 const (
-	ErrClassNone      ErrorClass = ""
-	ErrClassQuota     ErrorClass = "quota"
-	ErrClassRateLimit ErrorClass = "rate_limit"
-	ErrClassAuth      ErrorClass = "auth"
-	ErrClassOutage    ErrorClass = "outage"
-	ErrClassSpike     ErrorClass = "spike"
-	ErrClassModel     ErrorClass = "model"  // 400 de modelo/provedor incompatível — abre só o circuito do modelo
-	ErrClassPolicy    ErrorClass = "policy" // jail, aprovação, pedido inválido para qualquer modelo — nunca abre circuito
+	ErrClassNone       ErrorClass = ""
+	ErrClassQuota      ErrorClass = "quota"
+	ErrClassModelQuota ErrorClass = "model_quota" // cota/créditos do modelo e família no provedor — abre modelo+família por cooldown de quota
+	ErrClassRateLimit  ErrorClass = "rate_limit"
+	ErrClassAuth       ErrorClass = "auth"
+	ErrClassOutage     ErrorClass = "outage"
+	ErrClassSpike      ErrorClass = "spike"
+	ErrClassModel      ErrorClass = "model"  // 400 de modelo/provedor incompatível — abre só o circuito do modelo
+	ErrClassPolicy     ErrorClass = "policy" // jail, aprovação, pedido inválido para qualquer modelo — nunca abre circuito
 )
 
 // ClassifyError maps a provider error (already past internal/modelx retries)
@@ -64,7 +65,7 @@ func ClassifyError(err error) ErrorClass {
 	for _, pat := range []string{
 		"402", "payment required", "créditos insuficientes", "insufficient credits",
 		"resource_exhausted", "esgotou a quota", "quota/créditos", "quota exceeded",
-		"insufficient_quota",
+		"insufficient_quota", "ai credits balance is too low", "credits balance is too low",
 	} {
 		if strings.Contains(msg, pat) {
 			return ErrClassQuota
@@ -352,6 +353,7 @@ func (h *HealthStore) TryAcquireHalfOpen(provider, model string) bool {
 			}
 			return false
 		}
+		mrAcquired := false
 		if mr.Circuit == CircuitHalfOpen {
 			if !leaseFree(mr.HalfOpenLeaseUntil, now) {
 				if pr.Circuit == CircuitHalfOpen {
@@ -360,6 +362,38 @@ func (h *HealthStore) TryAcquireHalfOpen(provider, model string) bool {
 				return false
 			}
 			mr.HalfOpenLeaseUntil = now.Add(halfOpenLeaseTTL)
+			mrAcquired = true
+		}
+		var acquiredFamily []*circuitRecord
+		rollback := func() {
+			if pr.Circuit == CircuitHalfOpen {
+				pr.HalfOpenLeaseUntil = time.Time{}
+			}
+			if mrAcquired {
+				mr.HalfOpenLeaseUntil = time.Time{}
+			}
+			for _, rec := range acquiredFamily {
+				rec.HalfOpenLeaseUntil = time.Time{}
+			}
+		}
+		for _, fk := range agyModelFamilyLookupKeys(provider, model) {
+			fr, ok := h.state.Models[catalogKey(provider, fk)]
+			if !ok || fr == nil {
+				continue
+			}
+			advanceLazyState(fr, now)
+			if fr.Circuit == CircuitOpen {
+				rollback()
+				return false
+			}
+			if fr.Circuit == CircuitHalfOpen {
+				if !leaseFree(fr.HalfOpenLeaseUntil, now) {
+					rollback()
+					return false
+				}
+				fr.HalfOpenLeaseUntil = now.Add(halfOpenLeaseTTL)
+				acquiredFamily = append(acquiredFamily, fr)
+			}
 		}
 	}
 	return true
@@ -377,6 +411,11 @@ func (h *HealthStore) ReleaseHalfOpen(provider, model string) {
 	if strings.TrimSpace(model) != "" {
 		if rec, ok := h.state.Models[catalogKey(provider, model)]; ok && rec != nil {
 			rec.HalfOpenLeaseUntil = time.Time{}
+		}
+		for _, fk := range agyModelFamilyLookupKeys(provider, model) {
+			if rec, ok := h.state.Models[catalogKey(provider, fk)]; ok && rec != nil {
+				rec.HalfOpenLeaseUntil = time.Time{}
+			}
 		}
 	}
 }
@@ -409,6 +448,18 @@ func (h *HealthStore) RecordSuccess(provider, model string) {
 		mr.FailureCount = 0
 		mr.HalfOpenLeaseUntil = time.Time{}
 		mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: true})
+		for _, fk := range agyModelFamilyLookupKeys(provider, model) {
+			if fr, ok := h.state.Models[catalogKey(provider, fk)]; ok && fr != nil {
+				if fr.Circuit != CircuitClosed {
+					wasOpen = true
+				}
+				fr.Circuit = CircuitClosed
+				fr.Reason = ""
+				fr.Until = time.Time{}
+				fr.FailureCount = 0
+				fr.HalfOpenLeaseUntil = time.Time{}
+			}
+		}
 	}
 	allClosed := h.allClosedLocked(now)
 	fn := h.onChange
@@ -453,6 +504,11 @@ func (h *HealthStore) RecordFailure(provider, model string, class ErrorClass, re
 	mr := h.ensureModelLocked(provider, model)
 	pr.HalfOpenLeaseUntil = time.Time{}
 	mr.HalfOpenLeaseUntil = time.Time{}
+	for _, fk := range agyModelFamilyLookupKeys(provider, model) {
+		if fr, ok := h.state.Models[catalogKey(provider, fk)]; ok && fr != nil {
+			fr.HalfOpenLeaseUntil = time.Time{}
+		}
+	}
 	mr.Recent = appendOutcomeSample(mr.Recent, outcomeSample{At: now, OK: false})
 
 	opened := false
@@ -471,6 +527,33 @@ func (h *HealthStore) RecordFailure(provider, model string, class ErrorClass, re
 		scope = "provider"
 		state = CircuitOpen
 		opened = true
+
+	case ErrClassModelQuota:
+		mr.FailureCount++
+		mr.Circuit = CircuitOpen
+		mr.Reason = string(ErrClassModelQuota)
+		mr.OpenedAt = now
+		if resetsAt.After(now) {
+			mr.Until = resetsAt
+		} else {
+			mr.Until = now.Add(h.backoffCooldown(h.cooldownDuration(ErrClassQuota), mr.FailureCount))
+		}
+		scope = "model"
+		state = CircuitOpen
+		opened = true
+		for _, fk := range AgyQuotaFamilyKeys(provider, model) {
+			fr := h.ensureModelLocked(provider, fk)
+			if fr.Circuit != CircuitOpen {
+				fr.FailureCount++
+			}
+			fr.Circuit = CircuitOpen
+			fr.Reason = string(ErrClassModelQuota)
+			fr.OpenedAt = now
+			if mr.Until.After(fr.Until) {
+				fr.Until = mr.Until
+			}
+			fr.HalfOpenLeaseUntil = time.Time{}
+		}
 
 	case ErrClassAuth:
 		pr.FailureCount++
@@ -745,7 +828,7 @@ func advanceLazyState(rec *circuitRecord, now time.Time) {
 
 func (h *HealthStore) cooldownDuration(class ErrorClass) time.Duration {
 	switch class {
-	case ErrClassQuota:
+	case ErrClassQuota, ErrClassModelQuota:
 		if d, err := time.ParseDuration(h.cooldown.Quota); err == nil && d > 0 {
 			return d
 		}
@@ -863,4 +946,80 @@ func (h *HealthStore) mergeDiskStateLocked(disk healthFile) {
 			h.state.Models[k] = &cp
 		}
 	}
+}
+
+func normalizeAgyQuotaSlug(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "agy:")
+	if idx := strings.LastIndex(m, ":"); idx >= 0 {
+		switch m[idx+1:] {
+		case "low", "medium", "high", "xhigh", "max":
+			m = m[:idx]
+		}
+	}
+	m = strings.TrimSpace(m)
+	if m == "" || m == "agy" || m == "default" {
+		return ""
+	}
+	return m
+}
+
+func stripAgySlugEffort(slug string) string {
+	for _, suf := range []string{"-thinking", "-xhigh", "-medium", "-high", "-low", "-max"} {
+		if strings.HasSuffix(slug, suf) {
+			return strings.TrimSuffix(slug, suf)
+		}
+	}
+	return slug
+}
+
+// AgyQuotaFamilyKeys returns sibling-effort quota family keys for Antigravity
+// models so exhausting e.g. agy:claude-opus-5-5-medium also suppresses
+// agy:claude-opus-5-5-high and agy:claude-opus-5-5-low.
+func AgyQuotaFamilyKeys(provider, model string) []string {
+	if !strings.EqualFold(strings.TrimSpace(provider), "agy") {
+		return nil
+	}
+	slug := normalizeAgyQuotaSlug(model)
+	if slug == "" {
+		return nil
+	}
+	base := stripAgySlugEffort(slug)
+	if base != "" && base != slug {
+		return []string{"__family__:" + base}
+	}
+	return nil
+}
+
+// AgyCreditsFamilyKey returns the broader credits family key (e.g.
+// "__family__:claude") for Antigravity models sharing paid AI credits.
+func AgyCreditsFamilyKey(provider, model string) string {
+	if !strings.EqualFold(strings.TrimSpace(provider), "agy") {
+		return ""
+	}
+	slug := normalizeAgyQuotaSlug(model)
+	if slug == "" {
+		return ""
+	}
+	if strings.Contains(slug, "claude") {
+		return "__family__:claude"
+	}
+	return ""
+}
+
+func agyModelFamilyLookupKeys(provider, model string) []string {
+	keys := AgyQuotaFamilyKeys(provider, model)
+	if cfk := AgyCreditsFamilyKey(provider, model); cfk != "" {
+		dup := false
+		for _, k := range keys {
+			if k == cfk {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			keys = append(keys, cfk)
+		}
+	}
+	return keys
 }

@@ -46,6 +46,7 @@ func TestClassifyError(t *testing.T) {
 		{"jail refusal", errors.New("caminho recusado fora do workspace"), ErrClassPolicy},
 		{"402 quota", errors.New("OpenRouter respondeu 402: créditos insuficientes"), ErrClassQuota},
 		{"agy resource exhausted", errors.New("agy esgotou a quota/créditos (429 RESOURCE_EXHAUSTED)"), ErrClassQuota},
+		{"agy ai credits low", errors.New("Your AI credits balance is too low to continue."), ErrClassQuota},
 		{"401 auth", errors.New("OpenRouter rejeitou a chave (HTTP 401 Unauthorized)"), ErrClassAuth},
 		{"403 auth", errors.New("HTTP 403 forbidden"), ErrClassAuth},
 		{"429 rate limit", errors.New("HTTP 429 Too Many Requests"), ErrClassRateLimit},
@@ -231,5 +232,83 @@ func TestScoreExcludesCursorMidStepAndOpenModelCircuits(t *testing.T) {
 	}
 	if choice.Provider != "agy" {
 		t.Fatalf("expected agy when gemini model circuit is open and cursor is blocked InStep, got %+v", choice)
+	}
+}
+
+func TestHealthStoreModelQuotaAndAgyFamilyIsolation(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	hs := NewHealthStore(filepath.Join(t.TempDir(), "health.json"), CooldownConfig{
+		Quota:     "15m",
+		RateLimit: "2m",
+		Outage:    "1m",
+	})
+	hs.nowFn = func() time.Time { return now }
+
+	scope, st := hs.RecordFailure("agy", "agy:claude-opus-5-5-medium", ErrClassModelQuota, time.Time{})
+	if scope != "model" || st != CircuitOpen {
+		t.Fatalf("expected model circuit open for ErrClassModelQuota, got scope=%q state=%q", scope, st)
+	}
+
+	snap := hs.Snapshot(map[string]bool{"agy": true}, nil)
+	if snap.Circuits["agy"].Circuit == CircuitOpen {
+		t.Fatalf("ErrClassModelQuota must NOT open whole agy provider: %+v", snap.Circuits["agy"])
+	}
+	mc := snap.ModelCircuits[catalogKey("agy", "agy:claude-opus-5-5-medium")]
+	if mc.Circuit != CircuitOpen || mc.Until.Sub(now) != 15*time.Minute {
+		t.Fatalf("expected 15m quota cooldown on exact model, got %+v", mc)
+	}
+	if isPairCircuitEligible("agy", "agy:claude-opus-5-5-high", snap) {
+		t.Fatal("sibling effort variant agy:claude-opus-5-5-high must be ineligible")
+	}
+	if !isPairCircuitEligible("agy", "agy:gemini-4-neon-high", snap) {
+		t.Fatal("unrelated agy:gemini-4-neon-high must remain eligible")
+	}
+	if !isPairCircuitEligible("agy", "agy", snap) {
+		t.Fatal("base agy route must remain eligible")
+	}
+
+	cat := Catalog{
+		Version: 1,
+		Entries: []ModelEntry{
+			{Provider: "agy", Model: "agy:claude-opus-5-5-medium", ContextLength: 200_000, Quality: 0.99, Capabilities: Capabilities{Tools: true}, DataClass: DataClassCLIAccount, Tier: TierMid},
+			{Provider: "agy", Model: "agy:claude-opus-5-5-high", ContextLength: 200_000, Quality: 0.97, Capabilities: Capabilities{Tools: true}, DataClass: DataClassCLIAccount, Tier: TierMid},
+			{Provider: "agy", Model: "agy:gemini-4-neon-high", ContextLength: 1_000_000, Quality: 0.91, Capabilities: Capabilities{Tools: true}, DataClass: DataClassCLIAccount, Tier: TierMid},
+		},
+	}
+	choice, ref := Score(Task{
+		Role: team.RoleDeveloper, Class: ClassCoding, Complexity: ComplexityMedium, InputTokens: 2000, NeedsTools: true,
+	}, cat, DefaultPolicy(), snap, AgentPin{}, RepoPolicy{})
+	if ref.Code != "" {
+		t.Fatalf("unexpected score refusal: %+v", ref)
+	}
+	if choice.Model != "agy:gemini-4-neon-high" {
+		t.Fatalf("expected Score to skip claude sibling family and choose agy:gemini-4-neon-high, got %+v", choice)
+	}
+
+	hs.RecordFailure("agy", "__family__:claude", ErrClassModelQuota, time.Time{})
+	snap = hs.Snapshot(map[string]bool{"agy": true}, nil)
+	if isPairCircuitEligible("agy", "agy:claude-sonnet-4-6-high", snap) {
+		t.Fatal("claude credits family must block other claude variants on agy")
+	}
+	if !isPairCircuitEligible("agy", "agy:gemini-4-neon-high", snap) {
+		t.Fatal("claude credits family must NOT block gemini models on agy")
+	}
+
+	now = now.Add(15*time.Minute + time.Second)
+	if !hs.TryAcquireHalfOpen("agy", "agy:claude-opus-5-5-high") {
+		t.Fatal("first half_open probe after 15m quota window should succeed")
+	}
+	if hs.TryAcquireHalfOpen("agy", "agy:claude-opus-5-5-high") {
+		t.Fatal("concurrent second half_open probe on same family must be blocked")
+	}
+	hs.ReleaseHalfOpen("agy", "agy:claude-opus-5-5-high")
+	if !hs.TryAcquireHalfOpen("agy", "agy:claude-opus-5-5-high") {
+		t.Fatal("half_open probe slot should reopen after ReleaseHalfOpen")
+	}
+
+	hs.RecordSuccess("agy", "agy:claude-opus-5-5-high")
+	snap = hs.Snapshot(map[string]bool{"agy": true}, nil)
+	if !isPairCircuitEligible("agy", "agy:claude-opus-5-5-high", snap) || !isPairCircuitEligible("agy", "agy:claude-sonnet-4-6-high", snap) {
+		t.Fatalf("RecordSuccess must close family circuits too: %+v", snap.ModelCircuits)
 	}
 }

@@ -2,6 +2,7 @@ package modelx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -195,5 +196,58 @@ func TestAccountPoolNeverCrossesOrganizationBoundaries(t *testing.T) {
 	aPool := ListAccountPoolForProvider(WithWorkspace(context.Background(), wsAcme), "openrouter", "")
 	if len(aPool) != 1 || aPool[0].ID != "or-acme" {
 		t.Fatalf("acme pool leaked external accounts: %+v", aPool)
+	}
+}
+
+func TestAccountPoolAgyQuotaCooldownAndEffortFamily(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("AppData", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+
+	accountPoolMu.Lock()
+	accountPoolLoaded = true
+	accountPoolState = accountPoolHealthFile{
+		Version: 1,
+		Slots:   map[string]accountModelSlotState{},
+	}
+	accountPoolMu.Unlock()
+
+	errMsg := errors.New("agy esgotou a quota/créditos (429 RESOURCE_EXHAUSTED). Your AI credits balance is too low to continue.")
+	bucket, cooldown, shouldFailover := RecordAccountModelFailure("agy", "acc-alpha", "Conta Alpha", "agy:claude-opus-5-5-medium", errMsg)
+	if !shouldFailover {
+		t.Fatal("expected shouldFailover=true on AGY credits exhaustion")
+	}
+	if bucket != "claude-opus-5-5-medium" {
+		t.Fatalf("expected bucket claude-opus-5-5-medium, got %q", bucket)
+	}
+	if cooldown != defaultAccountModelQuotaCooldown {
+		t.Fatalf("expected 15m quota cooldown even when 429 is in text, got %v", cooldown)
+	}
+
+	if IsAccountModelSlotHealthy("agy", "acc-alpha", "agy:claude-opus-5-5-medium") {
+		t.Fatal("exact exhausted model must be unhealthy")
+	}
+	if IsAccountModelSlotHealthy("agy", "acc-alpha", "agy:claude-opus-5-5-high") {
+		t.Fatal("sibling effort variant claude-opus-5-5-high must be unhealthy on acc-alpha")
+	}
+	if IsAccountModelSlotHealthy("agy", "acc-alpha", "agy:claude-sonnet-4-6-high") {
+		t.Fatal("claude credits family must block claude-sonnet-4-6-high on acc-alpha")
+	}
+	if !IsAccountModelSlotHealthy("agy", "acc-alpha", "agy:gemini-4-neon-high") {
+		t.Fatal("gemini-4-neon-high on acc-alpha must remain healthy")
+	}
+	if !IsAccountModelSlotHealthy("agy", "acc-beta", "agy:claude-opus-5-5-high") {
+		t.Fatal("acc-beta must remain healthy")
+	}
+
+	_, rateCooldown, ok := RecordAccountModelFailure("agy", "acc-beta", "Conta Beta", "agy:gemini-4-neon-high", errors.New("HTTP 429 Too Many Requests"))
+	if !ok || rateCooldown != defaultAccountModelRateCooldown {
+		t.Fatalf("expected 2m rate-limit cooldown for pure 429, got ok=%v cooldown=%v", ok, rateCooldown)
+	}
+	if IsAccountModelSlotHealthy("agy", "acc-beta", "agy:gemini-4-neon-high") {
+		t.Fatal("acc-beta gemini-4-neon-high must be in cooldown")
+	}
+	if !IsAccountModelSlotHealthy("agy", "acc-beta", "agy:gemini-4-neon-low") {
+		t.Fatal("pure rate-limit must stay scoped to exact bucket without blocking sibling effort")
 	}
 }

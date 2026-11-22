@@ -327,7 +327,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 			// circuit (Spec 06 §3 — fim do leak de HalfOpenInFlight).
 			releaseLease func()
 		)
-		for iter := 0; iter < 16 && buildFails < 3; iter++ {
+		for iter := 0; iter < 16 && buildFails < 5; iter++ {
 			healthFn := opts.Health
 			if healthFn == nil {
 				creds := credsFn()
@@ -418,7 +418,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}
 				if healthStore != nil {
-					healthStore.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
+					recordJevFailure(ctx, healthStore, choice, buildClass, err)
 				}
 				if buildFails == 0 {
 					firstChoice = choice
@@ -428,7 +428,7 @@ func NewJevModelFactory(opts JevFactoryOptions) func(ctx context.Context, a team
 				exclude[pairKey(choice.Provider, choice.Model)] = true
 				agentPin = jev.AgentPin{}
 				buildFails++
-				if buildFails >= 3 {
+				if buildFails >= 5 {
 					return nil, fmt.Errorf("%s", jev.RedactSecrets(err.Error(), opts.ExtraSecrets...))
 				}
 				continue

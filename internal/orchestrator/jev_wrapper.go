@@ -16,7 +16,7 @@ import (
 )
 
 // jevModelWrapper wraps a routed model.LLM to track health/spend, classify errors
-// past modelx retries, and perform at most one between-call failover per
+// past modelx retries, and perform bounded between-call multi-hop failover per
 // GenerateContent invocation without duplicating tool calls.
 type jevModelWrapper struct {
 	mu           sync.Mutex
@@ -57,6 +57,8 @@ func (w *jevModelWrapper) Name() string {
 	return "jev"
 }
 
+const maxFailoverHops = 5
+
 func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// O lease da rota original vale pela sonda inteira: cancelamento,
@@ -65,6 +67,13 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		if w.releaseLease != nil {
 			defer w.releaseLease()
 		}
+		var activeHopRelease func()
+		defer func() {
+			if activeHopRelease != nil {
+				activeHopRelease()
+			}
+		}()
+
 		w.mu.Lock()
 		curLLM := w.current
 		curChoice := w.choice
@@ -72,106 +81,130 @@ func (w *jevModelWrapper) GenerateContent(ctx context.Context, req *model.LLMReq
 		w.mu.Unlock()
 
 		exclude := map[string]bool{}
-		if hasPriorToolActivity(req) {
-			// Mid-step ADK calls with tool history stay off WorkspaceAgent.
-		}
+		isFailover := false
 
-		var headBefore, statusBefore string
-		var snapChecked bool
-		if curChoice.Provider == "cursor" && w.git != nil && w.workDir != "" {
-			headBefore, statusBefore = snapshotWorktree(ctx, w.git, w.workDir)
-			snapChecked = true
-		}
+		for hop := 0; hop <= maxFailoverHops; hop++ {
+			var headBefore, statusBefore string
+			var snapChecked bool
+			if curChoice.Provider == "cursor" && w.git != nil && w.workDir != "" {
+				headBefore, statusBefore = snapshotWorktree(ctx, w.git, w.workDir)
+				snapChecked = true
+			}
 
-		started := time.Now()
-		respErr, deliveredToolCall, lastResp := w.invokeOnce(ctx, curLLM, curChoice, req, stream, yield)
-		if respErr == nil {
-			w.recordSuccessAndSpend(curChoice, lastResp)
-			w.recordCall(curChoice, true, "", time.Since(started), lastResp, false)
-			w.noteQA(lastResp)
-			return
-		}
+			started := time.Now()
+			respErr, deliveredToolCall, deliveredFinal, lastResp := w.invokeOnce(ctx, curLLM, curChoice, req, stream, yield)
+			if respErr == nil {
+				w.recordSuccessAndSpend(curChoice, lastResp)
+				w.recordCall(curChoice, true, "", time.Since(started), lastResp, isFailover)
+				w.noteQA(lastResp)
+				return
+			}
 
-		errClass := classifyUpstream(respErr)
-		w.recordCall(curChoice, false, errClass, time.Since(started), nil, false)
-		if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
-			yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
-			return
-		}
+			errClass := classifyUpstream(respErr)
+			w.recordCall(curChoice, false, errClass, time.Since(started), nil, isFailover)
+			if errClass == jev.ErrClassPolicy || ctx.Err() != nil {
+				yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
+				return
+			}
 
-		if w.health != nil {
-			w.health.RecordFailure(curChoice.Provider, curChoice.Model, scopeJevFailureClass(ctx, curChoice, errClass), time.Time{})
-		}
+			recordJevFailure(ctx, w.health, curChoice, errClass, respErr)
+			if activeHopRelease != nil {
+				activeHopRelease()
+				activeHopRelease = nil
+			}
 
-		// Do not repeat a GenerateContent call that already handed a tool call to ADK.
-		if deliveredToolCall {
-			yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
-			return
-		}
+			// Do not repeat a GenerateContent call that already handed a tool call or final response to ADK.
+			if deliveredToolCall || deliveredFinal {
+				yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
+				return
+			}
 
-		// Cursor worktree guard (§9 & §15 Fase 2): never hand a dirty worktree to
-		// another writer after Cursor CLI fails without explicit approval.
-		if curChoice.Provider == "cursor" && snapChecked && w.git != nil && w.workDir != "" {
-			headAfter, statusAfter := snapshotWorktree(ctx, w.git, w.workDir)
-			if headAfter != headBefore || statusAfter != statusBefore {
-				prompt := fmt.Sprintf("Jev: o Cursor CLI falhou após modificar a worktree (%s). Permitir que outro modelo continue sobre as alterações atuais?", w.workDir)
-				if w.approve == nil || !w.approve("worktree", prompt) {
-					w.emitExhausted(fmt.Sprintf("Cursor falhou após editar a worktree e a continuação não foi aprovada; alterações mantidas em %s.", w.workDir))
-					yield(nil, fmt.Errorf("worktree alterada pelo Cursor após falha sem aprovação para continuar: %s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
-					return
+			// Cursor worktree guard (§9 & §15 Fase 2): never hand a dirty worktree to
+			// another writer after Cursor CLI fails without explicit approval.
+			if curChoice.Provider == "cursor" && snapChecked && w.git != nil && w.workDir != "" {
+				headAfter, statusAfter := snapshotWorktree(ctx, w.git, w.workDir)
+				if headAfter != headBefore || statusAfter != statusBefore {
+					prompt := fmt.Sprintf("Jev: o Cursor CLI falhou após modificar a worktree (%s). Permitir que outro modelo continue sobre as alterações atuais?", w.workDir)
+					if w.approve == nil || !w.approve("worktree", prompt) {
+						w.emitExhausted(fmt.Sprintf("Cursor falhou após editar a worktree e a continuação não foi aprovada; alterações mantidas em %s.", w.workDir))
+						yield(nil, fmt.Errorf("worktree alterada pelo Cursor após falha sem aprovação para continuar: %s", jev.RedactSecrets(respErr.Error(), w.extraSecrets...)))
+						return
+					}
 				}
 			}
-		}
 
-		exclude[pairKey(curChoice.Provider, curChoice.Model)] = true
-		nextChoice, nextLLM, nextRelease, failErr := w.selectAndBuildFailover(ctx, req, curChoice, errClass, exclude)
-		if failErr != nil {
-			if nextRelease != nil {
-				nextRelease()
+			if hop == maxFailoverHops {
+				yield(nil, fmt.Errorf("%s", w.explain(curChoice, respErr)))
+				return
 			}
-			yield(nil, failErr)
-			return
-		}
-		// A sonda do failover também tem lease: garantido por defer para cobrir
-		// o path de política/cancelamento que não registra desfecho.
-		if nextRelease != nil {
-			defer nextRelease()
-		}
 
-		w.mu.Lock()
-		if w.gen == curGen {
-			w.current = nextLLM
-			w.choice = nextChoice
-			w.gen++
-		}
-		w.mu.Unlock()
+			exclude[pairKey(curChoice.Provider, curChoice.Model)] = true
+			nextChoice, nextLLM, nextRelease, failErr := w.selectAndBuildFailover(ctx, req, curChoice, errClass, exclude)
+			if failErr != nil {
+				if nextRelease != nil {
+					nextRelease()
+				}
+				yield(nil, failErr)
+				return
+			}
+			activeHopRelease = nextRelease
 
-		// Retry the same LLMRequest ONCE on the failover model (Spec §9).
-		retryStart := time.Now()
-		retryErr, _, retryResp := w.invokeOnce(ctx, nextLLM, nextChoice, req, stream, yield)
-		if retryErr == nil {
-			w.recordSuccessAndSpend(nextChoice, retryResp)
-			w.recordCall(nextChoice, true, "", time.Since(retryStart), retryResp, true)
-			w.noteQA(retryResp)
-			return
+			w.mu.Lock()
+			if w.gen == curGen {
+				w.current = nextLLM
+				w.choice = nextChoice
+				w.gen++
+				curGen = w.gen
+			}
+			w.mu.Unlock()
+
+			curLLM = nextLLM
+			curChoice = nextChoice
+			isFailover = true
 		}
-		retryClass := classifyUpstream(retryErr)
-		w.recordCall(nextChoice, false, retryClass, time.Since(retryStart), nil, true)
-		if retryClass != jev.ErrClassPolicy && ctx.Err() == nil && w.health != nil {
-			w.health.RecordFailure(nextChoice.Provider, nextChoice.Model, scopeJevFailureClass(ctx, nextChoice, retryClass), time.Time{})
-		}
-		yield(nil, fmt.Errorf("%s", w.explain(nextChoice, retryErr)))
 	}
 }
 
 // scopeJevFailureClass keeps quota failures on Antigravity (agy) scoped to the
-// individual model instead of tripping the entire provider circuit when a specific
-// model bucket runs out across pooled accounts while other AGY models still work.
+// individual model and its quota family instead of tripping the entire provider
+// circuit when a specific model bucket runs out across pooled accounts while
+// other AGY models still work.
 func scopeJevFailureClass(ctx context.Context, ch jev.Choice, class jev.ErrorClass) jev.ErrorClass {
 	if strings.EqualFold(ch.Provider, "agy") && class == jev.ErrClassQuota && strings.TrimSpace(ch.Model) != "" && !strings.EqualFold(strings.TrimSpace(ch.Model), "agy") {
-		return jev.ErrClassModel
+		return jev.ErrClassModelQuota
 	}
 	return class
+}
+
+func isAgyCreditsExhaustedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(modelx.FormatUpstreamError("", "", err) + " " + err.Error()))
+	for _, pat := range []string{
+		"ai credits balance is too low",
+		"credits balance is too low",
+		"insufficient credits",
+		"créditos insuficientes",
+	} {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func recordJevFailure(ctx context.Context, health *jev.HealthStore, ch jev.Choice, class jev.ErrorClass, rawErr error) {
+	if health == nil {
+		return
+	}
+	scoped := scopeJevFailureClass(ctx, ch, class)
+	health.RecordFailure(ch.Provider, ch.Model, scoped, time.Time{})
+	if scoped == jev.ErrClassModelQuota && isAgyCreditsExhaustedError(rawErr) {
+		if cfk := jev.AgyCreditsFamilyKey(ch.Provider, ch.Model); cfk != "" {
+			health.RecordFailure(ch.Provider, cfk, jev.ErrClassModelQuota, time.Time{})
+		}
+	}
 }
 
 func (w *jevModelWrapper) explain(ch jev.Choice, err error) string {
@@ -212,14 +245,14 @@ func (w *jevModelWrapper) invokeOnce(
 	req *model.LLMRequest,
 	stream bool,
 	yield func(*model.LLMResponse, error) bool,
-) (errOut error, deliveredToolCall bool, lastResp *model.LLMResponse) {
+) (errOut error, deliveredToolCall bool, deliveredFinal bool, lastResp *model.LLMResponse) {
 	if llm == nil {
-		return fmt.Errorf("modelo nulo no wrapper Jev"), false, nil
+		return fmt.Errorf("modelo nulo no wrapper Jev"), false, false, nil
 	}
 	req = bindWireModel(req, ch.Provider, ch.Model)
 	for resp, err := range llm.GenerateContent(ctx, req, stream) {
 		if err != nil {
-			return err, deliveredToolCall, lastResp
+			return err, deliveredToolCall, deliveredFinal, lastResp
 		}
 		if resp == nil {
 			continue
@@ -228,11 +261,14 @@ func (w *jevModelWrapper) invokeOnce(
 		if responseHasToolCall(resp) {
 			deliveredToolCall = true
 		}
+		if !resp.Partial {
+			deliveredFinal = true
+		}
 		if !yield(resp, nil) {
-			return nil, deliveredToolCall, lastResp
+			return nil, deliveredToolCall, deliveredFinal, lastResp
 		}
 	}
-	return nil, deliveredToolCall, lastResp
+	return nil, deliveredToolCall, deliveredFinal, lastResp
 }
 
 func (w *jevModelWrapper) selectAndBuildFailover(
@@ -257,7 +293,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	if w.credsFn != nil {
 		creds = w.credsFn()
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 6; attempt++ {
 		if w.catalog != nil {
 			w.catalog.RefreshIfStale(ctx)
 		}
@@ -311,7 +347,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 		if err != nil {
 			buildClass := classifyUpstream(err)
 			if buildClass != jev.ErrClassPolicy && w.health != nil {
-				w.health.RecordFailure(choice.Provider, choice.Model, scopeJevFailureClass(ctx, choice, buildClass), time.Time{})
+				recordJevFailure(ctx, w.health, choice, buildClass, err)
 			} else if releaseLease != nil {
 				// 400/cancel no build do failover não passa pelo RecordFailure:
 				// devolve o lease aqui mesmo.

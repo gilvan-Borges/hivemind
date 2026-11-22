@@ -221,20 +221,72 @@ func SplitAccountModelSpec(provider, modelName string) (baseProvider, accountID,
 	return baseProvider, accountID, cleanModel
 }
 
-// IsAccountModelSlotHealthy reports whether (provider, accountID, modelBucket)
-// AND the account-wide "__all__" slot are currently closed (available).
+func isCreditsExhaustedMsg(msg string) bool {
+	for _, pat := range []string{
+		"ai credits balance is too low",
+		"credits balance is too low",
+		"insufficient credits",
+		"créditos insuficientes",
+	} {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func agyAccountFamilyBuckets(prov, bucket string, includeClaudeFamily bool) []string {
+	if prov != "agy" || bucket == "" || bucket == "default" || bucket == "__all__" {
+		return nil
+	}
+	var out []string
+	base := bucket
+	for _, suf := range []string{"-thinking", "-xhigh", "-medium", "-high", "-low", "-max"} {
+		if strings.HasSuffix(base, suf) {
+			base = strings.TrimSuffix(base, suf)
+			break
+		}
+	}
+	if base != "" && base != bucket {
+		out = append(out, "__family__:"+base)
+	}
+	if includeClaudeFamily && strings.Contains(bucket, "claude") {
+		fb := "__family__:claude"
+		dup := false
+		for _, k := range out {
+			if k == fb {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, fb)
+		}
+	}
+	return out
+}
+
+// IsAccountModelSlotHealthy reports whether (provider, accountID, modelBucket),
+// any sibling effort/credits family bucket, AND the account-wide "__all__" slot
+// are currently closed (available).
 func IsAccountModelSlotHealthy(provider, accountID, modelName string) bool {
-	bucket := NormalizeModelQuotaBucket(provider, modelName)
+	prov := NormalizeProfileProvider(provider)
+	bucket := NormalizeModelQuotaBucket(prov, modelName)
 	accountPoolMu.Lock()
 	defer accountPoolMu.Unlock()
 	loadAccountPoolHealthLocked()
 
 	now := time.Now()
-	if st, ok := accountPoolState.Slots[slotKey(provider, accountID, "__all__")]; ok && st.Until.After(now) {
+	if st, ok := accountPoolState.Slots[slotKey(prov, accountID, "__all__")]; ok && st.Until.After(now) {
 		return false
 	}
-	if st, ok := accountPoolState.Slots[slotKey(provider, accountID, bucket)]; ok && st.Until.After(now) {
+	if st, ok := accountPoolState.Slots[slotKey(prov, accountID, bucket)]; ok && st.Until.After(now) {
 		return false
+	}
+	for _, fb := range agyAccountFamilyBuckets(prov, bucket, true) {
+		if st, ok := accountPoolState.Slots[slotKey(prov, accountID, fb)]; ok && st.Until.After(now) {
+			return false
+		}
 	}
 	return true
 }
@@ -274,7 +326,8 @@ func RecordAccountModelFailure(provider, accountID, accountName, modelName strin
 
 	// 2. Payment required (402) on API-key providers is account-wide billing balance;
 	// on AGY/Gemini/OpenCode model-specific quota exhaustion ("resource_exhausted",
-	// "quota exceeded", "esgotou a quota", "429") is scoped strictly to the model bucket!
+	// "quota exceeded", "esgotou a quota", "ai credits balance is too low") is scoped
+	// to the model bucket (and sibling effort/credits family on AGY)!
 	if reason == "" {
 		for _, pat := range []string{"402", "payment required", "créditos insuficientes", "insufficient credits"} {
 			if strings.Contains(msg, pat) {
@@ -286,20 +339,27 @@ func RecordAccountModelFailure(provider, accountID, accountName, modelName strin
 		}
 	}
 
-	// 3. Per-model quota / token window exhaustion (e.g. "argon" 5h limit reached on Account 1,
-	// while "gemini-4-neon-high" on Account 1 still has remaining quota).
+	// 3a. Real quota / credits exhaustion -> 15m cooldown (even if message also includes "429").
 	if reason == "" {
 		for _, pat := range []string{
 			"resource_exhausted", "esgotou a quota", "quota/créditos", "quota exceeded",
-			"insufficient_quota", "429", "too many requests", "rate limit", "rate_limit",
-			"limite", "exhausted",
+			"insufficient_quota", "ai credits balance is too low", "credits balance is too low",
+			"exhausted", "limite",
 		} {
 			if strings.Contains(msg, pat) {
 				reason = "model_quota"
 				cooldown = defaultAccountModelQuotaCooldown
-				if strings.Contains(msg, "rate") || strings.Contains(msg, "429") {
-					cooldown = defaultAccountModelRateCooldown
-				}
+				break
+			}
+		}
+	}
+
+	// 3b. Pure rate limit (without quota/exhaustion markers) -> 2m cooldown on the exact bucket.
+	if reason == "" {
+		for _, pat := range []string{"429", "too many requests", "rate limit", "rate_limit"} {
+			if strings.Contains(msg, pat) {
+				reason = "rate_limit"
+				cooldown = defaultAccountModelRateCooldown
 				break
 			}
 		}
@@ -312,7 +372,7 @@ func RecordAccountModelFailure(provider, accountID, accountName, modelName strin
 	now := time.Now()
 	accountPoolMu.Lock()
 	loadAccountPoolHealthLocked()
-	accountPoolState.Slots[slotKey(prov, accountID, bucket)] = accountModelSlotState{
+	state := accountModelSlotState{
 		Provider:    prov,
 		AccountID:   accountID,
 		AccountName: accountName,
@@ -321,13 +381,21 @@ func RecordAccountModelFailure(provider, accountID, accountName, modelName strin
 		OpenedAt:    now,
 		Until:       now.Add(cooldown),
 	}
+	accountPoolState.Slots[slotKey(prov, accountID, bucket)] = state
+	if bucket != "__all__" && reason == "model_quota" {
+		for _, fb := range agyAccountFamilyBuckets(prov, bucket, isCreditsExhaustedMsg(msg)) {
+			famState := state
+			famState.ModelBucket = fb
+			accountPoolState.Slots[slotKey(prov, accountID, fb)] = famState
+		}
+	}
 	saveAccountPoolHealthLocked()
 	accountPoolMu.Unlock()
 	return bucket, cooldown, true
 }
 
 // ClearAccountModelSlot clears any active cooldown on (provider, accountID, modelName)
-// after a successful call.
+// and associated AGY effort/credits family buckets after a successful call.
 func ClearAccountModelSlot(provider, accountID, modelName string) {
 	if strings.TrimSpace(accountID) == "" {
 		return
@@ -336,9 +404,20 @@ func ClearAccountModelSlot(provider, accountID, modelName string) {
 	bucket := NormalizeModelQuotaBucket(prov, modelName)
 	accountPoolMu.Lock()
 	loadAccountPoolHealthLocked()
+	changed := false
 	k := slotKey(prov, accountID, bucket)
 	if _, exists := accountPoolState.Slots[k]; exists {
 		delete(accountPoolState.Slots, k)
+		changed = true
+	}
+	for _, fb := range agyAccountFamilyBuckets(prov, bucket, true) {
+		fk := slotKey(prov, accountID, fb)
+		if _, exists := accountPoolState.Slots[fk]; exists {
+			delete(accountPoolState.Slots, fk)
+			changed = true
+		}
+	}
+	if changed {
 		saveAccountPoolHealthLocked()
 	}
 	accountPoolMu.Unlock()
