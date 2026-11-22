@@ -24,9 +24,11 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 	cleanKey := strings.ToUpper(strings.TrimSpace(preloadedJiraKey))
 
 	var (
-		mu           sync.Mutex
-		exploreCount int
-		delegated    bool
+		mu                  sync.Mutex
+		exploreCount        int
+		overBudgetCount     int
+		postDelegateBlocked int
+		delegated           bool
 	)
 
 	before := func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
@@ -37,6 +39,9 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 
 		mu.Lock()
 		isDelegated := delegated
+		if isDelegated && name != "jira_transition" && name != "jira_comment" {
+			postDelegateBlocked++
+		}
 		mu.Unlock()
 		if isDelegated && name != "jira_transition" && name != "jira_comment" {
 			return map[string]any{
@@ -58,17 +63,20 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 			mu.Lock()
 			exploreCount++
 			cur := exploreCount
+			if cur > maxExploreCalls {
+				overBudgetCount++
+			}
 			mu.Unlock()
 			if cur > maxExploreCalls {
 				return map[string]any{
-					"text": fmt.Sprintf("ORÇAMENTO DE TRIAGEM DO CHEFE ATINGIDO (%d/%d leituras/buscas): PARE IMEDIATAMENTE de abrir novos arquivos ou rodar git log/show via run_shell na fase de triagem. Se a issue já está implementada na branch, responda diretamente ao usuário agora; caso contrário, chame AGORA delegate_to_squad preenchendo 'plan', 'context_brief' e 'dev_tasks' para criar a worktree e iniciar o Dev.", cur-1, maxExploreCalls),
+					"text": fmt.Sprintf("ORÇAMENTO DE TRIAGEM DO CHEFE ATINGIDO (%d/%d leituras/buscas): PARE IMEDIATAMENTE de abrir novos arquivos ou rodar git_status/git_diff/run_shell na fase de triagem. Se a issue já está implementada na branch, responda diretamente ao usuário agora; caso contrário, chame AGORA delegate_to_squad preenchendo 'plan', 'context_brief' e 'dev_tasks' para o orquestrador iniciar o Dev na worktree.", cur-1, maxExploreCalls),
 				}, nil
 			}
 		}
 		return nil, nil
 	}
 
-	after := func(_ agent.Context, tl tool.Tool, _ map[string]any, result map[string]any, err error) (map[string]any, error) {
+	after := func(ctx agent.Context, tl tool.Tool, _ map[string]any, result map[string]any, err error) (map[string]any, error) {
 		if err != nil || tl == nil {
 			return nil, nil
 		}
@@ -79,6 +87,16 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 			mu.Lock()
 			delegated = true
 			mu.Unlock()
+			return nil, nil
+		}
+		mu.Lock()
+		over := overBudgetCount
+		postBlocked := postDelegateBlocked
+		mu.Unlock()
+		if postBlocked >= 1 || over >= 2 {
+			if ctx != nil && ctx.Actions() != nil {
+				ctx.Actions().Escalate = true
+			}
 		}
 		return nil, nil
 	}

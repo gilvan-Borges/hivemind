@@ -66,6 +66,7 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 	fileTotalReads := make(map[string]int)
 	diffCalls := make(map[string]int)
 	searchCalls := make(map[string]int)
+	gitInspectCalls := make(map[string]int)
 
 	normPath := func(raw any) string {
 		s := strings.TrimSpace(fmt.Sprint(raw))
@@ -76,15 +77,15 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 	}
 
 	return func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
-		if tl == nil || len(args) == 0 {
+		if tl == nil {
 			return nil, nil
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
 		switch name {
-		case "edit_file", "write_file", "write_doc":
+		case "edit_file", "write_file", "write_doc", "git_commit":
 			p := normPath(args["path"])
+			mu.Lock()
 			if p != "" {
-				mu.Lock()
 				prefix := p + "::"
 				for k := range reads {
 					if strings.HasPrefix(k, prefix) {
@@ -92,7 +93,23 @@ func newRepeatReadGuardCallback() llmagent.BeforeToolCallback {
 					}
 				}
 				delete(fileTotalReads, p)
-				mu.Unlock()
+			}
+			clear(gitInspectCalls)
+			mu.Unlock()
+			return nil, nil
+
+		case "git_status", "git_diff":
+			pathArg := normPath(args["path"])
+			stagedArg := strings.ToLower(strings.TrimSpace(fmt.Sprint(args["staged"])))
+			key := fmt.Sprintf("%s::%s::%s", name, pathArg, stagedArg)
+			mu.Lock()
+			gitInspectCalls[key]++
+			n := gitInspectCalls[key]
+			mu.Unlock()
+			if n >= 2 {
+				return map[string]any{
+					"text": fmt.Sprintf("AVISO ANTI-LOOP: você já executou %s neste turno sem nenhuma edição intermediária na worktree (o resultado permanece idêntico). NÃO chame %s novamente — avance imediatamente para o próximo passo (delegate_to_squad na triagem, edit_file/write_file no dev, qa_approve/qa_request_changes no QA ou resumo final no fecho).", name, name),
+				}, nil
 			}
 			return nil, nil
 

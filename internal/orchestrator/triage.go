@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 type delegateArgs struct {
@@ -165,6 +167,10 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	toolRoot := r.Workspace
 	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
 		toolRoot = r.ReviewRoot
+	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
+		if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
+			toolRoot = slotWT
+		}
 	}
 	triageStep := "triage_chief"
 	if isLightOperationalObjective(r.objectiveText) && !sddDocs && !sddJira && !isAutoReview {
@@ -244,6 +250,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		keepInTurn = 6
 	}
 	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
+		r.newTriageTurnIsolationCallback(sess, toolRoot, runMode, &delegateMu, &delegated),
 		contextx.NewCompactionCallback(contextx.Budget{
 			ContextWindow:   agentContextWindow(chief),
 			ContextWindowFn: r.dynamicAgentContextWindow(chief.Name, chief),
@@ -318,6 +325,11 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	wasDelegated := delegated
 	wasPlanCard := planCardEmitted
 	delegateMu.Unlock()
+	if !wasDelegated && r.resumedSession && runMode != "direct" && runMode != "auto-review" && !sddDocs {
+		if restored := r.tryRestorePlanAfterTriageAbort(sess); restored {
+			wasDelegated = true
+		}
+	}
 	if wasDelegated {
 		r.sealHandoff(sess.ID())
 	}
@@ -337,4 +349,146 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		})
 	}
 	return wasDelegated, summary, nil
+}
+
+// newTriageTurnIsolationCallback prevents two major pathologies in runTriageChief:
+// 1. Post-delegation loop: once delegate_to_squad has been called, it immediately terminates
+//    the triage turn with a TurnComplete LLMResponse instead of making another 75k-token LLM
+//    call where the Chief hallucinates that the Squad already ran and loops on git_status/git_diff.
+// 2. Stale session history pollution: when a session is resumed (IncludeContentsDefault), ADK
+//    populates req.Contents with raw FunctionCall/FunctionResponse events from earlier runs
+//    (including old delegate_to_squad and Developer tool calls). Slicing req.Contents to the
+//    current user turn and injecting a clean <system-reminder> with prior_session_context +
+//    current worktree git status keeps triage fast (~3k tokens instead of 75k) and prevents
+//    the Chief from mistaking itself for the Closing Chief.
+func (r *Runner) newTriageTurnIsolationCallback(
+	sess session.Session,
+	toolRoot string,
+	runMode string,
+	delegateMu *sync.Mutex,
+	delegated *bool,
+) llmagent.BeforeModelCallback {
+	var postDelegateModelCalls int
+	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		if delegateMu != nil && delegated != nil {
+			delegateMu.Lock()
+			done := *delegated
+			if done {
+				postDelegateModelCalls++
+			}
+			callsAfterDelegate := postDelegateModelCalls
+			delegateMu.Unlock()
+			// Allow at most 1 final text summarization call after delegate_to_squad;
+			// if the model attempted another tool call after delegating (callsAfterDelegate > 1),
+			// terminate the triage turn immediately so it can never loop on git_status/git_diff.
+			if done && callsAfterDelegate > 1 {
+				summaryText := "Plano técnico e dossiê de handoff registrados — iniciando execução do Squad na worktree da conversa."
+				if runMode == "plan" || r.pauseForApproval {
+					summaryText = "Plano técnico registrado — aguardando aprovação do usuário para iniciar o Squad."
+				} else if runMode == "plan:sdd-jira" {
+					summaryText = "Backlog Jira e ondas de desenvolvimento registrados — aguardando aprovação no Gate 2."
+				}
+				return &model.LLMResponse{
+					Content:      &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: summaryText}}},
+					TurnComplete: true,
+				}, nil
+			}
+		}
+		if req == nil || len(req.Contents) == 0 {
+			return nil, nil
+		}
+
+		// Find the index of the latest real user prompt (a RoleUser Content with text and no FunctionResponse).
+		lastUserIdx := -1
+		for i := len(req.Contents) - 1; i >= 0; i-- {
+			c := req.Contents[i]
+			if c == nil || c.Role != genai.RoleUser {
+				continue
+			}
+			hasText := false
+			hasFuncResp := false
+			for _, p := range c.Parts {
+				if p == nil {
+					continue
+				}
+				if p.FunctionResponse != nil {
+					hasFuncResp = true
+				}
+				if strings.TrimSpace(p.Text) != "" {
+					hasText = true
+				}
+			}
+			if hasText && !hasFuncResp {
+				lastUserIdx = i
+				break
+			}
+		}
+		if lastUserIdx > 0 {
+			req.Contents = append([]*genai.Content(nil), req.Contents[lastUserIdx:]...)
+		}
+
+		if !r.resumedSession || sess == nil {
+			return nil, nil
+		}
+		var b strings.Builder
+		if rawPrior, err := sess.State().Get("prior_session_context"); err == nil && rawPrior != nil {
+			if prior := strings.TrimSpace(fmt.Sprint(rawPrior)); prior != "" {
+				fmt.Fprintf(&b, "[Contexto Resumido da Sessão Anterior]\n%s\n\n", prior)
+			}
+		}
+		if rawPlan, err := sess.State().Get("chief_plan"); err == nil && rawPlan != nil {
+			if plan := strings.TrimSpace(fmt.Sprint(rawPlan)); plan != "" {
+				fmt.Fprintf(&b, "[Plano Técnico Anterior da Sessão (reutilize ou complemente e chame delegate_to_squad)]\n%s\n\n", plan)
+			}
+		}
+		if r.Git != nil && strings.TrimSpace(toolRoot) != "" && r.Git.IsRepo(ctx, toolRoot) {
+			if st, stErr := r.Git.Status(ctx, toolRoot); stErr == nil && strings.TrimSpace(st) != "" {
+				fmt.Fprintf(&b, "[Arquivos Já Criados/Modificados na Worktree da Conversa (%s)]\n%s\n(ATENÇÃO: a entrega ainda NÃO foi aprovada pelo QA. Se ainda faltam itens ou validação do QA, chame IMEDIATAMENTE delegate_to_squad para o Desenvolvedor e o QA concluírem na worktree — NÃO fique rodando git_status/git_diff em loop na triagem.)\n\n", toolRoot, strings.TrimSpace(st))
+			}
+		}
+		if rem := strings.TrimSpace(b.String()); rem != "" {
+			appendSystemReminder(req, rem)
+		}
+		return nil, nil
+	}
+}
+
+func (r *Runner) tryRestorePlanAfterTriageAbort(sess session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	qaApprovedFlag, _ := sess.State().Get("qa_approved")
+	if strings.TrimSpace(fmt.Sprint(qaApprovedFlag)) == "1" {
+		return false
+	}
+	if rawPlan, err := sess.State().Get("chief_plan"); err == nil && rawPlan != nil {
+		if plan := strings.TrimSpace(fmt.Sprint(rawPlan)); plan != "" {
+			r.chiefPlan = plan
+		}
+	}
+	if rawBrief, err := sess.State().Get("chief_context_brief"); err == nil && rawBrief != nil {
+		if brief := strings.TrimSpace(fmt.Sprint(rawBrief)); brief != "" {
+			r.chiefContextBrief = brief
+		}
+	}
+	if rawSlices, err := sess.State().Get("dev_slices_joined"); err == nil && rawSlices != nil {
+		if joined := strings.TrimSpace(fmt.Sprint(rawSlices)); joined != "" {
+			r.devSlices = strings.Split(joined, "\n|||\n")
+		}
+	}
+	if r.chiefPlan == "" {
+		if pkg, ok := loadPersistedHandoff(sess.ID()); ok {
+			r.chiefPlan = strings.TrimSpace(pkg.Objective)
+			if r.chiefContextBrief == "" && len(pkg.Facts) > 0 {
+				r.chiefContextBrief = strings.Join(pkg.Facts, "\n")
+			}
+		}
+	}
+	if r.chiefPlan == "" {
+		return false
+	}
+	if len(r.devSlices) == 0 {
+		r.devSlices = []string{r.chiefPlan}
+	}
+	return true
 }

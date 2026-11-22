@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/adk/v2/agent"
@@ -567,3 +568,78 @@ func TestSystemInstructionAndToolsStayInvariantAcrossTurns(t *testing.T) {
 		}
 	}
 }
+
+func TestIsResumeSquadPromptTyposAndRepeatGitInspectGuard(t *testing.T) {
+	for _, yes := range []string{"continue", "continua", "continuar", "contnuue", "continaur", "conitnue", "prossiga", "retomar", "bora"} {
+		if !isResumeSquadPrompt(yes) {
+			t.Fatalf("expected isResumeSquadPrompt(%q) = true", yes)
+		}
+	}
+	for _, no := range []string{"Resolver issue PROJ-1056 — implementar auditoria", "revisar PR #42", "explique a arquitetura"} {
+		if isResumeSquadPrompt(no) {
+			t.Fatalf("expected isResumeSquadPrompt(%q) = false", no)
+		}
+	}
+
+	guard := newRepeatReadGuardCallback()
+	gitStatus := stubNamedTool{name: "git_status"}
+	gitDiff := stubNamedTool{name: "git_diff"}
+	writeFile := stubNamedTool{name: "write_file"}
+
+	if res, _ := guard(nil, gitStatus, nil); res != nil {
+		t.Fatalf("1st git_status should pass, got %v", res)
+	}
+	if res, _ := guard(nil, gitStatus, nil); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("2nd git_status without edit must be blocked, got %v", res)
+	}
+	if res, _ := guard(nil, gitDiff, nil); res != nil {
+		t.Fatalf("1st git_diff should pass, got %v", res)
+	}
+	if res, _ := guard(nil, gitDiff, nil); res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("2nd git_diff without edit must be blocked, got %v", res)
+	}
+
+	// After a file write, git_status/git_diff counters reset.
+	if res, _ := guard(nil, writeFile, map[string]any{"path": "src/a.go"}); res != nil {
+		t.Fatalf("write_file should pass, got %v", res)
+	}
+	if res, _ := guard(nil, gitStatus, nil); res != nil {
+		t.Fatalf("git_status after write_file should pass again, got %v", res)
+	}
+}
+
+func TestTriageTurnIsolationDropsStaleHistoryAndStopsPostDelegateLoop(t *testing.T) {
+	r := &Runner{resumedSession: true}
+	var mu sync.Mutex
+	delegated := false
+	cb := r.newTriageTurnIsolationCallback(nil, "", "auto", &mu, &delegated)
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Resolver issue PROJ-1056"}}},
+			{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "old-1", Name: "delegate_to_squad"}}}},
+			{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "old-1", Name: "delegate_to_squad", Response: map[string]any{"status": "ok"}}}}},
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "contnuue"}}},
+		},
+	}
+	resp, err := cb(nil, req)
+	if err != nil || resp != nil {
+		t.Fatalf("unexpected pre-delegate response/err: resp=%v err=%v", resp, err)
+	}
+	if len(req.Contents) != 1 || req.Contents[0].Parts[0].Text != "contnuue" {
+		t.Fatalf("expected stale history sliced to current user prompt, got %d contents", len(req.Contents))
+	}
+
+	// Once delegated, 1st post-delegate call is allowed for brief summary, 2nd terminates immediately.
+	mu.Lock()
+	delegated = true
+	mu.Unlock()
+	if resp1, _ := cb(nil, req); resp1 != nil {
+		t.Fatalf("1st post-delegate call should allow 1 summary turn, got %v", resp1)
+	}
+	resp2, err := cb(nil, req)
+	if err != nil || resp2 == nil || !resp2.TurnComplete {
+		t.Fatalf("2nd post-delegate call must force TurnComplete to stop git_status/git_diff loops, got resp=%v err=%v", resp2, err)
+	}
+}
+

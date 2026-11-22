@@ -143,21 +143,27 @@ func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targ
 		// Best-effort fetch from origin if working on an existing remote PR branch.
 		_, _ = g.Run(ctx, repo, "fetch", "origin", branch+":"+branch)
 	}
-	if g.BranchExists(ctx, repo, branch) {
-		if _, err := g.Run(ctx, wt, "checkout", "-f", branch); err != nil {
-			return "", "", err
-		}
-	} else {
-		baseSHA, err := g.Run(ctx, repo, "rev-parse", "HEAD")
-		if err != nil {
-			return "", "", err
-		}
-		if _, err := g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(baseSHA)); err != nil {
-			return "", "", err
+	curWtBranch, _ := g.CurrentBranch(ctx, wt)
+	alreadyOnBranch := strings.TrimSpace(curWtBranch) == branch
+	if !alreadyOnBranch {
+		if g.BranchExists(ctx, repo, branch) {
+			if _, err := g.Run(ctx, wt, "checkout", "-f", branch); err != nil {
+				return "", "", err
+			}
+		} else {
+			baseSHA, err := g.Run(ctx, repo, "rev-parse", "HEAD")
+			if err != nil {
+				return "", "", err
+			}
+			if _, err := g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(baseSHA)); err != nil {
+				return "", "", err
+			}
 		}
 	}
 	ensureNestedExcludes(ctx, g, repo)
-	_, _ = g.Run(ctx, wt, "clean", "-fd")
+	if !alreadyOnBranch {
+		_, _ = g.Run(ctx, wt, "clean", "-fd")
+	}
 	return wt, branch, nil
 }
 

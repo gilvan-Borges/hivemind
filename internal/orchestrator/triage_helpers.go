@@ -324,7 +324,7 @@ func (r *Runner) newTriageDelegateTool(
 		if r.pauseForApproval {
 			return delegateResult{Status: fmt.Sprintf("plano registrado com pausa para aprovação (%d dev(s) previstos); o usuário revisará antes de disparar o Squad", len(resolved))}, nil
 		}
-		return delegateResult{Status: fmt.Sprintf("delegado para %d desenvolvedor(es) e QA em worktree separada", len(resolved))}, nil
+		return delegateResult{Status: fmt.Sprintf("plano e dossiê registrados; encerrando a fase de triagem do Chefe para o orquestrador iniciar agora %d desenvolvedor(es) e o QA na worktree", len(resolved))}, nil
 	})
 }
 

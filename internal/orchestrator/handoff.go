@@ -251,6 +251,23 @@ func persistHandoff(workspaceRoot string, pkg HandoffPackage) error {
 	return writePrivate(filepath.Join(mdDir, pkg.RunID+".md"), body)
 }
 
+func loadPersistedHandoff(runID string) (HandoffPackage, bool) {
+	cleanID := safeRunID(runID)
+	if cleanID == "" || cleanID == "sem-run" {
+		return HandoffPackage{}, false
+	}
+	jsonPath := filepath.Join(workspace.AppDataRoot(), "handoffs", cleanID+".json")
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil || len(raw) == 0 {
+		return HandoffPackage{}, false
+	}
+	var pkg HandoffPackage
+	if err := json.Unmarshal(raw, &pkg); err != nil || strings.TrimSpace(pkg.Objective) == "" {
+		return HandoffPackage{}, false
+	}
+	return pkg, true
+}
+
 func writePrivate(path string, body []byte) error {
 	// Escrita atômica (temp + Sync + Rename): um crash nunca deixa um pacote de
 	// handoff meio escrito em .hivemind/handoff (W1-01 padrão, concluído aqui).

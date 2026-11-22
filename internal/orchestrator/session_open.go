@@ -27,30 +27,95 @@ func isResumeSquadPrompt(raw string) bool {
 		text = strings.TrimSpace(text[:idx])
 	}
 	low := strings.ToLower(strings.TrimSpace(text))
+	low = strings.Trim(low, " \t\r\n.!?,;:")
 	if low == "" || len(low) > 120 {
 		return false
 	}
 	switch low {
 	case "continua", "continue", "continuar", "pode continuar", "podes continuar",
-		"prosseguir", "prossiga", "retomar", "retome", "segue", "seguir", "vai",
+		"prosseguir", "prossiga", "retomar", "retome", "segue", "seguir", "vai", "bora",
 		"tenta de novo", "tentar de novo", "tente novamente", "rodar dev", "roda o dev",
 		"continue da onde parou", "continua de onde parou", "continuar de onde parou",
-		"ok", "aprovar", "aprovado", "go", "resume":
+		"ok", "aprovar", "aprovado", "go", "resume", "manda ver", "pode seguir":
 		return true
 	}
 	for _, prefix := range []string{
 		"continua ", "continue ", "continuar ", "pode continuar", "retomar ", "retome ",
 		"prossiga", "prosseguir", "tenta de novo", "tente novamente", "segue ",
+		"contnu", "contina", "conitn",
 	} {
 		if strings.HasPrefix(low, prefix) {
 			return true
 		}
 	}
+	// Fuzzy match for short single-word continuation typos (e.g. "contnuue", "continaur", "conitnue", "prossiga").
+	if !strings.ContainsAny(low, " \t\n") && len(low) >= 5 && len(low) <= 16 {
+		collapsed := collapseRepeatedRunes(low)
+		for _, target := range []string{"continua", "continue", "continuar", "prosseguir", "prossiga", "retomar", "retome"} {
+			if levenshteinASCII(low, target) <= 2 || levenshteinASCII(collapsed, target) <= 2 {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+func collapseRepeatedRunes(s string) string {
+	var b strings.Builder
+	var prev rune
+	for i, r := range s {
+		if i > 0 && r == prev {
+			continue
+		}
+		prev = r
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func levenshteinASCII(a, b string) int {
+	if a == b {
+		return 0
+	}
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			m := del
+			if ins < m {
+				m = ins
+			}
+			if sub < m {
+				m = sub
+			}
+			curr[j] = m
+		}
+		prev, curr = curr, prev
+	}
+	return prev[lb]
 }
 
 func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode string) (session.Session, error) {
 	if id != "" {
+		r.resumedSession = true
 		got, err := r.Sessions.Get(ctx, &session.GetRequest{AppName: sessionx.AppName, UserID: sessionx.UserID, SessionID: id})
 		if err != nil {
 			return nil, fmt.Errorf("retomar sessão %s: %w", id, err)
@@ -63,6 +128,16 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		isQAApproved := strings.TrimSpace(fmt.Sprint(qaApprovedFlag)) == "1"
 		existingPlanRaw, _ := got.Session.State().Get("chief_plan")
 		hasExistingPlan := existingPlanRaw != nil && strings.TrimSpace(fmt.Sprint(existingPlanRaw)) != ""
+		if !hasExistingPlan && !isQAApproved {
+			if pkg, ok := loadPersistedHandoff(id); ok {
+				existingPlanRaw = pkg.Objective
+				hasExistingPlan = true
+				r.setStateChecked(got.Session.State(), "chief_plan", pkg.Objective)
+				if len(pkg.Facts) > 0 {
+					r.setStateChecked(got.Session.State(), "chief_context_brief", strings.Join(pkg.Facts, "\n"))
+				}
+			}
+		}
 
 		if runMode == "plan:sdd-jira" && !isDocsPending {
 			return nil, fmt.Errorf("não há docs SDD pendentes de aprovação nesta sessão; execute primeiro o modo Planejar · Projeto SDD (plan:sdd) e aprove o Gate 1 (Docs & Arquitetura)")
@@ -122,6 +197,7 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 		}
 		priorCtx := summarizePriorSessionContext(got.Session)
 		keepPlan := (shouldRestorePlan && r.chiefPlan != "") ||
+			(hasExistingPlan && !isQAApproved) ||
 			(runMode == "plan:sdd") ||
 			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
