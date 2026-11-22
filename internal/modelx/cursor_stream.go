@@ -17,6 +17,17 @@ type cursorLine struct {
 	Result      string          `json:"result"`
 	Message     cursorMessage   `json:"message"`
 	ToolCall    json.RawMessage `json:"tool_call"`
+	Usage       *cursorUsage    `json:"usage"`
+}
+
+// cursorUsage is the token accounting the CLI attaches to result events.
+// Field names follow the CLI's usage object; a CLI that omits them simply
+// yields zero values (best-effort telemetry, never a hard dependency).
+type cursorUsage struct {
+	InputTokens     int64    `json:"input_tokens"`
+	OutputTokens    int64    `json:"output_tokens"`
+	CacheReadTokens int64    `json:"cache_read_input_tokens"`
+	CostUSD         *float64 `json:"total_cost_usd"`
 }
 
 type cursorMessage struct {
@@ -38,7 +49,11 @@ type cursorNotice struct {
 	Partial  bool
 	Final    bool
 	Failed   bool
+	Usage    *cursorUsage
 }
+
+// CursorUsage is the token accounting parsed from one CLI result event.
+type CursorUsage = cursorUsage
 
 // CursorNotice is the exported representation of one parsed Cursor CLI stream-json event.
 type CursorNotice = cursorNotice
@@ -80,7 +95,7 @@ func parseCursorStreamLine(line string) (cursorNotice, bool) {
 		}
 		return cursorNotice{ToolName: name, ToolPath: path, Partial: true}, true
 	case "result":
-		return cursorNotice{Text: ev.Result, Final: true, Failed: ev.IsError}, true
+		return cursorNotice{Text: ev.Result, Final: true, Failed: ev.IsError, Usage: ev.Usage}, true
 	default:
 		return cursorNotice{}, false
 	}

@@ -7,6 +7,7 @@ package tools
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,6 +57,13 @@ type Deps struct {
 	// MCP, quando preenchido, expõe só os servidores ligados e as duas
 	// ferramentas leves de lista e de ligar sob aprovação.
 	MCP *mcpx.Host
+	// HTTPClient atende a tool web_fetch; nil usa um cliente padrão com
+	// timeout curto.
+	HTTPClient *http.Client
+	// WebFetchAllowLoopback libera alvos loopback/privados no web_fetch.
+	// Default false (o guard SSRF recusa loopback, link-local, private e
+	// metadata endpoints). Existe para testes com httptest; NUNCA ligar para modelos.
+	WebFetchAllowLoopback bool
 	// SkillLookup resolve o corpo completo de uma skill pelo nome para a tool
 	// read_skill (progressive disclosure). Quando nil, read_skill não é exposta.
 	SkillLookup func(name string) (skillx.Skill, string, bool)
@@ -329,6 +337,12 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 	if err := deps.addMCP(&out); err != nil {
 		return nil, err
 	}
+	if err := add(deps.canListTree()); err != nil {
+		return nil, err
+	}
+	if err := add(deps.canWebFetch()); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -357,7 +371,7 @@ func ForReadOnly(root string, settings team.Settings) ([]tool.Tool, error) {
 		return nil
 	}
 	for _, build := range []func() (tool.Tool, error){
-		deps.canRead, deps.canList, deps.canSearchText, deps.canFindFiles, deps.gitStatus, deps.gitDiff,
+		deps.canRead, deps.canList, deps.canListTree, deps.canSearchText, deps.canFindFiles, deps.gitStatus, deps.gitDiff,
 	} {
 		if err := add(build()); err != nil {
 			return nil, err

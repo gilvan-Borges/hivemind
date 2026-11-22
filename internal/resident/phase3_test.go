@@ -192,7 +192,7 @@ func TestPhase3SubagentCapAndRemoteApproval(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			_, err := parent.runSpawn(context.Background(), "segura", nil, nil)
+			_, err := parent.runSpawn(context.Background(), SpawnRequest{Objective: "segura"})
 			errCh <- err
 		}()
 	}
@@ -203,7 +203,7 @@ func TestPhase3SubagentCapAndRemoteApproval(t *testing.T) {
 			t.Fatal("subagente não chegou a rodar")
 		}
 	}
-	if _, err := parent.runSpawn(context.Background(), "terceiro", nil, nil); err == nil {
+	if _, err := parent.runSpawn(context.Background(), SpawnRequest{Objective: "terceiro"}); err == nil {
 		t.Fatal("terceiro subagente deveria recusar")
 	}
 	close(release)

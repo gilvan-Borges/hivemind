@@ -41,6 +41,10 @@ type Server struct {
 	Headers     map[string]string `json:"headers,omitempty"`
 	Enabled     bool              `json:"enabled"`
 	Builtin     bool              `json:"builtin,omitempty"`
+	// TimeoutSeconds limits each tool call against this server. Zero uses
+	// DefaultCallTimeout. The value is clamped to [5, 600] so a bad override
+	// can neither hang the agent loop nor bypass the ceiling.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
 // File é a lista persistida. Um arquivo de override só precisa repetir os

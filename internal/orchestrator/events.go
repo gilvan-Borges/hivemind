@@ -22,16 +22,25 @@ import (
 // stream instead of being silently applied. No-op passes stay silent to avoid
 // one event per model call.
 func (r *Runner) compactionStatsCallback(author, label string) func(contextx.Stats) {
+	first := true
 	return func(s contextx.Stats) {
 		if r.OnEvent == nil || s.Compacted <= 0 {
 			return
+		}
+		detail := fmt.Sprintf("%d saídas antigas compactadas · ~%d tokens poupados", s.Compacted, s.TokensSaved)
+		if s.ContextTokens > 0 && s.ContextWindow > 0 {
+			detail += fmt.Sprintf(" · janela %d%% ocupada no gatilho (%d/%d tokens)", s.UsagePercent(), s.ContextTokens, s.ContextWindow)
+		}
+		if first {
+			first = false
+			detail += " · 1ª compactação deste agente no run"
 		}
 		r.OnEvent(Event{
 			Kind:   "compact",
 			Stage:  inferStage(author, label),
 			Author: author,
 			Label:  label,
-			Detail: fmt.Sprintf("%d saídas antigas compactadas · ~%d tokens poupados", s.Compacted, s.TokensSaved),
+			Detail: detail,
 			Tokens: int32(s.TokensSaved),
 		})
 	}

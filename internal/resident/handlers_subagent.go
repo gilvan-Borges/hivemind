@@ -6,11 +6,29 @@ import (
 	"strings"
 )
 
+// SpawnRequest is the structured charge for one subagent: objective, scoped
+// roots, tier ceiling (only narrows), a short context brief the parent can
+// attach so the child does not re-read the same files, and the readonly flag
+// that hard-gates the child to read-tier tools.
+type SpawnRequest struct {
+	Objective    string
+	Roots        []string
+	Classes      []string
+	ContextBrief string
+	Readonly     bool
+}
+
 func (b *Broker) handleSpawn(ctx context.Context, args map[string]any) (string, error) {
 	if b.cfg.Spawn == nil {
 		return "", fmt.Errorf("subagente indisponível")
 	}
-	out, err := b.cfg.Spawn(ctx, strArg(args, "objective"), strSliceArg(args, "roots"), strSliceArg(args, "classes"))
+	out, err := b.cfg.Spawn(ctx, SpawnRequest{
+		Objective:    strArg(args, "objective"),
+		Roots:        strSliceArg(args, "roots"),
+		Classes:      strSliceArg(args, "classes"),
+		ContextBrief: strArg(args, "context_brief"),
+		Readonly:     boolArg(args, "readonly"),
+	})
 	if err != nil {
 		return "", err
 	}

@@ -56,13 +56,25 @@ type AskResponse struct {
 	Answer   string `json:"answer,omitempty"`
 }
 
+// UsageReport carries the external worker's own token accounting into the
+// HiveMind ledger. Without it, a CLI worker burns quota invisibly: the run
+// shows zero cost while the worker's provider bills the real usage.
+type UsageReport struct {
+	Model           string `json:"model,omitempty"`
+	InputTokens     int64  `json:"inputTokens,omitempty"`
+	OutputTokens    int64  `json:"outputTokens,omitempty"`
+	CacheReadTokens int64  `json:"cacheReadTokens,omitempty"`
+	CostMicroUSD    int64  `json:"costMicroUsd,omitempty"`
+}
+
 // DoneEvent is the idempotent terminal report emitted once per dispatchId.
 type DoneEvent struct {
-	DispatchID    string   `json:"dispatchId"`
-	TaskID        string   `json:"taskId"`
-	Outcome       string   `json:"outcome"` // "success" | "failed" | "aborted"
-	Summary       string   `json:"summary,omitempty"`
-	FilesModified []string `json:"filesModified,omitempty"`
+	DispatchID    string       `json:"dispatchId"`
+	TaskID        string       `json:"taskId"`
+	Outcome       string       `json:"outcome"` // "success" | "failed" | "aborted"
+	Summary       string       `json:"summary,omitempty"`
+	FilesModified []string     `json:"filesModified,omitempty"`
+	Usage         *UsageReport `json:"usage,omitempty"`
 }
 
 // Callbacks connects worker protocol events to the orchestrator / IDE / Mobile / Orb.

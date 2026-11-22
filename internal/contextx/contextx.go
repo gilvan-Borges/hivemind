@@ -66,11 +66,21 @@ var neverCompactInTurnTools = map[string]bool{
 	"qa_approve":         true,
 	"qa_request_changes": true,
 	"sdd_docs_ready":     true,
+	// The enable flow is the audit trail of which MCP server the user
+	// approved for this task; a preview would hide that record.
+	"mcp_enable_server": true,
 }
 
-// Stats reports what one compaction pass saved, so the orchestrator can emit
-// usage events (compacted payloads / tokens saved): without it, token savings
-// are invisible.
+// compactableToolName reports whether one older FunctionResponse payload may
+// be replaced by a compact preview. Besides the fixed read/search/diff set,
+// every MCP tool response qualifies because remote payloads are re-fetchable.
+func compactableToolName(name string) bool {
+	return compactableInTurnTools[name] || strings.HasPrefix(name, "mcp_")
+}
+
+// Stats reports what one compaction pass saved and where the request stood,
+// so the orchestrator can emit usage events (compacted payloads / tokens
+// saved / window occupancy).
 type Stats struct {
 	// Compacted is how many payloads were replaced with compact previews.
 	Compacted int
@@ -79,6 +89,23 @@ type Stats struct {
 	// TokensSaved is the conservative token estimate of BytesSaved using
 	// the same bytes/4 heuristic as EstimateRequestTokens.
 	TokensSaved int
+	// ContextTokens is the estimated request size (tokens) BEFORE the pass ran.
+	ContextTokens int
+	// ContextWindow is the resolved model window used for the decision.
+	ContextWindow int
+}
+
+// UsagePercent returns ContextTokens as a whole percentage of ContextWindow
+// (0 when either side is unknown). Capped at 999 to stay honest yet compact.
+func (s Stats) UsagePercent() int {
+	if s.ContextTokens <= 0 || s.ContextWindow <= 0 {
+		return 0
+	}
+	pct := s.ContextTokens * 100 / s.ContextWindow
+	if pct > 999 {
+		pct = 999
+	}
+	return pct
 }
 
 // Budget controls one compaction pass.
@@ -225,12 +252,15 @@ func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
 		if actx != nil {
 			ctx = actx
 		}
+		contextTokens := EstimateRequestTokens(req)
 		compacted, bytesSaved, summary := compactRequestContext(ctx, req, b)
 		if compacted > 0 && b.OnCompact != nil {
 			b.OnCompact(Stats{
-				Compacted:   compacted,
-				BytesSaved:  bytesSaved,
-				TokensSaved: (bytesSaved + 3) / 4,
+				Compacted:     compacted,
+				BytesSaved:    bytesSaved,
+				TokensSaved:   (bytesSaved + 3) / 4,
+				ContextTokens: contextTokens,
+				ContextWindow: b.window(),
 			})
 		}
 		if summary {
@@ -370,7 +400,7 @@ func capOversizedOlderToolOutputs(req *model.LLMRequest, maxEntryBytes int) (com
 			if origPart != nil && origPart.FunctionResponse != nil {
 				fr := origPart.FunctionResponse
 				name := strings.ToLower(strings.TrimSpace(fr.Name))
-				if !neverCompactInTurnTools[name] && compactableInTurnTools[name] {
+				if !neverCompactInTurnTools[name] && compactableToolName(name) {
 					if rawText, ok := fr.Response["text"].(string); ok && len(rawText) > maxEntryBytes {
 						trimmed := truncateHeadTailTokenAware(rawText, maxEntryBytes)
 						if len(trimmed) < len(rawText) {
@@ -654,7 +684,7 @@ func compactFunctionResponseMap(fr *genai.FunctionResponse, callTarget string, c
 		return nil, 0, false
 	}
 	name := strings.ToLower(strings.TrimSpace(fr.Name))
-	if neverCompactInTurnTools[name] || !compactableInTurnTools[name] {
+	if neverCompactInTurnTools[name] || !compactableToolName(name) {
 		return nil, 0, false
 	}
 	// Never compact error responses so the model can still diagnose failures.

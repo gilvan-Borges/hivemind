@@ -462,6 +462,129 @@ func (r *Runner) slots() *spawnGate {
 // window on every later call.
 const childResponseContract = "\n\nCONTRATO DE RESPOSTA: devolva um relatório curto e direto — comece pelo resultado (sucesso/falha), depois bullets com arquivos alterados e verificação. Resumos longos lotam a janela de contexto do agente pai; sem narrativa passo a passo."
 
+// childBriefCap bounds the context snippet a parent may attach to a spawn:
+// the brief exists so the child does not re-read what the parent already
+// knows, not to smuggle a second objective through the side door.
+const childBriefCap = 2 * 1024
+
+// spawnSummaryHeader is the one-line lifecycle telemetry that rides with the
+// child's report: cost-relevant counters the parent (and the event stream)
+// can reason about before reading a word of the summary.
+func spawnSummaryHeader(req SpawnRequest, res TurnResult, dur time.Duration) string {
+	role := "subagente"
+	if req.Readonly {
+		role = "subagente (readonly)"
+	}
+	return fmt.Sprintf("[%s · %d chamadas de ferramenta · %d tokens · %.1fs]", role, res.ToolCalls, res.TotalTokens, dur.Seconds())
+}
+
+func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error) {
+	if r.Child {
+		return "", fmt.Errorf("subagente não pode criar outro subagente")
+	}
+	objective := strings.TrimSpace(req.Objective)
+	if objective == "" {
+		return "", fmt.Errorf("objetivo do subagente vazio")
+	}
+	root, err := spawnRoot(r.lastWorkspace(), req.Roots)
+	if err != nil {
+		return "", err
+	}
+	allowed, err := parseClassList(req.Classes)
+	if err != nil {
+		return "", err
+	}
+	// Readonly spawn is a hard gate at the broker tier ceiling, not a prompt
+	// suggestion: whatever classes were requested, only read survives.
+	if req.Readonly {
+		allowed = intersectTiers(allowed, TierRead)
+		if len(allowed) == 0 {
+			allowed = []Tier{TierRead}
+		}
+	}
+	if !r.slots().enter() {
+		return "", fmt.Errorf("limite de %d subagentes ao mesmo tempo", r.Config.EffectiveMaxConcurrentSubagents())
+	}
+	defer r.slots().leave()
+
+	// The brief rides with the objective so the child starts from what the
+	// parent already learned instead of re-reading the same files.
+	message := objective + childResponseContract
+	if brief := strings.TrimSpace(req.ContextBrief); brief != "" {
+		if len(brief) > childBriefCap {
+			brief = brief[:childBriefCap] + "…(brief truncado em 2 KiB)"
+		}
+		message = "[CONTEXTO DO AGENTE PAI — fatos já apurados, não re-leia o que está aqui]\n" + brief + "\n\n[OBJETIVO]" + message
+	}
+
+	child := &Runner{
+		BaseDir:         r.BaseDir,
+		Config:          r.Config,
+		Policy:          r.Policy,
+		Sandbox:         r.Sandbox,
+		Vault:           r.Vault,
+		HTTPClient:      r.HTTPClient,
+		ApprovalTimeout: r.ApprovalTimeout,
+		Audit:           r.Audit,
+		Memory:          r.Memory,
+		ListProjects:    r.ListProjects,
+		Approve:         r.Approve,
+		ApproveDetailed: r.ApproveDetailed,
+		OnEvent:         r.OnEvent,
+		Model:           r.Model,
+		Streaming:        agent.StreamingModeNone,
+		Child:           true,
+		ParentTier:      ceilingTier(allowed),
+		AllowedTiers:    allowed,
+		gate:            r.slots(),
+	}
+	start := time.Now()
+	res, err := child.RunTurn(ctx, TurnRequest{
+		// The response contract rides with the objective so the child leads
+		// with outcomes instead of a step-by-step narrative.
+		Message:    message,
+		Workspace:  root,
+		Workstream: r.lastWorkstream(),
+		Origin:     OriginSubagent,
+		AccountID:  r.lastAccount(),
+	})
+	dur := time.Since(start)
+	if err != nil {
+		r.emit(Event{
+			Kind:   "subagent",
+			Author: "hive",
+			Label:  "Hive Residente",
+			Detail: fmt.Sprintf("subagente falhou após %.1fs: %v", dur.Seconds(), err),
+		})
+		return "", err
+	}
+	r.emit(Event{
+		Kind:   "subagent",
+		Author: "hive",
+		Label:  "Hive Residente",
+		Detail: spawnSummaryHeader(req, res, dur),
+	})
+	// Bound the summary that re-enters the parent's context and archive the
+	// full text: the pointer is rooted at the parent's workspace so its own
+	// read_file can resolve it.
+	spillRoot := r.lastWorkspace()
+	if spillRoot == "" {
+		spillRoot = root
+	}
+	return spawnSummaryHeader(req, res, dur) + "\n" + budgetChildSummary(res.FinalText, r.childSummaryCap(), toolspill.NewStore(spillRoot)), nil
+}
+
+// intersectTiers keeps only the classes at or below the ceiling.
+func intersectTiers(list []Tier, ceiling Tier) []Tier {
+	out := make([]Tier, 0, len(list))
+	for _, t := range list {
+		if tierRank(t) <= tierRank(ceiling) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // childSummaryCap resolves the per-child summary budget: the configured static
 // cap, tightened by the parent's leftover input budget (~4 chars/token, half
 // share) so a fan-out cannot overflow the parent's window. Floor 2.000 chars
@@ -499,70 +622,6 @@ func budgetChildSummary(text string, cap int, store *toolspill.Store) string {
 		)
 	}
 	return preview + fmt.Sprintf("\n\n[resumo do subagente truncado em %d de %d caracteres]", cap, len(text))
-}
-
-func (r *Runner) runSpawn(ctx context.Context, objective string, roots, classes []string) (string, error) {
-	if r.Child {
-		return "", fmt.Errorf("subagente não pode criar outro subagente")
-	}
-	objective = strings.TrimSpace(objective)
-	if objective == "" {
-		return "", fmt.Errorf("objetivo do subagente vazio")
-	}
-	root, err := spawnRoot(r.lastWorkspace(), roots)
-	if err != nil {
-		return "", err
-	}
-	allowed, err := parseClassList(classes)
-	if err != nil {
-		return "", err
-	}
-	if !r.slots().enter() {
-		return "", fmt.Errorf("limite de %d subagentes ao mesmo tempo", r.Config.EffectiveMaxConcurrentSubagents())
-	}
-	defer r.slots().leave()
-
-	child := &Runner{
-		BaseDir:         r.BaseDir,
-		Config:          r.Config,
-		Policy:          r.Policy,
-		Sandbox:         r.Sandbox,
-		Vault:           r.Vault,
-		HTTPClient:      r.HTTPClient,
-		ApprovalTimeout: r.ApprovalTimeout,
-		Audit:           r.Audit,
-		Memory:          r.Memory,
-		ListProjects:    r.ListProjects,
-		Approve:         r.Approve,
-		ApproveDetailed: r.ApproveDetailed,
-		OnEvent:         r.OnEvent,
-		Model:           r.Model,
-		Streaming:       agent.StreamingModeNone,
-		Child:           true,
-		ParentTier:      ceilingTier(allowed),
-		AllowedTiers:    allowed,
-		gate:            r.slots(),
-	}
-	res, err := child.RunTurn(ctx, TurnRequest{
-		// The response contract rides with the objective so the child leads
-		// with outcomes instead of a step-by-step narrative.
-		Message:    objective + childResponseContract,
-		Workspace:  root,
-		Workstream: r.lastWorkstream(),
-		Origin:     OriginSubagent,
-		AccountID:  r.lastAccount(),
-	})
-	if err != nil {
-		return "", err
-	}
-	// Bound the summary that re-enters the parent's context and archive the
-	// full text: the pointer is rooted at the parent's workspace so its own
-	// read_file can resolve it.
-	spillRoot := r.lastWorkspace()
-	if spillRoot == "" {
-		spillRoot = root
-	}
-	return budgetChildSummary(res.FinalText, r.childSummaryCap(), toolspill.NewStore(spillRoot)), nil
 }
 
 func (r *Runner) lastWorkspace() string {

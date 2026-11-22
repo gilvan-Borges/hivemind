@@ -124,6 +124,20 @@ func (r *Runner) RunExternalWorkerDev(ctx context.Context, dev devEnv, adapter w
 		},
 	})
 
+	if u := doneEv.Usage; u != nil && r.OnEvent != nil {
+		r.OnEvent(Event{
+			Kind:             "worker_usage",
+			Stage:            "dev",
+			Author:           dev.ADK,
+			Label:            label,
+			InputTokens:      clampInt32(u.InputTokens),
+			OutputTokens:     clampInt32(u.OutputTokens),
+			CachedReadTokens: clampInt32(u.CacheReadTokens),
+			CostMicroUSD:     u.CostMicroUSD,
+			Detail:           fmt.Sprintf("usage reportado pelo worker externo (%s): entrada %d · saída %d", adapter.Provider(), u.InputTokens, u.OutputTokens),
+		})
+	}
+
 	g := r.Git
 	if g == nil {
 		g = gitx.Local{}
@@ -180,4 +194,15 @@ func (r *Runner) externalWorkerAgent(dev devEnv, adkName, reportKey, slice strin
 			}
 		},
 	})
+}
+
+func clampInt32(n int64) int32 {
+	if n <= 0 {
+		return 0
+	}
+	const maxI32 = 1<<31 - 1
+	if n > maxI32 {
+		return maxI32
+	}
+	return int32(n)
 }
