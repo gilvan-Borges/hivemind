@@ -17,6 +17,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -182,7 +183,7 @@ func (r *Runner) build(ctx context.Context, devs []devEnv, key, objective string
 		if !r.sharedDevWorktree {
 			scopeDesc = "worktree isolada"
 		}
-		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nMESA REDONDA AO VIVO (Chefe ↔ Dev ↔ QA): você pode conversar em tempo real com o Chefe e o time! Se tiver qualquer dúvida sobre qual arquivo/classe editar, encontrar uma dependência ausente na branch ou bater em um erro de compilação/teste, chame `ask_chief` para o Chefe te direcionar ao vivo na hora (ou `share_team_note` para alinhar contratos com outros Devs e o QA). Quando o Chefe publicar um `[🧭 MESA REDONDA — DIRECIONAMENTO AO VIVO]`, siga a orientação dele imediatamente.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPROIBIDO ENCERRAR SEM CÓDIGO: em tarefas de implementação, nunca finalize a rodada apenas analisando ou listando pendências sem criar ou editar arquivos.\nDEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare de mãos vazias — implemente todos os contratos, eventos, serviços, consumers e testes unitários da SUA fatia de forma desacoplada e compilável e documente o ponto de acoplamento no resumo.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA e pelo Chefe.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
+		extra := fmt.Sprintf("Seu diretório de trabalho (%s) é %s.\nSua branch é %s.\nO Chefe JÁ leu a spec/plano e registrou os contratos essenciais em [chief_plan] e [chief_context_brief]. NÃO releia spec.md/plan.md/tasks.md inteiros em loop; leia apenas os arquivos de código que precisa editar/chamar (máx. 3-4 leituras por turno) e comece a implementar logo.\nREGRA DE PARADA POR RETORNO DECRESCENTE (Diminishing-Return Stop Test): se 2 buscas/leituras seguidas retornarem arquivos já conhecidos ou duplicados, PARE de explorar imediatamente e comece a criar/editar os arquivos alvo com write_file/edit_file.\nMESA REDONDA AO VIVO (Chefe ↔ Dev ↔ QA): você pode conversar em tempo real com o Chefe e o time! Se tiver qualquer dúvida sobre qual arquivo/classe editar, encontrar uma dependência ausente na branch ou bater em um erro de compilação/teste, chame `ask_chief` para o Chefe te direcionar ao vivo na hora (ou `share_team_note` para alinhar contratos com outros Devs e o QA). Quando o Chefe publicar um `[🧭 MESA REDONDA — DIRECIONAMENTO AO VIVO]` ou `<agent_message_board_notification>`, siga a orientação dele imediatamente.\nORÇAMENTO RÍGIDO: você tem até %d chamadas de LLM nesta rodada e no máximo %d leituras/buscas antes da primeira edição — se estourar, a execução inteira é interrompida. Localize os trechos com 1-2 buscas, edite e siga em frente.\nPROIBIDO ENCERRAR SEM CÓDIGO: em tarefas de implementação, nunca finalize a rodada apenas analisando ou listando pendências sem criar ou editar arquivos.\nDEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare de mãos vazias — implemente todos os contratos, eventos, serviços, consumers e testes unitários da SUA fatia de forma desacoplada e compilável e documente o ponto de acoplamento no resumo.\nPara modificar arquivos existentes, use SEMPRE edit_file (preserva bytes/encoding/CRLF e economiza tokens); reserve write_file para arquivos novos e nunca use scripts python/node via run_shell para editar texto.\nNÃO execute git commit, git push nem abra PR (apenas o Chefe ou o Arquiteto comitam na worktree da conversa após aprovação do QA).\nNão altere arquivos fora desse diretório.\nSe houver [qa_feedback] ou [qa_report], corrija prioritariamente todos os pontos apontados pelo QA e pelo Chefe.", scopeDesc, dev.Root, dev.Branch, r.Project.Settings.EffectiveMaxDevCalls(), r.Project.Settings.EffectiveMaxDevExploreCalls())
 		if hint := r.nestedWorktreesPromptHint(); hint != "" {
 			extra += "\n" + hint
 		}
@@ -400,9 +401,18 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			fmt.Fprintf(&b, "[%s]\n%s\n\n", k, text)
 		}
 		if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
+			if notif := r.sharedBoard.UnreadNotificationFor(adkName); notif != "" {
+				fmt.Fprintf(&b, "%s\n\n", notif)
+			}
 			if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
 				fmt.Fprintf(&b, "%s\n\n", boardText)
 			}
+		}
+		if guidance := contextx.ContextWindowGuidance(req, contextx.Budget{
+			ContextWindow:   agentContextWindow(a),
+			ContextWindowFn: r.dynamicAgentContextWindow(adkName, a),
+		}); guidance != "" {
+			fmt.Fprintf(&b, "%s\n\n", guidance)
 		}
 		reminder := strings.TrimSpace(b.String())
 		if reminder == "" {

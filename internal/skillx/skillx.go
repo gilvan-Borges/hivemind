@@ -27,6 +27,10 @@ const HiveMindSkillsDir = ".hivemind/skills"
 
 const (
 	maxDescriptionBytes = 240
+	// DefaultCatalogBudgetBytes limita o tamanho total do catálogo de skills injetado
+	// no prompt de triagem para evitar explosão de tokens em workspaces com muitas skills
+	// (padrão Codex skills_context_budget + progressive disclosure).
+	DefaultCatalogBudgetBytes = 4 * 1024
 	// DefaultBodyBytes limita o corpo de cada skill injetada no prompt do executor.
 	DefaultBodyBytes = 4 * 1024
 	// DefaultTotalBytes limita o total de diretrizes de skills por agente.
@@ -184,11 +188,12 @@ func loadDir(dir, relBase, source string) ([]Skill, string) {
 	return out, HashBody([]byte(strings.Join(parts, "\n")))
 }
 
-// ExtractDescription devolve a primeira frase/parágrafo curto do SKILL.md (sem títulos).
+// ExtractDescription devolve a primeira frase/parágrafo curto do corpo do SKILL.md (sem títulos),
+// usando o campo YAML `description:` do frontmatter como fallback quando o corpo não tem parágrafo.
 func ExtractDescription(md string) string {
-	md = stripFrontmatter(md)
+	body := stripFrontmatter(md)
 	var parts []string
-	for _, ln := range strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n") {
+	for _, ln := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
 		t := strings.TrimSpace(ln)
 		if t == "" {
 			if len(parts) > 0 {
@@ -204,10 +209,54 @@ func ExtractDescription(md string) string {
 			break
 		}
 	}
-	if len(parts) == 0 {
+	if len(parts) > 0 {
+		return strx.TruncateBytes(strings.Join(parts, " "), maxDescriptionBytes, "…")
+	}
+	if fmDesc := extractFrontmatterDescription(md); fmDesc != "" {
+		return strx.TruncateBytes(fmDesc, maxDescriptionBytes, "…")
+	}
+	return ""
+}
+
+func extractFrontmatterDescription(md string) string {
+	s := strings.ReplaceAll(md, "\r\n", "\n")
+	if !strings.HasPrefix(s, "---\n") {
 		return ""
 	}
-	return strx.TruncateBytes(strings.Join(parts, " "), maxDescriptionBytes, "…")
+	rest := s[4:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return ""
+	}
+	fm := rest[:idx]
+	lines := strings.Split(fm, "\n")
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		low := strings.ToLower(trimmed)
+		if !strings.HasPrefix(low, "description:") {
+			continue
+		}
+		val := strings.TrimSpace(trimmed[len("description:"):])
+		if val == ">-" || val == ">" || val == "|-" || val == "|" {
+			var block []string
+			for j := i + 1; j < len(lines); j++ {
+				ln := lines[j]
+				if len(ln) == 0 {
+					continue
+				}
+				if ln[0] != ' ' && ln[0] != '\t' {
+					break
+				}
+				if t := strings.TrimSpace(ln); t != "" {
+					block = append(block, t)
+				}
+			}
+			return strings.TrimSpace(strings.Join(block, " "))
+		}
+		val = strings.Trim(val, `"'`)
+		return strings.TrimSpace(val)
+	}
+	return ""
 }
 
 func stripFrontmatter(md string) string {
@@ -282,17 +331,55 @@ func day(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// CatalogBlock formata o catálogo combinado para o prompt do Chefe:
-// primeiro as skills do projeto, depois as nativas da IDE (com data de atualização).
+// CatalogBlock formata o catálogo combinado para o prompt do Chefe respeitando
+// DefaultCatalogBudgetBytes (progressive disclosure + orçamento de contexto de skills).
 func CatalogBlock(project, native []Skill) string {
+	return CatalogBlockWithBudget(project, native, DefaultCatalogBudgetBytes)
+}
+
+// CatalogBlockWithBudget formata o catálogo de skills dentro de maxBytes.
+// Se o catálogo completo exceder o orçamento, reduz progressivamente o tamanho das
+// descrições (80 bytes), depois omite descrições (mantendo nome + caminho) e, se
+// ainda exceder, trunca entradas excedentes com aviso explícito.
+func CatalogBlockWithBudget(project, native []Skill, maxBytes int) string {
 	if len(project) == 0 && len(native) == 0 {
 		return ""
 	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultCatalogBudgetBytes
+	}
+	if full := renderCatalogBlock(project, native, 0, true); len(full) <= maxBytes {
+		return full
+	}
+	if compact := renderCatalogBlock(project, native, 80, true); len(compact) <= maxBytes {
+		return compact
+	}
+	minimal := renderCatalogBlock(project, native, 0, false)
+	if len(minimal) <= maxBytes {
+		return minimal
+	}
+	notice := "\n[Algumas skills foram omitidas para respeitar o orçamento de contexto de skills.]\n"
+	limit := maxBytes - len(notice)
+	if limit < 64 {
+		limit = 64
+	}
+	return strx.TruncateBytes(minimal, limit, notice)
+}
+
+// ProgressiveDisclosureHint retorna diretrizes enxutas de higiene de contexto para
+// uso econômico de skills (carregar somente o SKILL.md aplicável e referências diretas).
+func ProgressiveDisclosureHint() string {
+	return "HIGIENE DE CONTEXTO PARA SKILLS (PROGRESSIVE DISCLOSURE):\n" +
+		"- Carregue apenas o SKILL.md das skills realmente aplicáveis à tarefa; não pré-carregue pastas references/, scripts/ ou assets/ não relacionadas.\n" +
+		"- Evite perseguir referências em cascata: abra somente arquivos linkados diretamente pelo SKILL.md quando necessário, resolvendo caminhos relativos a partir do diretório do SKILL.md.\n"
+}
+
+func renderCatalogBlock(project, native []Skill, descLimit int, includeDesc bool) string {
 	var b strings.Builder
 	if len(project) > 0 {
 		fmt.Fprintf(&b, "SKILLS DO PROJETO (%s):\n", SkillsDir)
 		for _, s := range project {
-			writeCatalogLine(&b, s)
+			writeCatalogLineWithLimit(&b, s, descLimit, includeDesc)
 		}
 	}
 	var optional []Skill
@@ -303,20 +390,28 @@ func CatalogBlock(project, native []Skill) string {
 				optional = append(optional, s)
 				continue
 			}
-			writeCatalogLine(&b, s)
+			writeCatalogLineWithLimit(&b, s, descLimit, includeDesc)
 		}
 	}
 	if len(optional) > 0 {
 		b.WriteString("SKILLS OPCIONAIS DESLIGADAS (não selecione, a menos que o usuário tenha pedido explicitamente esta skill pelo nome):\n")
 		for _, s := range optional {
-			writeCatalogLine(&b, s)
+			writeCatalogLineWithLimit(&b, s, descLimit, includeDesc)
 		}
 	}
 	return b.String()
 }
 
-func writeCatalogLine(b *strings.Builder, s Skill) {
-	if s.Description == "" {
+func writeCatalogLineWithLimit(b *strings.Builder, s Skill, descLimit int, includeDesc bool) {
+	if !includeDesc {
+		fmt.Fprintf(b, "- `%s` (`%s`)\n", s.Name, s.Path)
+		return
+	}
+	desc := s.Description
+	if descLimit > 0 && len(desc) > descLimit {
+		desc = strx.TruncateBytes(desc, descLimit, "…")
+	}
+	if desc == "" {
 		if d := day(s.UpdatedAt); d != "" {
 			fmt.Fprintf(b, "- `%s` — sem descrição; leia `%s` antes de decidir. (atualizada em %s)\n", s.Name, s.Path, d)
 			return
@@ -325,10 +420,10 @@ func writeCatalogLine(b *strings.Builder, s Skill) {
 		return
 	}
 	if d := day(s.UpdatedAt); d != "" {
-		fmt.Fprintf(b, "- `%s` — %s (atualizada em %s)\n", s.Name, s.Description, d)
+		fmt.Fprintf(b, "- `%s` — %s (atualizada em %s)\n", s.Name, desc, d)
 		return
 	}
-	fmt.Fprintf(b, "- `%s` — %s\n", s.Name, s.Description)
+	fmt.Fprintf(b, "- `%s` — %s\n", s.Name, desc)
 }
 
 // GuidanceBlock monta o bloco de diretrizes das skills escolhidas para o prompt

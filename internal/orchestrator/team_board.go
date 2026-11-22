@@ -163,6 +163,23 @@ func (b *TeamBoard) PendingDirectivesFor(agentName string, markDelivered bool) [
 	return out
 }
 
+// UnreadNotificationFor returns a structured <agent_message_board_notification> block
+// containing unread live directives addressed to agentName (or "todos") and marks them
+// delivered so each message is surfaced once without bloating subsequent turns.
+func (b *TeamBoard) UnreadNotificationFor(agentName string) string {
+	pending := b.PendingDirectivesFor(agentName, true)
+	if len(pending) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.WriteString("<agent_message_board_notification>\n")
+	for _, d := range pending {
+		fmt.Fprintf(&out, "- [%s → %s]: %s\n", d.From, d.To, d.Content)
+	}
+	out.WriteString("</agent_message_board_notification>")
+	return out.String()
+}
+
 func (b *TeamBoard) RegisterOwner(agentName string, paths []string) {
 	if b == nil {
 		return
