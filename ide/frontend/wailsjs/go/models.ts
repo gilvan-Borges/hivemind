@@ -2544,6 +2544,8 @@ export namespace remote {
 	    author?: string;
 	    url?: string;
 	    isMine?: boolean;
+	    repo?: string;
+	    repoRoot?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectIssue(source);
@@ -2568,6 +2570,8 @@ export namespace remote {
 	        this.author = source["author"];
 	        this.url = source["url"];
 	        this.isMine = source["isMine"];
+	        this.repo = source["repo"];
+	        this.repoRoot = source["repoRoot"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2596,6 +2600,8 @@ export namespace remote {
 	    state: string;
 	    isDraft: boolean;
 	    author?: string;
+	    repo?: string;
+	    repoRoot?: string;
 	    headRef?: string;
 	    baseRef?: string;
 	    updatedAt?: string;
@@ -2625,6 +2631,8 @@ export namespace remote {
 	        this.state = source["state"];
 	        this.isDraft = source["isDraft"];
 	        this.author = source["author"];
+	        this.repo = source["repo"];
+	        this.repoRoot = source["repoRoot"];
 	        this.headRef = source["headRef"];
 	        this.baseRef = source["baseRef"];
 	        this.updatedAt = source["updatedAt"];
