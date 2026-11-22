@@ -122,6 +122,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 			ContextWindow:   agentContextWindow(a),
 			ContextWindowFn: r.dynamicAgentContextWindow(adkName, a),
 			KeepRecent:      r.Project.Settings.EffectiveInTurnKeepToolResults(),
+			OnCompact:       r.compactionStatsCallback(adkName, label),
 		}),
 		r.newDynamicContextReminderCallback(adkName, a, qa, outputKey, keys),
 	}

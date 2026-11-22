@@ -282,8 +282,12 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 	task.OnlyProvider = "" // Failover is never locked to a single failed/exhausted provider.
 	task.InStep = true     // Cursor stays out of mid-step failover (Spec §9 / Fase 2).
 	task.HasPendingToolCall = hasPriorToolActivity(req)
-	if est := estimateRequestTokens(req); est > task.InputTokens {
-		task.InputTokens = est
+	// Failover switches models mid-turn, so the surviving model re-processes
+	// the whole request without the previous model's prefix cache. Report the
+	// estimated re-cache cost alongside the route change.
+	reCacheTokens := estimateRequestTokens(req)
+	if reCacheTokens > task.InputTokens {
+		task.InputTokens = reCacheTokens
 	}
 	if w.outcomes != nil {
 		task.Learn = w.outcomes.Snapshot(task.RepoKey)
@@ -358,7 +362,7 @@ func (w *jevModelWrapper) selectAndBuildFailover(
 			continue
 		}
 
-		w.emitFailover(from, choice, errClass)
+		w.emitFailover(from, choice, errClass, reCacheTokens)
 		return choice, llm, releaseLease, nil
 	}
 
@@ -458,11 +462,14 @@ func (w *jevModelWrapper) recordSuccessAndSpend(ch jev.Choice, resp *model.LLMRe
 	}
 }
 
-func (w *jevModelWrapper) emitFailover(from, to jev.Choice, errClass jev.ErrorClass) {
+func (w *jevModelWrapper) emitFailover(from, to jev.Choice, errClass jev.ErrorClass, reCacheTokens int) {
 	if w.onEvent == nil {
 		return
 	}
 	text := fmt.Sprintf("%s respondeu %s em %s. Seguindo em %s/%s.", from.Provider, errClass, from.Model, to.Provider, to.Model)
+	if reCacheTokens > 0 {
+		text += fmt.Sprintf(" Sem cache de prefixo compartilhado: ~%d tokens de entrada serão reprocessados.", reCacheTokens)
+	}
 	var sum []jev.ProviderHealthView
 	if w.health != nil {
 		var creds map[string]bool
@@ -484,6 +491,7 @@ func (w *jevModelWrapper) emitFailover(from, to jev.Choice, errClass jev.ErrorCl
 		FromModel:         from.Model,
 		Tier:              string(to.Tier),
 		Reasons:           reasons,
+		InputTokens:       int32(reCacheTokens),
 		EstimatedMicroUSD: to.EstimatedMicroUSD,
 		DecisionMicros:    to.DecisionMicros,
 		Health:            sum,

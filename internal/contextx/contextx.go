@@ -65,6 +65,19 @@ var neverCompactInTurnTools = map[string]bool{
 	"sdd_docs_ready":     true,
 }
 
+// Stats reports what one compaction pass saved, so the orchestrator can emit
+// usage events (compacted payloads / tokens saved): without it, token savings
+// are invisible.
+type Stats struct {
+	// Compacted is how many payloads were replaced with compact previews.
+	Compacted int
+	// BytesSaved is how many request bytes the pass removed.
+	BytesSaved int
+	// TokensSaved is the conservative token estimate of BytesSaved using
+	// the same bytes/4 heuristic as EstimateRequestTokens.
+	TokensSaved int
+}
+
 // Budget controls one compaction pass.
 type Budget struct {
 	// ContextWindow is the model's token window. Zero falls back to
@@ -76,6 +89,9 @@ type Budget struct {
 	// KeepRecent is the minimum number of recent tool results kept verbatim.
 	// Zero falls back to defaultKeepToolResults.
 	KeepRecent int
+	// OnCompact, when set, receives one Stats per pass that actually trimmed
+	// payloads. No-op passes stay silent to avoid event spam.
+	OnCompact func(Stats)
 }
 
 func (b Budget) window() int {
@@ -190,7 +206,14 @@ func appendArgValue(b *strings.Builder, v any) {
 // escalates to the aggressive cut at SummaryThresholdPct.
 func NewCompactionCallback(b Budget) llmagent.BeforeModelCallback {
 	return func(_ agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		CompactRequest(req, b)
+		compacted, bytesSaved := CompactRequest(req, b)
+		if compacted > 0 && b.OnCompact != nil {
+			b.OnCompact(Stats{
+				Compacted:   compacted,
+				BytesSaved:  bytesSaved,
+				TokensSaved: (bytesSaved + 3) / 4,
+			})
+		}
 		return nil, nil
 	}
 }

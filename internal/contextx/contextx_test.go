@@ -107,6 +107,46 @@ func TestCompactRequestSummaryTierIsMoreAggressive(t *testing.T) {
 	}
 }
 
+func TestCompactionCallbackReportsStatsAndStaysSilentOnNoOp(t *testing.T) {
+	var reports []Stats
+	cb := NewCompactionCallback(Budget{
+		ContextWindow: 12_000,
+		KeepRecent:    4,
+		OnCompact:     func(s Stats) { reports = append(reports, s) },
+	})
+	req, _ := buildTurnRequest(12)
+	if _, err := cb(nil, req); err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("expected exactly one Stats report for a trimming pass, got %d", len(reports))
+	}
+	s := reports[0]
+	if s.Compacted != 8 {
+		t.Fatalf("expected 8 compacted payloads in stats, got %d", s.Compacted)
+	}
+	if s.BytesSaved <= 0 {
+		t.Fatalf("expected positive BytesSaved, got %d", s.BytesSaved)
+	}
+	if s.TokensSaved != (s.BytesSaved+3)/4 {
+		t.Fatalf("TokensSaved must follow the bytes/4 heuristic, got %+v", s)
+	}
+
+	// A pass below the compaction threshold must not emit anything.
+	reports = nil
+	noop := NewCompactionCallback(Budget{
+		ContextWindow: DefaultContextWindow,
+		OnCompact:     func(s Stats) { reports = append(reports, s) },
+	})
+	req2, _ := buildTurnRequest(12)
+	if _, err := noop(nil, req2); err != nil {
+		t.Fatalf("noop callback error: %v", err)
+	}
+	if len(reports) != 0 {
+		t.Fatalf("no-op pass must stay silent, got %d reports", len(reports))
+	}
+}
+
 func TestEstimateRequestTokensCountsSystemContentsArgsAndTools(t *testing.T) {
 	req := &model.LLMRequest{
 		Config: &genai.GenerateContentConfig{
