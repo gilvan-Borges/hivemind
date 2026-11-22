@@ -45,6 +45,7 @@ const (
 // safe to replace with a compact preview + conclusion note.
 var compactableInTurnTools = map[string]bool{
 	"read_file":       true,
+	"read_skill":      true,
 	"list_dir":        true,
 	"search_text":     true,
 	"find_files":      true,

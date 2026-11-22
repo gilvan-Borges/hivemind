@@ -44,3 +44,29 @@ identificou duas lacunas no HiveMind:
   injeção incondicional).
 - Campos novos (`Skill.Triggers`, `Event.CacheHitPct`, `Result.CachedReadTokens`)
   são aditivos no JSON: consumidores existentes ignoram.
+
+## Emenda — Progressive Disclosure 100% On-Demand via `read_skill` (PR #55)
+
+Na integração do PR #55 (OpenClaw) sobre a `main`, optamos por substituir a
+injeção inline do `GuidanceBlock` em `guidanceForRole`/`nativeSkillGuide` por
+`skillx.StubBlockForObjective` + ferramenta dedicada `read_skill`:
+
+- **Motivo da troca:**
+  1. **Economia de tokens em turnos longos:** mesmo com `triggers:`, skills sem
+     triggers continuavam injetando até 12 KiB no system prompt em *todas* as
+     chamadas de LLM da rodada (20–80 chamadas/dev). Com `StubBlockForObjective`,
+     o bloco cai para ~0,4 KiB fixos e o corpo carregado via `read_skill` (até
+     16 KiB, sem truncamento silencioso em 4 KiB) é micro-compactado pelo
+     `contextx` conforme o turno avança.
+  2. **Acesso real a skills nativas:** o stub anterior apontava para `read_file`,
+     que falha em `NativeSkillsRoot` por estar fora do jail da worktree. A tool
+     `read_skill` resolve ambos os catálogos (priorizando a versão nativa quando
+     explicitamente aprovada/selecionada).
+  3. **Preservação dos `triggers:` (ADR 0002):** `Skill.Triggers` e
+     `MatchTrigger` continuam ativos — `StubBlockForObjective` marca com
+     `[recomendada para esta tarefa]` as skills cujos triggers casam com o
+     objetivo, orientando o agente a priorizar `read_skill` nelas.
+- **Alinhamento do Bounded Intake com o jail (PR #54):** `IntakeDir` foi
+  ajustado de `.hivemind/intake` para `.hivemind/spillover/intake` para
+  reaproveitar o carve-out `AllowSpilloverRead` sem enfraquecer o isolamento
+  de `.hivemind/team.yaml`, sessões e worktrees.

@@ -95,6 +95,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	if err != nil {
 		return nil, fmt.Errorf("modelo de %s (provedor %s): %w", a.Name, a.Provider, err)
 	}
+	_, preferredNative := r.resolveSkillCatalogs(a.Role, true)
 	roleTools, err := tools.ForRole(a.Role, tools.Deps{
 		Root:                 root,
 		Settings:             r.Project.Settings,
@@ -109,6 +110,7 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 		JiraKey:              jiraKey,
 		BaseBranch:           r.Project.Settings.BaseBranch,
 		MCP:                  r.MCP,
+		SkillLookup:          tools.NewSkillLookupWithPreferredNative(r.Workspace, r.NativeSkillsRoot, r.skills, r.NativeSkills, preferredNative),
 	})
 	if err != nil {
 		return nil, err
@@ -253,7 +255,21 @@ func (r *Runner) llmCore(ctx context.Context, a team.Agent, adkName, outputKey, 
 	return llmagent.New(cfg)
 }
 
+// modelFor resolves o modelo do agente e aplica o teto de tempo por chamada
+// (Settings.ModelCallTimeoutSeconds, default 600s) para que um stream travado
+// do provedor não segure a rodada do squad indefinidamente.
 func (r *Runner) modelFor(ctx context.Context, a team.Agent) (model.LLM, error) {
+	m, err := r.modelForRaw(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if to := r.Project.Settings.EffectiveModelCallTimeout(); to > 0 {
+		m = modelx.NewPerCallTimeout(m, to)
+	}
+	return m, nil
+}
+
+func (r *Runner) modelForRaw(ctx context.Context, a team.Agent) (model.LLM, error) {
 	if r.Models != nil {
 		if m, ok := r.Models[a.Name]; ok && m != nil {
 			return m, nil

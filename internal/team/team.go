@@ -4,6 +4,7 @@ package team
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 )
@@ -128,6 +129,7 @@ type Settings struct {
 	MaxDevCalls              int                `yaml:"max_dev_calls,omitempty" json:"max_dev_calls,omitempty"`
 	MaxDevExploreCalls       int                `yaml:"max_dev_explore_calls,omitempty" json:"max_dev_explore_calls,omitempty"`
 	MaxDevInputTokens        int64              `yaml:"max_dev_input_tokens,omitempty" json:"max_dev_input_tokens,omitempty"`
+	ModelCallTimeoutSeconds  int                `yaml:"model_call_timeout_seconds,omitempty" json:"model_call_timeout_seconds,omitempty"`
 	MaxTokens                int64              `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	InTurnKeepToolResults    int                `yaml:"in_turn_keep_tool_results,omitempty" json:"in_turn_keep_tool_results,omitempty"`
 	ReviewModel              string             `yaml:"review_model,omitempty" json:"review_model,omitempty"`
@@ -238,6 +240,23 @@ func (s Settings) EffectiveMaxDevInputTokens() int64 {
 		return 10_000_000
 	}
 	return s.MaxDevInputTokens
+}
+
+// EffectiveModelCallTimeout returns the wall-clock budget of each LLM call
+// (default 600s, range 60..7200). A stalled provider stream surfaces as
+// context.DeadlineExceeded instead of holding the squad round indefinitely;
+// the budget is per call, so long multi-call rounds are not penalized.
+func (s Settings) EffectiveModelCallTimeout() time.Duration {
+	if s.ModelCallTimeoutSeconds <= 0 {
+		return 600 * time.Second
+	}
+	if s.ModelCallTimeoutSeconds < 60 {
+		return 60 * time.Second
+	}
+	if s.ModelCallTimeoutSeconds > 7200 {
+		return 7200 * time.Second
+	}
+	return time.Duration(s.ModelCallTimeoutSeconds) * time.Second
 }
 
 // EffectiveInTurnKeepToolResults returns how many recent tool outputs stay verbatim

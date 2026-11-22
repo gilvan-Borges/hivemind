@@ -428,7 +428,7 @@ func (r *Runner) resolveSkillCatalogs(target string, includeDynamic bool) (proje
 
 func (r *Runner) guidanceForRole(target string, includeDynamic bool) string {
 	project, native := r.resolveSkillCatalogs(target, includeDynamic)
-	return skillx.GuidanceBlock(r.objectiveText, r.Workspace, r.NativeSkillsRoot, project, native, 0, 0)
+	return skillx.StubBlockForObjective(r.objectiveText, project, native)
 }
 
 func (r *Runner) nativeSkillGuide(names ...string) string {
@@ -444,7 +444,7 @@ func (r *Runner) nativeSkillGuide(names ...string) string {
 	if len(picked) == 0 {
 		return ""
 	}
-	return skillx.GuidanceBlock(r.objectiveText, r.Workspace, r.NativeSkillsRoot, nil, picked, 0, 0)
+	return skillx.StubBlockForObjective(r.objectiveText, nil, picked)
 }
 
 func (r *Runner) pinnedSkillsNote() string {

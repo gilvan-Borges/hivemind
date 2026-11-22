@@ -561,6 +561,46 @@ func GuidanceBlock(objective, projectRoot, nativeRoot string, project, native []
 	return b.String()
 }
 
+// StubBlock monta o bloco compacto de skills selecionadas para o prompt dos
+// executores: apenas nome, descrição curta e origem de cada skill, com a
+// instrução de carregar o corpo completo sob demanda via tool read_skill.
+// Isso mantém o custo do bloco em ~dezenas de tokens por skill em TODAS as
+// chamadas do turno, em vez dos 4-12 KiB de corpo injetado inline a cada call.
+func StubBlock(project, native []Skill) string {
+	return StubBlockForObjective("", project, native)
+}
+
+// StubBlockForObjective estende StubBlock integrando os `triggers:` (ADR 0002):
+// mantém o modelo 100% on-demand via `read_skill` (economia máxima de tokens
+// por chamada) e destaca as skills cujos triggers casam com o objetivo atual.
+func StubBlockForObjective(objective string, project, native []Skill) string {
+	if len(project) == 0 && len(native) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nSKILLS SELECIONADAS PARA ESTE PAPEL (diretrizes NÃO estão inline; carregue sob demanda):\n")
+	for _, s := range project {
+		writeStubLine(&b, s, "projeto", objective)
+	}
+	for _, s := range native {
+		writeStubLine(&b, s, "nativa da IDE", objective)
+	}
+	b.WriteString("Antes de executar a parte da tarefa coberta por uma skill, carregue as diretrizes completas com a tool `read_skill` (argumento: nome exato da skill, ex.: read_skill {\"name\":\"code-review\"}). Carregue apenas as skills relevantes para a sua fatia; o corpo lido uma vez vale para o turno inteiro e não conta como leitura de exploração.\n")
+	return b.String()
+}
+
+func writeStubLine(b *strings.Builder, s Skill, source, objective string) {
+	tag := ""
+	if objective != "" && len(s.Triggers) > 0 && MatchTrigger(s, objective) {
+		tag = " [recomendada para esta tarefa]"
+	}
+	if s.Description == "" {
+		fmt.Fprintf(b, "- `%s` (skill %s; sem descrição — carregue com read_skill para saber quando se aplica)%s\n", s.Name, source, tag)
+		return
+	}
+	fmt.Fprintf(b, "- `%s` — %s (skill %s)%s\n", s.Name, s.Description, source, tag)
+}
+
 // ReadBody devolve o conteúdo do SKILL.md truncado em maxBytes.
 func (s Skill) ReadBody(root string, maxBytes int) string {
 	if maxBytes <= 0 {
