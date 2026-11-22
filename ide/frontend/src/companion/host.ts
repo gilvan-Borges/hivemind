@@ -112,15 +112,22 @@ export function mountCompanion(): void {
     onOpen: (id) => openStored(id),
     onSettings: () => view?.applySettings(loadSettings()),
   });
-  // When the independent desktop Orb window is running outside the IDE, hide the
-  // legacy in-IDE hexagon widget so only the real floating mascot appears.
+  // Keep the legacy in-IDE hexagon widget hidden by default so it never flashes
+  // on cold-start installs before startOrbHost() finishes spawning the HiveBee Orb.
+  view.root.hidden = true;
   const syncOrbCompanionVisibility = () => {
-    void api()?.OrbRunning?.().then((running) => {
+    const appApi = api();
+    if (!appApi?.OrbRunning) {
+      if (view) view.root.hidden = false;
+      return;
+    }
+    void appApi.OrbRunning().then((running) => {
       if (view) view.root.hidden = Boolean(running);
     });
   };
   syncOrbCompanionVisibility();
   window.setTimeout(syncOrbCompanionVisibility, 1200);
+  window.setTimeout(syncOrbCompanionVisibility, 4000);
   subscribeSettings(() => view?.applySettings(loadSettings()));
   window.addEventListener("focus", () => {
     focused = true;
