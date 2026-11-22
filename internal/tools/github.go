@@ -453,18 +453,26 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 	if !d.DisableMerge {
 		mergePR, err := functiontool.New(functiontool.Config{
 			Name:        "github_merge_pr",
-			Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor. Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access).",
+			Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor — ou um PR do próprio usuário sem revisor externo quando o usuário ordenar explicitamente no chat (passe force_owner_merge=true). Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access).",
 		}, func(ctx agent.Context, args struct {
-			Number      int    `json:"number" jsonschema:"Número do pull request."`
-			Method      string `json:"method,omitempty" jsonschema:"Método: merge (padrão), squash ou rebase."`
-			CommitTitle string `json:"commit_title,omitempty" jsonschema:"Título opcional do commit de merge."`
+			Number          int    `json:"number" jsonschema:"Número do pull request."`
+			Method          string `json:"method,omitempty" jsonschema:"Método: merge (padrão), squash ou rebase."`
+			CommitTitle     string `json:"commit_title,omitempty" jsonschema:"Título opcional do commit de merge."`
+			ForceOwnerMerge bool   `json:"force_owner_merge,omitempty" jsonschema:"Use true APENAS quando o usuário ordenou explicitamente no chat mesclar um PR DELE mesmo sem revisor externo (ex.: repositório solo)."`
 		}) (textResult, error) {
 			pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
 			if err != nil {
 				return textResult{}, err
 			}
-			if err := githubx.CheckPRMergeAllowed(pr); err != nil {
-				return textResult{}, err
+			if args.ForceOwnerMerge {
+				me, _ := d.GitHub.CurrentUser(ctx)
+				if err := githubx.CheckOwnerMergeAllowed(pr, me); err != nil {
+					return textResult{}, err
+				}
+			} else {
+				if err := githubx.CheckPRMergeAllowed(pr); err != nil {
+					return textResult{}, err
+				}
 			}
 			if d.Settings.NeedsMergePermission(pr.BaseRef) {
 				approveFn := d.Approve

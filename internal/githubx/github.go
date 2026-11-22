@@ -1397,6 +1397,51 @@ func CheckPRMergeAllowed(pr PullRequestDetail) error {
 	return nil
 }
 
+// CheckOwnerMergeAllowed allows the authenticated PR author to merge their own
+// open PR when explicitly ordered in chat (e.g. solo repositories without an
+// external human reviewer), as long as no reviewer has an unresolved
+// CHANGES_REQUESTED review.
+func CheckOwnerMergeAllowed(pr PullRequestDetail, currentUser string) error {
+	me := strings.TrimSpace(currentUser)
+	if me == "" || !strings.EqualFold(strings.TrimSpace(pr.Author), me) {
+		return CheckPRMergeAllowed(pr)
+	}
+	if pr.Merged {
+		return fmt.Errorf("governança PR: merge do PR #%d bloqueado (o PR #%d já foi mesclado)", pr.Number, pr.Number)
+	}
+	if pr.State != "" && !strings.EqualFold(pr.State, "open") {
+		return fmt.Errorf("governança PR: merge do PR #%d bloqueado (o PR #%d não está aberto: estado=%s)", pr.Number, pr.Number, pr.State)
+	}
+	latestByReviewer := map[string]string{}
+	var order []string
+	for _, rv := range pr.Reviews {
+		author := strings.ToLower(strings.TrimSpace(rv.Author))
+		if author == "" || strings.EqualFold(author, me) {
+			continue
+		}
+		st := strings.ToUpper(strings.TrimSpace(rv.State))
+		switch st {
+		case "APPROVED", "CHANGES_REQUESTED":
+			if _, seen := latestByReviewer[author]; !seen {
+				order = append(order, author)
+			}
+			latestByReviewer[author] = st
+		case "DISMISSED":
+			delete(latestByReviewer, author)
+		}
+	}
+	var changesBy []string
+	for _, rev := range order {
+		if latestByReviewer[rev] == "CHANGES_REQUESTED" {
+			changesBy = append(changesBy, rev)
+		}
+	}
+	if len(changesBy) > 0 {
+		return fmt.Errorf("governança PR: merge do PR #%d bloqueado (há alterações pendentes solicitadas por: %s)", pr.Number, strings.Join(changesBy, ", "))
+	}
+	return nil
+}
+
 func isUserRequestedReviewer(pr PullRequestDetail, login string) bool {
 	for _, rr := range pr.RequestedReviewers {
 		if strings.EqualFold(strings.TrimSpace(rr), login) {

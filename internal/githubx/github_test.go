@@ -317,6 +317,29 @@ func TestPRGovernancePolicies(t *testing.T) {
 	}
 }
 
+func TestCheckOwnerMergeAllowed(t *testing.T) {
+	pr := PullRequestDetail{
+		Number:             42,
+		Author:             "author",
+		State:              "OPEN",
+		RequestedReviewers: []string{"bot-reviewer"},
+	}
+	if err := CheckOwnerMergeAllowed(pr, "author"); err != nil {
+		t.Fatalf("expected owner merge allowed with 0 approvals: %v", err)
+	}
+	if err := CheckOwnerMergeAllowed(pr, "other-user"); err == nil {
+		t.Fatal("must block owner merge when currentUser != pr.Author")
+	}
+
+	prWithChanges := pr
+	prWithChanges.Reviews = []PRReview{
+		{Author: "reviewer", State: "CHANGES_REQUESTED", Body: "fix this"},
+	}
+	if err := CheckOwnerMergeAllowed(prWithChanges, "author"); err == nil {
+		t.Fatal("must block owner merge while CHANGES_REQUESTED is unresolved")
+	}
+}
+
 func TestGHCLI(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "gh")
