@@ -93,6 +93,7 @@ func TestSandboxWindowsIsolationDeniesOutsideReadAndNetwork(t *testing.T) {
 		Timeout: 10 * time.Second,
 	})
 	if err == nil || res.ExitCode == 0 || !strings.Contains(res.Stderr, "read error:") {
+		skipIfTSanChildInitFailed(t, res.Stderr)
 		t.Fatalf("expected AppContainer to deny reading ungranted file %s, got err=%v code=%d stdout=%q stderr=%q", secretPath, err, res.ExitCode, res.Stdout, res.Stderr)
 	}
 
@@ -108,6 +109,7 @@ func TestSandboxWindowsIsolationDeniesOutsideReadAndNetwork(t *testing.T) {
 		Timeout: 10 * time.Second,
 	})
 	if err == nil || res.ExitCode == 0 || !strings.Contains(res.Stderr, "write error:") {
+		skipIfTSanChildInitFailed(t, res.Stderr)
 		t.Fatalf("expected AppContainer to deny writing %s without WriteRoots, got err=%v code=%d stdout=%q stderr=%q", blockedWrite, err, res.ExitCode, res.Stdout, res.Stderr)
 	}
 
@@ -137,7 +139,18 @@ func TestSandboxWindowsIsolationDeniesOutsideReadAndNetwork(t *testing.T) {
 		Timeout: 10 * time.Second,
 	})
 	if err == nil || res.ExitCode == 0 || !strings.Contains(res.Stderr, "dial error:") {
+		skipIfTSanChildInitFailed(t, res.Stderr)
 		t.Fatalf("expected AppContainer to block TCP socket without internetClient, got err=%v code=%d stdout=%q stderr=%q", err, res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+// skipIfTSanChildInitFailed avoids false CI failures when Go -race (ThreadSanitizer)
+// fails to map shadow memory (error 487) inside a Windows AppContainer child process
+// before the Go runtime even starts.
+func skipIfTSanChildInitFailed(t *testing.T, stderr string) {
+	t.Helper()
+	if strings.Contains(stderr, "ThreadSanitizer failed to allocate") {
+		t.Skipf("Windows -race ThreadSanitizer failed to initialize inside AppContainer child: %s", strings.TrimSpace(stderr))
 	}
 }
 
