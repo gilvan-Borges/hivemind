@@ -308,21 +308,57 @@ func RemoveWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch strin
 	removeSingleWorktree(ctx, g, repo, wtPath, deleteBranch)
 }
 
+// confineWorktreePath verifies that wtPath resolves strictly inside HiveMind's
+// external workspaces root (<AppDataRoot>/workspaces/<slug>/worktrees/...) so
+// filesystem cleanup can never escape into the main repo or arbitrary paths.
+func confineWorktreePath(wtPath string) (string, bool) {
+	baseRoot, err := filepath.Abs(filepath.Join(workspace.AppDataRoot(), "workspaces"))
+	if err != nil {
+		return "", false
+	}
+	target, err := filepath.Abs(strings.TrimSpace(wtPath))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(baseRoot, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 || parts[1] != "worktrees" || parts[2] == "" {
+		return "", false
+	}
+	for _, seg := range parts {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", false
+		}
+	}
+	safeTarget := filepath.Clean(filepath.Join(baseRoot, rel))
+	if !strings.HasPrefix(safeTarget, filepath.Clean(baseRoot)+string(filepath.Separator)) {
+		return "", false
+	}
+	return safeTarget, true
+}
+
 func removeSingleWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch string) {
 	if strings.TrimSpace(repo) == "" || strings.TrimSpace(wtPath) == "" || filepath.Clean(wtPath) == filepath.Clean(repo) {
 		return
 	}
-	// Shared-directory links sit at the worktree root. Removing the tree
-	// while they are still linked fails on Windows (junction) and can follow
+	safePath, ok := confineWorktreePath(wtPath)
+	if !ok {
+		return
+	}
+	// Shared-directory links (top-level or nested) must be unlinked before
+	// removing the tree so Windows junctions do not block removal or follow
 	// the link into the user's real folder.
-	_ = unlinkTopLevelSymlinks(wtPath)
-	_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", wtPath)
-	if _, err := os.Stat(wtPath); err == nil {
-		_ = unlinkTopLevelSymlinks(wtPath)
-		_ = os.RemoveAll(wtPath)
+	_ = unlinkWorktreeSymlinks(safePath)
+	_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", safePath)
+	if _, err := os.Stat(safePath); err == nil {
+		_ = unlinkWorktreeSymlinks(safePath)
+		_ = os.RemoveAll(safePath)
 	}
 	_, _ = g.Run(ctx, repo, "worktree", "prune")
-	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(safePath); !os.IsNotExist(err) {
 		// Branch is still checked out here. Deleting it now fails and the
 		// next EnsureWorktree reports the branch as already in use.
 		return
