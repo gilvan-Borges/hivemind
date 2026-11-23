@@ -225,6 +225,7 @@ export const state = {
     result: "",
     error: "",
   },
+  gitRefreshError: "",
   commitMenuOpen: false,
   commitMenuRepoRoot: "",
   showFlowResponded: false,
@@ -439,6 +440,7 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.buildProblems = ctx.buildProblems ?? [];
   state.mentionResults = [];
   state.branchPopover.open = false;
+  state.gitRefreshError = "";
   publishComposerMode();
 }
 

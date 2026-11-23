@@ -695,13 +695,13 @@ func ParseGHPRList(data []byte, currentUser string) ([]ProjectPullRequest, error
 // aggregating across all discovered Git repositories (root and nested) when the
 // workspace contains multiple repositories (e.g. monorepo/container with sibling apps).
 func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPullRequest, error) {
-	repos, err := DiscoverGitRepos(ctx, workspace)
+	repos, err := discoverGitRepoPaths(ctx, workspace)
 	if err != nil || len(repos) <= 1 {
 		target := workspace
 		var repoName string
 		if len(repos) == 1 {
-			target = repos[0].Root
-			repoName = repos[0].Name
+			target = repos[0].root
+			repoName = repoDisplayName(repos[0].root, repos[0].relPath)
 		}
 		prs, listErr := listPullRequestsForRepo(ctx, target)
 		if len(repos) == 1 {
@@ -721,12 +721,13 @@ func ListProjectPullRequests(ctx context.Context, workspace string) ([]ProjectPu
 	var wg sync.WaitGroup
 	for i, r := range repos {
 		wg.Add(1)
-		go func(idx int, repoInfo WorkspaceGitRepo) {
+		go func(idx int, repoInfo discoveredRepo) {
 			defer wg.Done()
-			prs, listErr := listPullRequestsForRepo(ctx, repoInfo.Root)
+			prs, listErr := listPullRequestsForRepo(ctx, repoInfo.root)
+			name := repoDisplayName(repoInfo.root, repoInfo.relPath)
 			for j := range prs {
-				prs[j].Repo = repoInfo.Name
-				prs[j].RepoRoot = repoInfo.Root
+				prs[j].Repo = name
+				prs[j].RepoRoot = repoInfo.root
 			}
 			results[idx] = repoResult{prs: prs, err: listErr}
 		}(i, r)

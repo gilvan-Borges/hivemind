@@ -194,11 +194,28 @@ export async function refreshDiffsAndSummarize(lane: TeamLane) {
   }
 }
 
+export function pickActiveGitRepo(repos: WorkspaceGitRepo[], savedRoot: string): WorkspaceGitRepo | undefined {
+  const saved = normalizePathKey(savedRoot);
+  if (saved) {
+    const match = repos.find((r) => normalizePathKey(r.root) === saved);
+    if (match) return match;
+  }
+  return repos.find((r) => r.isRoot) || repos[0];
+}
+
+function repoInsideWorkspace(repo: WorkspaceGitRepo): boolean {
+  const projectKey = normalizePathKey(state.project?.root || "");
+  const repoKey = normalizePathKey(repo.root);
+  if (!projectKey || !repoKey) return true;
+  return repoKey === projectKey || repoKey.startsWith(`${projectKey}/`);
+}
+
 export function getGitStatusMap(): { files: Map<string, "M" | "U">; dirs: Set<string> } {
   const files = new Map<string, "M" | "U">();
   const dirs = new Set<string>();
   const repos = getEffectiveGitRepos();
   for (const repo of repos) {
+    if (!repoInsideWorkspace(repo)) continue;
     const prefix = repo.relPath ? repo.relPath.replace(/\\/g, "/").replace(/\/+$/, "") : "";
     for (const d of (repo.diffs || [])) {
       const raw = (d.path || "").replace(/\\/g, "/");
@@ -251,24 +268,52 @@ function formatSyncTime(iso?: string): string {
   return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export async function refreshDiffs() {
+const diffInflight = new Map<string, Promise<void>>();
+const diffAgain = new Set<string>();
+
+function gitErrorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const clean = String(raw || "Não foi possível atualizar o Git.").trim();
+  return clean.length > 180 ? `${clean.slice(0, 180)}…` : clean;
+}
+
+export function refreshDiffs(): Promise<void> {
+  const backend = api();
+  if (!backend || !state.project) return Promise.resolve();
+  const targetKey = normalizePathKey(state.project.root);
+  const pending = diffInflight.get(targetKey);
+  if (pending) {
+    diffAgain.add(targetKey);
+    return pending;
+  }
+  const run = refreshDiffsOnce(targetKey).finally(() => {
+    diffInflight.delete(targetKey);
+    if (!diffAgain.delete(targetKey)) return;
+    if (normalizePathKey(state.project?.root || "") === targetKey) void refreshDiffs();
+  });
+  diffInflight.set(targetKey, run);
+  return run;
+}
+
+async function refreshDiffsOnce(targetKey: string) {
   const backend = api();
   if (!backend || !state.project) return;
   const targetRoot = state.project.root;
-  const targetKey = normalizePathKey(targetRoot);
+  if (normalizePathKey(targetRoot) !== targetKey) return;
   try {
     let discoveredRepos: WorkspaceGitRepo[] | null = null;
     if (backend.GetWorkspaceGitRepos) {
       discoveredRepos = (await backend.GetWorkspaceGitRepos(targetRoot)) || [];
     }
     const diffs = discoveredRepos
-      ? (discoveredRepos[0]?.diffs || [])
+      ? []
       : ((await backend.GetDiff(targetRoot)) || []);
 
     const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
-    const activeCtxRepoRoot = ctx?.activeGitRepoRoot || state.activeGitRepoRoot;
+    const savedRoot = ctx?.activeGitRepoRoot
+      || (state.project && normalizePathKey(state.project.root) === targetKey ? state.activeGitRepoRoot : "");
     let resolvedRepos: WorkspaceGitRepo[] = discoveredRepos || [];
-    if (!discoveredRepos && state.project.branch) {
+    if (!discoveredRepos && state.project?.branch && normalizePathKey(state.project.root) === targetKey) {
       resolvedRepos = [{
         root: targetRoot,
         name: state.project.name,
@@ -279,12 +324,9 @@ export async function refreshDiffs() {
       }];
     }
 
-    const activeMatch =
-      resolvedRepos.find((r) => normalizePathKey(r.root) === normalizePathKey(activeCtxRepoRoot))
-      || resolvedRepos.find((r) => (r.diffs?.length || 0) > 0)
-      || resolvedRepos[0];
+    const activeMatch = pickActiveGitRepo(resolvedRepos, savedRoot);
     const nextActiveRoot = activeMatch?.root || "";
-    const activeDiffs = activeMatch?.diffs || diffs;
+    const activeDiffs = activeMatch?.diffs || [];
 
     if (ctx) {
       ctx.gitRepos = resolvedRepos;
@@ -297,6 +339,7 @@ export async function refreshDiffs() {
     state.gitRepos = resolvedRepos;
     state.activeGitRepoRoot = nextActiveRoot;
     state.diffs = activeDiffs;
+    state.gitRefreshError = "";
     updateGitActivityBadge();
     await refreshConflictedFiles(nextActiveRoot || targetRoot);
 
@@ -334,8 +377,12 @@ export async function refreshDiffs() {
         bindTreeRowClicks();
       }
     }
-  } catch {
-    // ignore non-git
+  } catch (err) {
+    if (!state.project || normalizePathKey(state.project.root) !== targetKey) return;
+    state.gitRefreshError = gitErrorText(err);
+    if (state.sidebarView === "git" && state.showLeftSidebar) {
+      renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
+    }
   }
 }
 
@@ -1275,6 +1322,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       ` : `<button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>`}
     </div>
     <div class="sidebar-body scm-body">
+      ${state.gitRefreshError ? `<div class="dim" style="padding:6px 10px">${escapeHtml(state.gitRefreshError)}</div>` : ""}
       <div class="scm-repo-strip">
         <span class="gh-dot ${hasGit ? "ok" : "off"}"></span>
         ${hasGit ? `

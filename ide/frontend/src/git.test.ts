@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { collectTurnEditedFiles, filterTurnDiffs, formatPrRelativeTime, getActiveGitRepo, getGitStatusMap, renderGitGraphSectionHtml, renderGitSidebarHtml, renderPrCardHtml, selectActiveGitRepo } from "./git";
+import { collectTurnEditedFiles, filterTurnDiffs, formatPrRelativeTime, getActiveGitRepo, getGitStatusMap, pickActiveGitRepo, renderGitGraphSectionHtml, renderGitSidebarHtml, renderPrCardHtml, selectActiveGitRepo } from "./git";
 import { state } from "./state";
 import type { ChatMessage, ProjectInfo, ProjectPullRequest, WorkspaceGitRepo } from "./types";
 
@@ -66,6 +66,17 @@ describe("multi-repo source control", () => {
     expect(html).toContain("Alterações (2)");
     expect(html).toContain('scm-graph-repo-pill" title="hivemind">hivemind</span>');
 
+    state.gitRepos = [
+      ...repos,
+      {
+        root: "d:/outro/projeto",
+        name: "projeto",
+        relPath: "",
+        branch: "main",
+        isRoot: false,
+        diffs: [{ path: "ide/app.go", status: "M", added: 9, removed: 0, lines: [] }],
+      },
+    ];
     const map = getGitStatusMap();
     expect(map.files.get("ide/app.go")).toBe("M");
     expect(map.files.get("HiveMind-App/app/MainActivity.kt")).toBe("U");
@@ -82,6 +93,14 @@ describe("multi-repo source control", () => {
     state.activeGitRepoRoot = repos[0].root;
     state.gitGraph.repoRoot = repos[0].root;
     state.gitGraph.loadedOnce = true;
+
+    const picked = pickActiveGitRepo(repos, "c:/outro-projeto");
+    expect(picked?.root).toBe("c:/hivemind");
+    const dirtyOther: WorkspaceGitRepo[] = [
+      { root: "c:/pai", name: "pai", relPath: "", branch: "main", isRoot: true, diffs: [] },
+      { root: "c:/pai/outro", name: "outro", relPath: "outro", branch: "main", isRoot: false, diffs: [{ path: "a.kt", status: "M", added: 1, removed: 0, lines: [] }] },
+    ];
+    expect(pickActiveGitRepo(dirtyOther, "")?.root).toBe("c:/pai");
 
     selectActiveGitRepo("c:/hivemind/HiveMind-App");
     const active = getActiveGitRepo();

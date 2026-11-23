@@ -38,9 +38,21 @@ func shouldSkipRepoScanDir(name string) bool {
 	return ignoredDirs[name] || repoScanExtraSkipped[name]
 }
 
-// DiscoverGitRepos scans workspaceDir for Git repositories (root and nested up to depth 3),
-// skipping build/vendor/worktree folders, and returns branch and working-tree diffs for each.
-func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitRepo, error) {
+type discoveredRepo struct {
+	root    string
+	relPath string
+	isRoot  bool
+}
+
+func repoDisplayName(root, relPath string) string {
+	if relPath != "" {
+		return filepath.Base(relPath)
+	}
+	return filepath.Base(root)
+}
+
+// discoverGitRepoPaths lists Git repositories inside workspaceDir without reading diffs.
+func discoverGitRepoPaths(ctx context.Context, workspaceDir string) ([]discoveredRepo, error) {
 	absRoot, err := filepath.Abs(strings.TrimSpace(workspaceDir))
 	if err != nil {
 		return nil, err
@@ -54,13 +66,8 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 		return nil, fmt.Errorf("workspace is not a directory: %s", absRoot)
 	}
 
-	type discovered struct {
-		root    string
-		relPath string
-		isRoot  bool
-	}
 	g := gitx.Local{}
-	var found []discovered
+	var found []discoveredRepo
 	seen := make(map[string]bool)
 
 	var walk func(dir, rel string, depth int)
@@ -75,7 +82,7 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 		seen[key] = true
 
 		if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil && g.IsRepo(ctx, dir) {
-			found = append(found, discovered{
+			found = append(found, discoveredRepo{
 				root:    dir,
 				relPath: filepath.ToSlash(rel),
 				isRoot:  depth == 0,
@@ -106,16 +113,25 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 	}
 
 	walk(absRoot, "", 0)
-	if len(found) == 0 {
-		return []WorkspaceGitRepo{}, nil
-	}
-
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].isRoot != found[j].isRoot {
 			return found[i].isRoot
 		}
 		return strings.ToLower(found[i].relPath) < strings.ToLower(found[j].relPath)
 	})
+	return found, nil
+}
+
+// DiscoverGitRepos scans workspaceDir for Git repositories (root and nested up to depth 3),
+// skipping build/vendor/worktree folders, and returns branch and working-tree diffs for each.
+func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitRepo, error) {
+	found, err := discoverGitRepoPaths(ctx, workspaceDir)
+	if err != nil || len(found) == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return []WorkspaceGitRepo{}, nil
+	}
 
 	repos := make([]WorkspaceGitRepo, len(found))
 	sem := make(chan struct{}, 4)
@@ -134,13 +150,9 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 			if diffErr != nil || diffs == nil {
 				diffs = []FileDiff{}
 			}
-			name := filepath.Base(item.root)
-			if item.relPath != "" {
-				name = filepath.Base(item.relPath)
-			}
 			repos[idx] = WorkspaceGitRepo{
 				Root:    item.root,
-				Name:    name,
+				Name:    repoDisplayName(item.root, item.relPath),
 				RelPath: item.relPath,
 				Branch:  branch,
 				IsRoot:  item.isRoot,
@@ -153,12 +165,10 @@ func DiscoverGitRepos(ctx context.Context, workspaceDir string) ([]WorkspaceGitR
 	return repos, nil
 }
 
-// DiscoverGitReposWithActiveWorktree returns DiscoverGitRepos, and when the
-// workspace has a single clean root repository with exactly one active
-// non-main worktree (single-team execution), promotes that worktree as the
-// active repo entry so the Changes tab displays live worktree edits instead of
-// an empty base branch. Falls back to the root repository whenever there are
-// zero or multiple active worktrees, or when the root itself has local edits.
+// DiscoverGitReposWithActiveWorktree returns DiscoverGitRepos. When the
+// workspace is a single clean root with exactly one active worktree, that
+// worktree is appended as its own entry. The open folder stays the root, so
+// its changes are not replaced by the worktree's.
 func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string) ([]WorkspaceGitRepo, error) {
 	repos, err := DiscoverGitRepos(ctx, workspaceDir)
 	if err != nil || len(repos) != 1 || !repos[0].IsRoot || len(repos[0].Diffs) > 0 {
@@ -195,11 +205,26 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 	if branch == "" {
 		branch = CurrentBranch(ctx, wt.Path)
 	}
-	repos[0].Root = filepath.Clean(wt.Path)
-	if branch != "" {
-		repos[0].Branch = branch
+	if len(wtDiffs) == 0 {
+		return repos, nil
 	}
-	repos[0].Diffs = wtDiffs
+	wtRoot := filepath.Clean(wt.Path)
+	rel := ""
+	if relPath, relErr := filepath.Rel(rootPath, wtRoot); relErr == nil && relPath != "." && !strings.HasPrefix(relPath, "..") {
+		rel = filepath.ToSlash(relPath)
+	}
+	name := branch
+	if name == "" {
+		name = filepath.Base(wtRoot)
+	}
+	repos = append(repos, WorkspaceGitRepo{
+		Root:    wtRoot,
+		Name:    name,
+		RelPath: rel,
+		Branch:  branch,
+		IsRoot:  false,
+		Diffs:   wtDiffs,
+	})
 	return repos, nil
 }
 

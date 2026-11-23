@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,16 +124,25 @@ func TestDiscoverGitReposWithActiveWorktree_PromotesSingleActiveWorktree(t *test
 		t.Fatal(err)
 	}
 
-	// 1 active worktree + clean root => promotes wt1 with its branch and diffs.
+	// Clean root stays the open project. The worktree is a separate entry.
 	repos, err := DiscoverGitReposWithActiveWorktree(ctx, root)
 	if err != nil {
 		t.Fatalf("DiscoverGitReposWithActiveWorktree failed: %v", err)
 	}
-	if len(repos) != 1 || canonicalPathKey(repos[0].Root) != canonicalPathKey(wt1) || repos[0].Branch != "feat/lane-1" {
-		t.Fatalf("expected single active worktree promoted, got: %+v", repos)
+	if len(repos) != 2 || !repos[0].IsRoot || canonicalPathKey(repos[0].Root) != canonicalPathKey(root) {
+		t.Fatalf("expected the open folder to stay the root, got: %+v", repos)
 	}
-	if len(repos[0].Diffs) != 1 || repos[0].Diffs[0].Path != "README.md" {
-		t.Fatalf("expected worktree diff, got: %+v", repos[0].Diffs)
+	if repos[0].Branch != "main" || len(repos[0].Diffs) != 0 {
+		t.Fatalf("root should keep its own clean status, got: %+v", repos[0])
+	}
+	if canonicalPathKey(repos[1].Root) != canonicalPathKey(wt1) || repos[1].Branch != "feat/lane-1" || repos[1].IsRoot {
+		t.Fatalf("expected worktree as its own entry, got: %+v", repos[1])
+	}
+	if len(repos[1].Diffs) != 1 || repos[1].Diffs[0].Path != "README.md" {
+		t.Fatalf("expected worktree diff, got: %+v", repos[1].Diffs)
+	}
+	if repos[1].RelPath == "" || !strings.Contains(repos[1].RelPath, "lane-1") {
+		t.Fatalf("worktree relPath should stay inside the workspace, got %q", repos[1].RelPath)
 	}
 
 	// Adding a 2nd parallel active worktree falls back to the root repository.
