@@ -138,6 +138,7 @@ var phase2AllowedTools = map[string]Tier{
 	"cron_add":              TierWrite,
 	"spawn_subagent":        TierExec,
 	"delegate_to_hive_team": TierDestructive,
+	"ide_action":            TierWrite,
 }
 
 // knownDisallowedToolTiers classifies Phase 3/4/shell tools that MUST fail closed in Phase 2.
@@ -385,6 +386,12 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			return Decision{Allow: false, Ask: false, Reason: "objetivo do handoff vazio"}
 		}
 		return Decision{Allow: false, Ask: true, Reason: "handoff para o time exige aprovação humana"}
+
+	case "ide_action":
+		if strings.TrimSpace(strArg(cleanArgs, "action")) == "" {
+			return Decision{Allow: false, Ask: false, Reason: "ação de IDE vazia"}
+		}
+		return Decision{Allow: false, Ask: true, Reason: "ação na IDE exige aprovação humana"}
 	}
 
 	switch tier {

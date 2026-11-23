@@ -397,6 +397,36 @@ func ForResidentPhase3(broker ResidentBroker) ([]tool.Tool, error) {
 		return nil
 	}
 	if err := add(functiontool.New(functiontool.Config{
+		Name:        "ide_action",
+		Description: "Age na IDE aberta como o usuário. action: list_sessions, open_file, save_file, start_run, steer, run_command ou git. Pede aprovação. path, content, message, session_id, lane_id, team e command conforme a ação.",
+	}, func(ctx agent.Context, args struct {
+		Action    string `json:"action" jsonschema:"list_sessions, open_file, save_file, start_run, steer, run_command ou git."`
+		Path      string `json:"path,omitempty" jsonschema:"Caminho relativo para open_file ou save_file."`
+		Content   string `json:"content,omitempty" jsonschema:"Conteúdo completo para save_file."`
+		Message   string `json:"message,omitempty" jsonschema:"Texto para start_run ou steer."`
+		SessionID string `json:"session_id,omitempty" jsonschema:"Sessão da IDE para start_run."`
+		LaneID    string `json:"lane_id,omitempty" jsonschema:"Lane para start_run ou steer."`
+		Team      string `json:"team,omitempty" jsonschema:"Time para start_run. Vazio usa o time ativo."`
+		Command   string `json:"command,omitempty" jsonschema:"Comando para run_command, ou ação git (status, diff, pull)."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "ide_action", map[string]any{
+			"action":     args.Action,
+			"path":       args.Path,
+			"content":    args.Content,
+			"message":    args.Message,
+			"session_id": args.SessionID,
+			"lane_id":    args.LaneID,
+			"team":       args.Team,
+			"command":    args.Command,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+	if err := add(functiontool.New(functiontool.Config{
 		Name:        "cron_add",
 		Description: "Grava uma rotina estruturada (expressão de 5 campos, fuso e texto). Não aceita comando de shell e pede aprovação humana.",
 	}, func(ctx agent.Context, args residentCronArgs) (textResult, error) {

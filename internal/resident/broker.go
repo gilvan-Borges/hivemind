@@ -31,6 +31,10 @@ type ApprovalDetailFunc func(ctx context.Context, req ApprovalRequest) bool
 // ToolHandler executes a validated call inside the broker.
 type ToolHandler func(ctx context.Context, args map[string]any) (string, error)
 
+// IDEActionFunc is the IDE host. The model cannot set it.
+// name is the tool ("ide_action"); args carry the action and its fields.
+type IDEActionFunc func(ctx context.Context, name string, args map[string]any) (string, error)
+
 // BrokerConfig configures a single-turn Phase 2 resident tool broker.
 type BrokerConfig struct {
 	Workspace       string
@@ -65,6 +69,8 @@ type BrokerConfig struct {
 	IsolatedSandbox bool
 	// Surface is the host browser/desktop. Nil uses the OS implementation.
 	Surface Surface
+	// IDE runs an action inside the open IDE. Nil means this process has no window.
+	IDE IDEActionFunc
 	// CustomHandlers optionally overrides built-in handlers (used in tests
 	// to observe exact invocation order relative to Audit.RecordDecision).
 	CustomHandlers map[string]ToolHandler
@@ -473,6 +479,8 @@ func (b *Broker) resolveHandler(name string) (ToolHandler, bool) {
 		return b.handleDesktopClick, true
 	case "desktop_type":
 		return b.handleDesktopType, true
+	case "ide_action":
+		return b.handleIDEAction, true
 	}
 	return nil, false
 }

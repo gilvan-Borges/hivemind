@@ -46,6 +46,7 @@ type ResidentManager struct {
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
+	ideAction resident.IDEActionFunc
 }
 
 // ResidentManagerOptions configures ResidentManager.
@@ -100,6 +101,16 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 		m.sessions.MirrorShared = m.mirrorIDELine
 	}
 	return m
+}
+
+// SetIDEAction connects ide_action to the open IDE. The model cannot replace it.
+func (m *ResidentManager) SetIDEAction(fn resident.IDEActionFunc) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.ideAction = fn
+	m.mu.Unlock()
 }
 
 // IsEnabled reports whether the resident assistant is enabled in resident.json.
@@ -559,6 +570,7 @@ func (m *ResidentManager) runTurn(
 		ApproveDetailed: approveDetailed,
 		Model:           m.testModel,
 		SkillsDir:       skillx.UserSkillsDir(),
+		IDE:             m.ideAction,
 		AllowedTiers:    narrow,
 		PermissionMode:  m.permissionMode,
 		SquadHandoff:    m.squadHandoff,

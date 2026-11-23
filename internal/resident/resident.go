@@ -68,9 +68,11 @@ type Runner struct {
 	SquadHandoff func(ctx context.Context, h SquadHandoff) (string, error)
 	// OnRoutineSaved rearms the in-process timer after cron_add.
 	OnRoutineSaved func()
-	gateOnce       sync.Once
-	gate           *spawnGate
-	brokerMu       sync.Mutex
+	// IDE runs ide_action against the open IDE. Nil refuses the tool.
+	IDE      IDEActionFunc
+	gateOnce sync.Once
+	gate     *spawnGate
+	brokerMu sync.Mutex
 }
 
 // residentSpillCallbacks returns the tool-result spillover guard for one
@@ -191,6 +193,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		SquadHandoff:           r.SquadHandoff,
 		BaseDir:                baseDir,
 		OnRoutineSaved:         r.OnRoutineSaved,
+		IDE:                    r.IDE,
 		ExperimentalUnisolated: r.Config.ExperimentalUnisolated,
 		IsolatedSandbox:        r.Config.IsolatedSandbox,
 	})
