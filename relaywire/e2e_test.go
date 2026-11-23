@@ -65,6 +65,12 @@ func TestAllowedRPC(t *testing.T) {
 		t.Fatal("resolve deveria ser permitido")
 	}
 	if !AllowedRPC("POST", "/api/v1/runs/steer") {
+		t.Fatal("steer")
+	}
+	if !AllowedRPC("POST", "/api/v1/git/commit") || !AllowedRPC("GET", "/api/v1/routines") || !AllowedRPC("POST", "/api/v1/project/permission") {
+		t.Fatal("rotas novas do app precisam passar pelo relay")
+	}
+	if !AllowedRPC("POST", "/api/v1/runs/steer") {
 		t.Fatal("steer deveria ser permitido")
 	}
 	if AllowedRPC("GET", "/api/v1/events") {

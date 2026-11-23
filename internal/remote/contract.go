@@ -167,3 +167,36 @@ type Deps interface {
 	AutoReviewStatus(workspace string) AutoReviewStatus
 	AutoReviewPoll(workspace string) AutoReviewStatus
 }
+
+// ProjectControls is the optional IDE surface the mobile app uses on top of Deps.
+// A host that does not implement it answers these routes with 501.
+type ProjectControls interface {
+	SetPermissionMode(workspace, mode string) error
+	Commit(ctx context.Context, workspace, message string, push bool) (string, error)
+	OpenPullRequest(ctx context.Context, workspace, title, body, baseBranch string) (string, error)
+	ListRoutines() ([]RoutineInfo, error)
+	SetRoutineEnabled(id string, enabled bool) error
+	MarkSessionRead(ctx context.Context, workspace, sessionID string) error
+	PermissionMode(workspace string) string
+}
+
+// RoutineInfo is one Agent Hive schedule the app can pause.
+type RoutineInfo struct {
+	ID         string `json:"id"`
+	Expr       string `json:"expr"`
+	Timezone   string `json:"timezone,omitempty"`
+	Text       string `json:"text"`
+	Workstream string `json:"workstream,omitempty"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// Activity is a live "what the agent is doing" card. It rides SSE type "activity".
+type Activity struct {
+	LaneID    string `json:"laneId"`
+	Team      string `json:"team,omitempty"`
+	Author    string `json:"author,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Phase     string `json:"phase"` // file | command | test | other
+	Target    string `json:"target,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+}

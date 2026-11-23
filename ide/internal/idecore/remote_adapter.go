@@ -7,6 +7,8 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
 // Adapter is the IDE implementation of remote.Deps: it wires the bridge HTTP
@@ -21,6 +23,7 @@ type Adapter struct {
 }
 
 var _ remote.Deps = (*Adapter)(nil)
+var _ remote.ProjectControls = (*Adapter)(nil)
 
 // RunStart registers the run in the Hub, echoes the mobile message into the
 // IDE chat (bidirectional sync) and starts the turn asynchronously. Errors
@@ -52,7 +55,7 @@ func (a *Adapter) RunStart(
 			}
 		}
 		go func() {
-			_, err := a.Resident.RunTurn(context.Background(), workspace, "", objective, resident.OriginRemote)
+			_, err := a.Resident.RunTurnIn(context.Background(), workspace, "", objective, sessionID, resident.OriginRemote)
 			if err != nil {
 				a.Hub.HandleRunError(laneID, workspace, err)
 			}
@@ -159,7 +162,61 @@ func (a *Adapter) AutoReviewStatus(workspace string) AutoReviewStatus {
 	return a.AutoReview.GetStatus(workspace)
 }
 
-// AutoReviewPoll triggers an immediate Auto-Review poll.
+// SetPermissionMode stores the project's Full / governed mode in team.yaml.
+func (a *Adapter) SetPermissionMode(workspace, mode string) error {
+	_, err := UpdateProjectPermissionMode(workspace, mode)
+	return err
+}
+
+func (a *Adapter) PermissionMode(workspace string) string {
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return ""
+	}
+	return cfg.Settings.EffectivePermissionMode()
+}
+
+func (a *Adapter) Commit(ctx context.Context, workspace, message string, push bool) (string, error) {
+	return CommitAndPush(ctx, workspace, message, push)
+}
+
+func (a *Adapter) OpenPullRequest(ctx context.Context, workspace, title, body, baseBranch string) (string, error) {
+	pr, err := OpenPullRequest(ctx, workspace, title, body, baseBranch)
+	if err != nil {
+		return "", err
+	}
+	return pr.URL, nil
+}
+
+func (a *Adapter) ListRoutines() ([]remote.RoutineInfo, error) {
+	if a.Resident == nil {
+		return []remote.RoutineInfo{}, nil
+	}
+	items, err := a.Resident.ListRoutines()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]remote.RoutineInfo, 0, len(items))
+	for _, rt := range items {
+		out = append(out, remote.RoutineInfo{
+			ID: rt.ID, Expr: rt.Expr, Timezone: rt.Timezone, Text: rt.Text,
+			Workstream: rt.Workstream, Enabled: rt.Enabled,
+		})
+	}
+	return out, nil
+}
+
+func (a *Adapter) SetRoutineEnabled(id string, enabled bool) error {
+	if a.Resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.Resident.SetRoutineEnabled(id, enabled)
+}
+
+func (a *Adapter) MarkSessionRead(ctx context.Context, workspace, sessionID string) error {
+	return sessionx.MarkSessionRead(ctx, workspace, sessionID)
+}
+
 func (a *Adapter) AutoReviewPoll(workspace string) AutoReviewStatus {
 	if a.AutoReview == nil {
 		return AutoReviewStatus{Workspace: workspace, State: "idle"}

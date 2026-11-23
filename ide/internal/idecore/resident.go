@@ -577,6 +577,7 @@ func (m *ResidentManager) runTurn(
 		return resident.TurnResult{}, err
 	}
 	prov, mod := resident.ResolveModelRoute(cfg)
+	full := cfg.IsFullAccess() || workspacePermissionFull(workspaceDir)
 	runner := &resident.Runner{
 		BaseDir:         m.baseDir,
 		Config:          cfg,
@@ -590,7 +591,7 @@ func (m *ResidentManager) runTurn(
 		Model:           m.testModel,
 		SkillsDir:       skillx.UserSkillsDir(),
 		IDE:             m.ideAction,
-		FullAccess:      cfg.IsFullAccess(),
+		FullAccess:      full,
 		AllowedTiers:    narrow,
 		PermissionMode:  m.permissionMode,
 		SquadHandoff:    m.squadHandoff,
@@ -662,7 +663,7 @@ func (m *ResidentManager) runTurn(
 		ReplyMessageID:   shared.ReplyID,
 		SharedHistory:    shared.History,
 		SkipLocalHistory: true,
-		FullAccess:       cfg.IsFullAccess(),
+		FullAccess:       full,
 	})
 	if runErr != nil {
 		m.mu.Lock()
@@ -771,6 +772,18 @@ func (m *ResidentManager) AuditLog(limit int) ([]resident.AuditEntry, error) {
 		limit = 50
 	}
 	return m.audit.ReadRecent(limit)
+}
+
+func workspacePermissionFull(workspace string) bool {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return false
+	}
+	cfg, err := team.Load(workspace)
+	if err != nil {
+		return false
+	}
+	return cfg.Settings.IsFullAccess()
 }
 
 func (m *ResidentManager) permissionMode(ws string) string {
