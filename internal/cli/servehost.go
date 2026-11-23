@@ -37,6 +37,7 @@ type serveHost struct {
 
 	mu        sync.Mutex
 	cancels   map[string]context.CancelFunc
+	runners   map[string]*orchestrator.Runner
 	approvals map[string]chan bool
 	apprSeq   uint64
 }
@@ -45,6 +46,7 @@ func newServeHost(hub *remote.Hub) *serveHost {
 	return &serveHost{
 		hub:       hub,
 		cancels:   make(map[string]context.CancelFunc),
+		runners:   make(map[string]*orchestrator.Runner),
 		approvals: make(map[string]chan bool),
 	}
 }
@@ -99,6 +101,17 @@ func (s *serveHost) ApprovalResolve(id string, approved bool) bool {
 	ch <- approved
 	s.hub.MarkApprovalResolved(id, approved)
 	return true
+}
+
+// RunSteer injects a live note into the running lane without cancelling it.
+func (s *serveHost) RunSteer(laneID, message string) bool {
+	s.mu.Lock()
+	runner := s.runners[laneID]
+	s.mu.Unlock()
+	if runner == nil {
+		return false
+	}
+	return runner.Steer("Usuário (celular)", message)
 }
 
 // RunCancel stops the active run on the lane.
@@ -190,6 +203,14 @@ func (s *serveHost) RunStart(
 			OnEvent:   emit,
 		})
 		defer cleanup()
+		s.mu.Lock()
+		s.runners[laneID] = runner
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.runners, laneID)
+			s.mu.Unlock()
+		}()
 
 		_, runErr := runner.Run(runCtx, orchestrator.Request{
 			Objective:   objective,

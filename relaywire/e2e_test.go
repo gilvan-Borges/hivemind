@@ -64,6 +64,9 @@ func TestAllowedRPC(t *testing.T) {
 	if !AllowedRPC("post", "/api/v1/approvals/resolve") {
 		t.Fatal("resolve deveria ser permitido")
 	}
+	if !AllowedRPC("POST", "/api/v1/runs/steer") {
+		t.Fatal("steer deveria ser permitido")
+	}
 	if AllowedRPC("GET", "/api/v1/events") {
 		t.Fatal("SSE não é RPC")
 	}

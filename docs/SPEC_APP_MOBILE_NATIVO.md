@@ -76,7 +76,8 @@ Hoje, o estado da conversa em andamento fica no frontend da IDE enquanto o hist�
 | `GET` | `/api/v1/session?workspace=...&id=...` | Carrega mensagens de uma sessão salva para continuar |
 | `POST` | `/api/v1/runs/start` | Inicia/continua execução (`laneId`, `workspace`, `team`, `objective`, `jiraKey`, `sessionId`, `runMode`, `images`) |
 | `POST` | `/api/v1/runs/cancel` | Para execução ativa na lane (`laneId`) |
-| `POST` | `/api/v1/runs/redirect` | Cancela execução ativa e já dispara nova instrução na mesma lane |
+| `POST` | `/api/v1/runs/steer` | Injeta uma nota na execução viva da lane (`laneId`, `message`) sem cancelar. 409 se não houver run |
+| `POST` | `/api/v1/runs/redirect` | Com run viva e sem imagens, desvia (steer). Com imagens, ou sem run viva, cancela e inicia de novo |
 | `POST` | `/api/v1/approvals/resolve` | Aprova ou recusa um gate pendente (`approvalId`, `approved`) |
 | `GET` | `/api/v1/git/diffs?workspace=...` | Lista arquivos alterados e hunks de diff |
 | `GET` | `/api/v1/git/prs?workspace=...` | Lista PRs abertos + status de revisão (Fluxo) |

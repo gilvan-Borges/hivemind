@@ -212,12 +212,17 @@ func (r *Runner) openSession(ctx context.Context, id, objective, key, runMode st
 			(runMode == "plan:sdd-jira" && isDocsPending)
 		resetMap := map[string]any{
 			"prior_session_context": priorCtx,
-			"qa_feedback":           "",
-			"qa_report":             "",
 			"qa_approval_note":      "",
 			"qa_approved":           "",
 			"integrate_status":      "",
 			"plan_pending_approval": "",
+		}
+		// "continua" keeps the QA notes so the Dev does not rediscover them.
+		// A new objective drops them; the short prior_session_context still
+		// carries the latest decisions.
+		if !isResume {
+			resetMap["qa_feedback"] = ""
+			resetMap["qa_report"] = ""
 		}
 		if runMode == "plan:sdd" || runMode == "plan:sdd-jira" {
 			resetMap["sdd_stage"] = map[bool]string{true: "docs", false: "backlog"}[runMode == "plan:sdd"]
@@ -319,16 +324,21 @@ func summarizePriorSessionContext(sess session.Session) string {
 	if len(items) > maxItems {
 		items = items[len(items)-maxItems:]
 	}
-	var b strings.Builder
 	const maxTotal = 3600
-	for _, it := range items {
-		line := fmt.Sprintf("- %s: %s\n", it.who, it.text)
-		if b.Len()+len(line) > maxTotal {
+	var lines []string
+	total := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		line := fmt.Sprintf("- %s: %s\n", items[i].who, items[i].text)
+		if total+len(line) > maxTotal {
 			break
 		}
-		b.WriteString(line)
+		lines = append(lines, line)
+		total += len(line)
 	}
-	return strings.TrimSpace(b.String())
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	return strings.TrimSpace(strings.Join(lines, ""))
 }
 
 // teamMemorySnippet reads .hivemind/MEMORY.md purely read-only (Spec 01 §3.3).

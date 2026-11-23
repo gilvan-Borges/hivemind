@@ -195,6 +195,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/runs/start", s.handleRunStart)
 	mux.HandleFunc("POST /api/v1/runs/cancel", s.handleRunCancel)
 	mux.HandleFunc("POST /api/v1/runs/redirect", s.handleRunRedirect)
+	mux.HandleFunc("POST /api/v1/runs/steer", s.handleRunSteer)
 	mux.HandleFunc("POST /api/v1/approvals/resolve", s.handleApprovalResolve)
 	mux.HandleFunc("GET /api/v1/git/diffs", s.handleDiffs)
 	mux.HandleFunc("GET /api/v1/git/prs", s.handlePRs)
@@ -424,6 +425,18 @@ func (s *Server) handleRunRedirect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
+	// A message sent while the squad is running used to cancel the turn and
+	// start over, paying for the same plan twice and dropping the worktree
+	// state. Steer keeps the run and hands the note to the live roundtable.
+	// Images still restart: the steer path is text-only.
+	if len(req.Images) == 0 && s.deps.RunSteer(req.LaneID, req.Objective) {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"accepted": true,
+			"steered":  true,
+			"laneId":   req.LaneID,
+		})
+		return
+	}
 	s.deps.RunCancel(req.LaneID)
 	if err := s.deps.RunStart(r.Context(), req.LaneID, req.Workspace, req.Team, req.Objective, req.JiraKey, req.SessionID, req.RunMode, req.Images); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -434,6 +447,25 @@ func (s *Server) handleRunRedirect(w http.ResponseWriter, r *http.Request) {
 		"laneId":    req.LaneID,
 		"workspace": req.Workspace,
 	})
+}
+
+func (s *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LaneID  string `json:"laneId"`
+		Message string `json:"message"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.LaneID) == "" || strings.TrimSpace(req.Message) == "" {
+		writeErr(w, http.StatusBadRequest, "laneId e message obrigatórios")
+		return
+	}
+	if !s.deps.RunSteer(req.LaneID, req.Message) {
+		writeErr(w, http.StatusConflict, "nenhuma execução ativa nesta lane")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"steered": true, "laneId": req.LaneID})
 }
 
 func (s *Server) handleApprovalResolve(w http.ResponseWriter, r *http.Request) {

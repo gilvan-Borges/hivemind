@@ -407,32 +407,39 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			}
 		}
 
-		// Blocos situacionais pequenos e notificações não-lidas: sempre injetados.
-		var fixed strings.Builder
+		// Tudo passa pelo mesmo filtro: um bloco idêntico que ainda está no
+		// transcript não é colado de novo. Reinjeta só se a compactação o tirou
+		// ou se o texto mudou (plano novo, status novo, aviso novo).
+		var dedup []reminderBlock
+		add := func(marker, text string) {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return
+			}
+			if !strings.HasSuffix(text, "\n") {
+				text += "\n\n"
+			}
+			dedup = append(dedup, reminderBlock{marker: marker, text: text})
+		}
 		if outputKey == "closing_summary" && !qaApprovedReadonly(ctx.ReadonlyState()) {
-			fixed.WriteString("[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.\n\n")
+			add("[GATE DE QA — BLOQUEIO ATIVO]", "[GATE DE QA — BLOQUEIO ATIVO]\nO QA NÃO aprovou esta entrega (`qa_approve` não foi chamado). Ferramentas de commit, push e PR estão bloqueadas. NÃO tente commitar, dar push ou abrir/atualizar PR; apenas apresente um resumo claro do que foi tentado, do feedback do QA e do que ficou pendente na worktree.")
 		}
 		if a.Role == team.RoleDeveloper && hasQAFeedback {
 			if worktreeEmpty {
-				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.\n\n")
+				add("[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]", "[RETOMADA APÓS REPROVAÇÃO DO QA — WORKTREE VAZIA]\nATENÇÃO CRÍTICA: nenhum arquivo foi criado ou editado na rodada anterior. NÃO encerre novamente apenas com diagnóstico ou lista de pendências. Se uma dependência de outra task ainda não estiver integrada na branch, implemente os contratos, eventos, serviços, consumidores e testes da SUA tarefa de forma desacoplada e compilável AGORA usando write_file/edit_file e documente o ponto de acoplamento no resumo.")
 			} else {
-				fixed.WriteString("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar. Se após inspecionar o código você concluir que o QA se enganou e nenhuma edição é necessária, NÃO encerre em silêncio: chame `ask_chief` para mediação ou justifique explicitamente com evidência de código/teste.\n\n")
+				add("[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]", "[RETOMADA APÓS REPROVAÇÃO DO QA — AÇÃO OBRIGATÓRIA]\nCorrija prioritariamente TODOS os pontos apontados em [qa_feedback] com edit_file/write_file e valide os testes antes de encerrar. Se após inspecionar o código você concluir que o QA se enganou e nenhuma edição é necessária, NÃO encerre em silêncio: chame `ask_chief` para mediação ou justifique explicitamente com evidência de código/teste.")
 			}
 		}
 		if qa && worktreeEmpty {
-			fixed.WriteString("[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.\n\n")
+			add("[ESTADO DA WORKTREE: VAZIA]", "[ESTADO DA WORKTREE: VAZIA]\nNenhum arquivo foi criado ou modificado na worktree (git status vazio). Se a tarefa exige código/alterações e não há nada implementado, chame qa_request_changes IMEDIATAMENTE em 1 único turno listando os arquivos/classes concretos que o Dev precisa criar, sem gastar turnos explorando o repositório inteiro.")
 		} else if qa && r.qaHasLastStatus && r.qaLoopIter > 0 && worktreeStatus == r.qaLastStatus && worktreeDiffHash != "" && worktreeDiffHash == r.qaLastDiffHash {
-			fixed.WriteString("[WORKTREE INALTERADA DESDE A ÚLTIMA REPROVAÇÃO]\nNenhum arquivo foi modificado pelo Dev desde o último qa_request_changes. NÃO reexecute a suíte inteira de testes no código idêntico: verifique a justificativa do Dev — se ele demonstrou com evidência que seu apontamento anterior estava incorreto, chame qa_approve; caso contrário, chame qa_request_changes imediatamente em 1 turno.\n\n")
+			add("[WORKTREE INALTERADA DESDE A ÚLTIMA REPROVAÇÃO]", "[WORKTREE INALTERADA DESDE A ÚLTIMA REPROVAÇÃO]\nNenhum arquivo foi modificado pelo Dev desde o último qa_request_changes. NÃO reexecute a suíte inteira de testes no código idêntico: verifique a justificativa do Dev — se ele demonstrou com evidência que seu apontamento anterior estava incorreto, chame qa_approve; caso contrário, chame qa_request_changes imediatamente em 1 turno.")
 		}
-
-		// Blocos grandes (git status, state keys, TeamBoard): deduplicados.
-		var dedup []reminderBlock
 		if a.Role == team.RoleDeveloper && worktreeStatus != "" {
-			dedup = append(dedup, reminderBlock{
-				marker: "[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE",
-				text:   fmt.Sprintf("[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE (git status)]\n%s\n(Estes arquivos JÁ estão gravados na sua worktree. Se houve troca de modelo via failover ou compactação de contexto, NÃO recomece do zero relendo plan.md/tasks.md — verifique apenas o que falta para concluir e entregue ao QA.)\n\n", worktreeStatus),
-			})
+			add("[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE", fmt.Sprintf("[ARQUIVOS JÁ CRIADOS/MODIFICADOS NESTA WORKTREE (git status)]\n%s\n(Estes arquivos JÁ estão gravados na sua worktree. Se houve troca de modelo via failover ou compactação de contexto, NÃO recomece do zero relendo plan.md/tasks.md — verifique apenas o que falta para concluir e entregue ao QA.)", capWorktreeStatus(worktreeStatus)))
 		}
+		loaded := map[string]string{}
 		for _, k := range keys {
 			if a.Role == team.RoleDeveloper && hasQAFeedback && k == outputKey {
 				continue
@@ -445,34 +452,37 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 			if text == "" {
 				continue
 			}
-			dedup = append(dedup, reminderBlock{
-				marker: "[" + k + "]",
-				text:   fmt.Sprintf("[%s]\n%s\n\n", k, text),
-			})
+			loaded[k] = text
+		}
+		for _, k := range keys {
+			text := loaded[k]
+			if text == "" || redundantPlanKey(k, text, loaded) {
+				continue
+			}
+			add("["+k+"]", fmt.Sprintf("[%s]\n%s", k, text))
 		}
 		if r.sharedBoard != nil && (a.Role == team.RoleDeveloper || qa) {
 			if notif := r.sharedBoard.UnreadNotificationFor(adkName); notif != "" {
-				fmt.Fprintf(&fixed, "%s\n\n", notif)
+				add("[mesa-redonda]", notif)
 			}
 			if boardText := r.sharedBoard.SummaryFor(adkName); boardText != "" {
 				marker := "[Memória Compartilhada do Time"
 				if !strings.Contains(boardText, marker) {
 					marker = "[Arquivos modificados pelo time"
 				}
-				dedup = append(dedup, reminderBlock{marker: marker, text: boardText + "\n\n"})
+				add(marker, boardText)
 			}
-		}
-
-		var b strings.Builder
-		b.WriteString(fixed.String())
-		for _, blk := range filterReminderBlocks(req, dedup, lastInjected) {
-			b.WriteString(blk.text)
 		}
 		if guidance := contextx.ContextWindowGuidance(req, contextx.Budget{
 			ContextWindow:   agentContextWindow(a),
 			ContextWindowFn: r.dynamicAgentContextWindow(adkName, a),
 		}); guidance != "" {
-			fmt.Fprintf(&b, "%s\n\n", guidance)
+			add("[janela de contexto]", guidance)
+		}
+
+		var b strings.Builder
+		for _, blk := range filterReminderBlocks(req, dedup, lastInjected) {
+			b.WriteString(blk.text)
 		}
 		reminder := strings.TrimSpace(b.String())
 		if reminder == "" {
@@ -480,6 +490,36 @@ func (r *Runner) newDynamicContextReminderCallback(adkName string, a team.Agent,
 		}
 		appendSystemReminder(req, reminder)
 		return nil, nil
+	}
+}
+
+// capWorktreeStatus keeps the file list the model needs and drops a monorepo
+// status dump that would be re-sent on every edit.
+func capWorktreeStatus(status string) string {
+	const maxLines = 40
+	const maxBytes = 2048
+	status = strings.TrimSpace(status)
+	lines := strings.Split(status, "\n")
+	if len(lines) > maxLines {
+		omitted := len(lines) - maxLines
+		lines = append(lines[:maxLines], fmt.Sprintf("… +%d arquivos omitidos (já estão na worktree)", omitted))
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) > maxBytes {
+		out = out[:maxBytes] + "\n…(status truncado; os arquivos continuam na worktree)"
+	}
+	return out
+}
+
+// redundantPlanKey drops pm/tech-lead/architect plans already covered by chief_plan.
+func redundantPlanKey(key, text string, loaded map[string]string) bool {
+	switch key {
+	case "pm_plan", "tech_lead_plan", "architect_plan":
+		chief := strings.TrimSpace(loaded["chief_plan"])
+		text = strings.TrimSpace(text)
+		return chief != "" && (text == chief || strings.Contains(chief, text))
+	default:
+		return false
 	}
 }
 

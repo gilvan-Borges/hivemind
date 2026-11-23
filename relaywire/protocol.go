@@ -15,12 +15,12 @@ const (
 
 	EncNaClBox = "naclbox"
 
-	TypeHello     = "hello"
-	TypeHelloOK   = "hello_ok"
-	TypeRPC       = "rpc"
-	TypeRPCResult = "rpc_result"
-	TypeEvent     = "event"
-	TypeAck       = "ack"
+	TypeHello        = "hello"
+	TypeHelloOK      = "hello_ok"
+	TypeRPC          = "rpc"
+	TypeRPCResult    = "rpc_result"
+	TypeEvent        = "event"
+	TypeAck          = "ack"
 	TypePing         = "ping"
 	TypePong         = "pong"
 	TypeError        = "error"
@@ -143,6 +143,7 @@ func AllowedRPC(method, path string) bool {
 		"POST /api/v1/runs/start",
 		"POST /api/v1/runs/cancel",
 		"POST /api/v1/runs/redirect",
+		"POST /api/v1/runs/steer",
 		"POST /api/v1/approvals/resolve",
 		"GET /api/v1/git/diffs",
 		"GET /api/v1/git/prs",
