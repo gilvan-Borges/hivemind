@@ -26,8 +26,16 @@ func (m *ResidentManager) loopController() *loopx.Controller {
 		m.loopCtl = &loopx.Controller{
 			Executor: hiveLoopExec{m},
 			Commands: loopCommands{m},
-			Full:     m.loopFull,
-			OnEvent:  m.onLoopEvent,
+			Judge:    hiveJudge{m},
+			Tree: loopx.GitWorktree{OpenPull: func(ctx context.Context, workspace, title, body, base string) (string, error) {
+				pr, err := OpenPullRequest(ctx, workspace, title, body, base)
+				if err != nil {
+					return "", err
+				}
+				return pr.URL, nil
+			}},
+			Full:    m.loopFull,
+			OnEvent: m.onLoopEvent,
 		}
 	}
 	return m.loopCtl
@@ -105,15 +113,17 @@ func (m *ResidentManager) startGoalLoop(workspace string, cmd loopx.Command, ori
 	if err != nil {
 		return "", err
 	}
-	off := false
 	spec := loopx.Spec{
 		ID:        id,
 		Name:      clipLoop(cmd.Text, 80),
 		Kind:      loopx.KindGoal,
 		Objective: cmd.Text,
 		DoneWhen:  []string{cmd.Text},
-		Judge:     loopx.JudgeSpec{Enabled: &off},
 		Trigger:   loopx.TriggerSpec{Manual: true},
+	}
+	if cmd.JudgeOff {
+		off := false
+		spec.Judge.Enabled = &off
 	}
 	if cmd.Max > 0 {
 		spec.Limits.MaxIterations = cmd.Max
@@ -356,6 +366,35 @@ func clipLoop(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+type hiveJudge struct{ m *ResidentManager }
+
+func (h hiveJudge) Run(ctx context.Context, req loopx.JudgeRequest) (loopx.JudgeResult, error) {
+	if h.m != nil && h.m.testLoopJudge != nil {
+		return h.m.testLoopJudge.Run(ctx, req)
+	}
+	full := false
+	model := req.Model
+	if model == "" || model == "review_model" {
+		cfg, _ := resident.LoadConfig(h.m.baseDir)
+		_, executor := resident.ResolveModelRoute(cfg)
+		model = loopx.ResolveJudgeModel(req.Model, executor)
+	}
+	res, err := h.m.runTurn(ctx, req.Workspace, "", "Juiz do loop "+req.LoopID, req.SessionID, resident.OriginLoop, nil, turnOpts{
+		loopID:       req.LoopID,
+		readOnly:     true,
+		forceFull:    &full,
+		fresh:        true,
+		model:        model,
+		display:      "Juiz do loop " + req.LoopID,
+		modelMessage: req.Prompt,
+		skipCommand:  true,
+	})
+	if err != nil {
+		return loopx.JudgeResult{}, err
+	}
+	return loopx.ParseJudge(res.FinalText)
 }
 
 type hiveLoopExec struct{ m *ResidentManager }

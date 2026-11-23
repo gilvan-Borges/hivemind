@@ -60,6 +60,8 @@ type RunOptions struct {
 type Controller struct {
 	Executor Executor
 	Commands CommandRunner
+	Judge    Judge
+	Tree     Tree
 	Full     func(workspace string, accompanied bool, mode string) bool
 	OnEvent  func(Event)
 	Now      func() time.Time
@@ -146,12 +148,14 @@ func (c *Controller) Run(ctx context.Context, workspace, id string, opt RunOptio
 	}); err != nil {
 		return State{}, err
 	}
+	branchOK := c.prepareGit(ctx, workspace, spec)
+	c.seedFingerprint(ctx, workspace, id)
 	steps := 0
 	for {
 		if ctx.Err() != nil {
 			return c.park(workspace, id)
 		}
-		st, terminal, err := c.iterate(ctx, workspace, spec, opt)
+		st, terminal, err := c.iterate(ctx, workspace, spec, opt, branchOK)
 		if err != nil {
 			return st, err
 		}
@@ -194,7 +198,7 @@ func (c *Controller) Pause(workspace, id string) (State, error) {
 	})
 }
 
-func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, opt RunOptions) (State, bool, error) {
+func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, opt RunOptions, branchOK bool) (State, bool, error) {
 	lim, err := spec.ParsedLimits()
 	if err != nil {
 		return State{}, false, err
@@ -233,8 +237,21 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 	if c.Full != nil {
 		full = c.Full(workspace, opt.Accompanied, spec.Permissions.Access())
 	}
+	item, initializing := c.plan(workspace, spec, st)
 	prompt := ExecPrompt(workspace, spec, st, next)
+	if initializing {
+		prompt += "\n\nEsta é a primeira iteração. Responda com um JSON array de features (id, title, priority, passes false, steps). Não grave esse arquivo você mesmo.\n"
+	}
+	if item.ID != "" {
+		prompt += fmt.Sprintf("\n\nItem desta iteração (%s): %s\n", item.ID, item.Title)
+		for _, step := range item.Steps {
+			prompt += "- " + step + "\n"
+		}
+	}
 	display := fmt.Sprintf("Loop %s · iteração %d", spec.ID, next)
+	if item.ID != "" {
+		display += " · " + item.ID
+	}
 	c.emit(Event{
 		Kind: "loop_iteration", LoopID: spec.ID, Iteration: next, Phase: "execute",
 		Text: display, ConversationID: st.ConversationID, SessionID: st.SessionID, Workspace: workspace,
@@ -249,6 +266,13 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 		}
 		execCtx, cancel = context.WithTimeout(ctx, remain)
 	}
+	var beforeFiles map[string]string
+	if c.Tree != nil {
+		if _, files, snapErr := c.Tree.Snapshot(ctx, workspace); snapErr == nil {
+			beforeFiles = files
+		}
+	}
+	featBefore, _ := ReadFeatureBytes(workspace, spec.ID, spec.Features)
 	res, runErr := c.Executor.Run(execCtx, ExecRequest{
 		LoopID: spec.ID, Iteration: next, Workspace: workspace,
 		Prompt: prompt, Display: display, Model: spec.Executor.Model,
@@ -262,6 +286,27 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 	if runErr != nil && (res.NeedsHuman || humanErr(runErr)) {
 		st, err = c.finish(workspace, spec, OutcomeBlocked, runErr.Error())
 		return st, true, err
+	}
+
+	var changed []string
+	var fp string
+	haveFP := false
+	if c.Tree != nil {
+		if got, files, snapErr := c.Tree.Snapshot(ctx, workspace); snapErr == nil {
+			fp = got
+			haveFP = true
+			changed = ChangedFiles(beforeFiles, files)
+		}
+	}
+	featAfter, _ := ReadFeatureBytes(workspace, spec.ID, spec.Features)
+	integrityOK, integrityReason := checkIntegrity(spec, changed, featBefore, featAfter)
+	wroteFeatures := false
+	if initializing && runErr == nil {
+		if items, perr := ParseFeatureBlock(res.Summary); perr == nil {
+			if serr := SaveFeatures(workspace, spec.ID, spec.Features, items); serr == nil {
+				wroteFeatures = true
+			}
+		}
 	}
 
 	checkCtx := ctx
@@ -285,6 +330,47 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 	if !ok {
 		reason = failReason(results, summary)
 	}
+	if !integrityOK {
+		reason = strings.TrimSpace(integrityReason + " " + reason)
+	}
+	featuresRequired := strings.TrimSpace(spec.Features) != ""
+	allPass := false
+	if featuresRequired && !initializing {
+		if items, exists, _ := LoadFeatures(workspace, spec.ID, spec.Features); exists {
+			if integrityOK && ok && item.ID != "" {
+				items = MarkPass(items, item.ID, true)
+				_ = SaveFeatures(workspace, spec.ID, spec.Features, items)
+			}
+			allPass = AllPass(items)
+		}
+	}
+	judgeRequired := spec.Judge.On()
+	judgeVerdict := JudgeSkipped
+	if judgeRequired && !initializing && ok && integrityOK {
+		if c.Judge == nil {
+			judgeVerdict = JudgeNotMet
+			reason = strings.TrimSpace(reason + " juiz indisponível")
+		} else {
+			jr, jerr := c.Judge.Run(ctx, JudgeRequest{
+				LoopID: spec.ID, Workspace: workspace,
+				Model:        ResolveJudgeModel(spec.Judge.Model, spec.Executor.Model),
+				Prompt:       JudgePrompt(spec, results, changed, summary),
+				Conversation: st.ConversationID, SessionID: st.SessionID,
+			})
+			if jerr != nil {
+				judgeVerdict = JudgeNotMet
+				reason = strings.TrimSpace(reason + " " + jerr.Error())
+			} else {
+				judgeVerdict = jr.Verdict
+				if jr.Reason != "" {
+					reason = jr.Reason
+				}
+				if jr.NextHint != "" {
+					reason = strings.TrimSpace(reason + " " + jr.NextHint)
+				}
+			}
+		}
+	}
 
 	var terminal bool
 	var outcome string
@@ -299,11 +385,24 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 		if res.CostMicroUSD > 0 {
 			st.SpentMicroUSD += res.CostMicroUSD
 		}
-		NoteProgress(st, "", false, passing)
+		st.CurrentItem = item.ID
+		NoteProgress(st, fp, haveFP, passing)
+		if wroteFeatures {
+			st.ConsecutiveNoProgress = 0
+		}
+		switch judgeVerdict {
+		case JudgeImpossible:
+			st.ConsecutiveImpossible++
+		case JudgeMet, JudgeNotMet:
+			st.ConsecutiveImpossible = 0
+		}
 		outcome = Decide(Snapshot{
 			ChecksOK:              ok,
-			IntegrityOK:           true,
-			Judge:                 JudgeSkipped,
+			IntegrityOK:           integrityOK,
+			FeaturesRequired:      featuresRequired,
+			FeaturesAllPass:       allPass,
+			Judge:                 judgeVerdict,
+			JudgeRequired:         judgeRequired && !initializing,
 			Iterations:            st.Iteration,
 			Elapsed:               c.now().Sub(st.StartedAt),
 			SpentMicroUSD:         st.SpentMicroUSD,
@@ -330,11 +429,31 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 	if st.StopRequested || st.Status == StatusStopped || st.Status == StatusPaused {
 		return st, true, nil
 	}
+	commit := ""
+	if integrityOK && branchOK && c.Tree != nil && spec.Git.CommitEach() {
+		sha, cerr := c.Tree.Commit(ctx, workspace, fmt.Sprintf("loop(%s): iteração %d\n\n%s", spec.ID, st.Iteration, clip(summary, 200)))
+		if cerr != nil {
+			reason = strings.TrimSpace(reason + " commit: " + cerr.Error())
+		} else {
+			commit = sha
+		}
+	}
+	if terminal && outcome == OutcomeDone && branchOK && c.Tree != nil && spec.Git.OpenPR() {
+		url, perr := c.Tree.OpenPR(ctx, workspace, spec.Name, spec.Objective, "main")
+		st, _ = UpdateState(workspace, spec.ID, func(st *State) error {
+			if perr != nil {
+				st.LastReason = clip(strings.TrimSpace(st.LastReason+" PR: "+perr.Error()), 500)
+				return nil
+			}
+			st.PRURL = url
+			return nil
+		})
+	}
 	_ = AppendProgress(workspace, spec.ID, st.Iteration, summary, outcome)
 	_ = AppendIteration(workspace, spec.ID, IterationRecord{
 		Iteration: st.Iteration, At: c.now(), Phase: "decide", Summary: clip(summary, 2000),
-		ChecksOK: ok, Verdict: outcome, Reason: clip(reason, 500),
-		SpentMicroUSD: st.SpentMicroUSD, Tokens: st.Tokens,
+		ChecksOK: ok && integrityOK, Verdict: outcome, Reason: clip(reason, 500),
+		SpentMicroUSD: st.SpentMicroUSD, Tokens: st.Tokens, Commit: commit,
 	})
 	c.emit(Event{
 		Kind: "loop_verdict", LoopID: spec.ID, Iteration: st.Iteration, Phase: "decide",
@@ -349,6 +468,70 @@ func (c *Controller) iterate(ctx context.Context, workspace string, spec Spec, o
 		})
 	}
 	return st, terminal, nil
+}
+
+func (c *Controller) prepareGit(ctx context.Context, workspace string, spec Spec) bool {
+	if c == nil || c.Tree == nil || strings.TrimSpace(spec.Git.Branch) == "" {
+		return false
+	}
+	return c.Tree.EnsureBranch(ctx, workspace, spec.Git.Branch) == nil
+}
+
+func (c *Controller) seedFingerprint(ctx context.Context, workspace, id string) {
+	if c == nil || c.Tree == nil {
+		return
+	}
+	st, err := LoadState(workspace, id)
+	if err != nil || st.HaveFingerprint {
+		return
+	}
+	fp, _, err := c.Tree.Snapshot(ctx, workspace)
+	if err != nil {
+		return
+	}
+	_, _ = UpdateState(workspace, id, func(st *State) error {
+		if st.HaveFingerprint {
+			return nil
+		}
+		st.Fingerprint = fp
+		st.HaveFingerprint = true
+		return nil
+	})
+}
+
+func (c *Controller) plan(workspace string, spec Spec, st State) (Feature, bool) {
+	if strings.TrimSpace(spec.Features) == "" {
+		return Feature{}, false
+	}
+	items, exists, err := LoadFeatures(workspace, spec.ID, spec.Features)
+	if err != nil || !exists {
+		return Feature{}, true
+	}
+	item, ok := NextFeature(items)
+	if !ok {
+		return Feature{}, false
+	}
+	_ = st
+	return item, false
+}
+
+func checkIntegrity(spec Spec, changed []string, before, after []byte) (bool, string) {
+	if FeaturesTampered(before, after) {
+		return false, "features.json só pode mudar o campo passes"
+	}
+	rel := filepathSlash(strings.TrimSpace(spec.Features))
+	files := make([]string, 0, len(changed))
+	for _, f := range changed {
+		if rel != "" && (f == rel || strings.HasSuffix(f, "/"+rel)) {
+			continue
+		}
+		files = append(files, f)
+	}
+	bad := Violations(files, spec.ProtectedPaths)
+	if len(bad) == 0 {
+		return true, ""
+	}
+	return false, "diff tocou caminho protegido: " + strings.Join(bad, ", ")
 }
 
 func (c *Controller) finish(workspace string, spec Spec, outcome, reason string) (State, error) {
