@@ -45,7 +45,7 @@ func extractReviewPRNumber(objective string) int {
 	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
 		text = text[idx+len("[Objetivo do Usuário]"):]
 	}
-	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nTask pai:", "\nFonte:"} {
+	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nDescrição do PR:", "\nTask pai:", "\nFonte:"} {
 		if idx := strings.Index(text, sep); idx > 0 {
 			text = strings.TrimSpace(text[:idx])
 		}
@@ -285,11 +285,11 @@ func buildPreHydratedPRDossier(parentCtx context.Context, gh githubx.Client, prN
 
 // newPRReviewGuardCallbacks returns BeforeTool and AfterTool callbacks that enforce
 // Anthropic-style bounded PR reviews:
-// 1. Blocks redundant calls to github_get_pr / github_pr_files / github_ci_status for the preloaded PR.
-// 2. Blocks calling github_pr_diff without a file filter when all patches are already preloaded.
-// 3. Caps repository exploration calls (read_file, search_text, find_files, list_dir, github_pr_diff)
-//    at maxExploreCalls so the reviewer submits its verdict in 1-4 turns instead of 40 turns.
-// 4. Escalates (finishes the turn immediately) once github_review_pr succeeds.
+//  1. Blocks redundant calls to github_get_pr / github_pr_files / github_ci_status for the preloaded PR.
+//  2. Blocks calling github_pr_diff without a file filter when all patches are already preloaded.
+//  3. Caps repository exploration calls (read_file, search_text, find_files, list_dir, github_pr_diff)
+//     at maxExploreCalls so the reviewer submits its verdict in 1-4 turns instead of 40 turns.
+//  4. Escalates (finishes the turn immediately) once github_review_pr succeeds.
 func newPRReviewGuardCallbacks(preloadedPR int, allPatchesComplete bool, maxExploreCalls int) (llmagent.BeforeToolCallback, llmagent.AfterToolCallback) {
 	if maxExploreCalls <= 0 {
 		maxExploreCalls = defaultMaxReviewExploreCalls

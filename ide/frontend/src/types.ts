@@ -1210,6 +1210,7 @@ export interface WailsBackendApp {
   CancelAgyOAuthLogin?(workspace: string): Promise<ProfilesOverview>;
   ActivateAgyAccount?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   MobileBridgeStatus?(): Promise<MobileBridgeStatus>;
+  SetComposerMode?(workspace: string, mode: string): Promise<void>;
   SetMobileBridgeEnabled?(on: boolean): Promise<MobileBridgeStatus>;
   RotateMobileToken?(): Promise<MobileBridgeStatus>;
   MobilePairing?(): Promise<MobilePairing>;

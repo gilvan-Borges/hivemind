@@ -80,6 +80,31 @@ func GetOpenRouterBalanceUSD(ctx context.Context) (balanceUSD float64, known boo
 	return 0, false
 }
 
+// ForgetOpenRouterBalanceForTest drops the cached balance so a 402 in one test
+// does not make the next test treat OpenRouter as empty.
+func ForgetOpenRouterBalanceForTest() {
+	orBalanceCache.mu.Lock()
+	orBalanceCache.entries = map[string]*swrEntry[float64]{}
+	orBalanceCache.mu.Unlock()
+}
+
+// MarkOpenRouterOutOfCredits remembers a zero balance after a 402 so the next
+// Jev route skips OpenRouter instead of sending another call to an empty account.
+func MarkOpenRouterOutOfCredits(ctx context.Context) {
+	key := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_API_KEY"))
+	if key == "" {
+		return
+	}
+	base := strings.TrimSpace(ResolveEnv(ctx, "openrouter", "OPENROUTER_BASE_URL"))
+	if base == "" {
+		base = "https://openrouter.ai/api/v1"
+	}
+	cacheKey := key + "@" + strings.TrimRight(base, "/")
+	orBalanceCache.mu.Lock()
+	orBalanceCache.entries[cacheKey] = &swrEntry[float64]{val: 0, fetchedAt: orBalanceCache.now()}
+	orBalanceCache.mu.Unlock()
+}
+
 // probeOpenRouterBalance queries GET /credits (account-wide total_credits -
 // total_usage) and falls back to GET /key (key-scoped limit_remaining).
 func probeOpenRouterBalance(ctx context.Context, key, base string) (float64, error) {
@@ -273,8 +298,8 @@ func orDailyDiscountCachePath() (string, error) {
 var orDiscountProbeBackoff untilTime
 
 type untilTime struct {
-	mu     sync.Mutex
-	until  time.Time
+	mu    sync.Mutex
+	until time.Time
 }
 
 func (u *untilTime) blocked() bool {

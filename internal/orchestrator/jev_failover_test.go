@@ -132,6 +132,8 @@ func TestJevFailover429And402AndTimeout(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			modelx.ForgetOpenRouterBalanceForTest()
+			t.Cleanup(modelx.ForgetOpenRouterBalanceForTest)
 			cat, hs, pol := newTwoProviderTestEnv(t, 0.02)
 			var built []string
 			var events []Event

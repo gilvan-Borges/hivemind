@@ -9,7 +9,7 @@ import { openInlineEdit, toggleGhostText } from "./inline-ai";
 import { openIdeSettingsTab } from "./ide-settings";
 import { openGitHubModal, openJiraModal } from "./modals";
 import { openSidebarView, updateStatusBar } from "./shell";
-import { api, state } from "./state";
+import { api, setRunMode, state } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
 
@@ -21,11 +21,11 @@ export function getCommandActions(): CommandAction[] {
     { id: "ide-settings-hive", label: "Configurações da IDE: Agent Hive & Mascote Orb", run: () => void openIdeSettingsTab("agent-hive") },
     { id: "ide-settings-limits", label: "Configurações da IDE: Limites & Política do Jev", run: () => void openIdeSettingsTab("limits") },
     { id: "mission", label: "Abrir Quadro de Controle Multiagente", shortcut: "Ctrl+Shift+A", run: () => openMissionControlTab() },
-    { id: "mode-auto", label: "Modo de Execução: Auto (Triagem Inteligente)", run: () => { state.runMode = "auto"; renderComposerModeBar(); updateStatusBar(); } },
-    { id: "mode-direct", label: "Modo de Execução: Direto (1 Agente · Rápido)", run: () => { state.runMode = "direct"; renderComposerModeBar(); updateStatusBar(); } },
-    { id: "mode-plan", label: "Modo de Execução: Planejar · Feature / Task Grande (Aprovação Humana)", run: () => { state.runMode = "plan"; renderComposerModeBar(); updateStatusBar(); } },
-    { id: "mode-plan-sdd", label: "Modo de Execução: Planejar · Projeto do Zero (SDD com Gates)", run: () => { state.runMode = "plan:sdd"; renderComposerModeBar(); updateStatusBar(); } },
-    { id: "mode-squad", label: "Modo de Execução: Squad Completo (Paralelo + QA)", run: () => { state.runMode = "squad"; renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-auto", label: "Modo de Execução: Auto (Triagem Inteligente)", run: () => { setRunMode("auto"); renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-direct", label: "Modo de Execução: Direto (1 Agente · Rápido)", run: () => { setRunMode("direct"); renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-plan", label: "Modo de Execução: Planejar · Feature / Task Grande (Aprovação Humana)", run: () => { setRunMode("plan"); renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-plan-sdd", label: "Modo de Execução: Planejar · Projeto do Zero (SDD com Gates)", run: () => { setRunMode("plan:sdd"); renderComposerModeBar(); updateStatusBar(); } },
+    { id: "mode-squad", label: "Modo de Execução: Squad Completo (Paralelo + QA)", run: () => { setRunMode("squad"); renderComposerModeBar(); updateStatusBar(); } },
     { id: "perm-governed", label: "Permissão: Governado (Worktree + PR + Aprovação p/ main)", run: () => setProjectPermissionMode("governed") },
     { id: "perm-auto", label: "Permissão: Auto-Edição (Edições e comandos locais livres)", run: () => setProjectPermissionMode("auto_edit") },
     { id: "perm-full", label: "Permissão: Full Acesso & Permissão Total (estilo Claude Code / GPT)", run: () => setProjectPermissionMode("full_access") },

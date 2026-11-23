@@ -171,6 +171,21 @@ func TestHubSubscribeAndBroadcast(t *testing.T) {
 	}
 }
 
+func TestHubSetComposerMode(t *testing.T) {
+	hub := NewHub()
+	hub.SetComposerMode("C:/w", "direct")
+	if got := hub.Projects(); len(got) != 0 {
+		t.Fatalf("modo sem projeto registrado não deveria criar projeto, veio %+v", got)
+	}
+	hub.RegisterProject("C:/w", "demo", "main", "Go", "principal")
+	hub.SetComposerMode("C:/w", "direct")
+	hub.SetComposerMode("C:/w", "modo-desconhecido")
+	got := hub.Projects()
+	if len(got) != 1 || got[0].ComposerMode != "direct" {
+		t.Fatalf("composerMode deveria permanecer direct, veio %+v", got)
+	}
+}
+
 type errTest string
 
 func (e errTest) Error() string { return string(e) }

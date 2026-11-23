@@ -91,6 +91,7 @@ type ProjectSummary struct {
 	Branch           string `json:"branch,omitempty"`
 	Stack            string `json:"stack,omitempty"`
 	ActiveTeam       string `json:"activeTeam,omitempty"`
+	ComposerMode     string `json:"composerMode,omitempty"`
 	RunningLanes     int    `json:"runningLanes"`
 	PendingApprovals int    `json:"pendingApprovals"`
 }
@@ -429,6 +430,27 @@ func (h *Hub) RegisterProject(workspace, name, branch, stack, activeTeam string)
 	}
 	h.projects[workspace] = p
 	h.mu.Unlock()
+}
+
+// SetComposerMode stores the IDE composer's current run mode for a workspace
+// the hub already knows. Mobile clients read it from GET /api/v1/projects.
+func (h *Hub) SetComposerMode(workspace, mode string) {
+	if h == nil {
+		return
+	}
+	workspace = strings.TrimSpace(workspace)
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if workspace == "" || mode == "" || mode == "resident" || !isAllowedRunMode(mode) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p, ok := h.projects[workspace]
+	if !ok {
+		return
+	}
+	p.ComposerMode = mode
+	h.projects[workspace] = p
 }
 
 // Projects returns the registered projects with live lane/approval counters.

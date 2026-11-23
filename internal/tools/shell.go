@@ -98,6 +98,9 @@ func (d Deps) runShell(ctx context.Context, command, relDir string, unsandboxed 
 	if pat, denied := repoSandboxDenyMatch(d.Root, command); denied {
 		return "", fmt.Errorf("política de sandbox do repositório (.hivemind/sandbox.json, deny_commands): comando bloqueado pelo padrão %q. O arquivo do repo só pode restringir, nunca liberar", pat)
 	}
+	if shellx.IsGitHubPRPublishCommand(command) {
+		return "", fmt.Errorf("comentário e aprovação de PR não passam pelo gh. Use github_review_pr, ou mcp_call no servidor github (mcp_enable_server se estiver desligado). Não repita o gh")
+	}
 	if d.shellBlocksGitWrite() {
 		if blocked, what := shellx.IsCommitOrPRCommand(command); blocked {
 			if !d.canCommitAndManagePR() {

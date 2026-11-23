@@ -161,7 +161,9 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 		if fbBest != nil {
 			best = fbBest
 			estMicro = fbEst
-			if prevOnly == "openrouter" && isOpenRouterReserveLocked(policy, health) {
+			if prevOnly == "openrouter" && openRouterOutOfCredits(health) {
+				crossProviderFallbackReason = "openrouter_sem_credito"
+			} else if prevOnly == "openrouter" && isOpenRouterReserveLocked(policy, health) {
 				crossProviderFallbackReason = "openrouter_reserva_1usd"
 			} else {
 				crossProviderFallbackReason = "fallback_" + prevOnly
@@ -197,6 +199,8 @@ func Score(task Task, catalog Catalog, policy Policy, health HealthSnapshot, age
 	}
 	if crossProviderFallbackReason != "" {
 		reasons = append([]string{crossProviderFallbackReason}, reasons...)
+	} else if openRouterOutOfCredits(health) && !strings.EqualFold(best.Provider, "openrouter") {
+		reasons = append([]string{"openrouter_sem_credito"}, reasons...)
 	} else if isOpenRouterReserveLocked(policy, health) && !strings.EqualFold(best.Provider, "openrouter") {
 		reasons = append([]string{"openrouter_reserva_1usd"}, reasons...)
 	}
@@ -293,6 +297,10 @@ func weightsForTask(policy Policy, task Task) Weights {
 	default:
 		return base
 	}
+}
+
+func openRouterOutOfCredits(health HealthSnapshot) bool {
+	return health.OpenRouterBalanceKnown && health.OpenRouterBalanceUSD <= 0
 }
 
 func isOpenRouterReserveLocked(policy Policy, health HealthSnapshot) bool {
@@ -398,6 +406,10 @@ func selectBestInTierWithOpts(
 		}
 		// Reserve rule: when OpenRouter balance is <= $1.00, do not indicate or select
 		// OpenRouter so that $1.00 stays reserved for operating Jev itself; route to agy/cursor/others.
+		if strings.EqualFold(e.Provider, "openrouter") && openRouterOutOfCredits(health) {
+			sawCircuit = true
+			continue
+		}
 		if orReserveLocked && strings.EqualFold(e.Provider, "openrouter") {
 			sawCircuit = true
 			continue

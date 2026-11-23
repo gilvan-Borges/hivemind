@@ -24,6 +24,20 @@ declare global {
 
 export const api = () => (typeof window === "undefined" ? undefined : window.go?.main?.App);
 
+export function publishComposerMode() {
+  const root = state.project?.root?.trim();
+  const mode = state.runMode;
+  if (!root || !mode) return;
+  const fn = api()?.SetComposerMode;
+  if (!fn) return;
+  void fn(root, mode).catch(() => {});
+}
+
+export function setRunMode(mode: RunMode) {
+  state.runMode = mode;
+  publishComposerMode();
+}
+
 export const MISSION_TAB_KEY = "mission:swarm";
 
 export const TEAM_CONFIG_TAB_KEY = "team:config";
@@ -425,6 +439,7 @@ export function loadFromProjectContext(ctx: ProjectWorkspaceContext) {
   state.buildProblems = ctx.buildProblems ?? [];
   state.mentionResults = [];
   state.branchPopover.open = false;
+  publishComposerMode();
 }
 
 export function findLaneWithContext(laneId: string): { lane: TeamLane; ctx?: ProjectWorkspaceContext; isActiveProject: boolean } | null {

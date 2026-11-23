@@ -374,15 +374,15 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 }
 
 // newTriageTurnIsolationCallback prevents two major pathologies in runTriageChief:
-// 1. Post-delegation loop: once delegate_to_squad has been called, it immediately terminates
-//    the triage turn with a TurnComplete LLMResponse instead of making another 75k-token LLM
-//    call where the Chief hallucinates that the Squad already ran and loops on git_status/git_diff.
-// 2. Stale session history pollution: when a session is resumed (IncludeContentsDefault), ADK
-//    populates req.Contents with raw FunctionCall/FunctionResponse events from earlier runs
-//    (including old delegate_to_squad and Developer tool calls). Slicing req.Contents to the
-//    current user turn and injecting a clean <system-reminder> with prior_session_context +
-//    current worktree git status keeps triage fast (~3k tokens instead of 75k) and prevents
-//    the Chief from mistaking itself for the Closing Chief.
+//  1. Post-delegation loop: once delegate_to_squad has been called, it immediately terminates
+//     the triage turn with a TurnComplete LLMResponse instead of making another 75k-token LLM
+//     call where the Chief hallucinates that the Squad already ran and loops on git_status/git_diff.
+//  2. Stale session history pollution: when a session is resumed (IncludeContentsDefault), ADK
+//     populates req.Contents with raw FunctionCall/FunctionResponse events from earlier runs
+//     (including old delegate_to_squad and Developer tool calls). Slicing req.Contents to the
+//     current user turn and injecting a clean <system-reminder> with prior_session_context +
+//     current worktree git status keeps triage fast (~3k tokens instead of 75k) and prevents
+//     the Chief from mistaking itself for the Closing Chief.
 func (r *Runner) newTriageTurnIsolationCallback(
 	sess session.Session,
 	toolRoot string,
@@ -391,7 +391,17 @@ func (r *Runner) newTriageTurnIsolationCallback(
 	delegated *bool,
 ) llmagent.BeforeModelCallback {
 	var postDelegateModelCalls int
+	var reviewModelCalls int
 	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
+		if runMode == "direct" && r.reviewRequested {
+			reviewModelCalls++
+			if reviewModelCalls > 8 {
+				return &model.LLMResponse{
+					Content:      &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "Parei esta revisão depois de 8 chamadas sem encerrar. Publique com github_review_pr ou mcp_call no servidor github. gh pr comment e gh pr review estão bloqueados."}}},
+					TurnComplete: true,
+				}, nil
+			}
+		}
 		if delegateMu != nil && delegated != nil {
 			delegateMu.Lock()
 			done := *delegated

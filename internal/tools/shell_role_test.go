@@ -135,6 +135,12 @@ func TestChiefShellRunsGHOnlyAfterApproval(t *testing.T) {
 	if len(sb.last.ExtraEnv) != 0 {
 		t.Fatalf("sandbox não pode receber ambiente extra: %#v", sb.last.ExtraEnv)
 	}
+	if _, err := deps.runShell(context.Background(), "gh pr review 7 --approve --body ok", "", true); err == nil || !strings.Contains(err.Error(), "não passam pelo gh") {
+		t.Fatalf("gh pr review bloqueado: %v", err)
+	}
+	if sb.runs != 1 {
+		t.Fatal("gh pr review não pode executar")
+	}
 	if !containsFold(deps.shellAllowlist(), "gh") {
 		t.Fatalf("chefe antigo sem gh na lista ainda recebe gh: %v", deps.shellAllowlist())
 	}

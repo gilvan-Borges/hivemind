@@ -255,6 +255,22 @@ func TestNativeConnectorCredentials(t *testing.T) {
 	}
 }
 
+func TestExplicitReviewObjectiveIncludesMentionAndApprove(t *testing.T) {
+	if !IsExplicitReviewObjective("Responder menção no PR #768 de @autor — título. Fui marcado por @colega.") {
+		t.Fatal("menção no PR deveria abrir a revisão")
+	}
+	if !IsExplicitReviewObjective("coemente no PR e aprove entao") {
+		t.Fatal("pedido de aprovar no PR deveria abrir a revisão")
+	}
+	if !IsExplicitReviewObjective("comenta essa porra pelo MCP do github") {
+		t.Fatal("pedido explícito de MCP do GitHub deveria abrir a revisão")
+	}
+	jira := "Resolver issue PROJ-1\nDescrição:\naprovação pendente neste PR #1"
+	if IsExplicitReviewObjective(jira) {
+		t.Fatal("descrição de issue não deveria abrir revisão")
+	}
+}
+
 func TestPRGovernancePolicies(t *testing.T) {
 	thirdPartyPR := PullRequestDetail{
 		Number:  42,

@@ -404,7 +404,7 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		return err
 	}
 
-	reviewDesc := "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria; permitido SOMENTE quando há pedido de revisão. Chame NO MÁXIMO UMA VEZ por PR."
+	reviewDesc := "Envia revisão oficial (APPROVE, REQUEST_CHANGES ou COMMENT) em um PR DE TERCEIRO. NUNCA use em PR de própria autoria. Permitido com pedido de revisão no GitHub ou quando o usuário pediu no chat para revisar, comentar, responder menção ou aprovar. Chame NO MÁXIMO UMA VEZ por PR. O parecer vai no body; um resumo só no chat não publica nada."
 	if d.ReviewCommentOnly {
 		reviewDesc = "Envia comentário de revisão (APENAS event=COMMENT) em um PR DE TERCEIRO. Modo automático configurado como somente-comentário: APPROVE e REQUEST_CHANGES são bloqueados. Chame NO MÁXIMO UMA VEZ por PR."
 	}

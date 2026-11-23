@@ -344,6 +344,22 @@ func TestCurated21OpenRouterModelsAndPromotionDifficultyRouting(t *testing.T) {
 	if unlockedRef.Code != "" || unlockedChoice.Provider != "openrouter" {
 		t.Fatalf("expected OpenRouter unlocked below $1.00 when TypeSafeDecisionReady=true, got choice=%+v ref=%+v", unlockedChoice, unlockedRef)
 	}
+
+	// Saldo zero: OpenRouter fica fora mesmo com TypeSafe e mesmo se o pedido era só OpenRouter.
+	emptyHealth := HealthSnapshot{
+		Credentials:            map[string]bool{"openrouter": true, "agy": true, "cursor": true},
+		AgyRemainingPct:        80,
+		OpenRouterBalanceUSD:   0,
+		OpenRouterBalanceKnown: true,
+		TypeSafeDecisionReady:  true,
+	}
+	emptyChoice, emptyRef := Score(medTask, cat, pol, emptyHealth, AgentPin{Provider: "openrouter", Model: "openrouter:auto"}, RepoPolicy{})
+	if emptyRef.Code != "" {
+		t.Fatalf("sem crédito no OpenRouter deveria cair em outro provedor, recusa: %+v", emptyRef)
+	}
+	if emptyChoice.Provider == "openrouter" || (emptyChoice.Provider != "agy" && emptyChoice.Provider != "cursor") {
+		t.Fatalf("sem crédito no OpenRouter deveria escolher agy ou cursor, veio %+v", emptyChoice)
+	}
 }
 
 func TestIsSafeCatalogIDRejectsBannerColons(t *testing.T) {

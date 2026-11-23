@@ -93,6 +93,15 @@ func TestEvaluateAllowAndDeny(t *testing.T) {
 	if blocked, what := IsCommitOrPRCommand(`gh pr merge 1 --merge`); !blocked || what != "gh pr merge" {
 		t.Fatalf("expected gh pr merge blocked, got %v %q", blocked, what)
 	}
+	if !IsGitHubPRPublishCommand(`gh pr review 768 --approve --body-file body.md`) {
+		t.Fatal("gh pr review deve ser publicação, não leitura")
+	}
+	if !IsGitHubPRPublishCommand(`gh pr comment 768 --body-file note.md`) {
+		t.Fatal("gh pr comment deve ser publicação, não leitura")
+	}
+	if IsGitHubPRPublishCommand(`gh pr view 768 --json reviews`) {
+		t.Fatal("gh pr view continua leitura")
+	}
 	if blocked, _ := IsCommitOrPRCommand(`git status --short`); blocked {
 		t.Fatal("git status must remain allowed for all roles")
 	}

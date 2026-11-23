@@ -11,7 +11,7 @@ import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, stopLaneRunningAgents, toggleSplitLanes } from "./lanes";
 import { renderModalLayer } from "./modals";
 import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
-import { api, setStatus, state, toastError } from "./state";
+import { api, setRunMode, setStatus, state, toastError } from "./state";
 import { mountLanePTY } from "./terminal";
 import { openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
 
@@ -391,7 +391,7 @@ export function renderComposerModeBar() {
   bar.querySelectorAll("[data-run-mode]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.runMode = (btn as HTMLElement).dataset.runMode as RunMode;
+      setRunMode((btn as HTMLElement).dataset.runMode as RunMode);
       state.composerMenuOpen = "";
       state.planMenuOpen = false;
       renderComposerModeBar();

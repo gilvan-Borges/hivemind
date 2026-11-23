@@ -29,6 +29,14 @@ func newMobileBridge(sessions *idecore.SessionManager, residentMgr *idecore.Resi
 	return &mobileBridge{hub: hub, adapter: adapter, server: server, cfg: cfg}
 }
 
+// SetComposerMode publishes the IDE composer's run mode to paired phones.
+func (a *App) SetComposerMode(workspace, mode string) {
+	if a == nil || a.mobile == nil || a.mobile.hub == nil {
+		return
+	}
+	a.mobile.hub.SetComposerMode(workspace, mode)
+}
+
 // start brings the bridge up when the user enabled it previously.
 func (b *mobileBridge) start() {
 	if !b.cfg.Enabled {

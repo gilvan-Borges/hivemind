@@ -401,11 +401,12 @@ REGRAS ABSOLUTAS DESTE MODO:
 
 Você é o Agente Executor (%s) operando em MODO DIRETO (1 Único Agente, estilo Antigravity / Cursor — sem delegar ao squad).
 REGRAS DE EXECUÇÃO RÁPIDA E CIRÚRGICA:
-1. Se o usuário fez uma pergunta, pediu análise ou revisão de PR: faça no máximo 1 lote curto de leituras/buscas (3 a 5 chamadas) e responda direto.
-2. Se o usuário pediu para resolver uma issue, implementar feature ou corrigir código: VOCÊ MESMO implementa os arquivos e testes diretamente neste turno usando write_file (arquivos novos) e edit_file (arquivos existentes)!
-3. PROIBIDO EXPLORAR EM LOOP: NÃO leia spec.md, plan.md ou tasks.md inteiros de 400 em 400 linhas e NÃO liste nem inspecione PRs antigos (github_list_prs / github_pr_files) durante uma tarefa de implementação. Use search_text com o código da regra/método (ex.: RN-..., nome da classe/evento), leia apenas os 2 a 4 arquivos alvo (orçamento máximo de 8 leituras antes da 1ª edição) e comece IMEDIATAMENTE a criar/editar código com write_file / edit_file já no 2º turno.
-4. DEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare para procurar em outros PRs — implemente todos os contratos, eventos, serviços, consumidores e testes unitários da tarefa atual de forma desacoplada e compilável agora mesmo.
-5. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado.`,
+1. Pergunta ou análise sem pedido de publicação no GitHub: no máximo 1 lote curto de leituras/buscas (3 a 5 chamadas) e responda direto.
+2. Revisão, menção, comentário ou aprovação de PR: leia o PR (github_get_pr e o diff) e PUBLIQUE com github_review_pr. Menção ou "comente" → event=COMMENT. "Aprove", ou "comente e aprove" → event=APPROVE com o parecer no body, num único envio. Um resumo no chat não substitui o envio. Se github_review_pr falhar, use o MCP do GitHub (mcp_list_servers, mcp_enable_server no servidor github, mcp_call) antes de qualquer gh no run_shell.
+3. Se o usuário pediu para resolver uma issue, implementar feature ou corrigir código: VOCÊ MESMO implementa os arquivos e testes diretamente neste turno usando write_file (arquivos novos) e edit_file (arquivos existentes)!
+4. PROIBIDO EXPLORAR EM LOOP: NÃO leia spec.md, plan.md ou tasks.md inteiros de 400 em 400 linhas e NÃO liste nem inspecione PRs antigos (github_list_prs / github_pr_files) durante uma tarefa de implementação. Use search_text com o código da regra/método (ex.: RN-..., nome da classe/evento), leia apenas os 2 a 4 arquivos alvo (orçamento máximo de 8 leituras antes da 1ª edição) e comece IMEDIATAMENTE a criar/editar código com write_file / edit_file já no 2º turno.
+5. DEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare para procurar em outros PRs — implemente todos os contratos, eventos, serviços, consumidores e testes unitários da tarefa atual de forma desacoplada e compilável agora mesmo.
+6. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado.`,
 			chief.Instructions, chief.Name)
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
@@ -477,7 +478,7 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 			chief.Instructions, chief.Name, defaultMaxTriageExploreCalls, scaleGuidance, govRules)
 	}
 
-	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão. Se o usuário pedir para rodar um comando (gh, testes, build), chame run_shell. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."
+	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão para testes e build. Ação no GitHub (comentar, aprovar, revisar) usa as ferramentas nativas; se falharem, o MCP github; gh no run_shell só quando o usuário pediu o comando gh ou o MCP não está disponível. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."
 
 	if catalogBlock := skillx.CatalogBlock(r.skills, r.NativeSkills); catalogBlock != "" {
 		triageInstr += "\n\n" + catalogBlock +

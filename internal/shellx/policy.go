@@ -111,6 +111,13 @@ func IsCommitOrPRCommand(command string) (bool, string) {
 	return false, ""
 }
 
+// IsGitHubPRPublishCommand reports a gh invocation that comments on or reviews a PR.
+// Those writes go through github_review_pr or the GitHub MCP, not the CLI.
+func IsGitHubPRPublishCommand(command string) bool {
+	blocked, what := IsCommitOrPRCommand(command)
+	return blocked && (what == "gh pr comment" || what == "gh pr review")
+}
+
 // gitConfigAliasMutates detects `git -c alias.X=commit` style aliases, which
 // bypass a top-level subcommand check: the actual subcommand is the alias name.
 func gitConfigAliasMutates(args []string) bool {

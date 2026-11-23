@@ -1284,7 +1284,7 @@ func IsExplicitReviewObjective(objective string) bool {
 	if idx := strings.LastIndex(text, "[Objetivo do Usuário]"); idx >= 0 {
 		text = strings.TrimSpace(text[idx+len("[Objetivo do Usuário]"):])
 	}
-	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nTask pai:", "\nFonte:"} {
+	for _, sep := range []string{"\n\nIssue ", "\nDescrição:", "\nDescrição do PR:", "\nTask pai:", "\nFonte:"} {
 		if idx := strings.Index(text, sep); idx > 0 {
 			text = strings.TrimSpace(text[:idx])
 		}
@@ -1302,10 +1302,19 @@ func IsExplicitReviewObjective(objective string) bool {
 		"revisar", "revise", "revisão", "revisao",
 		"code review", "fazer review", "faça review", "faca review",
 		"avalie o pr", "analise o pr", "review pr", "review pull request",
+		"responder menção", "responder mencao", "fui marcado", "reavaliar pr",
+		"comente no pr", "comentar no pr", "comentário no pr", "comentario no pr",
+		"aprove o pr", "aprovar o pr", "aprove então", "aprove entao",
 	} {
 		if strings.Contains(low, kw) {
 			return true
 		}
+	}
+	if strings.Contains(low, "mcp") && (strings.Contains(low, "github") || strings.Contains(low, "pr")) {
+		return true
+	}
+	if (strings.Contains(low, "comenta") || strings.Contains(low, "comente")) && strings.Contains(low, "pr") {
+		return true
 	}
 	return false
 }
@@ -1323,7 +1332,7 @@ func CheckPRCommentAllowed(pr PullRequestDetail, currentUser string, explicitRev
 	if me != "" && isUserRequestedReviewer(pr, me) {
 		return nil
 	}
-	return fmt.Errorf("governança PR: só é permitido comentar em PR de própria autoria (%s) ou quando há pedido de revisão (PR #%d é de %q)", me, pr.Number, pr.Author)
+	return fmt.Errorf("governança PR: só é permitido comentar em PR de própria autoria (%s) ou quando há pedido de revisão (PR #%d é de %q). Se o usuário pediu para publicar, use mcp_call no servidor github. Não use gh", me, pr.Number, pr.Author)
 }
 
 // CheckPRReviewAllowed enforces that submitting a PR review (APPROVE / REQUEST_CHANGES / COMMENT)
@@ -1336,7 +1345,7 @@ func CheckPRReviewAllowed(pr PullRequestDetail, currentUser, event string, expli
 	if explicitReviewRequest || (me != "" && isUserRequestedReviewer(pr, me)) {
 		return nil
 	}
-	return fmt.Errorf("governança PR: só é permitido aprovar/revisar o PR #%d quando houver pedido de revisão", pr.Number)
+	return fmt.Errorf("governança PR: só é permitido aprovar/revisar o PR #%d quando houver pedido de revisão. Se o usuário pediu para publicar, use mcp_call no servidor github. Não use gh", pr.Number)
 }
 
 // HasReviewerApproval reports whether at least one external reviewer has an active APPROVED

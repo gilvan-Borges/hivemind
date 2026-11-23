@@ -200,6 +200,9 @@ func recordJevFailure(ctx context.Context, health *jev.HealthStore, ch jev.Choic
 	}
 	scoped := scopeJevFailureClass(ctx, ch, class)
 	health.RecordFailure(ch.Provider, ch.Model, scoped, time.Time{})
+	if strings.EqualFold(ch.Provider, "openrouter") && scoped == jev.ErrClassQuota {
+		modelx.MarkOpenRouterOutOfCredits(ctx)
+	}
 	if scoped == jev.ErrClassModelQuota && isAgyCreditsExhaustedError(rawErr) {
 		if cfk := jev.AgyCreditsFamilyKey(ch.Provider, ch.Model); cfk != "" {
 			health.RecordFailure(ch.Provider, cfk, jev.ErrClassModelQuota, time.Time{})
