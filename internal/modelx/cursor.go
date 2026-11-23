@@ -37,8 +37,9 @@ func agentDirFrom(ctx context.Context) string {
 }
 
 // CursorWindowsSandboxWarning is shown in the IDE when the Cursor CLI has no
-// sandbox on this OS. --trust and --force stay off unless the mode is full_access.
-const CursorWindowsSandboxWarning = "No Windows o Cursor CLI não tem sandbox. --trust e --force só são passados em Full Acesso. Em Governado e Auto-Edição o CLI recusa edições que pediriam aprovação."
+// sandbox on this OS. --trust is always passed: the current CLI refuses to start
+// without it. --force stays off unless the mode is full_access.
+const CursorWindowsSandboxWarning = "No Windows o Cursor CLI não tem sandbox. --trust vai em todo modo para o CLI aceitar a pasta. --force só entra em Full Acesso. Em Governado e Auto-Edição o CLI recusa edições que pediriam aprovação."
 
 func cursorSandboxMode(goos string) string {
 	if goos == "windows" {
@@ -95,7 +96,7 @@ type Cursor struct {
 	Env        map[string]string
 	IsolateEnv bool
 	// PermMode is the team permission mode captured when the model was built.
-	// Only full_access passes --trust and --force to the Cursor CLI.
+	// full_access also passes --force. --trust is always added in BuildCursorArgs.
 	PermMode string
 }
 
@@ -262,7 +263,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		mode = c.PermMode
 	}
 	if cursorSandboxMode(runtime.GOOS) == "disabled" && !cursorTrustForce(mode) {
-		prompt += "\nNeste Windows o CLI está sem sandbox e sem --trust/--force. Uma edição que exigiria aprovação é recusada. Não contorne isso.\n"
+		prompt += "\nNeste Windows o CLI está sem sandbox e sem --force. Uma edição que exigiria aprovação é recusada. Não contorne isso.\n"
 	}
 	taskPath, err := writeCursorTask(dir, prompt)
 	if err != nil {
@@ -393,16 +394,18 @@ func cursorArgs(modelID, workspace, permissionMode string) []string {
 	return BuildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS)
 }
 
-// BuildCursorArgs builds the CLI argument list for Cursor `agent` respecting
-// permissionMode (--trust --force only in full_access) and OS sandbox support.
+// BuildCursorArgs builds the CLI argument list for Cursor `agent`.
+// --trust is required by the current CLI before it will run in a folder.
+// --force is only added in full_access.
 func BuildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--stream-partial-output",
+		"--trust",
 	}
 	if CursorTrustForce(permissionMode) {
-		args = append(args, "--trust", "--force")
+		args = append(args, "--force")
 	}
 	args = append(args,
 		"--sandbox", cursorSandboxMode(goos),
@@ -431,7 +434,7 @@ func cursorTrustForce(permissionMode string) bool {
 type permissionModeKey struct{}
 
 // WithPermissionMode marks the team permission mode for this call.
-// Only full_access passes --trust and --force to the Cursor CLI.
+// full_access is what adds --force. --trust is applied for every mode.
 func WithPermissionMode(ctx context.Context, mode string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -643,6 +646,8 @@ func cursorWellKnown() []string {
 		out = append(out,
 			filepath.Join(root, "cursor-agent", "agent.exe"),
 			filepath.Join(root, "cursor-agent", "cursor-agent.exe"),
+			filepath.Join(root, "cursor-agent", "agent.cmd"),
+			filepath.Join(root, "cursor-agent", "cursor-agent.cmd"),
 		)
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {

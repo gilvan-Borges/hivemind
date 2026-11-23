@@ -42,7 +42,7 @@ func (a *CursorWorkerAdapter) Provider() string { return "cursor" }
 //  1. Resolves cursor binary & worktree directory;
 //  2. Starts loopback CallbackServer (/heartbeat, blocking /ask, idempotent /done);
 //  3. Writes the Worker Contract preamble + handoff to .hivemind/cursor-task.md;
-//  4. Launches Cursor CLI with --trust/--force ONLY when PermissionMode == full_access;
+//  4. Launches Cursor CLI with --trust always, and --force ONLY when PermissionMode == full_access;
 //  5. Streams NDJSON lines + fallback inline protocol markers until process exit;
 //  6. Returns the single idempotent DoneEvent (or synthesizes one from git status).
 func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, cb Callbacks) (DoneEvent, error) {
@@ -171,11 +171,11 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 				cb.OnTool(notice.ToolName, notice.ToolPath)
 			}
 			if notice.Usage != nil {
-			mu.Lock()
-			lastUsage = notice.Usage
-			mu.Unlock()
-		}
-		if notice.Text != "" {
+				mu.Lock()
+				lastUsage = notice.Usage
+				mu.Unlock()
+			}
+			if notice.Text != "" {
 				if notice.Final {
 					mu.Lock()
 					lastResult = notice.Text

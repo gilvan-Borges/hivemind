@@ -83,8 +83,8 @@ func TestCursorArgsOmitAutoAndNeverCarryTheKey(t *testing.T) {
 	if strings.Contains(joined, secret) {
 		t.Fatal("argumentos não podem carregar a chave")
 	}
-	if !strings.Contains(joined, "stream-json") || strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") {
-		t.Fatalf("sem full_access não passa --trust/--force: %s", joined)
+	if !strings.Contains(joined, "stream-json") || !strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") {
+		t.Fatalf("sem full_access passa --trust e não passa --force: %s", joined)
 	}
 	if !strings.Contains(joined, "--sandbox enabled") && runtime.GOOS != "windows" {
 		t.Fatalf("sandbox deveria permanecer ligada: %s", joined)
@@ -126,7 +126,7 @@ func TestCursorModelID(t *testing.T) {
 func TestCursorArgsTrustForceOnlyInFullAccess(t *testing.T) {
 	for _, mode := range []string{"", "governed", "auto_edit"} {
 		joined := strings.Join(buildCursorArgs("auto", `C:\proj`, mode, "linux"), " ")
-		if strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") || !strings.Contains(joined, "--sandbox enabled") {
+		if !strings.Contains(joined, "--trust") || strings.Contains(joined, "--force") || !strings.Contains(joined, "--sandbox enabled") {
 			t.Fatalf("modo %q: %s", mode, joined)
 		}
 	}
@@ -135,7 +135,7 @@ func TestCursorArgsTrustForceOnlyInFullAccess(t *testing.T) {
 		t.Fatalf("full_access mantém a sandbox e só então passa trust/force: %s", full)
 	}
 	win := strings.Join(buildCursorArgs("auto", `C:\proj`, "auto_edit", "windows"), " ")
-	if strings.Contains(win, "--trust") || strings.Contains(win, "--force") || !strings.Contains(win, "--sandbox disabled") {
+	if !strings.Contains(win, "--trust") || strings.Contains(win, "--force") || !strings.Contains(win, "--sandbox disabled") {
 		t.Fatalf("windows sem full_access: %s", win)
 	}
 	winFull := strings.Join(buildCursorArgs("auto", `C:\proj`, "full_access", "windows"), " ")
