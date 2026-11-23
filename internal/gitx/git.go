@@ -90,14 +90,24 @@ func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (
 	if g.IsRepo(ctx, wt) {
 		return wt, nil
 	}
-	// Only clear a leftover directory when it physically exists AND carries no
-	// .git metadata at all. A worktree that merely failed a transient probe
-	// (lock, race, ctx deadline) keeps its .git entry and is preserved.
+	// A directory with a live gitdir is left alone: a lock or a cancelled
+	// probe must not wipe uncommitted work. A gitdir pointer that no longer
+	// exists is a half-removed worktree and blocks every later run.
 	if _, statErr := os.Stat(wt); statErr == nil {
 		if _, gitErr := os.Stat(filepath.Join(wt, ".git")); gitErr == nil {
-			return "", fmt.Errorf("worktree existente em %s falhou a verificação de repositório (possível falha transitória); nada foi removido — rode novamente ou inspecione manualmente", wt)
+			if !worktreeGitDirMissing(wt) {
+				return "", fmt.Errorf("worktree existente em %s falhou a verificação de repositório (possível falha transitória); nada foi removido — rode novamente ou inspecione manualmente", wt)
+			}
+			RemoveWorktree(ctx, g, repo, wt, "")
+			if g.IsRepo(ctx, wt) {
+				return wt, nil
+			}
+			if _, still := os.Stat(wt); still == nil {
+				return "", fmt.Errorf("worktree quebrada em %s não pôde ser removida", wt)
+			}
+		} else {
+			_ = os.RemoveAll(wt)
 		}
-		_ = os.RemoveAll(wt)
 	}
 	_, _ = g.Run(ctx, repo, "worktree", "prune")
 	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
@@ -113,6 +123,34 @@ func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (
 		return "", err
 	}
 	return wt, nil
+}
+
+// worktreeGitDirMissing reports a worktree whose .git file points at a
+// gitdir that is gone. A real .git directory is never treated as missing.
+func worktreeGitDirMissing(wt string) bool {
+	gitPath := filepath.Join(wt, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return true
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir:"
+	if len(line) < len(prefix) || !strings.EqualFold(line[:len(prefix)], prefix) {
+		return true
+	}
+	gitdir := strings.TrimSpace(line[len(prefix):])
+	if gitdir == "" {
+		return true
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(wt, gitdir)
+	}
+	_, err = os.Stat(gitdir)
+	return os.IsNotExist(err)
 }
 
 // CommitAll stages everything and commits when the worktree is dirty.

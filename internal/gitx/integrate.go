@@ -312,9 +312,21 @@ func removeSingleWorktree(ctx context.Context, g Git, repo, wtPath, deleteBranch
 	if strings.TrimSpace(repo) == "" || strings.TrimSpace(wtPath) == "" || filepath.Clean(wtPath) == filepath.Clean(repo) {
 		return
 	}
+	// Shared-directory links sit at the worktree root. Removing the tree
+	// while they are still linked fails on Windows (junction) and can follow
+	// the link into the user's real folder.
+	_ = unlinkTopLevelSymlinks(wtPath)
 	_, _ = g.Run(ctx, repo, "worktree", "remove", "--force", wtPath)
-	_ = os.RemoveAll(wtPath)
+	if _, err := os.Stat(wtPath); err == nil {
+		_ = unlinkTopLevelSymlinks(wtPath)
+		_ = os.RemoveAll(wtPath)
+	}
 	_, _ = g.Run(ctx, repo, "worktree", "prune")
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		// Branch is still checked out here. Deleting it now fails and the
+		// next EnsureWorktree reports the branch as already in use.
+		return
+	}
 	if br := strings.TrimSpace(deleteBranch); br != "" && br != IntegrationBranch && br != "main" && br != "master" && br != "homolog" {
 		_, _ = g.Run(ctx, repo, "branch", "-D", br)
 	}
