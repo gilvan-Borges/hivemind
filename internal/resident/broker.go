@@ -71,6 +71,9 @@ type BrokerConfig struct {
 	Surface Surface
 	// IDE runs an action inside the open IDE. Nil means this process has no window.
 	IDE IDEActionFunc
+	// FullAccess is set only from resident.json by the IDE settings toggle.
+	// The model cannot pass this flag. Audit still runs.
+	FullAccess bool
 	// CustomHandlers optionally overrides built-in handlers (used in tests
 	// to observe exact invocation order relative to Audit.RecordDecision).
 	CustomHandlers map[string]ToolHandler
@@ -149,14 +152,22 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	callID := newShortID("res")
 	sandboxState := sandboxRequirement(toolName)
 
-	dec := DecideWithPolicy(call, b.cfg.Policy)
-	if isHostSurfaceTool(toolName) {
-		if b.cfg.ExperimentalUnisolated {
-			sandboxState = "unisolated"
-			dec = decideExperimentalSurface(call, b.fullAccess())
-		} else if b.cfg.IsolatedSandbox {
-			sandboxState = "windows_sandbox"
-			dec = decideExperimentalSurface(call, b.fullAccess())
+	var dec Decision
+	if b.cfg.FullAccess {
+		// The user turned Full on in IDE settings. Guards do not block or ask.
+		// The audit line below still runs before any effect.
+		dec = Decision{Allow: true, Ask: false, Reason: "modo full: autorizado pelo usuário, auditoria mantida"}
+		sandboxState = "full"
+	} else {
+		dec = DecideWithPolicy(call, b.cfg.Policy)
+		if isHostSurfaceTool(toolName) {
+			if b.cfg.ExperimentalUnisolated {
+				sandboxState = "unisolated"
+				dec = decideExperimentalSurface(call, b.fullAccess())
+			} else if b.cfg.IsolatedSandbox {
+				sandboxState = "windows_sandbox"
+				dec = decideExperimentalSurface(call, b.fullAccess())
+			}
 		}
 	}
 
@@ -167,7 +178,8 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	}
 
 	// 2. Fail closed if OS sandbox is mandatory for this action and cannot be applied (§12.3).
-	if requiresOSSandbox(toolName) {
+	// Full mode skips the sandbox on purpose; the decision is still audited.
+	if requiresOSSandbox(toolName) && !b.cfg.FullAccess {
 		if b.cfg.Sandbox == nil {
 			err := fmt.Errorf("%w: runner de sandbox ausente", sandboxx.ErrSandboxUnavailable)
 			b.recordDenyBestEffort(callID, call, tier, target, "unavailable", "sandbox_unavailable", err.Error())
@@ -503,7 +515,7 @@ func (b *Broker) surface() Surface {
 }
 
 func (b *Broker) refuseIfSurfaceOff() error {
-	if b.cfg.ExperimentalUnisolated || b.cfg.IsolatedSandbox {
+	if b.cfg.FullAccess || b.cfg.ExperimentalUnisolated || b.cfg.IsolatedSandbox {
 		return nil
 	}
 	return fmt.Errorf("recusado: experimental_unisolated e sandbox .wsb desligados")

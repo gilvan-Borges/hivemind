@@ -69,10 +69,12 @@ type Runner struct {
 	// OnRoutineSaved rearms the in-process timer after cron_add.
 	OnRoutineSaved func()
 	// IDE runs ide_action against the open IDE. Nil refuses the tool.
-	IDE      IDEActionFunc
-	gateOnce sync.Once
-	gate     *spawnGate
-	brokerMu sync.Mutex
+	IDE IDEActionFunc
+	// FullAccess mirrors resident.json. The model cannot set it.
+	FullAccess bool
+	gateOnce   sync.Once
+	gate       *spawnGate
+	brokerMu   sync.Mutex
 }
 
 // residentSpillCallbacks returns the tool-result spillover guard for one
@@ -194,6 +196,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		BaseDir:                baseDir,
 		OnRoutineSaved:         r.OnRoutineSaved,
 		IDE:                    r.IDE,
+		FullAccess:             r.FullAccess,
 		ExperimentalUnisolated: r.Config.ExperimentalUnisolated,
 		IsolatedSandbox:        r.Config.IsolatedSandbox,
 	})

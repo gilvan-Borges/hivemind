@@ -63,6 +63,8 @@ describe("Configurações Globais da IDE (ide-settings)", () => {
     expect(hiveHtml).toContain("Ativação &amp; Presença do Agent Hive");
     expect(hiveHtml).toContain('id="ide-hive-enabled"');
     expect(hiveHtml).toContain('id="ide-hive-orb-enabled"');
+    expect(hiveHtml).toContain('id="ide-hive-full-access"');
+    expect(hiveHtml).not.toContain("Permissão Full ligada");
 
     // Seção limits
     state.ideSettingsSection = "limits";

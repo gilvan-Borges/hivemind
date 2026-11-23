@@ -4,7 +4,10 @@
 // untrusted-data fencing — all in pure Go without opening any network port.
 package resident
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // LaneID is the fixed lane identifier for the resident agent across the IDE
 // and the existing Remote Bridge / SSE contract (§1.10, §10).
@@ -115,6 +118,27 @@ type Config struct {
 	// (default 24.000). O excedente vira head+tail com o texto completo
 	// persistido para recuperação via read_file.
 	MaxSubagentSummaryChars int `json:"maxSubagentSummaryChars,omitempty"`
+	// PermissionMode is "governed" (default) or "full". Only the IDE settings
+	// write this. The model cannot.
+	PermissionMode string `json:"permissionMode,omitempty"`
+}
+
+// IsFullAccess reports the explicit Full permission toggle. Default is off.
+func (c Config) IsFullAccess() bool {
+	switch strings.ToLower(strings.TrimSpace(c.PermissionMode)) {
+	case "full", "full_access":
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeResidentPermission accepts the Full toggle and anything else as governed.
+func NormalizeResidentPermission(raw string) string {
+	if (Config{PermissionMode: raw}).IsFullAccess() {
+		return "full"
+	}
+	return "governed"
 }
 
 // EffectiveMaxConcurrentSubagents returns the spawn concurrency cap (default 2).
@@ -187,6 +211,8 @@ type Status struct {
 	ConversationID         string   `json:"conversationId,omitempty"`
 	SharedSessionID        string   `json:"sharedSessionId,omitempty"`
 	LaneID                 string   `json:"laneId,omitempty"`
+	PermissionMode         string   `json:"permissionMode,omitempty"`
+	FullAccess             bool     `json:"fullAccess,omitempty"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.
@@ -246,6 +272,7 @@ type TurnRequest struct {
 	ReplyMessageID   string
 	SharedHistory    []LocalTurnMessage
 	SkipLocalHistory bool
+	FullAccess       bool
 }
 
 // TurnResult summarizes the completed turn.

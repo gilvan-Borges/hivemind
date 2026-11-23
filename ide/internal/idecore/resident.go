@@ -103,6 +103,23 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	return m
 }
 
+// SetFullAccess persists the Full permission toggle. Off is governed.
+func (m *ResidentManager) SetFullAccess(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	if on {
+		cfg.PermissionMode = "full"
+	} else {
+		cfg.PermissionMode = "governed"
+	}
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
 // SetIDEAction connects ide_action to the open IDE. The model cannot replace it.
 func (m *ResidentManager) SetIDEAction(fn resident.IDEActionFunc) {
 	if m == nil {
@@ -391,6 +408,8 @@ func (m *ResidentManager) Status() resident.Status {
 		ConversationID:         convID,
 		SharedSessionID:        sharedSID,
 		LaneID:                 laneID,
+		PermissionMode:         resident.NormalizeResidentPermission(cfg.PermissionMode),
+		FullAccess:             cfg.IsFullAccess(),
 	}
 }
 
@@ -571,6 +590,7 @@ func (m *ResidentManager) runTurn(
 		Model:           m.testModel,
 		SkillsDir:       skillx.UserSkillsDir(),
 		IDE:             m.ideAction,
+		FullAccess:      cfg.IsFullAccess(),
 		AllowedTiers:    narrow,
 		PermissionMode:  m.permissionMode,
 		SquadHandoff:    m.squadHandoff,
@@ -642,6 +662,7 @@ func (m *ResidentManager) runTurn(
 		ReplyMessageID:   shared.ReplyID,
 		SharedHistory:    shared.History,
 		SkipLocalHistory: true,
+		FullAccess:       cfg.IsFullAccess(),
 	})
 	if runErr != nil {
 		m.mu.Lock()

@@ -254,6 +254,15 @@ function renderAgentHiveSectionHtml(): string {
         </div>
 
         <label class="ide-settings-toggle-row">
+          <input type="checkbox" id="ide-hive-full-access" ${st?.fullAccess ? "checked" : ""} />
+          <div>
+            <div class="ide-settings-toggle-title">Permissão Full</div>
+            <div class="dim">Desligado por padrão. Quando ligado, o Agent Hive não pede aprovação e não é barrado por política, sandbox, fence, netguard ou allowlist. Vale para o PC, o browser e a IDE. A auditoria continua gravando cada ação.</div>
+          </div>
+        </label>
+        ${st?.fullAccess ? `<div class="tc-error">Permissão Full ligada: o Agent Hive age sem pedir confirmação.</div>` : ""}
+
+        <label class="ide-settings-toggle-row">
           <input type="checkbox" id="ide-hive-experimental-unisolated" ${st?.experimentalUnisolated ? "checked" : ""} />
           <div>
             <div class="ide-settings-toggle-title">Browser e desktop SEM isolamento (experimental_unisolated)</div>
@@ -715,6 +724,20 @@ export function bindIdeSettingsEvents(): void {
   });
   document.getElementById("ide-comp-dnd")?.addEventListener("change", (ev) => {
     updateSettings({ doNotDisturb: Boolean((ev.target as HTMLInputElement | null)?.checked) });
+  });
+
+  document.getElementById("ide-hive-full-access")?.addEventListener("change", async (ev) => {
+    const backend = api();
+    const on = Boolean((ev.target as HTMLInputElement | null)?.checked);
+    if (!backend?.ResidentSetFullAccess) return;
+    try {
+      residentState.status = await backend.ResidentSetFullAccess(on);
+      toast(on ? "Permissão Full ligada. A auditoria continua ativa." : "Permissão Full desligada. O Agent Hive volta ao modo governado.", "success");
+      rerenderSelf();
+    } catch (err: any) {
+      toastError("salvar a permissão Full do Agent Hive", err);
+      rerenderSelf();
+    }
   });
 
   document.getElementById("ide-hive-experimental-unisolated")?.addEventListener("change", async (ev) => {

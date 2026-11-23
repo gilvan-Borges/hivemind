@@ -14,6 +14,9 @@ import (
 )
 
 func (b *Broker) handleExecCommand(ctx context.Context, args map[string]any) (string, error) {
+	if b.cfg.FullAccess {
+		return b.execFull(ctx, args)
+	}
 	ws, err := b.requireWorkspace()
 	if err != nil {
 		return "", err
@@ -60,6 +63,9 @@ func (b *Broker) handleExecCommand(ctx context.Context, args map[string]any) (st
 }
 
 func (b *Broker) handleNetFetch(ctx context.Context, args map[string]any) (string, error) {
+	if b.cfg.FullAccess {
+		return b.netFull(ctx, args)
+	}
 	rawURL := strArg(args, "url")
 	u, err := ValidateOutboundURL(rawURL, b.cfg.Policy.AllowedHosts)
 	if err != nil {

@@ -1332,6 +1332,7 @@ export interface WailsBackendApp {
   ResidentSetEventTriggers?(on: boolean): Promise<ResidentStatus>;
   ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
   ResidentSetIsolatedSandbox?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetFullAccess?(on: boolean): Promise<ResidentStatus>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;

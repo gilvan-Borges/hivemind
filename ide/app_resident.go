@@ -123,6 +123,15 @@ func (a *App) ResidentSetOrbEnabled(on bool) (resident.Status, error) {
 	return st, nil
 }
 
+// ResidentSetFullAccess turns the explicit Full permission mode on or off.
+// Off is the default. On skips resident guards and still writes the audit log.
+func (a *App) ResidentSetFullAccess(on bool) (resident.Status, error) {
+	if a.resident == nil {
+		return resident.Status{}, fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.SetFullAccess(on)
+}
+
 // ResidentSetJevFailover enables or disables Jev fallback route retries for the resident assistant.
 func (a *App) ResidentSetJevFailover(on bool) (resident.Status, error) {
 	if a.resident == nil {
