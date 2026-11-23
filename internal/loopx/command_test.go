@@ -21,6 +21,10 @@ func TestParseGoalAndLoop(t *testing.T) {
 	if !ok || stop.Action != "stop" || stop.ID != "fix-auth" {
 		t.Fatalf("stop: %+v", stop)
 	}
+	on, ok := Parse(`/loop on arquivo revisar o save --check "go test ./..."`)
+	if !ok || on.Kind != KindProactive || len(on.Events) != 1 || on.Events[0] != "arquivo" {
+		t.Fatalf("evento: %+v %v", on, ok)
+	}
 	timed, ok := Parse("/loop 10m cuidar do CI --max 3")
 	if !ok || timed.Kind != KindTime || timed.Cron != "*/10 * * * *" || timed.Max != 3 || timed.Text != "cuidar do CI" {
 		t.Fatalf("tempo: %+v", timed)

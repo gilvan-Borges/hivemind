@@ -144,6 +144,81 @@ func (s *Server) handleRoutines(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"routines": items})
 }
 
+func (s *Server) loopControls() (LoopControls, bool) {
+	if s == nil || s.deps == nil {
+		return nil, false
+	}
+	c, ok := s.deps.(LoopControls)
+	return c, ok
+}
+
+func (s *Server) handleLoops(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.loopControls()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"loops": []LoopInfo{}})
+		return
+	}
+	ws := strings.TrimSpace(r.URL.Query().Get("workspace"))
+	if ws == "" {
+		writeErr(w, http.StatusBadRequest, "workspace obrigatório")
+		return
+	}
+	if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" {
+		item, err := c.GetLoop(ws, id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+		return
+	}
+	items, err := c.ListLoops(ws)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []LoopInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"loops": items})
+}
+
+func (s *Server) handleLoopStop(w http.ResponseWriter, r *http.Request) {
+	s.loopAction(w, r, func(c LoopControls, ws, id string) error { return c.StopLoop(ws, id) })
+}
+
+func (s *Server) handleLoopPause(w http.ResponseWriter, r *http.Request) {
+	s.loopAction(w, r, func(c LoopControls, ws, id string) error { return c.PauseLoop(ws, id) })
+}
+
+func (s *Server) handleLoopResume(w http.ResponseWriter, r *http.Request) {
+	s.loopAction(w, r, func(c LoopControls, ws, id string) error { return c.ResumeLoop(ws, id) })
+}
+
+func (s *Server) loopAction(w http.ResponseWriter, r *http.Request, fn func(LoopControls, string, string) error) {
+	c, ok := s.loopControls()
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, "loops indisponíveis neste host")
+		return
+	}
+	var req struct {
+		Workspace string `json:"workspace"`
+		ID        string `json:"id"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Workspace) == "" || strings.TrimSpace(req.ID) == "" {
+		writeErr(w, http.StatusBadRequest, "workspace e id obrigatórios")
+		return
+	}
+	if err := fn(c, req.Workspace, req.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID})
+}
+
 func (s *Server) handleRoutineEnabled(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.controls()
 	if !ok {

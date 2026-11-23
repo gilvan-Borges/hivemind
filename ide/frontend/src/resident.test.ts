@@ -58,7 +58,23 @@ describe("badge do Agent Hive", () => {
     residentState.subTab = "chat";
     const html = renderResidentViewHtml();
     expect(html).toContain("<h2>Agent Hive</h2>");
+    expect(html).toContain("Nenhum loop neste projeto.");
     expect(html).not.toContain("<h2>Hive Residente</h2>");
+  });
+});
+
+describe("painel de loops", () => {
+  it("mostra estado, iteração, veredito e parar", () => {
+    residentState.status = status(false);
+    residentState.messages = [];
+    residentState.subTab = "chat";
+    residentState.loops = [{ id: "fix-auth", name: "Testes verdes", status: "running", iteration: 2, lastVerdict: "continue" }];
+    const html = renderResidentViewHtml();
+    expect(html).toContain("Testes verdes");
+    expect(html).toContain("iteração 2");
+    expect(html).toContain("continue");
+    expect(html).toContain('data-loop-stop="fix-auth"');
+    residentState.loops = [];
   });
 });
 

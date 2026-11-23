@@ -263,6 +263,14 @@ function renderAgentHiveSectionHtml(): string {
         ${st?.fullAccess ? `<div class="tc-error">Permissão Full ligada: o Agent Hive age sem pedir confirmação.</div>` : ""}
 
         <label class="ide-settings-toggle-row">
+          <input type="checkbox" id="ide-hive-full-unattended" ${st?.allowFullUnattended ? "checked" : ""} />
+          <div>
+            <div class="ide-settings-toggle-title">Full em loop desacompanhado</div>
+            <div class="dim">Desligado por padrão. Só esta tela grava. Sem ele, loop de rotina ou de evento continua governado mesmo com o modo Full ativo. Um loop acompanhado segue o Full normal.</div>
+          </div>
+        </label>
+
+        <label class="ide-settings-toggle-row">
           <input type="checkbox" id="ide-hive-experimental-unisolated" ${st?.experimentalUnisolated ? "checked" : ""} />
           <div>
             <div class="ide-settings-toggle-title">Browser e desktop SEM isolamento (experimental_unisolated)</div>
@@ -736,6 +744,20 @@ export function bindIdeSettingsEvents(): void {
       rerenderSelf();
     } catch (err: any) {
       toastError("salvar a permissão Full do Agent Hive", err);
+      rerenderSelf();
+    }
+  });
+
+  document.getElementById("ide-hive-full-unattended")?.addEventListener("change", async (ev) => {
+    const backend = api();
+    const on = Boolean((ev.target as HTMLInputElement | null)?.checked);
+    if (!backend?.ResidentSetAllowFullUnattended) return;
+    try {
+      residentState.status = await backend.ResidentSetAllowFullUnattended(on);
+      toast(on ? "Loops de rotina e evento podem usar a Permissão Full." : "Loops desacompanhados voltam ao modo governado.", "success");
+      rerenderSelf();
+    } catch (err: any) {
+      toastError("salvar Full desacompanhado", err);
       rerenderSelf();
     }
   });

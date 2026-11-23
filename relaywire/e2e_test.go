@@ -70,6 +70,12 @@ func TestAllowedRPC(t *testing.T) {
 	if !AllowedRPC("POST", "/api/v1/git/commit") || !AllowedRPC("GET", "/api/v1/routines") || !AllowedRPC("POST", "/api/v1/project/permission") {
 		t.Fatal("rotas novas do app precisam passar pelo relay")
 	}
+	if !AllowedRPC("GET", "/api/v1/loops") || !AllowedRPC("POST", "/api/v1/loops/stop") {
+		t.Fatal("loops do app precisam passar pelo relay")
+	}
+	if AllowedRPC("POST", "/api/v1/loops/full") {
+		t.Fatal("o app não grava allow_full_unattended")
+	}
 	if !AllowedRPC("POST", "/api/v1/runs/steer") {
 		t.Fatal("steer deveria ser permitido")
 	}

@@ -188,6 +188,32 @@ type RoutineInfo struct {
 	Text       string `json:"text"`
 	Workstream string `json:"workstream,omitempty"`
 	Enabled    bool   `json:"enabled"`
+	LoopID     string `json:"loopId,omitempty"`
+}
+
+// LoopInfo is one Agent Hive loop the app can watch and stop.
+type LoopInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Status        string `json:"status"`
+	Outcome       string `json:"outcome,omitempty"`
+	Iteration     int    `json:"iteration"`
+	Phase         string `json:"phase,omitempty"`
+	LastVerdict   string `json:"lastVerdict,omitempty"`
+	LastReason    string `json:"lastReason,omitempty"`
+	SpentMicroUSD int64  `json:"spentMicroUsd,omitempty"`
+	PRURL         string `json:"prUrl,omitempty"`
+}
+
+// LoopControls is the loop surface. The app lists, reads and stops.
+// It cannot turn on allow_full_unattended.
+type LoopControls interface {
+	ListLoops(workspace string) ([]LoopInfo, error)
+	GetLoop(workspace, id string) (LoopInfo, error)
+	StopLoop(workspace, id string) error
+	PauseLoop(workspace, id string) error
+	ResumeLoop(workspace, id string) error
 }
 
 // Activity is a live "what the agent is doing" card. It rides SSE type "activity".

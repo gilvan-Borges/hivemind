@@ -47,8 +47,8 @@ func (m *ResidentManager) loopFull(workspace string, accompanied bool, mode stri
 	if workspacePermissionFull(workspace) {
 		project = true
 	}
-	// allow_full_unattended chega na fase do interruptor local. Até lá, cron fica governado.
-	return loopx.ApplyPermission(mode, project, accompanied, false)
+	allow := err == nil && cfg.AllowFullUnattended
+	return loopx.ApplyPermission(mode, project, accompanied, allow)
 }
 
 func (m *ResidentManager) interceptLoop(ctx context.Context, workspace, workstream, message, sessionID string, origin resident.Origin) (bool, resident.TurnResult, error) {
@@ -100,7 +100,7 @@ func (m *ResidentManager) dispatchLoop(ctx context.Context, workspace string, cm
 		return "Loop " + cmd.ID + " retomado.", nil
 	case "start":
 		if cmd.Kind == loopx.KindTime || cmd.Kind == loopx.KindProactive {
-			return "", fmt.Errorf("o loop por tempo entra com o agendador; use /goal por enquanto")
+			return m.startScheduledLoop(workspace, cmd, origin, conv, session)
 		}
 		return m.startGoalLoop(workspace, cmd, origin, conv, session)
 	default:
@@ -145,6 +145,124 @@ func (m *ResidentManager) startGoalLoop(workspace string, cmd loopx.Command, ori
 		SessionID:      session,
 	})
 	return "Loop " + id + " iniciado. O host confere e decide quando parar.", nil
+}
+
+func (m *ResidentManager) startScheduledLoop(workspace string, cmd loopx.Command, origin resident.Origin, conv, session string) (string, error) {
+	if len(cmd.Checks) == 0 {
+		return "", fmt.Errorf("informe um check do host, por exemplo --check \"go test ./...\"")
+	}
+	id, err := nextLoopID(workspace, loopx.Slug(cmd.Text))
+	if err != nil {
+		return "", err
+	}
+	every := ""
+	if cmd.Every > 0 {
+		every = cmd.Every.String()
+	}
+	spec := loopx.Spec{
+		ID: id, Name: clipLoop(cmd.Text, 80), Kind: cmd.Kind, Objective: cmd.Text,
+		DoneWhen: []string{cmd.Text},
+		Trigger:  loopx.TriggerSpec{Cron: cmd.Cron, Every: every, Events: append([]string(nil), cmd.Events...)},
+	}
+	if cmd.Max > 0 {
+		spec.Limits.MaxIterations = cmd.Max
+	}
+	if cmd.JudgeOff {
+		off := false
+		spec.Judge.Enabled = &off
+	}
+	for i, run := range cmd.Checks {
+		spec.Checks = append(spec.Checks, loopx.Check{Name: fmt.Sprintf("check-%d", i+1), Run: run})
+	}
+	if _, err := m.loopController().Start(workspace, spec, conv, session); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(cmd.Cron) != "" {
+		if _, err := resident.SaveRoutine(m.baseDir, resident.Routine{
+			Expr: cmd.Cron, Text: cmd.Text, Enabled: true, LoopID: id, Workspace: workspace,
+		}); err != nil {
+			return "", err
+		}
+		if m.sched != nil {
+			m.sched.Arm()
+		}
+	}
+	accompanied := origin == resident.OriginLocal || origin == resident.OriginRemote
+	m.launchLoop(workspace, id, loopx.RunOptions{
+		MaxSteps: 3, Accompanied: accompanied, ConversationID: conv, SessionID: session,
+	})
+	when := cmd.Cron
+	if when == "" {
+		when = "evento " + strings.Join(cmd.Events, ",")
+	}
+	return "Loop " + id + " armado (" + when + "). Cada disparo faz no máximo 3 iterações.", nil
+}
+
+func (m *ResidentManager) wakeLoops(kind string) {
+	if m == nil {
+		return
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	if m.projectsFn != nil {
+		for _, p := range m.projectsFn() {
+			root := strings.TrimSpace(p.Root)
+			if root == "" || seen[root] {
+				continue
+			}
+			seen[root] = true
+			dirs = append(dirs, root)
+		}
+	}
+	m.mu.Lock()
+	bound := strings.TrimSpace(m.boundWorkspace)
+	m.mu.Unlock()
+	if bound != "" && !seen[bound] {
+		dirs = append(dirs, bound)
+	}
+	for _, ws := range dirs {
+		list, err := loopx.List(ws)
+		if err != nil {
+			continue
+		}
+		for _, sum := range list {
+			if sum.Status != loopx.StatusWaiting {
+				continue
+			}
+			spec, _, serr := loopx.LoadSpec(ws, sum.ID)
+			if serr != nil || !containsEvent(spec.Trigger.Events, kind) {
+				continue
+			}
+			_ = m.WakeLoop(ws, sum.ID)
+		}
+	}
+}
+
+func containsEvent(events []string, kind string) bool {
+	for _, ev := range events {
+		if ev == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// WakeLoop starts one waiting loop from cron or from an event. It is unattended.
+func (m *ResidentManager) WakeLoop(workspace, id string) error {
+	if !loopx.ValidID(id) || strings.TrimSpace(workspace) == "" {
+		return fmt.Errorf("loop inválido")
+	}
+	st, err := loopx.LoadState(workspace, id)
+	if err != nil {
+		return err
+	}
+	if st.Status != loopx.StatusWaiting {
+		return nil
+	}
+	m.launchLoop(workspace, id, loopx.RunOptions{
+		MaxSteps: 3, Accompanied: false, ConversationID: st.ConversationID, SessionID: st.SessionID,
+	})
+	return nil
 }
 
 func (m *ResidentManager) launchLoop(workspace, id string, opt loopx.RunOptions) {
@@ -201,6 +319,14 @@ func (m *ResidentManager) pauseLoops() bool {
 		}
 	}
 	return true
+}
+
+// GetLoop returns one loop. A missing spec is not found.
+func (m *ResidentManager) GetLoop(workspace, id string) (loopx.Summary, error) {
+	if _, _, err := loopx.LoadSpec(workspace, id); err != nil {
+		return loopx.Summary{}, fmt.Errorf("loop não encontrado")
+	}
+	return loopx.Summarize(workspace, id)
 }
 
 // ListLoops returns the loops stored in the workspace.

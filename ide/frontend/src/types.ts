@@ -1094,6 +1094,21 @@ export interface ResidentStatus {
   laneId?: string;
   permissionMode?: string;
   fullAccess?: boolean;
+  allowFullUnattended?: boolean;
+}
+
+export interface LoopSummary {
+  id: string;
+  name?: string;
+  kind?: string;
+  status: string;
+  outcome?: string;
+  iteration: number;
+  phase?: string;
+  lastVerdict?: string;
+  lastReason?: string;
+  spentMicroUsd?: number;
+  prUrl?: string;
 }
 
 export interface ResidentTurnResult {
@@ -1333,6 +1348,11 @@ export interface WailsBackendApp {
   ResidentSetExperimentalUnisolated?(on: boolean): Promise<ResidentStatus>;
   ResidentSetIsolatedSandbox?(on: boolean): Promise<ResidentStatus>;
   ResidentSetFullAccess?(on: boolean): Promise<ResidentStatus>;
+  ResidentSetAllowFullUnattended?(on: boolean): Promise<ResidentStatus>;
+  ResidentListLoops?(workspace: string): Promise<LoopSummary[]>;
+  ResidentStopLoop?(workspace: string, id: string): Promise<void>;
+  ResidentPauseLoop?(workspace: string, id: string): Promise<void>;
+  ResidentResumeLoop?(workspace: string, id: string): Promise<void>;
   ResidentSavePolicy?(allowedBinaries: string[], allowedHosts: string[]): Promise<ResidentStatus>;
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;

@@ -17,6 +17,7 @@ type Command struct {
 	Checks   []string
 	Every    time.Duration
 	Cron     string
+	Events   []string
 	ID       string
 	JudgeOff bool
 }
@@ -69,7 +70,11 @@ func parseLoop(args []string) (Command, bool) {
 	}
 	cmd := Command{Action: "start", Kind: KindTime}
 	rest := args
-	if d, err := time.ParseDuration(args[0]); err == nil && d > 0 {
+	if args[0] == "on" && len(args) >= 2 {
+		cmd.Kind = KindProactive
+		cmd.Events = []string{args[1]}
+		rest = args[2:]
+	} else if d, err := time.ParseDuration(args[0]); err == nil && d > 0 {
 		cmd.Every = d
 		rest = args[1:]
 	} else if args[0] == "cron" && len(args) >= 2 {
@@ -91,8 +96,15 @@ func parseLoop(args []string) (Command, bool) {
 		cmd.Cron = cron
 		cmd.Every = roundUpMinute(cmd.Every)
 	}
-	if strings.TrimSpace(cmd.Cron) == "" {
+	if strings.TrimSpace(cmd.Cron) == "" && len(cmd.Events) == 0 {
 		return Command{}, false
+	}
+	for _, ev := range cmd.Events {
+		switch ev {
+		case "arquivo", "lane", "aprovacao", "pr_review", "ci_failed":
+		default:
+			return Command{}, false
+		}
 	}
 	return cmd, true
 }

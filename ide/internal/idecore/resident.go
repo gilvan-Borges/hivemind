@@ -111,6 +111,20 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	return m
 }
 
+// SetAllowFullUnattended persists the local switch for unattended Full loops.
+// Cron and events stay governed without it. Only this settings call writes the flag.
+func (m *ResidentManager) SetAllowFullUnattended(on bool) (resident.Status, error) {
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return m.Status(), err
+	}
+	cfg.AllowFullUnattended = on
+	if err := resident.SaveConfig(m.baseDir, cfg); err != nil {
+		return m.Status(), err
+	}
+	return m.Status(), nil
+}
+
 // SetFullAccess persists the Full permission toggle. Off is governed.
 func (m *ResidentManager) SetFullAccess(on bool) (resident.Status, error) {
 	cfg, err := resident.LoadConfig(m.baseDir)
@@ -170,7 +184,7 @@ func (m *ResidentManager) NoteHostEvent(kind string) {
 		return
 	}
 	switch kind {
-	case "arquivo", "lane", "aprovacao":
+	case "arquivo", "lane", "aprovacao", "pr_review", "ci_failed":
 	default:
 		return
 	}
@@ -178,7 +192,11 @@ func (m *ResidentManager) NoteHostEvent(kind string) {
 	enabled := m.enabled
 	on := m.eventTriggers
 	m.mu.Unlock()
-	if !enabled || !on || m.sessions == nil || m.sessions.Emit == nil {
+	if !enabled || !on {
+		return
+	}
+	m.wakeLoops(kind)
+	if m.sessions == nil || m.sessions.Emit == nil {
 		return
 	}
 	m.sessions.Emit(LaneEvent{
@@ -309,6 +327,10 @@ func (m *ResidentManager) fireRoutine(rt resident.Routine) {
 	if !m.IsEnabled() {
 		return
 	}
+	if strings.TrimSpace(rt.LoopID) != "" {
+		_ = m.WakeLoop(rt.Workspace, rt.LoopID)
+		return
+	}
 	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes, turnOpts{})
 }
 
@@ -420,6 +442,7 @@ func (m *ResidentManager) Status() resident.Status {
 		LaneID:                 laneID,
 		PermissionMode:         resident.NormalizeResidentPermission(cfg.PermissionMode),
 		FullAccess:             cfg.IsFullAccess(),
+		AllowFullUnattended:    cfg.AllowFullUnattended,
 	}
 }
 

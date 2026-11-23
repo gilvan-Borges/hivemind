@@ -203,9 +203,15 @@ func PauseRunning(workspace string) (int, error) {
 		if sum.Status != StatusRunning {
 			continue
 		}
+		next := StatusPaused
+		if spec, _, serr := LoadSpec(workspace, sum.ID); serr == nil && (spec.Kind == KindTime || spec.Kind == KindProactive) {
+			// Um loop por tempo ou evento volta a esperar o próximo gatilho.
+			// Pausa de pessoa continua paused e o cron não acorda.
+			next = StatusWaiting
+		}
 		if _, err := UpdateState(workspace, sum.ID, func(st *State) error {
 			if st.Status == StatusRunning {
-				st.Status = StatusPaused
+				st.Status = next
 				st.Phase = ""
 			}
 			return nil
