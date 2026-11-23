@@ -47,7 +47,7 @@ func Parse(line string) (Command, bool) {
 }
 
 func parseGoal(args []string) (Command, bool) {
-	cmd := Command{Action: "start", Kind: KindGoal, JudgeOff: true}
+	cmd := Command{Action: "start", Kind: KindGoal}
 	text, err := fillFlags(&cmd, args)
 	if err != nil || strings.TrimSpace(text) == "" {
 		return Command{}, false
@@ -67,7 +67,7 @@ func parseLoop(args []string) (Command, bool) {
 		}
 		return Command{Action: args[0], ID: args[1]}, true
 	}
-	cmd := Command{Action: "start", Kind: KindTime, JudgeOff: true}
+	cmd := Command{Action: "start", Kind: KindTime}
 	rest := args
 	if d, err := time.ParseDuration(args[0]); err == nil && d > 0 {
 		cmd.Every = d

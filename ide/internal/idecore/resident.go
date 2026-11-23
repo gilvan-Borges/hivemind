@@ -49,11 +49,12 @@ type ResidentManager struct {
 	testModel model.LLM
 	ideAction resident.IDEActionFunc
 
-	loopCtl      *loopx.Controller
-	loopStop     map[string]context.CancelFunc
-	loopWG       sync.WaitGroup
-	testLoopExec loopx.Executor
-	testLoopCmd  loopx.CommandRunner
+	loopCtl       *loopx.Controller
+	loopStop      map[string]context.CancelFunc
+	loopWG        sync.WaitGroup
+	testLoopExec  loopx.Executor
+	testLoopCmd   loopx.CommandRunner
+	testLoopJudge loopx.Judge
 }
 
 // ResidentManagerOptions configures ResidentManager.

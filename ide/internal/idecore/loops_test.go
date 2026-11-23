@@ -15,6 +15,12 @@ func (okExec) Run(context.Context, loopx.ExecRequest) (loopx.ExecResult, error) 
 	return loopx.ExecResult{Summary: "feito"}, nil
 }
 
+type metJudge struct{}
+
+func (metJudge) Run(context.Context, loopx.JudgeRequest) (loopx.JudgeResult, error) {
+	return loopx.JudgeResult{Verdict: loopx.JudgeMet, Reason: "ok"}, nil
+}
+
 type okCmd struct{}
 
 func (okCmd) Run(context.Context, string, string, time.Duration) (int, string, error) {
@@ -36,6 +42,7 @@ func TestGoalCommandFinishesOnHostCheck(t *testing.T) {
 	t.Cleanup(m.Close)
 	m.testLoopExec = okExec{}
 	m.testLoopCmd = okCmd{}
+	m.testLoopJudge = metJudge{}
 	ws := t.TempDir()
 	res, err := m.RunTurn(context.Background(), ws, "geral", `/goal ficar verde --max 2 --check "go test ./..."`, resident.OriginLocal)
 	if err != nil {
