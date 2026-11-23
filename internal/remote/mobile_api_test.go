@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,8 @@ type stubControls struct {
 	prURL    string
 	routines []RoutineInfo
 	readID   string
+	loops    []LoopInfo
+	stopped  string
 }
 
 func (s *stubControls) SetPermissionMode(_ string, mode string) error {
@@ -40,6 +43,22 @@ func (s *stubControls) SetRoutineEnabled(id string, enabled bool) error {
 	}
 	return nil
 }
+func (s *stubControls) ListLoops(string) ([]LoopInfo, error) { return s.loops, nil }
+func (s *stubControls) GetLoop(_ string, id string) (LoopInfo, error) {
+	for _, item := range s.loops {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return LoopInfo{}, fmt.Errorf("loop não encontrado")
+}
+func (s *stubControls) StopLoop(_ string, id string) error {
+	s.stopped = id
+	return nil
+}
+func (s *stubControls) PauseLoop(string, string) error  { return nil }
+func (s *stubControls) ResumeLoop(string, string) error { return nil }
+
 func (s *stubControls) MarkSessionRead(_ context.Context, _ string, id string) error {
 	s.readID = id
 	return nil
@@ -108,6 +127,32 @@ func TestActivityEventAndMobileRoutes(t *testing.T) {
 	bare.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("sem IDE = %d", rec.Code)
+	}
+}
+
+func TestLoopRoutesListAndStop(t *testing.T) {
+	controls := &stubControls{loops: []LoopInfo{{ID: "fix-auth", Status: "running", Iteration: 2, LastVerdict: "continue"}}}
+	srv := NewServer(NewHub(), controls, Config{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/loops?workspace=/tmp/acme", nil)
+	req = srv.AttachLocal(req)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"fix-auth"`) {
+		t.Fatalf("lista %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/loops?workspace=/tmp/acme&id=fix-auth", nil)
+	req = srv.AttachLocal(req)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"iteration":2`) {
+		t.Fatalf("item %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/loops/stop", strings.NewReader(`{"workspace":"/tmp/acme","id":"fix-auth"}`))
+	req = srv.AttachLocal(req)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || controls.stopped != "fix-auth" {
+		t.Fatalf("stop %d %s stopped=%s", rec.Code, rec.Body.String(), controls.stopped)
 	}
 }
 

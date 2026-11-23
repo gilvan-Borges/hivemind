@@ -124,6 +124,9 @@ type Config struct {
 	// PermissionMode is "governed" (default) or "full". Only the IDE settings
 	// write this. The model cannot.
 	PermissionMode string `json:"permissionMode,omitempty"`
+	// AllowFullUnattended lets a cron or event loop run in Full.
+	// Only the IDE settings screen writes it. Default is false.
+	AllowFullUnattended bool `json:"allowFullUnattended,omitempty"`
 }
 
 // IsFullAccess reports the explicit Full permission toggle. Default is off.
@@ -216,6 +219,7 @@ type Status struct {
 	LaneID                 string   `json:"laneId,omitempty"`
 	PermissionMode         string   `json:"permissionMode,omitempty"`
 	FullAccess             bool     `json:"fullAccess,omitempty"`
+	AllowFullUnattended    bool     `json:"allowFullUnattended,omitempty"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.

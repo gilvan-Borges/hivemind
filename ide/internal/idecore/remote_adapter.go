@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
@@ -23,6 +24,7 @@ type Adapter struct {
 }
 
 var _ remote.Deps = (*Adapter)(nil)
+var _ remote.LoopControls = (*Adapter)(nil)
 var _ remote.ProjectControls = (*Adapter)(nil)
 
 // RunStart registers the run in the Hub, echoes the mobile message into the
@@ -200,7 +202,7 @@ func (a *Adapter) ListRoutines() ([]remote.RoutineInfo, error) {
 	for _, rt := range items {
 		out = append(out, remote.RoutineInfo{
 			ID: rt.ID, Expr: rt.Expr, Timezone: rt.Timezone, Text: rt.Text,
-			Workstream: rt.Workstream, Enabled: rt.Enabled,
+			Workstream: rt.Workstream, Enabled: rt.Enabled, LoopID: rt.LoopID,
 		})
 	}
 	return out, nil
@@ -215,6 +217,61 @@ func (a *Adapter) SetRoutineEnabled(id string, enabled bool) error {
 
 func (a *Adapter) MarkSessionRead(ctx context.Context, workspace, sessionID string) error {
 	return sessionx.MarkSessionRead(ctx, workspace, sessionID)
+}
+
+func (a *Adapter) ListLoops(workspace string) ([]remote.LoopInfo, error) {
+	if a.Resident == nil {
+		return []remote.LoopInfo{}, nil
+	}
+	items, err := a.Resident.ListLoops(workspace)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]remote.LoopInfo, 0, len(items))
+	for _, sum := range items {
+		out = append(out, toLoopInfo(sum))
+	}
+	return out, nil
+}
+
+func (a *Adapter) GetLoop(workspace, id string) (remote.LoopInfo, error) {
+	if a.Resident == nil {
+		return remote.LoopInfo{}, fmt.Errorf("agente residente indisponível")
+	}
+	sum, err := a.Resident.GetLoop(workspace, id)
+	if err != nil {
+		return remote.LoopInfo{}, err
+	}
+	return toLoopInfo(sum), nil
+}
+
+func (a *Adapter) StopLoop(workspace, id string) error {
+	if a.Resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.Resident.StopLoop(workspace, id)
+}
+
+func (a *Adapter) PauseLoop(workspace, id string) error {
+	if a.Resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.Resident.PauseLoop(workspace, id)
+}
+
+func (a *Adapter) ResumeLoop(workspace, id string) error {
+	if a.Resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.Resident.ResumeLoop(context.Background(), workspace, id)
+}
+
+func toLoopInfo(sum loopx.Summary) remote.LoopInfo {
+	return remote.LoopInfo{
+		ID: sum.ID, Name: sum.Name, Kind: sum.Kind, Status: sum.Status, Outcome: sum.Outcome,
+		Iteration: sum.Iteration, Phase: sum.Phase, LastVerdict: sum.LastVerdict, LastReason: sum.LastReason,
+		SpentMicroUSD: sum.SpentMicroUSD, PRURL: sum.PRURL,
+	}
 }
 
 func (a *Adapter) AutoReviewPoll(workspace string) AutoReviewStatus {

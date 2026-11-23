@@ -1,7 +1,7 @@
 import { icons } from "./icons";
 import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownStreamed } from "./markdown";
-import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus, SharedConversation } from "./types";
+import type { ChatMessage, ExternalSession, LoopSummary, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus, SharedConversation } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
 import { openIdeSettingsTab } from "./ide-settings";
@@ -27,6 +27,7 @@ export const residentState = {
   memoryPinned: false,
   audit: [] as ResidentAuditEntry[],
   routines: [] as ResidentRoutine[],
+  loops: [] as LoopSummary[],
   externalSessions: [] as ExternalSession[],
   soulDraft: "",
   soulDirty: false,
@@ -199,6 +200,8 @@ export async function refreshResidentData(): Promise<void> {
     residentState.memory = Array.isArray(memList) ? memList : [];
     residentState.audit = Array.isArray(auditList) ? auditList : [];
     residentState.routines = Array.isArray(routines) ? routines : [];
+    const loopList = await backend.ResidentListLoops?.(state.project?.root || "").catch(() => []) ?? [];
+    residentState.loops = Array.isArray(loopList) ? loopList : [];
     await refreshExternalSessions();
     residentState.loadedOnce = true;
     updateResidentStatusChip();
@@ -479,6 +482,8 @@ export function handleResidentLaneEvent(payload: any): void {
       { laneId: "resident", kind: "error", text: String(ev.text || ""), label: "Erro", origin: String(ev.origin || "") },
       { surface: "resident", projectId: "", laneId: "resident", messageId: errId },
     );
+  } else if (String(ev.kind || "").startsWith("loop_")) {
+    void refreshResidentData();
   } else if (ev.kind === "finish" && String(ev.origin || "") === "routine") {
     const doneId = residentState.messages[residentState.messages.length - 1]?.id || "";
     publishNotice(
@@ -556,12 +561,31 @@ export function renderResidentViewHtml(): string {
         </div>
       ` : ""}
 
+      ${residentState.subTab === "chat" ? renderLoopPanelHtml() : ""}
       ${residentState.subTab === "chat" ? renderResidentChatHtml(enabled) : ""}
       ${residentState.subTab === "security" ? renderResidentSecurityHtml() : ""}
       ${residentState.subTab === "memory" ? renderResidentMemoryHtml(acct) : ""}
       ${residentState.subTab === "audit" ? renderResidentAuditHtml() : ""}
     </div>
   `;
+}
+
+function renderLoopPanelHtml(): string {
+  const loops = residentState.loops;
+  const rows = loops.length === 0
+    ? `<p class="dim">Nenhum loop neste projeto.</p>`
+    : loops.map((loop) => {
+      const verdict = loop.lastVerdict || loop.outcome || "sem veredito";
+      const running = loop.status === "running" || loop.status === "waiting";
+      return `<div class="dim" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        <strong>${escapeHtml(loop.name || loop.id)}</strong>
+        <span>${escapeHtml(loop.status)}</span>
+        <span>iteração ${Number(loop.iteration) || 0}</span>
+        <span>${escapeHtml(verdict)}</span>
+        ${running ? `<button type="button" class="mini" data-loop-stop="${escapeHtml(loop.id)}">Parar</button>` : ""}
+      </div>`;
+    }).join("");
+  return `<section id="res-loops" aria-label="Loops">${rows}</section>`;
 }
 
 function renderResidentActivityRowHtml(m: ChatMessage): string {
@@ -951,6 +975,16 @@ export function bindResidentViewEvents(): void {
   });
   document.getElementById("btn-res-refresh")?.addEventListener("click", () => {
     void refreshResidentData();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-loop-stop]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.loopStop || "";
+      const backend = api();
+      if (!id || !backend?.ResidentStopLoop) return;
+      void backend.ResidentStopLoop(state.project?.root || "", id).then(() => refreshResidentData()).catch((err) => {
+        toastError("parar o loop", err);
+      });
+    });
   });
 
   document.getElementById("res-experimental-unisolated")?.addEventListener("change", async (ev) => {

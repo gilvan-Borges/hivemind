@@ -64,6 +64,8 @@ describe("Configurações Globais da IDE (ide-settings)", () => {
     expect(hiveHtml).toContain('id="ide-hive-enabled"');
     expect(hiveHtml).toContain('id="ide-hive-orb-enabled"');
     expect(hiveHtml).toContain('id="ide-hive-full-access"');
+    expect(hiveHtml).toContain('id="ide-hive-full-unattended"');
+    expect(hiveHtml).toContain("Full em loop desacompanhado");
     expect(hiveHtml).not.toContain("Permissão Full ligada");
 
     // Seção limits

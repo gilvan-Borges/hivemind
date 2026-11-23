@@ -29,6 +29,8 @@ type Routine struct {
 	Workstream string    `json:"workstream,omitempty"`
 	Classes    []string  `json:"classes,omitempty"`
 	Enabled    bool      `json:"enabled"`
+	LoopID     string    `json:"loopId,omitempty"`
+	Workspace  string    `json:"workspace,omitempty"`
 	LastFired  time.Time `json:"lastFired,omitempty"`
 	Day        string    `json:"day,omitempty"`
 	DayTurns   int       `json:"dayTurns,omitempty"`
@@ -77,6 +79,11 @@ func ValidateRoutine(rt Routine) (Routine, error) {
 	rt.Text = strings.TrimSpace(rt.Text)
 	rt.Timezone = strings.TrimSpace(rt.Timezone)
 	rt.Workstream = SanitizeWorkstream(rt.Workstream)
+	rt.LoopID = strings.TrimSpace(rt.LoopID)
+	rt.Workspace = strings.TrimSpace(rt.Workspace)
+	if rt.LoopID != "" && strings.ContainsAny(rt.LoopID, `/\`) {
+		return Routine{}, fmt.Errorf("id de loop inválido")
+	}
 	if _, err := parseCron(rt.Expr); err != nil {
 		return Routine{}, err
 	}
