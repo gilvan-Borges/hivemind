@@ -29,7 +29,7 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 		{"net_fetch", map[string]any{"url": "https://api.github.com"}, TierNetwork},   // empty allowlist denies
 	}
 
-	origins := []Origin{OriginLocal, OriginRemote, OriginRoutine, OriginSubagent}
+	origins := []Origin{OriginLocal, OriginRemote, OriginRoutine, OriginLoop, OriginSubagent}
 
 	for _, origin := range origins {
 		for _, tc := range disallowedTools {
@@ -69,7 +69,7 @@ func TestDecideMatrixAllOriginsAndTiers(t *testing.T) {
 	if d := Decide(readCall(OriginLocal)); !d.Allow || d.Ask {
 		t.Fatalf("local read_file = %+v, esperado Allow=true Ask=false", d)
 	}
-	for _, origin := range []Origin{OriginRemote, OriginRoutine, OriginSubagent, OriginWebhook, OriginSlack} {
+	for _, origin := range []Origin{OriginRemote, OriginRoutine, OriginLoop, OriginSubagent, OriginWebhook, OriginSlack} {
 		if d := Decide(readCall(origin)); d.Allow || !d.Ask {
 			t.Fatalf("%s read_file = %+v, esperado Allow=false Ask=true", origin, d)
 		}

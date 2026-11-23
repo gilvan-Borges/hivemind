@@ -26,6 +26,7 @@ type ConvMessage struct {
 	Author string    `json:"author,omitempty"`
 	Text   string    `json:"text"`
 	At     time.Time `json:"at"`
+	Kind   string    `json:"kind,omitempty"` // loop, when the line is a loop summary
 }
 
 // Conversation is the shared transcript both the IDE and the Agent Hive read.
@@ -505,7 +506,7 @@ func normalizeKind(kind string) string {
 func normalizeOrigin(origin, kind string) string {
 	origin = strings.TrimSpace(strings.ToLower(origin))
 	switch origin {
-	case "ide", "hive", "orb", "slack", "webhook", "routine", "remote", "local":
+	case "ide", "hive", "orb", "slack", "webhook", "routine", "remote", "local", "loop":
 		return origin
 	}
 	if kind == "team" {

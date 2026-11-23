@@ -72,9 +72,12 @@ type Runner struct {
 	IDE IDEActionFunc
 	// FullAccess mirrors resident.json. The model cannot set it.
 	FullAccess bool
-	gateOnce   sync.Once
-	gate       *spawnGate
-	brokerMu   sync.Mutex
+	// LoopID and Iteration stamp audit lines that belong to a loop iteration.
+	LoopID    string
+	Iteration int
+	gateOnce  sync.Once
+	gate      *spawnGate
+	brokerMu  sync.Mutex
 }
 
 // residentSpillCallbacks returns the tool-result spillover guard for one
@@ -165,9 +168,11 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	}
 
 	approvalTimeout := r.ApprovalTimeout
-	if origin == OriginRoutine && approvalTimeout == 0 {
+	if (origin == OriginRoutine || origin == OriginLoop) && approvalTimeout == 0 {
 		approvalTimeout = 15 * time.Minute
 	}
+	r.LoopID = req.LoopID
+	r.Iteration = req.Iteration
 	parentTier := r.ParentTier
 	broker := NewBroker(BrokerConfig{
 		Workspace:              req.Workspace,
@@ -176,6 +181,8 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		ParentTier:             parentTier,
 		AccountID:              accountID,
 		DeviceID:               req.DeviceID,
+		LoopID:                 req.LoopID,
+		Iteration:              req.Iteration,
 		Policy:                 pol,
 		Sandbox:                r.Sandbox,
 		Vault:                  r.Vault,
@@ -252,12 +259,16 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		streamMode = agent.StreamingModeSSE
 	}
 
+	shown := msg
+	if strings.TrimSpace(req.Display) != "" {
+		shown = req.Display
+	}
 	if req.UserMessageID != "" {
 		r.emit(Event{
 			Kind:           "user_message",
 			Author:         "user",
 			Label:          "Você",
-			Text:           msg,
+			Text:           shown,
 			MessageID:      req.UserMessageID,
 			ConversationID: req.ConversationID,
 			SessionID:      req.SharedSessionID,
@@ -714,5 +725,11 @@ func (r *Runner) emit(ev Event) {
 	}
 	ev.Text = RedactSecrets(ev.Text)
 	ev.Detail = RedactSecrets(ev.Detail)
+	if ev.LoopID == "" {
+		ev.LoopID = r.LoopID
+	}
+	if ev.Iteration == 0 {
+		ev.Iteration = r.Iteration
+	}
 	r.OnEvent(ev)
 }

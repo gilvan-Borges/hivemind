@@ -27,6 +27,7 @@ const (
 	OriginSubagent Origin = "subagent"
 	OriginWebhook  Origin = "webhook"
 	OriginSlack    Origin = "slack"
+	OriginLoop     Origin = "loop"
 )
 
 // Tier classifies the privilege class of a tool call (§4, §12.4).
@@ -89,6 +90,8 @@ type AuditEntry struct {
 	Outcome     string `json:"outcome,omitempty"` // "ok" | "error" | "denied"
 	ErrorClass  string `json:"errorClass,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+	LoopID      string `json:"loopId,omitempty"`
+	Iteration   int    `json:"iteration,omitempty"`
 }
 
 // Config is persisted in %LOCALAPPDATA%\HiveMind\resident\resident.json (mode 0600).
@@ -255,6 +258,8 @@ type Event struct {
 	MessageID      string `json:"messageId,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
 	SessionID      string `json:"sessionId,omitempty"`
+	LoopID         string `json:"loopId,omitempty"`
+	Iteration      int    `json:"iteration,omitempty"`
 }
 
 // TurnRequest holds one user turn for the resident agent.
@@ -273,6 +278,10 @@ type TurnRequest struct {
 	SharedHistory    []LocalTurnMessage
 	SkipLocalHistory bool
 	FullAccess       bool
+	// Display is the short line shown in the transcript. Message is what the model reads.
+	Display   string
+	LoopID    string
+	Iteration int
 }
 
 // TurnResult summarizes the completed turn.

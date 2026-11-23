@@ -68,6 +68,8 @@ type Event struct {
 	MessageID         string                   `json:"messageId,omitempty"`
 	ConversationID    string                   `json:"conversationId,omitempty"`
 	SessionID         string                   `json:"sessionId,omitempty"`
+	LoopID            string                   `json:"loopId,omitempty"`
+	Iteration         int                      `json:"iteration,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.

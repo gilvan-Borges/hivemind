@@ -14,6 +14,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/notify"
+	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/relayclient"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
@@ -229,6 +230,11 @@ func (a *App) startup(ctx context.Context) {
 	// sem sobrescrever edições do usuário feitas no painel de Skills.
 	if _, err := idecore.SeedNativeSkills(); err != nil {
 		log.Printf("aviso: falha ao semear skills nativas: %v", err)
+	}
+	for _, dir := range idecore.LoadRecentProjects("") {
+		if _, err := loopx.PauseRunning(dir); err != nil {
+			log.Printf("aviso: pausar loops de %s: %v", dir, err)
+		}
 	}
 	if a.mobile != nil {
 		a.mobile.start()

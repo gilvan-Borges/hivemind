@@ -64,7 +64,7 @@ func decideExperimentalSurface(call Call, fullAccess bool) Decision {
 		return Decision{Allow: false, Ask: false, Reason: "ferramenta fora do modo experimental"}
 	}
 	switch call.Origin {
-	case OriginLocal, OriginRemote, OriginRoutine, OriginSubagent:
+	case OriginLocal, OriginRemote, OriginRoutine, OriginLoop, OriginSubagent:
 	default:
 		return Decision{Allow: false, Ask: false, Reason: fmt.Sprintf("origem desconhecida ou inválida (%q): política falha fechado", call.Origin)}
 	}

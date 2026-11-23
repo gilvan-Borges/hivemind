@@ -199,4 +199,6 @@ type Activity struct {
 	Phase     string `json:"phase"` // file | command | test | other
 	Target    string `json:"target,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
+	LoopID    string `json:"loopId,omitempty"`
+	Iteration int    `json:"iteration,omitempty"`
 }
