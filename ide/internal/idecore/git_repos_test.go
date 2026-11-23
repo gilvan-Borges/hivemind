@@ -128,7 +128,7 @@ func TestDiscoverGitReposWithActiveWorktree_PromotesSingleActiveWorktree(t *test
 	if err != nil {
 		t.Fatalf("DiscoverGitReposWithActiveWorktree failed: %v", err)
 	}
-	if len(repos) != 1 || filepath.Clean(repos[0].Root) != filepath.Clean(wt1) || repos[0].Branch != "feat/lane-1" {
+	if len(repos) != 1 || canonicalPathKey(repos[0].Root) != canonicalPathKey(wt1) || repos[0].Branch != "feat/lane-1" {
 		t.Fatalf("expected single active worktree promoted, got: %+v", repos)
 	}
 	if len(repos[0].Diffs) != 1 || repos[0].Diffs[0].Path != "README.md" {
@@ -144,7 +144,7 @@ func TestDiscoverGitReposWithActiveWorktree_PromotesSingleActiveWorktree(t *test
 	if err != nil {
 		t.Fatalf("DiscoverGitReposWithActiveWorktree (2 wts) failed: %v", err)
 	}
-	if len(repos) != 1 || filepath.Clean(repos[0].Root) != filepath.Clean(root) {
+	if len(repos) != 1 || canonicalPathKey(repos[0].Root) != canonicalPathKey(root) {
 		t.Fatalf("expected fallback to root with 2 active worktrees, got: %+v", repos)
 	}
 }

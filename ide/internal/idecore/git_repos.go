@@ -165,6 +165,7 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 		return repos, err
 	}
 	rootPath := filepath.Clean(repos[0].Root)
+	rootKey := canonicalPathKey(rootPath)
 	wts, wtErr := gitx.ListWorktrees(ctx, gitx.Local{}, rootPath)
 	if wtErr != nil || len(wts) == 0 {
 		return repos, nil
@@ -174,7 +175,7 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 		if wt.IsMain || wt.Prunable || wt.Orphan || strings.TrimSpace(wt.Path) == "" {
 			continue
 		}
-		if strings.EqualFold(filepath.Clean(wt.Path), rootPath) {
+		if canonicalPathKey(wt.Path) == rootKey {
 			continue
 		}
 		if info, statErr := os.Stat(wt.Path); statErr != nil || !info.IsDir() {
@@ -194,10 +195,23 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 	if branch == "" {
 		branch = CurrentBranch(ctx, wt.Path)
 	}
-	repos[0].Root = wt.Path
+	repos[0].Root = filepath.Clean(wt.Path)
 	if branch != "" {
 		repos[0].Branch = branch
 	}
 	repos[0].Diffs = wtDiffs
 	return repos, nil
+}
+
+// canonicalPathKey resolves symlinks and Windows 8.3 short names (e.g. RUNNER~1)
+// so paths from t.TempDir() and `git worktree list` compare reliably.
+func canonicalPathKey(p string) string {
+	clean := filepath.Clean(strings.TrimSpace(p))
+	if abs, err := filepath.Abs(clean); err == nil {
+		clean = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != "" {
+		clean = resolved
+	}
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(clean)))
 }
