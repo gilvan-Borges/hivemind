@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
@@ -38,6 +39,7 @@ func HeadlessBridgeOptions() remote.HeadlessOptions {
 // registerProjectWithStack registers the starting workspace with the IDE's
 // stack detector (richer than the generic headless registrar).
 func registerProjectWithStack(ctx context.Context, hub *remote.Hub, workspace string) {
+	_, _ = loopx.PauseRunning(workspace)
 	name := filepath.Base(workspace)
 	branch := ""
 	g := gitx.Local{}

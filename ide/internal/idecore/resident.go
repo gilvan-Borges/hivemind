@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/adk/v2/model"
 
+	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
 	"github.com/gilvan-Borges/HiveMind/internal/resident"
@@ -47,6 +48,12 @@ type ResidentManager struct {
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
 	ideAction resident.IDEActionFunc
+
+	loopCtl      *loopx.Controller
+	loopStop     map[string]context.CancelFunc
+	loopWG       sync.WaitGroup
+	testLoopExec loopx.Executor
+	testLoopCmd  loopx.CommandRunner
 }
 
 // ResidentManagerOptions configures ResidentManager.
@@ -288,7 +295,9 @@ func (m *ResidentManager) Close() {
 	if m.sched != nil {
 		m.sched.Stop()
 	}
+	m.pauseLoops()
 	m.turns.Wait()
+	m.loopWG.Wait()
 	if m.release != nil {
 		m.release()
 		m.release = nil
@@ -299,7 +308,7 @@ func (m *ResidentManager) fireRoutine(rt resident.Routine) {
 	if !m.IsEnabled() {
 		return
 	}
-	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes)
+	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes, turnOpts{})
 }
 
 func (m *ResidentManager) currentAccount() (accountID, deviceID string) {
@@ -492,7 +501,7 @@ func (m *ResidentManager) RunTurn(
 	workspaceDir, workstream, message string,
 	origin resident.Origin,
 ) (resident.TurnResult, error) {
-	return m.runTurn(parentCtx, workspaceDir, workstream, message, "", origin, nil)
+	return m.runTurn(parentCtx, workspaceDir, workstream, message, "", origin, nil, turnOpts{})
 }
 
 // RunTurnIn continues the shared conversation identified by sessionID.
@@ -502,7 +511,20 @@ func (m *ResidentManager) RunTurnIn(
 	workspaceDir, workstream, message, sessionID string,
 	origin resident.Origin,
 ) (resident.TurnResult, error) {
-	return m.runTurn(parentCtx, workspaceDir, workstream, message, sessionID, origin, nil)
+	return m.runTurn(parentCtx, workspaceDir, workstream, message, sessionID, origin, nil, turnOpts{})
+}
+
+// turnOpts carries a loop iteration into the resident without a second public API.
+type turnOpts struct {
+	loopID       string
+	iteration    int
+	model        string
+	readOnly     bool
+	forceFull    *bool
+	fresh        bool
+	display      string
+	modelMessage string
+	skipCommand  bool
 }
 
 func (m *ResidentManager) runTurn(
@@ -511,6 +533,7 @@ func (m *ResidentManager) runTurn(
 	sessionID string,
 	origin resident.Origin,
 	classes []string,
+	opts turnOpts,
 ) (resident.TurnResult, error) {
 	m.turns.Add(1)
 	defer m.turns.Done()
@@ -521,6 +544,24 @@ func (m *ResidentManager) runTurn(
 	if !cfg.Enabled {
 		return resident.TurnResult{}, fmt.Errorf("Agent Hive está desativado nas Configurações da IDE")
 	}
+	if !opts.skipCommand {
+		if handled, res, herr := m.interceptLoop(parentCtx, workspaceDir, workstream, message, sessionID, origin); handled {
+			return res, herr
+		}
+	}
+	shown := message
+	if opts.display != "" {
+		shown = opts.display
+	}
+	if opts.modelMessage != "" {
+		if opts.display == "" {
+			shown = message
+		}
+		message = opts.modelMessage
+	}
+	if opts.model != "" {
+		cfg.Model = opts.model
+	}
 	pol, _ := resident.LoadPolicy(m.baseDir)
 	if strings.TrimSpace(workstream) == "" {
 		workstream = cfg.Workstream
@@ -528,7 +569,7 @@ func (m *ResidentManager) runTurn(
 	workstream = resident.SanitizeWorkstream(workstream)
 	acct, devID := m.currentAccount()
 	mem := resident.NewMemoryStore(m.baseDir, acct)
-	shared, sharedErr := m.prepareSharedTurn(strings.TrimSpace(workspaceDir), workstream, message, sessionID, string(origin))
+	shared, sharedErr := m.prepareSharedTurn(strings.TrimSpace(workspaceDir), workstream, shown, sessionID, string(origin))
 	if sharedErr != nil {
 		return resident.TurnResult{}, sharedErr
 	}
@@ -576,8 +617,17 @@ func (m *ResidentManager) runTurn(
 	if err != nil {
 		return resident.TurnResult{}, err
 	}
+	if opts.readOnly {
+		narrow = []resident.Tier{resident.TierRead}
+	}
 	prov, mod := resident.ResolveModelRoute(cfg)
 	full := cfg.IsFullAccess() || workspacePermissionFull(workspaceDir)
+	if opts.forceFull != nil {
+		full = *opts.forceFull
+	}
+	if opts.readOnly {
+		full = false
+	}
 	runner := &resident.Runner{
 		BaseDir:         m.baseDir,
 		Config:          cfg,
@@ -591,7 +641,10 @@ func (m *ResidentManager) runTurn(
 		Model:           m.testModel,
 		SkillsDir:       skillx.UserSkillsDir(),
 		IDE:             m.ideAction,
+		Child:           opts.readOnly,
 		FullAccess:      full,
+		LoopID:          opts.loopID,
+		Iteration:       opts.iteration,
 		AllowedTiers:    narrow,
 		PermissionMode:  m.permissionMode,
 		SquadHandoff:    m.squadHandoff,
@@ -642,6 +695,8 @@ func (m *ResidentManager) runTurn(
 						MessageID:      ev.MessageID,
 						ConversationID: ev.ConversationID,
 						SessionID:      ev.SessionID,
+						LoopID:         ev.LoopID,
+						Iteration:      ev.Iteration,
 					},
 				})
 			}
@@ -649,6 +704,10 @@ func (m *ResidentManager) runTurn(
 	}
 
 	soul, _ := resident.LoadSoul(m.baseDir)
+	history := shared.History
+	if opts.fresh {
+		history = nil
+	}
 	res, runErr := runner.RunTurn(ctx, resident.TurnRequest{
 		Message:          message,
 		Workspace:        strings.TrimSpace(workspaceDir),
@@ -661,9 +720,12 @@ func (m *ResidentManager) runTurn(
 		SharedSessionID:  shared.Conv.SessionID,
 		UserMessageID:    shared.UserID,
 		ReplyMessageID:   shared.ReplyID,
-		SharedHistory:    shared.History,
+		SharedHistory:    history,
 		SkipLocalHistory: true,
 		FullAccess:       full,
+		Display:          opts.display,
+		LoopID:           opts.loopID,
+		Iteration:        opts.iteration,
 	})
 	if runErr != nil {
 		m.mu.Lock()
@@ -693,6 +755,9 @@ func (m *ResidentManager) Cancel() bool {
 		canceled = true
 	}
 	if m.sessions != nil && m.sessions.Cancel(resident.LaneID) {
+		canceled = true
+	}
+	if m.pauseLoops() {
 		canceled = true
 	}
 	return canceled

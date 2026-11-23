@@ -293,16 +293,30 @@ func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 	h.mu.Unlock()
 
 	h.broadcast(StreamEvent{Type: "lane_event", Data: raw})
-	if e.Kind == "tool_call" {
+	if e.Kind == "tool_call" || strings.HasPrefix(e.Kind, "loop_") {
 		phase, target := activityPhase(e.ToolName, e.Detail)
+		tool := e.ToolName
+		if strings.HasPrefix(e.Kind, "loop_") {
+			tool = e.Kind
+			if strings.TrimSpace(e.Stage) != "" {
+				phase = e.Stage
+			} else {
+				phase = "other"
+			}
+			if strings.TrimSpace(e.Text) != "" {
+				target = e.Text
+			}
+		}
 		act, _ := json.Marshal(Activity{
 			LaneID:    ev.LaneID,
 			Team:      ev.Team,
 			Author:    e.Author,
-			Tool:      e.ToolName,
+			Tool:      tool,
 			Phase:     phase,
 			Target:    target,
 			SessionID: sessionID,
+			LoopID:    e.LoopID,
+			Iteration: e.Iteration,
 		})
 		h.broadcast(StreamEvent{Type: "activity", Data: act})
 	}

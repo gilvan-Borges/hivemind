@@ -43,6 +43,8 @@ type BrokerConfig struct {
 	ParentTier      Tier
 	AccountID       string
 	DeviceID        string
+	LoopID          string
+	Iteration       int
 	Audit           AuditWriter
 	Memory          *MemoryStore
 	Policy          Policy
@@ -249,7 +251,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	if b.cfg.Audit == nil {
 		return "", fmt.Errorf("falha fechada: gravador de auditoria não configurado")
 	}
-	decisionEntry := AuditEntry{
+	decisionEntry := b.stampAudit(AuditEntry{
 		AccountID:  b.cfg.AccountID,
 		DeviceID:   b.cfg.DeviceID,
 		Origin:     call.Origin,
@@ -261,7 +263,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 		Sandbox:    sandboxState,
 		Target:     target,
 		Reason:     RedactSecrets(dec.Reason),
-	}
+	})
 	if err := b.cfg.Audit.RecordDecision(decisionEntry); err != nil {
 		return "", fmt.Errorf("falha na gravação do log de auditoria (chamada abortada antes do efeito): %w", err)
 	}
@@ -386,7 +388,7 @@ func (b *Broker) recordDenyBestEffort(callID string, call Call, tier Tier, targe
 	if b.cfg.Audit == nil {
 		return
 	}
-	_ = b.cfg.Audit.RecordDecision(AuditEntry{
+	_ = b.cfg.Audit.RecordDecision(b.stampAudit(AuditEntry{
 		AccountID:  b.cfg.AccountID,
 		DeviceID:   b.cfg.DeviceID,
 		Origin:     call.Origin,
@@ -400,13 +402,23 @@ func (b *Broker) recordDenyBestEffort(callID string, call Call, tier Tier, targe
 		Outcome:    "denied",
 		ErrorClass: errClass,
 		Reason:     RedactSecrets(reason),
-	})
+	}))
+}
+
+func (b *Broker) stampAudit(entry AuditEntry) AuditEntry {
+	if b == nil {
+		return entry
+	}
+	entry.LoopID = b.cfg.LoopID
+	entry.Iteration = b.cfg.Iteration
+	return entry
 }
 
 func (b *Broker) recordOutcomeChecked(entry AuditEntry) {
 	if b.cfg.Audit == nil {
 		return
 	}
+	entry = b.stampAudit(entry)
 	if err := b.cfg.Audit.RecordOutcome(entry); err != nil {
 		log.Printf("residente: falha ao registrar desfecho de auditoria (%s/%s): %v", entry.Tool, entry.Outcome, err)
 	}
@@ -436,6 +448,12 @@ func (b *Broker) emit(ev Event) {
 	}
 	ev.Text = RedactSecrets(ev.Text)
 	ev.Detail = RedactSecrets(ev.Detail)
+	if ev.LoopID == "" {
+		ev.LoopID = b.cfg.LoopID
+	}
+	if ev.Iteration == 0 {
+		ev.Iteration = b.cfg.Iteration
+	}
 	b.cfg.OnToolEvent(ev)
 }
 

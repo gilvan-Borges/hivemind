@@ -237,7 +237,7 @@ func Decide(call Call) Decision {
 // DecideWithPolicy evaluates Phase 2 permission tiers purely without OS side effects (§4, §12.4):
 //   - Unknown / shell / Phase 3+ tools and unknown origins always fail closed (Allow=false, Ask=false).
 //   - Sensitive paths (.env, .git, keys) always fail closed.
-//   - Read tools: OriginLocal allowed (audited); OriginRemote/OriginRoutine/OriginSubagent require approval.
+//   - Read tools: OriginLocal allowed (audited); OriginRemote/OriginRoutine/OriginLoop/OriginSubagent require approval.
 //   - Write, Exec (validated argv + binary allowlist), Network (validated host allowlist), Credentials,
 //     and Destructive tools ALWAYS require explicit human approval (Ask=true, timeout denies).
 func DecideWithPolicy(call Call, pol Policy) Decision {
@@ -247,7 +247,7 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 	}
 
 	switch call.Origin {
-	case OriginLocal, OriginRemote, OriginRoutine, OriginSubagent, OriginWebhook, OriginSlack:
+	case OriginLocal, OriginRemote, OriginRoutine, OriginLoop, OriginSubagent, OriginWebhook, OriginSlack:
 	default:
 		return Decision{
 			Allow:  false,

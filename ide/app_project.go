@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
+	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -36,6 +37,7 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		return ProjectInfo{}, fmt.Errorf("pasta inválida: %s", abs)
 	}
 	_, _ = idecore.RecordRecentProject("", abs)
+	_, _ = loopx.PauseRunning(abs)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
