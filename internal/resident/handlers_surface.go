@@ -9,6 +9,9 @@ import (
 // experimental_unisolated flag. The vault is never consulted on this path.
 
 func (b *Broker) surfaceModeLabel() string {
+	if b.cfg.FullAccess {
+		return "modo full"
+	}
 	if b.cfg.ExperimentalUnisolated {
 		return "SEM isolamento (experimentalUnisolated)"
 	}

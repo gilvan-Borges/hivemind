@@ -71,4 +71,14 @@ func TestResidentEnableOrbAndJevFailoverSettings(t *testing.T) {
 	if !disk.Enabled || !disk.OrbDisabled || !disk.JevFailover {
 		t.Fatalf("unexpected persisted resident.json: %+v", disk)
 	}
+	if st.FullAccess || st.PermissionMode != "governed" {
+		t.Fatalf("full deve nascer desligado: %+v", st)
+	}
+	st, err = m.SetFullAccess(true)
+	if err != nil || !st.FullAccess || st.PermissionMode != "full" {
+		t.Fatalf("SetFullAccess(true): %+v err=%v", st, err)
+	}
+	if st, err = m.SaveConfig("openrouter", "openrouter/auto", "geral"); err != nil || !st.FullAccess {
+		t.Fatalf("SaveConfig apagou o modo full: %+v err=%v", st, err)
+	}
 }

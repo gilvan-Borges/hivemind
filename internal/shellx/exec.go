@@ -157,3 +157,24 @@ func isRegularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
+
+// RunDirect executes argv with the process environment and no allowlist.
+// The Hive Full permission mode is the caller. Governed paths keep using Run.
+func RunDirect(ctx context.Context, dir string, argv []string) (stdout, stderr string, exitCode int, err error) {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+		return "", "", -1, fmt.Errorf("comando vazio")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if strings.TrimSpace(dir) != "" {
+		cmd.Dir = dir
+	}
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	exitCode = -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	return outBuf.String(), errBuf.String(), exitCode, err
+}

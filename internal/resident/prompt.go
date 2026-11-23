@@ -94,6 +94,10 @@ func BuildUserPrompt(req TurnRequest, mem *MemoryStore) (string, error) {
 		b.WriteString("\n")
 	}
 
+	if req.FullAccess {
+		b.WriteString("\n[Modo Full]\nO usuário ligou permissão total nas Configurações. Shell, arquivos, browser e IDE não pedem aprovação. A auditoria continua.\n")
+	}
+
 	b.WriteString("\n[Mensagem do Usuário]\n")
 	b.WriteString(strings.TrimSpace(RedactSecrets(req.Message)))
 	return b.String(), nil

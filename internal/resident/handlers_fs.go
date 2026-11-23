@@ -19,6 +19,9 @@ func (b *Broker) requireWorkspace() (string, error) {
 }
 
 func (b *Broker) handleReadFile(_ context.Context, args map[string]any) (string, error) {
+	if b.cfg.FullAccess {
+		return b.readFull(strArg(args, "path"))
+	}
 	ws, err := b.requireWorkspace()
 	if err != nil {
 		return "", err
@@ -93,6 +96,10 @@ func (b *Broker) handleFindFiles(ctx context.Context, args map[string]any) (stri
 }
 
 func (b *Broker) handleWriteFile(_ context.Context, args map[string]any) (string, error) {
+	if b.cfg.FullAccess {
+		content, _ := args["content"].(string)
+		return b.writeFull(strArg(args, "path"), content)
+	}
 	ws, err := b.requireWorkspace()
 	if err != nil {
 		return "", err
