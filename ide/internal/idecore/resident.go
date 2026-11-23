@@ -42,6 +42,7 @@ type ResidentManager struct {
 	eventTriggers  bool
 	cancel         context.CancelFunc
 	detectorSeen   map[string]struct{}
+	turns          sync.WaitGroup
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
@@ -249,14 +250,17 @@ func (m *ResidentManager) SetIsolatedSandbox(on bool) (resident.Status, error) {
 	return m.Status(), nil
 }
 
-// Close solta a trava do processo para o diretório temporário do teste poder sair.
+// Close espera o turno em curso soltar os arquivos e depois solta a trava.
+// No Windows um handle aberto impede o teste de apagar o diretório temporário.
 func (m *ResidentManager) Close() {
 	if m == nil {
 		return
 	}
+	m.Cancel()
 	if m.sched != nil {
 		m.sched.Stop()
 	}
+	m.turns.Wait()
 	if m.release != nil {
 		m.release()
 		m.release = nil
@@ -478,6 +482,8 @@ func (m *ResidentManager) runTurn(
 	origin resident.Origin,
 	classes []string,
 ) (resident.TurnResult, error) {
+	m.turns.Add(1)
+	defer m.turns.Done()
 	cfg, err := resident.LoadConfig(m.baseDir)
 	if err != nil {
 		return resident.TurnResult{}, err

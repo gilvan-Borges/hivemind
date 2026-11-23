@@ -209,10 +209,7 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 		return repos, nil
 	}
 	wtRoot := filepath.Clean(wt.Path)
-	rel := ""
-	if relPath, relErr := filepath.Rel(rootPath, wtRoot); relErr == nil && relPath != "." && !strings.HasPrefix(relPath, "..") {
-		rel = filepath.ToSlash(relPath)
-	}
+	rel := relInsideWorkspace(rootPath, wtRoot)
 	name := branch
 	if name == "" {
 		name = filepath.Base(wtRoot)
@@ -226,6 +223,24 @@ func DiscoverGitReposWithActiveWorktree(ctx context.Context, workspaceDir string
 		Diffs:   wtDiffs,
 	})
 	return repos, nil
+}
+
+// relInsideWorkspace returns the slash path of target inside root.
+// Both sides are canonicalized first: on Windows, t.TempDir() can be a
+// RUNNER~1 short path while git worktree list prints the long path, and
+// filepath.Rel then returns ".." so the relative path is dropped.
+func relInsideWorkspace(root, target string) string {
+	base := filepath.FromSlash(canonicalPathKey(root))
+	child := filepath.FromSlash(canonicalPathKey(target))
+	rel, err := filepath.Rel(base, child)
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
 }
 
 // canonicalPathKey resolves symlinks and Windows 8.3 short names (e.g. RUNNER~1)
