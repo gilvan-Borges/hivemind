@@ -5,10 +5,15 @@ package gitx
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
@@ -90,14 +95,25 @@ func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (
 	if g.IsRepo(ctx, wt) {
 		return wt, nil
 	}
-	// Only clear a leftover directory when it physically exists AND carries no
-	// .git metadata at all. A worktree that merely failed a transient probe
-	// (lock, race, ctx deadline) keeps its .git entry and is preserved.
+	// A directory with a live gitdir is left alone: a lock or a cancelled
+	// probe must not wipe uncommitted work. A gitdir pointer that no longer
+	// exists is only rebuilt automatically when no uncommitted/untracked files
+	// live inside the worktree (Spec 08 §3.1).
 	if _, statErr := os.Stat(wt); statErr == nil {
 		if _, gitErr := os.Stat(filepath.Join(wt, ".git")); gitErr == nil {
-			return "", fmt.Errorf("worktree existente em %s falhou a verificação de repositório (possível falha transitória); nada foi removido — rode novamente ou inspecione manualmente", wt)
+			if !worktreeGitDirMissing(wt) || g.worktreeHasUncommittedFiles(ctx, repo, wt, branch) {
+				return "", fmt.Errorf("worktree existente em %s falhou a verificação de repositório (possível falha transitória); nada foi removido — rode novamente ou inspecione manualmente", wt)
+			}
+			RemoveWorktree(ctx, g, repo, wt, "")
+			if g.IsRepo(ctx, wt) {
+				return wt, nil
+			}
+			if _, still := os.Stat(wt); still == nil {
+				return "", fmt.Errorf("worktree quebrada em %s não pôde ser removida", wt)
+			}
+		} else {
+			_ = os.RemoveAll(wt)
 		}
-		_ = os.RemoveAll(wt)
 	}
 	_, _ = g.Run(ctx, repo, "worktree", "prune")
 	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
@@ -113,6 +129,157 @@ func (g Local) EnsureWorktree(ctx context.Context, repo, agent, branch string) (
 		return "", err
 	}
 	return wt, nil
+}
+
+// worktreeGitDirMissing reports a worktree whose .git file points at a
+// gitdir that is gone. A real .git directory is never treated as missing.
+func worktreeGitDirMissing(wt string) bool {
+	gitPath := filepath.Join(wt, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return true
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir:"
+	if len(line) < len(prefix) || !strings.EqualFold(line[:len(prefix)], prefix) {
+		return true
+	}
+	gitdir := strings.TrimSpace(line[len(prefix):])
+	if gitdir == "" {
+		return true
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(wt, gitdir)
+	}
+	_, err = os.Stat(gitdir)
+	return os.IsNotExist(err)
+}
+
+// worktreeHasUncommittedFiles reports whether wt holds any regular file not
+// committed identically in repo (on branch if it exists, otherwise HEAD).
+// Fails closed (returns true) on any probe error so EnsureWorktree never
+// destroys uncommitted work.
+func (g Local) worktreeHasUncommittedFiles(ctx context.Context, repo, wt, branch string) bool {
+	treeOIDs, ok := g.trackedBlobOIDs(ctx, repo, branch)
+	if !ok {
+		entries, err := os.ReadDir(wt)
+		if err != nil {
+			return true
+		}
+		for _, e := range entries {
+			if e.Name() != ".git" && e.Name() != ".hivemind" {
+				return true
+			}
+		}
+		return false
+	}
+	dirty := false
+	walkErr := filepath.WalkDir(wt, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			dirty = true
+			return fs.SkipAll
+		}
+		if p == wt {
+			return nil
+		}
+		rel, rErr := filepath.Rel(wt, p)
+		if rErr != nil {
+			dirty = true
+			return fs.SkipAll
+		}
+		relSlash := filepath.ToSlash(rel)
+		if relSlash == ".git" || relSlash == ".hivemind" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info, lErr := os.Lstat(p); lErr == nil && info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		expectedOID, tracked := treeOIDs[relSlash]
+		if !tracked {
+			dirty = true
+			return fs.SkipAll
+		}
+		data, readErr := os.ReadFile(p)
+		if readErr != nil || !gitBlobMatchesOID(data, expectedOID) {
+			dirty = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return dirty || walkErr != nil
+}
+
+func (g Local) trackedBlobOIDs(ctx context.Context, repo, branch string) (map[string]string, bool) {
+	ref := "HEAD"
+	if br := strings.TrimSpace(branch); br != "" && g.BranchExists(ctx, repo, br) {
+		ref = br
+	} else if !g.HasCommit(ctx, repo) {
+		return nil, false
+	}
+	raw, err := g.Run(ctx, repo, "ls-tree", "-r", "-z", ref)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]string)
+	for _, rec := range strings.Split(raw, "\x00") {
+		if rec == "" {
+			continue
+		}
+		meta, relPath, ok := strings.Cut(rec, "\t")
+		if !ok || relPath == "" {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) == 3 && fields[1] == "blob" {
+			out[relPath] = fields[2]
+		}
+	}
+	return out, true
+}
+
+func gitBlobMatchesOID(data []byte, expectedOID string) bool {
+	useSHA256 := len(expectedOID) == 64
+	if gitBlobOID(data, useSHA256) == expectedOID {
+		return true
+	}
+	if bytes.Contains(data, []byte("\r\n")) {
+		norm := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		return gitBlobOID(norm, useSHA256) == expectedOID
+	}
+	return false
+}
+
+func gitBlobOID(data []byte, useSHA256 bool) string {
+	header := "blob " + strconv.Itoa(len(data)) + "\x00"
+	if useSHA256 {
+		h := sha256.New()
+		_, _ = h.Write([]byte(header))
+		_, _ = h.Write(data)
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	h := sha1.New()
+	_, _ = h.Write([]byte(header))
+	_, _ = h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // CommitAll stages everything and commits when the worktree is dirty.

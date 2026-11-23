@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/session"
 
@@ -429,12 +430,8 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		r.crossLinkOpenedPRs(ctx, opened)
 	}
 
-	if pushedToRemote {
-		for _, dev := range devs {
-			if dev.Root != "" && dev.Root != r.Workspace && dev.Root != commitRoot {
-				gitx.RemoveWorktree(ctx, r.Git, r.Workspace, dev.Root, dev.Branch)
-			}
-		}
+	if rootCommitted || pushedToRemote {
+		r.releaseScratchDevWorktrees(ctx, devs, commitRoot)
 	}
 	gitx.CleanupMergedWorktrees(ctx, r.Git, r.Workspace, base)
 	for _, nw := range r.nestedWorktrees {
@@ -454,6 +451,39 @@ func (r *Runner) finish(ctx context.Context, sess session.Session, result *Resul
 		}
 	}
 	return nil
+}
+
+// releaseScratchDevWorktrees drops per-developer worktrees after the delivery
+// worktree already holds the integrated result. The delivery worktree and its
+// branch stay, so the PR head is not deleted out from under the checkout.
+// Cleanup keeps running if the user already cancelled the turn.
+func (r *Runner) releaseScratchDevWorktrees(ctx context.Context, devs []devEnv, commitRoot string) {
+	if r == nil || r.Git == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancel()
+	keepBranch := map[string]bool{}
+	if br := strings.TrimSpace(r.deliveryBranch); br != "" {
+		keepBranch[br] = true
+	}
+	for _, dev := range devs {
+		if dev.Root == "" || sameCleanPath(dev.Root, r.Workspace) || sameCleanPath(dev.Root, commitRoot) || sameCleanPath(dev.Root, r.deliveryRoot) {
+			continue
+		}
+		deleteBranch := ""
+		if br := strings.TrimSpace(dev.Branch); br != "" && !keepBranch[br] {
+			deleteBranch = br
+		}
+		gitx.RemoveWorktree(cleanupCtx, r.Git, r.Workspace, dev.Root, deleteBranch)
+	}
+}
+
+func sameCleanPath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 func (r *Runner) crossLinkOpenedPRs(ctx context.Context, opened []openedPRRef) {

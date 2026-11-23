@@ -168,25 +168,24 @@ func TestPipelineWithMocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v\nsaída:\n%s\ntraces:%v", err, out.String(), traceKeys(&traces))
 	}
-	a := filepath.Join(workspace.WorktreePath(repo, "dev_1"), "a.txt")
-	b := filepath.Join(workspace.WorktreePath(repo, "dev_2"), "b.txt")
-	for _, path := range []string{a, b} {
-		data, err := os.ReadFile(path)
-		if err != nil || string(data) != "olá\n" {
-			t.Fatalf("%s = %q %v\nsaída:\n%s", path, data, err, out.String())
-		}
-	}
 	deliveryWT := workspace.WorktreePath(repo, "_integracao")
 	for _, rel := range []string{"a.txt", "b.txt"} {
 		data, err := os.ReadFile(filepath.Join(deliveryWT, rel))
 		if err != nil || string(data) != "olá\n" {
-			t.Fatalf("consolidated %s = %q %v", rel, data, err)
+			t.Fatalf("consolidated %s = %q %v\nsaída:\n%s", rel, data, err, out.String())
 		}
 	}
-	// Developers must NOT create commits in their draft worktrees; only Chief/Architect commits on deliveryWT.
-	devLog, err := g.Run(ctx, workspace.WorktreePath(repo, "dev_1"), "log", "-1", "--pretty=%s")
-	if err != nil || strings.Contains(devLog, "PROJ-1") {
-		t.Fatalf("dev worktree should not have committed PROJ-1: %q %v", devLog, err)
+	// Scratch developer worktrees and their draft branches are released after
+	// deliveryWT commits the consolidated result; only deliveryWT keeps the commit.
+	for _, agentName := range []string{"dev_1", "dev_2"} {
+		wt := workspace.WorktreePath(repo, agentName)
+		if _, err := os.Stat(wt); !os.IsNotExist(err) {
+			t.Fatalf("scratch dev worktree %s should be removed after delivery commit, stat=%v", wt, err)
+		}
+	}
+	rootLog, err := g.Run(ctx, repo, "log", "-1", "--pretty=%s")
+	if err != nil || strings.Contains(rootLog, "PROJ-1") {
+		t.Fatalf("main repo checkout should not have committed PROJ-1 directly: %q %v", rootLog, err)
 	}
 	logDelivery, err := g.Run(ctx, deliveryWT, "log", "-1", "--pretty=%s")
 	if err != nil || !strings.Contains(logDelivery, "PROJ-1") {

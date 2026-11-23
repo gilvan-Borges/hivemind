@@ -176,8 +176,15 @@ func TestExternalWorkerDevEndToEndAndPostHocGuard(t *testing.T) {
 	if res.PendingQA {
 		t.Fatal("expected QA approval and integration commit")
 	}
+	if _, statErr := os.Stat(extAdapter.seenReq.WorktreeDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected scratch dev worktree %s to be cleaned after delivery commit, stat=%v", extAdapter.seenReq.WorktreeDir, statErr)
+	}
 
 	// Verify RunExternalWorkerDev rejects out-of-owned_paths / sensitive writes pós-hoc.
+	guardWT, err := r.Git.EnsureWorktree(context.Background(), repo, "dev_ext_guard", "hivemind/dev-ext-guard")
+	if err != nil {
+		t.Fatalf("EnsureWorktree for guard test failed: %v", err)
+	}
 	badAdapter := &fakeExternalWorkerAdapter{
 		provider:  "cursor",
 		writeFile: ".env",
@@ -186,15 +193,15 @@ func TestExternalWorkerDevEndToEndAndPostHocGuard(t *testing.T) {
 	badEnv := devEnv{
 		Agent:      team.Agent{Name: "dev_ext", Role: team.RoleDeveloper, Provider: "cursor"},
 		ADK:        "dev_ext",
-		Root:       extAdapter.seenReq.WorktreeDir,
-		Branch:     extAdapter.seenReq.Branch,
+		Root:       guardWT,
+		Branch:     "hivemind/dev-ext-guard",
 		OwnedPaths: []string{"pkg/api/**"},
 	}
 	_, guardRes, badErr := r.RunExternalWorkerDev(context.Background(), badEnv, badAdapter, "test guard")
 	if badErr == nil || guardRes.Passed() {
 		t.Fatalf("expected RunExternalWorkerDev to reject .env edit pós-hoc, got err=%v guard=%+v", badErr, guardRes)
 	}
-	if _, statErr := os.Stat(filepath.Join(extAdapter.seenReq.WorktreeDir, ".env")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(guardWT, ".env")); !os.IsNotExist(statErr) {
 		t.Fatal("expected disallowed .env to be reverted automatically")
 	}
 }

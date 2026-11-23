@@ -133,7 +133,7 @@ func ArchiveWorktree(ctx context.Context, g Git, repo, wtPath string) error {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("recusado: %s não é uma worktree gerenciada dentro de %s", wtPath, wtRoot)
 	}
-	_ = unlinkTopLevelSymlinks(target)
+	_ = unlinkWorktreeSymlinks(target)
 	if g.IsRepo(ctx, target) {
 		RemoveWorktree(ctx, g, repo, target, "")
 		if _, err := os.Stat(target); os.IsNotExist(err) {
@@ -225,18 +225,38 @@ func dirSizeSafe(root string) int64 {
 	return total
 }
 
-func unlinkTopLevelSymlinks(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		p := filepath.Join(dir, entry.Name())
-		if info, err := os.Lstat(p); err == nil && (info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeIrregular != 0) {
-			_ = os.Remove(p)
+// unlinkWorktreeSymlinks unlinks symlinks and Windows directory junctions
+// inside dir (both top-level and nested, e.g. frontend/node_modules) without
+// descending into or modifying their targets.
+func unlinkWorktreeSymlinks(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-	}
-	return nil
+		if p == dir {
+			return nil
+		}
+		if d.Name() == ".git" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		isLink := d.Type()&(os.ModeSymlink|os.ModeIrregular) != 0
+		if !isLink {
+			if info, lErr := os.Lstat(p); lErr == nil && info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+				isLink = true
+			}
+		}
+		if isLink {
+			_ = os.Remove(p)
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return nil
+	})
 }
 
 func normPathKey(p string) string {
