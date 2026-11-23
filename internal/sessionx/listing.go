@@ -34,6 +34,8 @@ type SessionSummary struct {
 	OutputTokens int64  `json:"outputTokens"`
 	TotalTokens  int64  `json:"totalTokens"`
 	Kind         string `json:"kind,omitempty"`
+	Preview      string `json:"preview,omitempty"`
+	Unread       int    `json:"unread,omitempty"`
 }
 
 // WorkspaceSessionsSummary aggregates all saved sessions and total project token consumption.
@@ -147,7 +149,26 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 			Kind:         m.Kind,
 		})
 	}
+	store.annotateConversations(ctx, out.Sessions)
 	return out, nil
+}
+
+// MarkSessionRead clears the unread count for one session.
+func MarkSessionRead(ctx context.Context, workspace, sessionID string) error {
+	store, err := Open(workspace)
+	if err != nil {
+		return err
+	}
+	got, err := store.Get(ctx, &session.GetRequest{
+		AppName:   AppName,
+		UserID:    UserID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return err
+	}
+	_, n := chatTail(got.Session)
+	return store.markRead(sessionID, n)
 }
 
 // LoadSessionDetail reconstructs the chat transcript and per-agent token stats for sessionID.

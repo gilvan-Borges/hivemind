@@ -192,12 +192,19 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/lanes", s.handleLanes)
 	mux.HandleFunc("GET /api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/v1/session", s.handleSession)
+	mux.HandleFunc("POST /api/v1/session/read", s.handleSessionRead)
+	mux.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
+	mux.HandleFunc("POST /api/v1/project/permission", s.handleProjectPermission)
 	mux.HandleFunc("POST /api/v1/runs/start", s.handleRunStart)
 	mux.HandleFunc("POST /api/v1/runs/cancel", s.handleRunCancel)
 	mux.HandleFunc("POST /api/v1/runs/redirect", s.handleRunRedirect)
 	mux.HandleFunc("POST /api/v1/runs/steer", s.handleRunSteer)
 	mux.HandleFunc("POST /api/v1/approvals/resolve", s.handleApprovalResolve)
 	mux.HandleFunc("GET /api/v1/git/diffs", s.handleDiffs)
+	mux.HandleFunc("POST /api/v1/git/commit", s.handleGitCommit)
+	mux.HandleFunc("POST /api/v1/git/pr", s.handleGitPR)
+	mux.HandleFunc("GET /api/v1/routines", s.handleRoutines)
+	mux.HandleFunc("POST /api/v1/routines/enabled", s.handleRoutineEnabled)
 	mux.HandleFunc("GET /api/v1/git/prs", s.handlePRs)
 	mux.HandleFunc("GET /api/v1/git/issues", s.handleIssues)
 	mux.HandleFunc("GET /api/v1/autoreview/status", s.handleAutoReviewStatus)
@@ -260,16 +267,22 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // --- Handlers ---
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"hostName": s.host,
-		"version":  s.version,
-		"time":     time.Now().UTC().Format(time.RFC3339),
-	})
+	writeJSON(w, http.StatusOK, s.healthBody(r))
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"projects": s.hub.Projects()})
+	projects := []ProjectSummary{}
+	if s.hub != nil {
+		projects = s.hub.Projects()
+	}
+	if c, ok := s.controls(); ok {
+		for i := range projects {
+			if mode := strings.TrimSpace(c.PermissionMode(projects[i].Workspace)); mode != "" {
+				projects[i].PermissionMode = mode
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 }
 
 func (s *Server) handleLanes(w http.ResponseWriter, r *http.Request) {

@@ -11,7 +11,7 @@ import (
 )
 
 // StreamEvent is one SSE message mirrored to mobile clients. Types:
-// "lane_event", "autoreview_status", "approval_resolved", "provider_health", "ping".
+// "lane_event", "activity", "autoreview_status", "approval_resolved", "provider_health", "ping".
 type StreamEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
@@ -94,6 +94,7 @@ type ProjectSummary struct {
 	ComposerMode     string `json:"composerMode,omitempty"`
 	RunningLanes     int    `json:"runningLanes"`
 	PendingApprovals int    `json:"pendingApprovals"`
+	PermissionMode   string `json:"permissionMode,omitempty"`
 }
 
 const (
@@ -118,6 +119,7 @@ type Hub struct {
 	laneWks          map[string]string // laneID -> workspace (events carry no workspace)
 	autoreview       map[string]AutoReviewStatus
 	projects         map[string]ProjectSummary
+	focusWorkspace   string
 	providerHealth   []ProviderHealthItem
 	lastHealthEmitAt time.Time
 	subscribers      map[chan StreamEvent]struct{}
@@ -286,10 +288,24 @@ func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 		}
 	}
 	s.PendingApprovals = approvalsSlice(st.approvals)
+	sessionID := s.SessionID
 	raw, _ := json.Marshal(ev)
 	h.mu.Unlock()
 
 	h.broadcast(StreamEvent{Type: "lane_event", Data: raw})
+	if e.Kind == "tool_call" {
+		phase, target := activityPhase(e.ToolName, e.Detail)
+		act, _ := json.Marshal(Activity{
+			LaneID:    ev.LaneID,
+			Team:      ev.Team,
+			Author:    e.Author,
+			Tool:      e.ToolName,
+			Phase:     phase,
+			Target:    target,
+			SessionID: sessionID,
+		})
+		h.broadcast(StreamEvent{Type: "activity", Data: act})
+	}
 }
 
 // HandleRunError marks a lane whose turn failed to start (e.g. no team
@@ -429,7 +445,46 @@ func (h *Hub) RegisterProject(workspace, name, branch, stack, activeTeam string)
 		p.ActiveTeam = activeTeam
 	}
 	h.projects[workspace] = p
+	h.focusWorkspace = workspace
 	h.mu.Unlock()
+}
+
+// FocusProject is the workspace the IDE opened last, preferring one with a live lane.
+func (h *Hub) FocusProject() (ProjectSummary, bool) {
+	if h == nil {
+		return ProjectSummary{}, false
+	}
+	projects := h.Projects()
+	if len(projects) == 0 {
+		return ProjectSummary{}, false
+	}
+	h.mu.Lock()
+	focus := h.focusWorkspace
+	h.mu.Unlock()
+	for _, p := range projects {
+		if p.RunningLanes > 0 {
+			return p, true
+		}
+	}
+	for _, p := range projects {
+		if p.Workspace == focus {
+			return p, true
+		}
+	}
+	return projects[0], true
+}
+
+// PendingApprovals lists approval cards the app can answer.
+func (h *Hub) PendingApprovals(workspace string) []ApprovalInfo {
+	if h == nil {
+		return nil
+	}
+	snaps := h.Snapshots(workspace)
+	out := make([]ApprovalInfo, 0)
+	for _, snap := range snaps {
+		out = append(out, snap.PendingApprovals...)
+	}
+	return out
 }
 
 // SetComposerMode stores the IDE composer's current run mode for a workspace
