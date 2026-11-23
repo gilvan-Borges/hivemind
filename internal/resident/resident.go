@@ -246,11 +246,24 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 		streamMode = agent.StreamingModeSSE
 	}
 
+	if req.UserMessageID != "" {
+		r.emit(Event{
+			Kind:           "user_message",
+			Author:         "user",
+			Label:          "Você",
+			Text:           msg,
+			MessageID:      req.UserMessageID,
+			ConversationID: req.ConversationID,
+			SessionID:      req.SharedSessionID,
+		})
+	}
 	r.emit(Event{
-		Kind:   "stage",
-		Author: "hive",
-		Label:  "Hive Residente",
-		Text:   "pensando",
+		Kind:           "stage",
+		Author:         "hive",
+		Label:          "Hive Residente",
+		Text:           "pensando",
+		ConversationID: req.ConversationID,
+		SessionID:      req.SharedSessionID,
 	})
 
 	var (
@@ -404,16 +417,20 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	})
 
 	return TurnResult{
-		SessionID:     sessID,
-		Workstream:    ws,
-		FinalText:     finalText,
-		Provider:      prov,
-		Model:         mod,
-		InputTokens:   totalIn,
-		OutputTokens:  totalOut,
-		TotalTokens:   totalTok,
-		ToolCalls:     broker.CallCount(),
-		PromptBuildMs: promptBuildMs,
+		SessionID:       sessID,
+		Workstream:      ws,
+		FinalText:       finalText,
+		ConversationID:  req.ConversationID,
+		SharedSessionID: req.SharedSessionID,
+		UserMessageID:   req.UserMessageID,
+		ReplyMessageID:  req.ReplyMessageID,
+		Provider:        prov,
+		Model:           mod,
+		InputTokens:     totalIn,
+		OutputTokens:    totalOut,
+		TotalTokens:     totalTok,
+		ToolCalls:       broker.CallCount(),
+		PromptBuildMs:   promptBuildMs,
 	}, nil
 }
 
@@ -532,7 +549,7 @@ func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error)
 		ApproveDetailed: r.ApproveDetailed,
 		OnEvent:         r.OnEvent,
 		Model:           r.Model,
-		Streaming:        agent.StreamingModeNone,
+		Streaming:       agent.StreamingModeNone,
 		Child:           true,
 		ParentTier:      ceilingTier(allowed),
 		AllowedTiers:    allowed,

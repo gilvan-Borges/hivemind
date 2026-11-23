@@ -6,6 +6,7 @@ import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindGitSidebarEvents, getGitStatusMap, renderGitSidebarHtml } from "./git";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
+import { syncHiveBinding } from "./resident";
 import { renderModalLayer } from "./modals";
 import { notifyRegionRendered } from "./render-guard";
 import { bindMCPSidebarEvents, refreshMCP, renderMCPSidebar } from "./mcp";
@@ -401,7 +402,7 @@ function renderLeftSidebarInner(sidebar: HTMLElement) {
           ? `<div class="dim">Nenhuma sessão salva neste projeto ainda. Envie uma mensagem ao Chefe para iniciar.</div>`
           : sum.sessions.map((s) => `
             <div class="session-card ${lane?.sessionId === s.id ? "active" : ""}">
-              <div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
+              <div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}${s.kind === "hive" ? ` <span class="dim">· Hive</span>` : ""}</div>
               <div class="session-meta">
                 <span>${escapeHtml(s.updatedAt)}${s.jiraKey ? ` · <strong>${escapeHtml(s.jiraKey)}</strong>` : ""}</span>
                 <span class="tok-pill" title="Entrada: ${exactTokens(s.inputTokens)} | Saída: ${exactTokens(s.outputTokens)}">${icons.bolt}<span>${exactTokens(s.totalTokens)} tok</span></span>
@@ -648,6 +649,8 @@ export function bindSessionsSidebarEvents() {
       try {
         const detail = await backend.LoadSession(state.project.root, sid);
         lane.sessionId = detail.id;
+        lane.conversationKind = detail.kind === "hive" ? "hive" : "team";
+        void syncHiveBinding();
         lane.turnInTokens = 0;
         lane.turnOutTokens = 0;
         lane.turnTotalTokens = 0;

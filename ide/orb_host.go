@@ -92,6 +92,8 @@ func (a *App) orbMirrorResidentEvent(ev idecore.LaneEvent) {
 		Text:       e.Text,
 		Partial:    e.Partial,
 		Label:      e.Label,
+		Role:       e.Role,
+		MessageID:  e.MessageID,
 		ToolName:   e.ToolName,
 		ToolDetail: e.Detail,
 		RiskTier:   e.Gate,
@@ -102,7 +104,7 @@ func (a *App) orbMirrorResidentEvent(ev idecore.LaneEvent) {
 		low := strings.ToLower(e.Text)
 		orbEv.Approved = !strings.Contains(low, "recus") && !strings.Contains(low, "negad")
 		hub.ApplyResidentEvent(orbEv)
-	case "user_message", "text", "tool_call", "tool_result", "approval_required", "stage", "error", "finish":
+	case "user_message", "text", "tool_call", "tool_result", "approval_required", "stage", "error", "finish", "shared_message":
 		hub.ApplyResidentEvent(orbEv)
 	}
 }
@@ -158,6 +160,8 @@ func (a *App) orbSyncResidentSnapshot() {
 		State:            st.State,
 		Workstream:       st.Workstream,
 		Workspace:        a.orbActiveWorkspace(),
+		ConversationID:   st.ConversationID,
+		SessionID:        st.SharedSessionID,
 		Provider:         st.Provider,
 		Model:            st.Model,
 		SandboxAvailable: st.SandboxAvailable,
@@ -172,8 +176,12 @@ func (a *App) orbSyncResidentSnapshot() {
 			kind = "user"
 			label = "Você"
 		}
+		id := msgs[i].ID
+		if id == "" {
+			id = fmt.Sprintf("hist-%d", i)
+		}
 		out.Messages = append(out.Messages, orb.OrbResidentMessage{
-			ID:    fmt.Sprintf("hist-%d", i),
+			ID:    id,
 			Kind:  kind,
 			Label: label,
 			Text:  msgs[i].Text,
@@ -313,7 +321,11 @@ func (a *App) orbHandleResidentSend(act orb.OrbAction) {
 				ws = "geral"
 			}
 		}
-		if _, err := a.ResidentStartTurn(a.orbActiveWorkspace(), ws, text); err != nil {
+		sessionID := ""
+		if hub := a.orbHub(); hub != nil {
+			sessionID = hub.Resident().SessionID
+		}
+		if _, err := a.ResidentStartTurnIn(a.orbActiveWorkspace(), ws, text, sessionID); err != nil {
 			log.Printf("aviso: turno do Agent Hive via Orb: %v", err)
 		}
 		a.orbSyncResidentSnapshot()

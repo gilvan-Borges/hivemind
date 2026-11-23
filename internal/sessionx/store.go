@@ -42,6 +42,8 @@ type Meta struct {
 	InputTokens  int64     `json:"inputTokens,omitempty"`
 	OutputTokens int64     `json:"outputTokens,omitempty"`
 	TotalTokens  int64     `json:"totalTokens,omitempty"`
+	// Kind is "hive" when the Agent Hive owns the thread. Empty means a team run.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Store implements session.Service on top of one JSON file per session.
@@ -666,6 +668,7 @@ func (s *fileSession) metaNoLock() Meta {
 		}
 		totTok += t
 	}
+	kind, _ := s.state["conversationKind"].(string)
 	return Meta{
 		ID:           s.id,
 		UpdatedAt:    s.updatedAt,
@@ -674,6 +677,7 @@ func (s *fileSession) metaNoLock() Meta {
 		InputTokens:  inTok,
 		OutputTokens: outTok,
 		TotalTokens:  totTok,
+		Kind:         kind,
 	}
 }
 

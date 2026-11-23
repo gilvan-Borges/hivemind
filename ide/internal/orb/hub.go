@@ -48,6 +48,8 @@ type OrbResidentState struct {
 	State            string               `json:"state"` // ocioso | pensando | aguardando você
 	Workstream       string               `json:"workstream"`
 	Workspace        string               `json:"workspace,omitempty"`
+	ConversationID   string               `json:"conversationId,omitempty"`
+	SessionID        string               `json:"sessionId,omitempty"`
 	Provider         string               `json:"provider,omitempty"`
 	Model            string               `json:"model,omitempty"`
 	SandboxAvailable bool                 `json:"sandboxAvailable"`
@@ -60,10 +62,12 @@ type OrbResidentState struct {
 // OrbResidentState (Spec 007 plan §1.1). The main process converts idecore
 // LaneEvents into this neutral shape so package orb stays decoupled.
 type OrbResidentEvent struct {
-	Kind       string // user_message | text | tool_call | tool_result | approval_required | approval_resolved | stage | error | finish
+	Kind       string // user_message | text | tool_call | tool_result | approval_required | approval_resolved | stage | error | finish | shared_message
 	Text       string
 	Partial    bool
 	Label      string
+	Role       string
+	MessageID  string
 	ToolName   string
 	ToolDetail string
 	RiskTier   string
@@ -387,12 +391,43 @@ func (h *Hub) ApplyResidentEvent(ev OrbResidentEvent) {
 	changed := true
 	switch ev.Kind {
 	case "user_message":
+		if ev.MessageID != "" && h.residentUpsertLocked(ev.MessageID, OrbResidentMessage{
+			ID: ev.MessageID, Kind: "user", Label: firstNonEmpty(ev.Label, "Você"), Text: ev.Text,
+		}) {
+			break
+		}
+		last := len(res.Messages) - 1
+		if last >= 0 && res.Messages[last].Kind == "user" && res.Messages[last].Text == ev.Text {
+			if ev.MessageID != "" {
+				res.Messages[last].ID = ev.MessageID
+			}
+			break
+		}
 		h.residentPushLocked(OrbResidentMessage{
+			ID:    ev.MessageID,
 			Kind:  "user",
 			Label: firstNonEmpty(ev.Label, "Você"),
 			Text:  ev.Text,
 		})
+	case "shared_message":
+		kind := "chief"
+		if ev.Role == "user" {
+			kind = "user"
+		}
+		if ev.MessageID != "" && h.residentUpsertLocked(ev.MessageID, OrbResidentMessage{
+			ID: ev.MessageID, Kind: kind, Label: firstNonEmpty(ev.Label, "Agent Hive"), Text: ev.Text,
+		}) {
+			break
+		}
+		h.residentPushLocked(OrbResidentMessage{
+			ID: ev.MessageID, Kind: kind, Label: firstNonEmpty(ev.Label, "Agent Hive"), Text: ev.Text,
+		})
 	case "text":
+		if ev.MessageID != "" && !ev.Partial && h.residentUpsertLocked(ev.MessageID, OrbResidentMessage{
+			ID: ev.MessageID, Kind: "chief", Label: firstNonEmpty(ev.Label, "Agent Hive"), Text: ev.Text,
+		}) {
+			break
+		}
 		last := len(res.Messages) - 1
 		if last >= 0 && res.Messages[last].Kind == "chief" && ev.Partial {
 			res.Messages[last].Text += ev.Text
@@ -400,6 +435,7 @@ func (h *Hub) ApplyResidentEvent(ev OrbResidentEvent) {
 			res.Messages[last].Text = ev.Text
 		} else {
 			h.residentPushLocked(OrbResidentMessage{
+				ID:    ev.MessageID,
 				Kind:  "chief",
 				Label: firstNonEmpty(ev.Label, "Agent Hive"),
 				Text:  ev.Text,
@@ -493,12 +529,34 @@ func (h *Hub) ApplyResidentEvent(ev OrbResidentEvent) {
 
 // residentPushLocked appends one message enforcing the timeline cap.
 // Callers must hold h.mu.
+// residentUpsertLocked replaces a line with the same ID. Callers hold h.mu.
+func (h *Hub) residentUpsertLocked(id string, m OrbResidentMessage) bool {
+	if id == "" {
+		return false
+	}
+	for i := range h.resident.Messages {
+		if h.resident.Messages[i].ID == id {
+			h.resident.Messages[i].Text = m.Text
+			if m.Label != "" {
+				h.resident.Messages[i].Label = m.Label
+			}
+			if m.Kind != "" {
+				h.resident.Messages[i].Kind = m.Kind
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Hub) residentPushLocked(m OrbResidentMessage) {
 	if strings.TrimSpace(m.Text) == "" && m.Kind != "approval" && m.Kind != "tool" {
 		return
 	}
 	h.residentSeq++
-	m.ID = fmt.Sprintf("res-%d", h.residentSeq)
+	if strings.TrimSpace(m.ID) == "" {
+		m.ID = fmt.Sprintf("res-%d", h.residentSeq)
+	}
 	h.resident.Messages = append(h.resident.Messages, m)
 	if len(h.resident.Messages) > maxOrbResidentMessages {
 		h.resident.Messages = append([]OrbResidentMessage(nil), h.resident.Messages[len(h.resident.Messages)-maxOrbResidentMessages:]...)

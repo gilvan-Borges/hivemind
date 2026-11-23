@@ -76,16 +76,14 @@ func BuildUserPrompt(req TurnRequest, mem *MemoryStore) (string, error) {
 				}
 			}
 		}
-		if hist, err := mem.LoadSessionMessages(ws, 10); err == nil && len(hist) > 0 {
-			b.WriteString("\n[Histórico Recente deste Workstream]\n")
-			for _, m := range hist {
-				role := "Usuário"
-				if m.Role == "model" {
-					role = "Hive"
-				}
-				fmt.Fprintf(&b, "%s: %s\n", role, strx.TruncateBytes(RedactSecrets(m.Text), 600, "…"))
+		if !req.SkipLocalHistory {
+			if hist, err := mem.LoadSessionMessages(ws, 10); err == nil && len(hist) > 0 {
+				writeHistory(&b, hist)
 			}
 		}
+	}
+	if len(req.SharedHistory) > 0 {
+		writeHistory(&b, req.SharedHistory)
 	}
 
 	// Team memory (.hivemind/MEMORY.md) is project data, NEVER system instruction (§2, §6).
@@ -98,6 +96,17 @@ func BuildUserPrompt(req TurnRequest, mem *MemoryStore) (string, error) {
 	b.WriteString("\n[Mensagem do Usuário]\n")
 	b.WriteString(strings.TrimSpace(RedactSecrets(req.Message)))
 	return b.String(), nil
+}
+
+func writeHistory(b *strings.Builder, hist []LocalTurnMessage) {
+	b.WriteString("\n[Histórico compartilhado com a IDE]\n")
+	for _, m := range hist {
+		role := "Usuário"
+		if m.Role == "model" {
+			role = "Hive"
+		}
+		fmt.Fprintf(b, "%s: %s\n", role, strx.TruncateBytes(RedactSecrets(m.Text), 600, "…"))
+	}
 }
 
 func loadFencedTeamMemory(workspaceRoot string) string {

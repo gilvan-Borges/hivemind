@@ -31,13 +31,17 @@ type ResidentManager struct {
 	sched      *resident.Scheduler
 	release    func()
 
-	mu            sync.Mutex
-	state         string // "ocioso" | "pensando" | "aguardando você"
-	enabled       bool
-	lastError     string
-	eventTriggers bool
-	cancel        context.CancelFunc
-	detectorSeen  map[string]struct{}
+	mu             sync.Mutex
+	state          string // "ocioso" | "pensando" | "aguardando você"
+	enabled        bool
+	boundWorkspace string
+	boundSession   string
+	boundLane      string
+	boundKind      string
+	lastError      string
+	eventTriggers  bool
+	cancel         context.CancelFunc
+	detectorSeen   map[string]struct{}
 
 	// testModel optionally overrides LLM creation in unit tests.
 	testModel model.LLM
@@ -92,6 +96,7 @@ func NewResidentManager(opts ResidentManagerOptions) *ResidentManager {
 	}
 	if m.sessions != nil {
 		m.sessions.HostSignal = func(kind string) { m.NoteHostEvent(kind) }
+		m.sessions.MirrorShared = m.mirrorIDELine
 	}
 	return m
 }
@@ -262,7 +267,7 @@ func (m *ResidentManager) fireRoutine(rt resident.Routine) {
 	if !m.IsEnabled() {
 		return
 	}
-	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, resident.OriginRoutine, rt.Classes)
+	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes)
 }
 
 func (m *ResidentManager) currentAccount() (accountID, deviceID string) {
@@ -329,6 +334,12 @@ func (m *ResidentManager) Status() resident.Status {
 
 	browserOK, browserReason := resident.IsolatedBrowserAvailable()
 	desktopOK, desktopReason := resident.IsolatedDesktopAvailable()
+	convID, sharedSID, laneID := "", "", ""
+	if conv, ok := m.activeConversation(); ok {
+		convID = conv.ID
+		sharedSID = conv.SessionID
+		laneID = conv.LaneID
+	}
 	warning := ""
 	if cfg.ExperimentalUnisolated {
 		warning = resident.ExperimentalUnisolatedWarning
@@ -362,6 +373,9 @@ func (m *ResidentManager) Status() resident.Status {
 		IsolatedBrowserReason:  browserReason,
 		IsolatedDesktop:        desktopOK,
 		IsolatedDesktopReason:  desktopReason,
+		ConversationID:         convID,
+		SharedSessionID:        sharedSID,
+		LaneID:                 laneID,
 	}
 }
 
@@ -444,12 +458,23 @@ func (m *ResidentManager) RunTurn(
 	workspaceDir, workstream, message string,
 	origin resident.Origin,
 ) (resident.TurnResult, error) {
-	return m.runTurn(parentCtx, workspaceDir, workstream, message, origin, nil)
+	return m.runTurn(parentCtx, workspaceDir, workstream, message, "", origin, nil)
+}
+
+// RunTurnIn continues the shared conversation identified by sessionID.
+// An empty sessionID keeps the conversation bound to the open IDE lane.
+func (m *ResidentManager) RunTurnIn(
+	parentCtx context.Context,
+	workspaceDir, workstream, message, sessionID string,
+	origin resident.Origin,
+) (resident.TurnResult, error) {
+	return m.runTurn(parentCtx, workspaceDir, workstream, message, sessionID, origin, nil)
 }
 
 func (m *ResidentManager) runTurn(
 	parentCtx context.Context,
 	workspaceDir, workstream, message string,
+	sessionID string,
 	origin resident.Origin,
 	classes []string,
 ) (resident.TurnResult, error) {
@@ -467,6 +492,10 @@ func (m *ResidentManager) runTurn(
 	workstream = resident.SanitizeWorkstream(workstream)
 	acct, devID := m.currentAccount()
 	mem := resident.NewMemoryStore(m.baseDir, acct)
+	shared, sharedErr := m.prepareSharedTurn(strings.TrimSpace(workspaceDir), workstream, message, sessionID, string(origin))
+	if sharedErr != nil {
+		return resident.TurnResult{}, sharedErr
+	}
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.mu.Lock()
@@ -536,6 +565,18 @@ func (m *ResidentManager) runTurn(
 			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
 				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
 			}
+			if ev.Kind == "text" && ev.MessageID == "" {
+				ev.MessageID = shared.ReplyID
+			}
+			if ev.Kind == "user_message" && ev.MessageID == "" {
+				ev.MessageID = shared.UserID
+			}
+			if ev.ConversationID == "" {
+				ev.ConversationID = shared.Conv.ID
+			}
+			if ev.SessionID == "" {
+				ev.SessionID = shared.Conv.SessionID
+			}
 			if m.sessions != nil && m.sessions.Emit != nil {
 				detail := ev.Detail
 				if ev.RiskTier != "" && detail != "" && !strings.Contains(detail, "risco:") {
@@ -545,20 +586,23 @@ func (m *ResidentManager) runTurn(
 					LaneID: resident.LaneID,
 					Team:   "hive-resident",
 					Event: orchestrator.Event{
-						Kind:         ev.Kind,
-						Stage:        "chief",
-						Author:       "hive",
-						Label:        ev.Label,
-						Text:         ev.Text,
-						ToolName:     ev.ToolName,
-						Detail:       detail,
-						ApprovalID:   ev.ApprovalID,
-						Partial:      ev.Partial,
-						Thought:      ev.Thought,
-						InputTokens:  ev.InputTokens,
-						OutputTokens: ev.OutputTokens,
-						Tokens:       ev.Tokens,
-						Origin:       string(origin),
+						Kind:           ev.Kind,
+						Stage:          "chief",
+						Author:         "hive",
+						Label:          ev.Label,
+						Text:           ev.Text,
+						ToolName:       ev.ToolName,
+						Detail:         detail,
+						ApprovalID:     ev.ApprovalID,
+						Partial:        ev.Partial,
+						Thought:        ev.Thought,
+						InputTokens:    ev.InputTokens,
+						OutputTokens:   ev.OutputTokens,
+						Tokens:         ev.Tokens,
+						Origin:         string(origin),
+						MessageID:      ev.MessageID,
+						ConversationID: ev.ConversationID,
+						SessionID:      ev.SessionID,
 					},
 				})
 			}
@@ -567,13 +611,19 @@ func (m *ResidentManager) runTurn(
 
 	soul, _ := resident.LoadSoul(m.baseDir)
 	res, runErr := runner.RunTurn(ctx, resident.TurnRequest{
-		Message:    message,
-		Workspace:  strings.TrimSpace(workspaceDir),
-		Workstream: workstream,
-		Origin:     origin,
-		AccountID:  acct,
-		DeviceID:   devID,
-		Soul:       soul,
+		Message:          message,
+		Workspace:        strings.TrimSpace(workspaceDir),
+		Workstream:       workstream,
+		Origin:           origin,
+		AccountID:        acct,
+		DeviceID:         devID,
+		Soul:             soul,
+		ConversationID:   shared.Conv.ID,
+		SharedSessionID:  shared.Conv.SessionID,
+		UserMessageID:    shared.UserID,
+		ReplyMessageID:   shared.ReplyID,
+		SharedHistory:    shared.History,
+		SkipLocalHistory: true,
 	})
 	if runErr != nil {
 		m.mu.Lock()
@@ -581,6 +631,11 @@ func (m *ResidentManager) runTurn(
 		m.mu.Unlock()
 		return resident.TurnResult{}, runErr
 	}
+	m.finishSharedTurn(shared, res.FinalText)
+	res.ConversationID = shared.Conv.ID
+	res.SharedSessionID = shared.Conv.SessionID
+	res.UserMessageID = shared.UserID
+	res.ReplyMessageID = shared.ReplyID
 	_ = resident.SaveRouteTokens(m.baseDir, res.InputTokens)
 	return res, nil
 }
@@ -603,13 +658,24 @@ func (m *ResidentManager) Cancel() bool {
 	return canceled
 }
 
-// SessionMessages returns recent local conversation turns for the current account & workstream.
+// SessionMessages returns the shared transcript when one is active, otherwise
+// the legacy workstream file.
 func (m *ResidentManager) SessionMessages(workstream string) ([]resident.LocalTurnMessage, error) {
+	if conv, ok := m.activeConversation(); ok && len(conv.Messages) > 0 {
+		out := make([]resident.LocalTurnMessage, 0, len(conv.Messages))
+		for _, msg := range conv.Messages {
+			out = append(out, resident.LocalTurnMessage{ID: msg.ID, Role: msg.Role, Text: msg.Text, At: msg.At})
+		}
+		return out, nil
+	}
 	return m.memoryForCurrentAccount().LoadSessionMessages(workstream, 40)
 }
 
 // ClearSession deletes the short-term conversation history for workstream.
 func (m *ResidentManager) ClearSession(workstream string) error {
+	if conv, ok := m.activeConversation(); ok {
+		_ = m.conversations().ClearMessages(conv.ID)
+	}
 	return m.memoryForCurrentAccount().ClearSession(workstream)
 }
 

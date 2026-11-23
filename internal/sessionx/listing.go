@@ -33,6 +33,7 @@ type SessionSummary struct {
 	InputTokens  int64  `json:"inputTokens"`
 	OutputTokens int64  `json:"outputTokens"`
 	TotalTokens  int64  `json:"totalTokens"`
+	Kind         string `json:"kind,omitempty"`
 }
 
 // WorkspaceSessionsSummary aggregates all saved sessions and total project token consumption.
@@ -60,6 +61,7 @@ type SessionDetail struct {
 	InputTokens  int64                `json:"inputTokens"`
 	OutputTokens int64                `json:"outputTokens"`
 	TotalTokens  int64                `json:"totalTokens"`
+	Kind         string               `json:"kind,omitempty"`
 	AgentUsage   map[string]TokenStat `json:"agentUsage"`
 	Messages     []RestoredMessage    `json:"messages"`
 }
@@ -142,6 +144,7 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 			InputTokens:  inTok,
 			OutputTokens: outTok,
 			TotalTokens:  totTok,
+			Kind:         m.Kind,
 		})
 	}
 	return out, nil
@@ -165,10 +168,12 @@ func LoadSessionDetail(ctx context.Context, workspace, sessionID string) (Sessio
 	objRaw, _ := sess.State().Get("objective")
 	jiraRaw, _ := sess.State().Get("jira_key")
 
+	kindRaw, _ := sess.State().Get("conversationKind")
 	detail := SessionDetail{
 		ID:         sess.ID(),
 		Title:      cleanObjectiveTitle(strings.TrimSpace(sessionStateToString(objRaw))),
 		JiraKey:    strings.TrimSpace(sessionStateToString(jiraRaw)),
+		Kind:       strings.TrimSpace(sessionStateToString(kindRaw)),
 		AgentUsage: make(map[string]TokenStat),
 	}
 

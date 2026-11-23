@@ -1,7 +1,7 @@
 import { icons } from "./icons";
 import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownStreamed } from "./markdown";
-import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus } from "./types";
+import type { ChatMessage, ExternalSession, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus, SharedConversation } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
 import { openIdeSettingsTab } from "./ide-settings";
@@ -37,7 +37,30 @@ export const residentState = {
   secretValueDraft: "",
   policyDirty: false,
   loadedOnce: false,
+  boundLaneId: "",
+  boundSessionId: "",
+  conversations: [] as SharedConversation[],
 };
+
+let onLaneMirrored: (() => void) | null = null;
+
+/** boot registra o redraw do chat da IDE quando o Hive escreve na lane aberta. */
+export function setResidentLaneMirrorHook(fn: () => void): void {
+  onLaneMirrored = fn;
+}
+
+export async function syncHiveBinding(): Promise<void> {
+  const backend = api();
+  const lane = state.lanes.find((l) => l.id === state.activeLaneId) ?? state.lanes[0];
+  if (!backend?.ResidentBindSession || !lane) return;
+  residentState.boundLaneId = lane.id;
+  residentState.boundSessionId = lane.sessionId || "";
+  try {
+    await backend.ResidentBindSession(state.project?.root || "", lane.sessionId || "", lane.id);
+  } catch {
+    // a IDE segue sem o Orb se o residente ainda não subiu
+  }
+}
 
 function syncPolicyDraftsFromStatus(st: ResidentStatus | null): void {
   if (!st || residentState.policyDirty) return;
@@ -163,9 +186,11 @@ export async function refreshResidentData(): Promise<void> {
     if (!residentState.soulDirty) {
       residentState.soulDraft = String(soulText || "");
     }
+    const convs = await backend.ResidentListConversations?.(state.project?.root || "").catch(() => []) ?? [];
+    residentState.conversations = Array.isArray(convs) ? convs : [];
     if (!residentState.loadedOnce && residentState.messages.length === 0 && Array.isArray(sessionMsgs) && sessionMsgs.length > 0) {
       residentState.messages = sessionMsgs.map((m, idx) => ({
-        id: `res-hist-${idx}`,
+        id: m.id || `res-hist-${idx}`,
         kind: m.role === "user" ? "user" : "chief",
         label: m.role === "user" ? "Você" : "Agent Hive",
         text: m.text,
@@ -248,13 +273,31 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
   if (ev.kind === "stage") {
     target.running = true;
     if (target.status) target.status.state = ev.text || "pensando";
+  } else if (ev.kind === "shared_message" && ev.text) {
+    const id = String(ev.messageId || `shared-${Date.now()}`);
+    if (target.messages.some((m) => m.id === id)) return;
+    const fromUser = String(ev.role || "") === "user";
+    target.messages.push({
+      id,
+      kind: fromUser ? "user" : "chief",
+      label: fromUser ? "Você" : String(ev.label || "IDE"),
+      text: String(ev.text),
+    });
   } else if (ev.kind === "user_message" && ev.text) {
+    const id = String(ev.messageId || "");
+    const text = String(ev.text);
+    const last = target.messages[target.messages.length - 1];
+    if (last && last.kind === "user" && last.text === text) {
+      if (id) last.id = id;
+      return;
+    }
+    if (id && target.messages.some((m) => m.id === id)) return;
     const fromOrb = String(ev.origin || "") === "orb";
     target.messages.push({
-      id: `res-u-${Date.now()}`,
+      id: id || `res-u-${Date.now()}`,
       kind: "user",
       label: fromOrb ? "Você" : String(ev.label || "Remoto"),
-      text: String(ev.text),
+      text,
     });
   } else if (ev.kind === "tool_call") {
     const risk = formatRiskBadge(String(ev.gate || ev.riskTier || ""));
@@ -330,6 +373,14 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
     }
     const sanitized = sanitizeAssistantText(String(ev.text));
     if (!sanitized) return;
+    const messageId = String(ev.messageId || "");
+    if (messageId) {
+      const existing = target.messages.find((m) => m.id === messageId);
+      if (existing) {
+        existing.text = ev.partial ? sanitizeAssistantText(`${existing.text}${sanitized}`) : sanitized;
+        return;
+      }
+    }
     const last = target.messages[target.messages.length - 1];
     const fromOrb = String(ev.origin || "") === "orb";
     if (last && last.kind === "chief" && ev.partial) {
@@ -338,7 +389,7 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
       last.text = sanitized;
     } else if (sanitized.trim() !== "" || ev.partial) {
       target.messages.push({
-        id: `res-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: messageId || `res-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         kind: "chief",
         label: fromOrb ? "Agent Hive" : String(ev.label || "Agent Hive"),
         text: sanitized,
@@ -381,11 +432,36 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
   }
 }
 
+function mirrorResidentToOpenLane(ev: any): void {
+  if (!ev || ev.origin === "ide" || ev.kind === "shared_message" || ev.thought) return;
+  if (ev.kind !== "user_message" && ev.kind !== "text") return;
+  const id = String(ev.messageId || "");
+  const text = String(ev.text || "");
+  if (!id || !text) return;
+  const sessionId = String(ev.sessionId || residentState.boundSessionId || "");
+  const lane = state.lanes.find((l) => (sessionId && l.sessionId === sessionId) || (residentState.boundLaneId && l.id === residentState.boundLaneId));
+  if (!lane) return;
+  const kind = ev.kind === "user_message" ? "user" : "chief";
+  const label = kind === "user" ? "Você" : "Agent Hive";
+  const existing = lane.messages.find((m) => m.id === id);
+  if (existing) {
+    existing.text = ev.partial ? `${existing.text}${text}` : text;
+  } else {
+    lane.messages.push({ id, kind, label, text });
+  }
+  if (ev.sessionId && !lane.sessionId) {
+    lane.sessionId = String(ev.sessionId);
+    lane.conversationKind = "hive";
+  }
+  onLaneMirrored?.();
+}
+
 export function handleResidentLaneEvent(payload: any): void {
   const ev = payload?.event;
   if (!ev) return;
 
   applyResidentLaneEvent(residentState, payload);
+  mirrorResidentToOpenLane(ev);
 
   if (ev.kind === "stage") {
     noteActivity({ laneId: "resident", kind: "stage", text: ev.text, label: ev.label });
@@ -618,7 +694,15 @@ function renderResidentChatHtml(enabled = true): string {
         </div>
       `;
 
+  const convOptions = residentState.conversations
+    .map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === residentState.status?.conversationId ? "selected" : ""}>${escapeHtml(c.title || c.id)} · ${escapeHtml(c.kind || "hive")}</option>`)
+    .join("");
+  const convSelect = convOptions
+    ? `<label class="dim" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">Conversa compartilhada com a IDE<select id="res-conversation">${convOptions}</select></label>`
+    : "";
+
   return `
+    ${convSelect}
     <div class="resident-chat-body" id="res-chat-scroll">${msgsHtml}</div>
     <div class="resident-composer">
       ${approvalDockHtml}
@@ -941,8 +1025,9 @@ export function bindResidentViewEvents(): void {
     if (!backend?.ResidentStartTurn || !text || residentState.running) return;
     residentState.draftInput = "";
     residentState.running = true;
+    const optimisticId = `res-u-${Date.now()}`;
     residentState.messages.push({
-      id: `res-u-${Date.now()}`,
+      id: optimisticId,
       kind: "user",
       label: "Você",
       text,
@@ -950,7 +1035,22 @@ export function bindResidentViewEvents(): void {
     updateResidentStatusChip();
     rerenderResidentIfOpen();
     try {
-      await backend.ResidentStartTurn(state.project?.root || "", residentState.workstream, text);
+      const sessionId = residentState.boundSessionId || "";
+      const started = backend.ResidentStartTurnIn
+        ? await backend.ResidentStartTurnIn(state.project?.root || "", residentState.workstream, text, sessionId)
+        : await backend.ResidentStartTurn(state.project?.root || "", residentState.workstream, text);
+      if (started?.userMessageId) {
+        const mine = residentState.messages.find((m) => m.id === optimisticId);
+        if (mine) mine.id = started.userMessageId;
+      }
+      if (started?.sharedSessionId) {
+        residentState.boundSessionId = started.sharedSessionId;
+        const lane = state.lanes.find((l) => l.id === residentState.boundLaneId);
+        if (lane && !lane.sessionId) {
+          lane.sessionId = started.sharedSessionId;
+          lane.conversationKind = "hive";
+        }
+      }
       setStatus("Hive Residente respondeu.");
     } catch (err: any) {
       residentState.running = false;
@@ -967,6 +1067,25 @@ export function bindResidentViewEvents(): void {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void sendTurn();
+    }
+  });
+  document.getElementById("res-conversation")?.addEventListener("change", async (ev) => {
+    const id = (ev.target as HTMLSelectElement).value;
+    const backend = api();
+    if (!backend?.ResidentOpenConversation || !id) return;
+    try {
+      const conv = await backend.ResidentOpenConversation(id);
+      residentState.boundSessionId = conv.sessionId || "";
+      residentState.boundLaneId = conv.laneId || residentState.boundLaneId;
+      residentState.messages = (conv.messages || []).map((m, idx) => ({
+        id: m.id || `res-open-${idx}`,
+        kind: m.role === "user" ? "user" : "chief",
+        label: m.role === "user" ? "Você" : "Agent Hive",
+        text: m.text,
+      }));
+      rerenderResidentIfOpen();
+    } catch (err: any) {
+      toastError("abrir a conversa compartilhada", err);
     }
   });
   document.getElementById("btn-res-send")?.addEventListener("click", () => {

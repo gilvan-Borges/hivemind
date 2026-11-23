@@ -434,6 +434,7 @@ func (m *MemoryStore) rewriteLocked(facts []MemoryFact) error {
 
 // LocalSession stores compact short-term conversation history per account & workstream (§6).
 type LocalTurnMessage struct {
+	ID   string    `json:"id,omitempty"`
 	Role string    `json:"role"` // "user" | "model"
 	Text string    `json:"text"`
 	At   time.Time `json:"at"`
