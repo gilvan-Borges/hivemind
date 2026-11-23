@@ -30,6 +30,20 @@ func (c *captureExec) snapshot() (int, bool) {
 	return c.calls, c.full
 }
 
+func waitSettled(t *testing.T, ws, id string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := loopx.LoadState(ws, id)
+		if err == nil && st.Status != loopx.StatusRunning && st.Iteration > 0 {
+			return
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	st, _ := loopx.LoadState(ws, id)
+	t.Fatalf("loop não assentou: %+v", st)
+}
+
 func waitCalls(t *testing.T, c *captureExec, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -82,6 +96,7 @@ func TestUnattendedFullNeedsTheSettingsSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalls(t, m.testLoopExec.(*captureExec), 1)
+	waitSettled(t, ws, "cron")
 	if _, full := cap.snapshot(); full {
 		t.Fatal("cron em Full sem allow_full_unattended deve ficar governado")
 	}
