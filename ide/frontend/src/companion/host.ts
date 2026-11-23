@@ -110,19 +110,17 @@ export function mountCompanion(): void {
   focused = !document.hidden && (typeof document.hasFocus !== "function" || document.hasFocus());
   view = mountCompanionView({
     onOpen: (id) => openStored(id),
-    onSettings: () => view?.applySettings(loadSettings()),
   });
-  // Keep the legacy in-IDE hexagon widget hidden by default so it never flashes
-  // on cold-start installs before startOrbHost() finishes spawning the HiveBee Orb.
+  // The hexagon dock is gone. This root is only in-IDE notice bubbles.
+  // Hide it while the floating Orb is up so the old mascot cannot come back as a fallback.
   view.root.hidden = true;
   const syncOrbCompanionVisibility = () => {
     const appApi = api();
-    if (!appApi?.OrbRunning) {
-      if (view) view.root.hidden = false;
-      return;
-    }
+    if (!appApi?.OrbRunning) return;
     void appApi.OrbRunning().then((running) => {
-      if (view) view.root.hidden = Boolean(running);
+      if (!view) return;
+      if (running) view.root.hidden = true;
+      else view.applySettings(loadSettings());
     });
   };
   syncOrbCompanionVisibility();

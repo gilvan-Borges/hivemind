@@ -38,6 +38,9 @@ Nenhum hex novo fora de `:root`. O mascote usa `currentColor`.
 
 O estado não depende só da cor: o balão traz texto e o botão do mascote atualiza o `aria-label`.
 
+## 6.1 Retirada do mascote na janela principal
+O hexágono dourado, a engrenagem e o minimizar (`.hm-dock`) não aparecem mais na IDE. O mascote é só a janela flutuante (Orb / HiveBee). Balões dentro da janela principal continuam no toggle Companion, sem desenhar o mascote antigo como reserva quando o Orb não está rodando.
+
 ## 6. Critérios de Aceite
 - [x] Zero cores literais novas fora de `:root`.
 - [x] `node ide/frontend/scripts/check-design-tokens.mjs` sem falhas.
