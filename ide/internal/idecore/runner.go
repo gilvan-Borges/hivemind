@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
@@ -271,6 +272,8 @@ type SessionManager struct {
 	Emit        func(LaneEvent)
 	// HostSignal wakes an opt-in listener. It must not run tools.
 	HostSignal func(kind string)
+	// MirrorShared copies one visible IDE line into the Agent Hive transcript.
+	MirrorShared func(workspace, laneID, sessionID, role, author, text, messageID string)
 }
 
 func (m *SessionManager) noteHostSignal(kind string) {
@@ -881,7 +884,35 @@ func (m *SessionManager) RunTurnWithOptions(
 	_, _ = skillx.SeedProductSkills(nativeRoot)
 	nativeSkills := skillx.LoadNative(nativeRoot)
 
+	var (
+		boundSession string
+		userLined    bool
+		lineN        int
+	)
 	recordLaneEvent := func(ev orchestrator.Event) {
+		if ev.Kind == "session" {
+			boundSession = strings.TrimSpace(ev.Text)
+		}
+		if m.MirrorShared != nil && boundSession != "" {
+			if !userLined && strings.TrimSpace(userText) != "" {
+				userLined = true
+				lineN++
+				m.MirrorShared(workspaceDir, laneID, boundSession, "user", "Você", userText,
+					fmt.Sprintf("ide:%s:u:%d:%d", boundSession, time.Now().UnixNano(), lineN))
+			}
+			if ev.Kind == "text" && !ev.Partial && !ev.Thought && strings.TrimSpace(ev.Text) != "" {
+				lineN++
+				author := strings.TrimSpace(ev.Author)
+				if author == "" {
+					author = strings.TrimSpace(ev.Label)
+				}
+				if author == "" {
+					author = "Chefe"
+				}
+				m.MirrorShared(workspaceDir, laneID, boundSession, "model", author, ev.Text,
+					fmt.Sprintf("ide:%s:m:%d:%d", boundSession, time.Now().UnixNano(), lineN))
+			}
+		}
 		if ev.Kind == "finish" {
 			m.noteHostSignal("lane")
 		}

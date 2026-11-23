@@ -8,7 +8,7 @@ import { appendGitProgress, loadGitHubPRs, refreshDiffs, refreshDiffsAndSummariz
 import { initInlineAIHooks, refreshInlineAIStatus } from "./inline-ai";
 import { activeLane, createLane, ensureThinkingTicker, findActiveThinking, isCurrentTurnSolo, markThinkingDone, markToolsDone, renderLaneBarOnly, stopLaneRunningAgents, syncDynamicDevsInLane, syncStageAgents, updateAgentStatus } from "./lanes";
 import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
-import { handleResidentLaneEvent, openResidentTab, refreshResidentStatus } from "./resident";
+import { handleResidentLaneEvent, openResidentTab, refreshResidentStatus, setResidentLaneMirrorHook, syncHiveBinding } from "./resident";
 import { installRenderGuardFlushHooks, renderGuard } from "./render-guard";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
@@ -62,6 +62,8 @@ export async function boot() {
     setStatus("Modo preview (sem runtime Wails)");
     return;
   }
+
+  setResidentLaneMirrorHook(() => scheduleChatFlush());
 
   window.runtime?.EventsOn("hivemind:lane-event", (payload: any) => {
     if (payload?.laneId === "resident") {

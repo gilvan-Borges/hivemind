@@ -268,6 +268,7 @@ export interface TeamLane {
   teamName: string;
   label?: string;
   sessionId: string;
+  conversationKind?: string;
   running: boolean;
   canceledByUser?: boolean;
   stage: "" | "chief" | "dev" | "qa" | "closing";
@@ -471,6 +472,7 @@ export interface SessionSummary {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  kind?: string;
 }
 
 export interface WorkspaceSessionsSummary {
@@ -495,6 +497,7 @@ export interface SessionDetail {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  kind?: string;
   agentUsage: Record<string, TokenStat>;
   messages: RestoredMessage[];
 }
@@ -1086,6 +1089,11 @@ export interface ResidentStatus {
   isolatedBrowserReason?: string;
   isolatedDesktop?: boolean;
   isolatedDesktopReason?: string;
+  conversationId?: string;
+  sharedSessionId?: string;
+  laneId?: string;
+  permissionMode?: string;
+  fullAccess?: boolean;
 }
 
 export interface ResidentTurnResult {
@@ -1099,6 +1107,10 @@ export interface ResidentTurnResult {
   totalTokens: number;
   toolCalls: number;
   promptBuildMs: number;
+  conversationId?: string;
+  sharedSessionId?: string;
+  userMessageId?: string;
+  replyMessageId?: string;
 }
 
 export interface ResidentMemoryFact {
@@ -1130,9 +1142,24 @@ export interface ResidentAuditEntry {
 }
 
 export interface ResidentLocalMessage {
+  id?: string;
   role: "user" | "model";
   text: string;
   at: string;
+}
+
+export interface SharedConversation {
+  id: string;
+  title: string;
+  workspace?: string;
+  workstream?: string;
+  kind: string;
+  origin: string;
+  sessionId?: string;
+  laneId?: string;
+  updatedAt?: string;
+  messageCount?: number;
+  messages?: ResidentLocalMessage[];
 }
 
 export interface WailsBackendApp {
@@ -1309,6 +1336,10 @@ export interface WailsBackendApp {
   ResidentSetSecret?(name: string, value: string): Promise<ResidentStatus>;
   ResidentDeleteSecret?(name: string): Promise<ResidentStatus>;
   ResidentStartTurn?(workspace: string, workstream: string, message: string): Promise<ResidentTurnResult>;
+  ResidentStartTurnIn?(workspace: string, workstream: string, message: string, sessionId: string): Promise<ResidentTurnResult>;
+  ResidentBindSession?(workspace: string, sessionId: string, laneId: string): Promise<SharedConversation>;
+  ResidentListConversations?(workspace: string): Promise<SharedConversation[]>;
+  ResidentOpenConversation?(id: string): Promise<SharedConversation>;
   ResidentCancel?(): Promise<boolean>;
   ResidentSessionMessages?(workstream: string): Promise<ResidentLocalMessage[]>;
   ResidentClearSession?(workstream: string): Promise<void>;

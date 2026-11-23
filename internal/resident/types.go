@@ -184,6 +184,9 @@ type Status struct {
 	IsolatedBrowserReason  string   `json:"isolatedBrowserReason,omitempty"`
 	IsolatedDesktop        bool     `json:"isolatedDesktop"`
 	IsolatedDesktopReason  string   `json:"isolatedDesktopReason,omitempty"`
+	ConversationID         string   `json:"conversationId,omitempty"`
+	SharedSessionID        string   `json:"sharedSessionId,omitempty"`
+	LaneID                 string   `json:"laneId,omitempty"`
 }
 
 // Policy defines the persistent fail-closed Phase 2 security allowlists configured locally.
@@ -208,44 +211,57 @@ type ApprovalRequest struct {
 
 // Event is emitted during a resident turn (compatible with orchestrator.Event / SSE).
 type Event struct {
-	Kind         string `json:"kind"` // "stage" | "text" | "tool_call" | "tool_result" | "usage" | "approval_required" | "finish" | "error"
-	Author       string `json:"author,omitempty"`
-	Label        string `json:"label,omitempty"`
-	Text         string `json:"text,omitempty"`
-	ToolName     string `json:"toolName,omitempty"`
-	Detail       string `json:"detail,omitempty"`
-	Gate         string `json:"gate,omitempty"`
-	RiskTier     string `json:"riskTier,omitempty"`
-	Origin       string `json:"origin,omitempty"`
-	ApprovalID   string `json:"approvalId,omitempty"`
-	Partial      bool   `json:"partial,omitempty"`
-	Thought      bool   `json:"thought,omitempty"`
-	InputTokens  int32  `json:"inputTokens,omitempty"`
-	OutputTokens int32  `json:"outputTokens,omitempty"`
-	Tokens       int32  `json:"tokens,omitempty"`
+	Kind           string `json:"kind"` // "stage" | "text" | "tool_call" | "tool_result" | "usage" | "approval_required" | "finish" | "error"
+	Author         string `json:"author,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Text           string `json:"text,omitempty"`
+	ToolName       string `json:"toolName,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	Gate           string `json:"gate,omitempty"`
+	RiskTier       string `json:"riskTier,omitempty"`
+	Origin         string `json:"origin,omitempty"`
+	ApprovalID     string `json:"approvalId,omitempty"`
+	Partial        bool   `json:"partial,omitempty"`
+	Thought        bool   `json:"thought,omitempty"`
+	InputTokens    int32  `json:"inputTokens,omitempty"`
+	OutputTokens   int32  `json:"outputTokens,omitempty"`
+	Tokens         int32  `json:"tokens,omitempty"`
+	MessageID      string `json:"messageId,omitempty"`
+	ConversationID string `json:"conversationId,omitempty"`
+	SessionID      string `json:"sessionId,omitempty"`
 }
 
 // TurnRequest holds one user turn for the resident agent.
 type TurnRequest struct {
-	Message    string
-	Workspace  string
-	Workstream string
-	Origin     Origin
-	AccountID  string
-	DeviceID   string
-	Soul       string
+	Message          string
+	Workspace        string
+	Workstream       string
+	Origin           Origin
+	AccountID        string
+	DeviceID         string
+	Soul             string
+	ConversationID   string
+	SharedSessionID  string
+	UserMessageID    string
+	ReplyMessageID   string
+	SharedHistory    []LocalTurnMessage
+	SkipLocalHistory bool
 }
 
 // TurnResult summarizes the completed turn.
 type TurnResult struct {
-	SessionID     string `json:"sessionId"`
-	Workstream    string `json:"workstream"`
-	FinalText     string `json:"finalText"`
-	Provider      string `json:"provider"`
-	Model         string `json:"model"`
-	InputTokens   int64  `json:"inputTokens"`
-	OutputTokens  int64  `json:"outputTokens"`
-	TotalTokens   int64  `json:"totalTokens"`
-	ToolCalls     int    `json:"toolCalls"`
-	PromptBuildMs int64  `json:"promptBuildMs"`
+	SessionID       string `json:"sessionId"`
+	Workstream      string `json:"workstream"`
+	FinalText       string `json:"finalText"`
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	InputTokens     int64  `json:"inputTokens"`
+	OutputTokens    int64  `json:"outputTokens"`
+	TotalTokens     int64  `json:"totalTokens"`
+	ToolCalls       int    `json:"toolCalls"`
+	PromptBuildMs   int64  `json:"promptBuildMs"`
+	ConversationID  string `json:"conversationId,omitempty"`
+	SharedSessionID string `json:"sharedSessionId,omitempty"`
+	UserMessageID   string `json:"userMessageId,omitempty"`
+	ReplyMessageID  string `json:"replyMessageId,omitempty"`
 }

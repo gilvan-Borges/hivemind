@@ -70,6 +70,19 @@ describe("formatRiskBadge", () => {
   });
 });
 
+describe("applyResidentLaneEvent (conversa compartilhada)", () => {
+  it("não duplica a mesma mensagem da IDE nem o mesmo id do Hive", () => {
+    const target = freshTarget();
+    applyResidentLaneEvent(target, { event: { kind: "shared_message", role: "user", text: "na IDE", messageId: "ide-1", origin: "ide" } });
+    applyResidentLaneEvent(target, { event: { kind: "shared_message", role: "user", text: "na IDE", messageId: "ide-1", origin: "ide" } });
+    applyResidentLaneEvent(target, { event: { kind: "user_message", text: "pelo Orb", messageId: "hu1" } });
+    applyResidentLaneEvent(target, { event: { kind: "user_message", text: "pelo Orb", messageId: "hu1" } });
+    applyResidentLaneEvent(target, { event: { kind: "text", text: "olhando", messageId: "hm1", partial: true } });
+    applyResidentLaneEvent(target, { event: { kind: "text", text: " o arquivo", messageId: "hm1", partial: true } });
+    expect(target.messages.map((m) => m.text)).toEqual(["na IDE", "pelo Orb", "olhando o arquivo"]);
+  });
+});
+
 describe("applyResidentLaneEvent (streaming da conversa — Spec 007 H003)", () => {
   it("mensagem do Orb chega como 'Você'; de outras origens como 'Remoto'", () => {
     const orb = freshTarget();

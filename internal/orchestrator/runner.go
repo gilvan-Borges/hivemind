@@ -65,6 +65,9 @@ type Event struct {
 	FromRole          string                   `json:"fromRole,omitempty"`
 	ToRole            string                   `json:"toRole,omitempty"`
 	Origin            string                   `json:"origin,omitempty"`
+	MessageID         string                   `json:"messageId,omitempty"`
+	ConversationID    string                   `json:"conversationId,omitempty"`
+	SessionID         string                   `json:"sessionId,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.

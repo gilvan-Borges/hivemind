@@ -138,19 +138,57 @@ func (a *App) ResidentSaveConfig(provider, modelName, workstream string) (reside
 	return a.resident.SaveConfig(provider, modelName, workstream)
 }
 
-// ResidentStartTurn executes a local read-only chat turn with the Hive resident agent.
+// ResidentStartTurn executes a local chat turn with the Hive resident agent.
 func (a *App) ResidentStartTurn(workspace, workstream, message string) (resident.TurnResult, error) {
+	return a.ResidentStartTurnIn(workspace, workstream, message, "")
+}
+
+// ResidentStartTurnIn continues the shared IDE conversation sessionID.
+// An empty sessionID keeps the lane the IDE already bound.
+func (a *App) ResidentStartTurnIn(workspace, workstream, message, sessionID string) (resident.TurnResult, error) {
 	if a.resident == nil {
 		return resident.TurnResult{}, fmt.Errorf("agente residente indisponível")
 	}
 	if a.mobile != nil && a.mobile.hub != nil {
-		a.mobile.hub.RegisterRun(resident.LaneID, workspace, "hive-resident", message, "", resident.RunMode)
+		a.mobile.hub.RegisterRun(resident.LaneID, workspace, "hive-resident", message, sessionID, resident.RunMode)
 	}
-	res, err := a.resident.RunTurn(context.Background(), workspace, workstream, message, resident.OriginLocal)
+	res, err := a.resident.RunTurnIn(context.Background(), workspace, workstream, message, sessionID, resident.OriginLocal)
 	if err != nil && a.mobile != nil && a.mobile.hub != nil {
 		a.mobile.hub.HandleRunError(resident.LaneID, workspace, err)
 	}
 	return res, err
+}
+
+// ResidentBindSession points the Orb at the IDE session the user is looking at.
+func (a *App) ResidentBindSession(workspace, sessionID, laneID string) (resident.Conversation, error) {
+	if a.resident == nil {
+		return resident.Conversation{}, fmt.Errorf("agente residente indisponível")
+	}
+	conv, err := a.resident.BindSharedSession(workspace, sessionID, laneID)
+	if err == nil {
+		go a.orbSyncResidentSnapshot()
+	}
+	return conv, err
+}
+
+// ResidentListConversations lists the threads shared by the IDE and the Agent Hive.
+func (a *App) ResidentListConversations(workspace string) ([]resident.ConversationSummary, error) {
+	if a.resident == nil {
+		return nil, nil
+	}
+	return a.resident.ListSharedConversations(workspace)
+}
+
+// ResidentOpenConversation loads one shared thread into the Hive and the Orb.
+func (a *App) ResidentOpenConversation(id string) (resident.Conversation, error) {
+	if a.resident == nil {
+		return resident.Conversation{}, fmt.Errorf("agente residente indisponível")
+	}
+	conv, err := a.resident.OpenSharedConversation(id)
+	if err == nil {
+		go a.orbSyncResidentSnapshot()
+	}
+	return conv, err
 }
 
 // ResidentCancel stops the active resident turn.

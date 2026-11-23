@@ -9,6 +9,7 @@ import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOp
 import { refreshExplorerTree, renderLeftSidebar, setProjectPermissionMode, updateTeamStatusPills } from "./explorer";
 import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, stopLaneRunningAgents, toggleSplitLanes } from "./lanes";
+import { syncHiveBinding } from "./resident";
 import { renderModalLayer } from "./modals";
 import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
 import { api, setRunMode, setStatus, state, toastError } from "./state";
@@ -1716,6 +1717,13 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   if (state.sidebarView === "team" && state.showLeftSidebar) updateTeamStatusPills();
 
   try {
+    if (lane.conversationKind === "hive" && backend.ResidentStartTurnIn) {
+      const hive = await backend.ResidentStartTurnIn(runProjectRoot, "geral", text, lane.sessionId || "");
+      if (hive?.sharedSessionId) lane.sessionId = hive.sharedSessionId;
+      void syncHiveBinding();
+      setStatus("Agent Hive continuou a conversa.");
+      return;
+    }
     const payloadImgs = attached.map((x) => ({ name: x.name, mimeType: x.mimeType, dataBase64: x.dataBase64 }));
     const res = backend.StartRunWithOptions
       ? await backend.StartRunWithOptions(
@@ -1739,6 +1747,8 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
         );
     const sid = res?.SessionID || res?.sessionID;
     if (sid) lane.sessionId = sid;
+    if (!lane.conversationKind) lane.conversationKind = "team";
+    void syncHiveBinding();
     setStatus(`Equipe "${lane.teamName}" concluída.`);
   } catch (err: any) {
     const errText = err?.message || String(err);
