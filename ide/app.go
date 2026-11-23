@@ -216,6 +216,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 			return out
 		},
 	})
+	app.resident.SetIDEAction(app.hiveIDEAction)
 	app.mobile = newMobileBridge(app.sessions, app.resident, app.autoReview, bridgeHub)
 	app.relay = newRelayClient(app)
 	return app
