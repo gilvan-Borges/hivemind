@@ -91,6 +91,14 @@ func (a *Adapter) RunStart(
 	return nil
 }
 
+// RunSteer injects a live note into the running lane without cancelling it.
+func (a *Adapter) RunSteer(laneID, message string) bool {
+	if a == nil || a.Sessions == nil {
+		return false
+	}
+	return a.Sessions.Steer(laneID, message)
+}
+
 // RunCancel stops the active run on the lane.
 func (a *Adapter) RunCancel(laneID string) bool {
 	if laneID == resident.LaneID && a.Resident != nil {

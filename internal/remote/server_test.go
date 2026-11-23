@@ -20,10 +20,12 @@ import (
 
 // fakeDeps records calls and returns canned values.
 type fakeDeps struct {
-	started   []startCall
-	cancelled []string
-	resolved  []resolveCall
-	polled    []string
+	started     []startCall
+	cancelled   []string
+	steered     []string
+	steerActive bool
+	resolved    []resolveCall
+	polled      []string
 
 	startErr     error
 	cancelResult bool
@@ -54,6 +56,14 @@ func (f *fakeDeps) RunStart(_ context.Context, laneID, workspace, teamName, obje
 func (f *fakeDeps) RunCancel(laneID string) bool {
 	f.cancelled = append(f.cancelled, laneID)
 	return f.cancelResult
+}
+
+func (f *fakeDeps) RunSteer(laneID, message string) bool {
+	if strings.TrimSpace(message) == "" {
+		return false
+	}
+	f.steered = append(f.steered, laneID+":"+message)
+	return f.steerActive
 }
 
 func (f *fakeDeps) ApprovalResolve(id string, approved bool) bool {
@@ -254,6 +264,41 @@ func TestRunCancelAndRedirect(t *testing.T) {
 	}
 	if len(deps.started) != 1 || deps.started[0].Objective != "nova" {
 		t.Fatalf("redirect deveria iniciar nova instrução: %+v", deps.started)
+	}
+}
+
+func TestRedirectSteersLiveRun(t *testing.T) {
+	srv, _, deps, sess := newTestServer(t)
+	deps.steerActive = true
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/runs/redirect", sess, map[string]any{"laneId": "l9", "workspace": "w", "objective": "ajusta o botão"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("redirect com run viva deveria ser 202, veio %d", rec.Code)
+	}
+	if len(deps.steered) != 1 || deps.steered[0] != "l9:ajusta o botão" {
+		t.Fatalf("deveria desviar sem reiniciar: %+v", deps.steered)
+	}
+	if len(deps.cancelled) != 0 || len(deps.started) != 0 {
+		t.Fatalf("não deveria cancelar nem reiniciar: cancel=%+v start=%+v", deps.cancelled, deps.started)
+	}
+
+	rec = doJSON(t, srv, http.MethodPost, "/api/v1/runs/redirect", sess, map[string]any{
+		"laneId": "l9", "workspace": "w", "objective": "com foto",
+		"images": []map[string]string{{"name": "foto.png", "mimeType": "image/png", "dataBase64": "aW1n"}},
+	})
+	if rec.Code != http.StatusAccepted || len(deps.started) != 1 || len(deps.cancelled) != 1 {
+		t.Fatalf("imagem ainda reinicia: code=%d cancel=%+v start=%+v", rec.Code, deps.cancelled, deps.started)
+	}
+
+	deps.steerActive = false
+	rec = doJSON(t, srv, http.MethodPost, "/api/v1/runs/steer", sess, map[string]any{"laneId": "l9", "message": "para"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("steer sem run deveria ser 409, veio %d", rec.Code)
+	}
+	deps.steerActive = true
+	rec = doJSON(t, srv, http.MethodPost, "/api/v1/runs/steer", sess, map[string]any{"laneId": "l9", "message": "segue pelo caminho curto"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("steer com run deveria ser 202, veio %d", rec.Code)
 	}
 }
 

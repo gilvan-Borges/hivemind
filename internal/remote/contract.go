@@ -155,6 +155,9 @@ type ProjectPullRequest struct {
 type Deps interface {
 	RunStart(ctx context.Context, laneID, workspace, teamName, objective, jiraKey, sessionID, runMode string, images []ImageInput) error
 	RunCancel(laneID string) bool
+	// RunSteer injects a live directive into a running lane without cancelling it.
+	// Returns false when no run is active.
+	RunSteer(laneID, message string) bool
 	ApprovalResolve(id string, approved bool) bool
 	ListSessions(ctx context.Context, workspace string) (sessionx.WorkspaceSessionsSummary, error)
 	LoadSession(ctx context.Context, workspace, id string) (sessionx.SessionDetail, error)
