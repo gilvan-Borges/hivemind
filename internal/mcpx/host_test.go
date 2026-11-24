@@ -92,6 +92,42 @@ func TestEnableForTaskDoesNotPersistAndCloses(t *testing.T) {
 	}
 }
 
+func TestInProcServerDoesNotDialOrLookPath(t *testing.T) {
+	RegisterInProc("hivemind-browser", func(context.Context) (InProcHandler, error) {
+		return InProcHandler{
+			Tools: func(context.Context) ([]RemoteTool, error) {
+				return []RemoteTool{{Server: "hivemind-browser", Name: "navigate", Description: "abre"}}, nil
+			},
+			Call: func(context.Context, string, map[string]any) (string, error) {
+				return "ok", nil
+			},
+		}, nil
+	})
+	t.Cleanup(func() { RegisterInProc("hivemind-browser", nil) })
+	prev := lookPath
+	lookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { lookPath = prev })
+
+	h := newHost("", func(context.Context, Server) (session, error) {
+		t.Fatal("servidor interno não pode usar o dial de processo")
+		return nil, fmt.Errorf("dial")
+	})
+	h.servers = []Server{
+		{Name: "hivemind-browser", Transport: TransportInProc, Enabled: true, Builtin: true},
+		{Name: "playwright", Transport: TransportStdio, Command: "npx", Enabled: false, Builtin: true},
+	}
+	if err := h.connect(context.Background(), h.servers[0], true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.Call(context.Background(), "hivemind-browser", "navigate", map[string]any{})
+	if err != nil || got != "ok" {
+		t.Fatalf("call: %q %v", got, err)
+	}
+	if _, err := h.EnableForTask(context.Background(), "playwright"); err == nil || !strings.Contains(err.Error(), "hivemind-browser") {
+		t.Fatalf("playwright deveria ser recusado enquanto o hivemind-browser está ligado: %v", err)
+	}
+}
+
 func TestDescribeMarksMissingUvx(t *testing.T) {
 	prev := lookPath
 	lookPath = func(name string) (string, error) {

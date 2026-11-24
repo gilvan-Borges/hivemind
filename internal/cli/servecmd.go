@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/gilvan-Borges/HiveMind/internal/browserx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/remote"
 )
@@ -49,7 +50,20 @@ O argumento opcional [workspace] registra o projeto inicial (padrão: diretório
 
 			opts := remote.HeadlessOptions{
 				Deps: func(hub *remote.Hub) remote.Deps {
-					return newServeHost(hub)
+					host := newServeHost(hub)
+					browserx.SetChatHandler(func(text string) (string, error) {
+						if host.RunSteer("lane-browser", text) {
+							return "instrução enviada para a execução", nil
+						}
+						if err := host.RunStart(cmd.Context(), "lane-browser", workspace, "", text, "", "", "auto", nil); err != nil {
+							return "", err
+						}
+						return "turno iniciado no hivemind serve", nil
+					})
+					if _, err := browserx.Listen(cmd.Context()); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "aviso: ponte do Chrome: %s\n", err.Error())
+					}
+					return host
 				},
 				Banner: func() string {
 					return "Modo CLI: runs do time com aprovações no celular; diffs/PRs/issues/auto-review chegam com o bootstrap unificado."

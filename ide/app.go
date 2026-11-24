@@ -14,6 +14,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/ide/internal/notify"
+	"github.com/gilvan-Borges/HiveMind/internal/browserx"
 	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/relayclient"
@@ -247,10 +248,12 @@ func (a *App) startup(ctx context.Context) {
 		a.startDesktopNotices()
 		a.startSystemTray()
 		a.startOrbHost()
+		a.startBrowserBridge()
 	}
 }
 
 func (a *App) shutdown(_ context.Context) {
+	_ = browserx.Close()
 	if a.desk != nil {
 		_ = a.desk.Close()
 	}

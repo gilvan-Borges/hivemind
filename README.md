@@ -88,6 +88,7 @@ PRs e issues na IDE. **Trabalhar c/ Equipe** manda o time resolver o PR sem sair
 - **Jev** — roteador de modelo com circuit breaker e telemetria de cota
 - **Sandbox fechada** — AppContainer/Job Object (Windows), bubblewrap (Linux), Seatbelt (macOS)
 - **MCP nativo** — Context7, Code Review Graph e outros no host compartilhado ([docs/MCP.md](docs/MCP.md))
+- **Chrome real** — extensão Agent Hive: o agente clica no seu Chrome, com aprovação ([docs/CHROME_EXTENSAO.md](docs/CHROME_EXTENSAO.md))
 - **Pool de contas** — várias Antigravity / OpenCode / Cursor por organização Git
 - **Revisão automática de PR** — lane dedicada (opt-in)
 - **Remote** — QR na LAN ou relay E2EE fora de casa
@@ -338,6 +339,7 @@ Docker (host com RAM): `docker build -f deploy/relay/Dockerfile -t hivemind-rela
 | --- | --- |
 | `cmd/` | `hivemind`, `hivemind-relay` |
 | `ide/` | IDE desktop (Go + Wails + TypeScript) |
+| `extension/chrome/` | Extensão Agent Hive (Manifest V3) |
 | `internal/` | Orquestrador, Jev, MCP, residente, sandbox, modelos, Git/GitHub/Jira |
 | `relaywire/` | Contrato app ↔ relay ↔ IDE |
 | `deploy/relay/` | Dockerfile, Caddyfile, systemd |
@@ -353,6 +355,7 @@ Docker (host com RAM): `docker build -f deploy/relay/Dockerfile -t hivemind-rela
 | Doc | Assunto |
 | --- | --- |
 | [docs/MCP.md](docs/MCP.md) | Host MCP e skills |
+| [docs/CHROME_EXTENSAO.md](docs/CHROME_EXTENSAO.md) | Extensão Chrome do Agent Hive |
 | [docs/CURSOR_AGENTE.md](docs/CURSOR_AGENTE.md) | Provedor Cursor CLI |
 | [docs/SPEC_JEV_ORQUESTRADOR.md](docs/SPEC_JEV_ORQUESTRADOR.md) | Jev |
 | [docs/SPEC_HIVE_AGENT.md](docs/SPEC_HIVE_AGENT.md) | Agente residente |

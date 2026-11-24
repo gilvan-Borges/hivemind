@@ -24,7 +24,7 @@ Na IDE, a barra lateral tem a vista MCP, com o mesmo interruptor e a opção "s�
 
 ## Desligados até alguém pedir
 
-Playwright, Chrome DevTools, Toolbox, GitHub, Figma Context e Codebase Memory aparecem na lista, mas o processo não inicia e o esquema das ferramentas não entra no prompt.
+Playwright, Chrome DevTools, a extensão Agent Hive (`hivemind-browser`), Toolbox, GitHub, Figma Context e Codebase Memory aparecem na lista, mas o processo não inicia e o esquema das ferramentas não entra no prompt. `hivemind-browser` não sobe um processo: ele mora neste host e só fala com a extensão em `127.0.0.1`. O guia está em [CHROME_EXTENSAO.md](CHROME_EXTENSAO.md).
 
 O agente tem três ferramentas leves em toda execução:
 
@@ -32,7 +32,7 @@ O agente tem três ferramentas leves em toda execução:
 - `mcp_enable_server` — pede permissão (terminal, IDE ou app mobile) e liga só nesta tarefa. No fim da execução o processo cai e a preferência gravada não muda.
 - `mcp_call` — chama uma ferramenta de um servidor que já está ligado.
 
-Pares que não ficam ligados juntos: Playwright com Chrome DevTools, e Code Review Graph com Codebase Memory. Ligar um desliga o outro na configuração; no meio da tarefa o segundo é recusado enquanto o primeiro estiver no ar.
+Pares que não ficam ligados juntos: Playwright, Chrome DevTools e `hivemind-browser` (os três são controle de browser; só um por vez), e Code Review Graph com Codebase Memory. Ligar um desliga os outros do grupo na configuração; no meio da tarefa o segundo é recusado enquanto o primeiro estiver no ar.
 
 O Toolbox só aceita `POSTGRES_HOST` em `127.0.0.1` ou `localhost`. O padrão já é `127.0.0.1`. Variáveis: `HIVEMIND_DEV_DB_NAME`, `HIVEMIND_DEV_DB_USER`, `HIVEMIND_DEV_DB_PASSWORD`. O HiveMind não usa Postgres para sessão. Não aponte isso para produção.
 

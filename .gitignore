@@ -38,6 +38,9 @@ ide/build/windows/*
 !ide/build/windows/icon.ico
 ide/frontend/node_modules/
 ide/frontend/dist/
+extension/chrome/node_modules/
+extension/chrome/dist/
+extension/chrome/*.zip
 /bin/*.exe
 /bin/*.log
 ide/cover

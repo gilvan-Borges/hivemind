@@ -115,10 +115,12 @@ func (h *Host) connectEnabled(ctx context.Context) {
 }
 
 func (h *Host) connect(ctx context.Context, s Server, temporary bool) error {
-	if other := exclusivePartner(s.Name); other != "" && h.isLive(other) {
-		err := fmt.Errorf("não dá para ligar %s junto com %s", s.Name, other)
-		h.setStatus(s.Name, "off", err.Error())
-		return err
+	for _, other := range exclusivePartners(s.Name) {
+		if h.isLive(other) {
+			err := fmt.Errorf("não dá para ligar %s junto com %s", s.Name, other)
+			h.setStatus(s.Name, "off", err.Error())
+			return err
+		}
 	}
 	expanded, missing := expandServer(cloneServers([]Server{s})[0], h.workspace)
 	if len(missing) > 0 {
@@ -130,26 +132,32 @@ func (h *Host) connect(ctx context.Context, s Server, temporary bool) error {
 		h.setStatus(s.Name, "error", err.Error())
 		return err
 	}
-	if expanded.Transport == TransportStdio {
-		cmdName := strings.TrimSpace(expanded.Command)
-		if cmdName == "" {
-			err := fmt.Errorf("servidor %s sem comando", s.Name)
-			h.setStatus(s.Name, "error", err.Error())
-			return err
+	var sess session
+	var err error
+	if expanded.Transport == TransportInProc {
+		sess, err = openInProc(ctx, expanded)
+	} else {
+		if expanded.Transport == TransportStdio {
+			cmdName := strings.TrimSpace(expanded.Command)
+			if cmdName == "" {
+				err := fmt.Errorf("servidor %s sem comando", s.Name)
+				h.setStatus(s.Name, "error", err.Error())
+				return err
+			}
+			if _, err := lookPath(cmdName); err != nil {
+				msg := missingCommandDetail(expanded)
+				h.setStatus(s.Name, "unavailable", msg)
+				return fmt.Errorf("%s: %s", s.Name, msg)
+			}
 		}
-		if _, err := lookPath(cmdName); err != nil {
-			msg := missingCommandDetail(expanded)
-			h.setStatus(s.Name, "unavailable", msg)
-			return fmt.Errorf("%s: %s", s.Name, msg)
+		if expanded.Env == nil {
+			expanded.Env = map[string]string{}
 		}
+		if strings.TrimSpace(h.workspace) != "" {
+			expanded.Env["HIVEMIND_MCP_CWD"] = h.workspace
+		}
+		sess, err = h.dial(ctx, expanded)
 	}
-	if expanded.Env == nil {
-		expanded.Env = map[string]string{}
-	}
-	if strings.TrimSpace(h.workspace) != "" {
-		expanded.Env["HIVEMIND_MCP_CWD"] = h.workspace
-	}
-	sess, err := h.dial(ctx, expanded)
 	if err != nil {
 		msg := dialFailureDetail(s, err)
 		h.setStatus(s.Name, "error", msg)
