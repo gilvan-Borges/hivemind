@@ -160,6 +160,24 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon testDebugUnitTest lintDebug
 
+  test-extension:
+    name: Extensão Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extension/chrome/package-lock.json
+      - name: Testes e zip da extensão
+        working-directory: extension/chrome
+        run: |
+          npm ci
+          npm test
+          npm run build
+
   govulncheck:
     name: Vulnerabilidades (govulncheck)
     runs-on: ubuntu-latest

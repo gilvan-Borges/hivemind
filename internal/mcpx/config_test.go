@@ -15,7 +15,7 @@ func TestDefaultsLeaveHeavyServersOff(t *testing.T) {
 	if !on["context7"] || !on["code-review-graph"] {
 		t.Fatalf("leves deveriam nascer ligados: %#v", on)
 	}
-	for _, name := range []string{"playwright", "chrome-devtools", "toolbox", "github", "figma-context", "codebase-memory"} {
+	for _, name := range []string{"playwright", "chrome-devtools", "toolbox", "github", "figma-context", "codebase-memory", "hivemind-browser"} {
 		if on[name] {
 			t.Fatalf("%s deveria nascer desligado", name)
 		}
@@ -47,6 +47,9 @@ func TestSetEnabledPersistsWithoutSecrets(t *testing.T) {
 	}
 	if chrome == nil || chrome.Enabled {
 		t.Fatal("chrome-devtools deveria desligar ao ligar o playwright")
+	}
+	if hive := findServer(got.Servers, "hivemind-browser"); hive == nil || hive.Enabled {
+		t.Fatal("hivemind-browser deveria desligar ao ligar o playwright")
 	}
 	raw, err := os.ReadFile(userPath)
 	if err != nil {

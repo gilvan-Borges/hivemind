@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "HiveMind Agent Hive",
+  "version": "0.2.0",
+  "description": "O Agent Hive controla o Chrome real, com a sua sessão, sob aprovação do HiveMind.",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq2jTFR4B5rHXhHyAVYJ1VfNjeRHBPmncCZkS132Erp4MkQALtcKwQlclXKk0QoTTuJdi7PZ7K9KxPEZnfEXUUDCtYarLwUNtdav4yGEZLsSGxRF+aYK4rHi+2qSSJ8OanOmOhMC0nOPj+lY68REw2qDCbbWuDU8OKG3UY18BwTKGt/QsDnrZIuPPgk9VjNQ+LHz55mbaGzJ50CyEDPtFV0QhRAgBz8bVvP2KcDmnPNk3pVKVHsl/yET64Yvv0eFsCG1ZFvE0kqrAaqv6TBdAGesNkKXM6/j1x6xdfoX9Mc+A4qGIqRDv6BD3ggf2y1+t7iWWOLZupzwNaK8wrSPcSQIDAQAB",
+  "permissions": ["debugger", "tabs", "scripting", "activeTab", "sidePanel", "nativeMessaging", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Agent Hive",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

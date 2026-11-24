@@ -266,7 +266,7 @@ func SetEnabled(workspace, name string, enabled, projectOnly bool) (File, error)
 	}
 	overlay = upsertEnabled(overlay, name, enabled)
 	if enabled {
-		if other := exclusivePartner(name); other != "" {
+		for _, other := range exclusivePartners(name) {
 			overlay = upsertEnabled(overlay, other, false)
 		}
 	}
@@ -599,20 +599,31 @@ func (v ServerView) RuntimeLabel() string {
 	}
 }
 
-func exclusivePartner(name string) string {
-	pairs := [][2]string{
-		{"playwright", "chrome-devtools"},
+func exclusivePartners(name string) []string {
+	groups := [][]string{
+		{"playwright", "chrome-devtools", "hivemind-browser"},
 		{"code-review-graph", "codebase-memory"},
 	}
-	for _, p := range pairs {
-		if name == p[0] {
-			return p[1]
+	for _, g := range groups {
+		found := false
+		for _, n := range g {
+			if n == name {
+				found = true
+				break
+			}
 		}
-		if name == p[1] {
-			return p[0]
+		if !found {
+			continue
 		}
+		out := make([]string, 0, len(g)-1)
+		for _, n := range g {
+			if n != name {
+				out = append(out, n)
+			}
+		}
+		return out
 	}
-	return ""
+	return nil
 }
 
 func validateLocal(s Server) error {

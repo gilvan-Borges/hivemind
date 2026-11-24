@@ -95,5 +95,12 @@ func DefaultServers() []Server {
 			Enabled:     false,
 			Builtin:     true,
 		},
+		{
+			Name:        "hivemind-browser",
+			Description: "Controla o Chrome real do usuário pela extensão Agent Hive. Não ligue junto com playwright nem chrome-devtools.",
+			Transport:   TransportInProc,
+			Enabled:     false,
+			Builtin:     true,
+		},
 	}
 }

@@ -244,9 +244,36 @@ jobs:
             dist/hivemind-relay-linux-${{ matrix.goarch }}
             dist/hivemind-relay-linux-${{ matrix.goarch }}.sha256
 
+  build-extension:
+    name: Extensão Chrome
+    needs: [detect]
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extension/chrome/package-lock.json
+      - name: Build da extensão
+        working-directory: extension/chrome
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hivemind-chrome-extension
+          path: extension/chrome/hivemind-chrome-extension.zip
+          if-no-files-found: error
+
   publish:
     name: Publicar GitHub Release
-    needs: [build-installer, build-cli, build-relay]
+    needs: [build-installer, build-cli, build-relay, build-extension]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -285,5 +312,8 @@ jobs:
             ### CLI / Relay
             Binários Linux/macOS e relay incluídos nos Assets.
             Confira `checksums.txt` / `*.sha256`.
+
+            ### Chrome
+            - `hivemind-chrome-extension.zip` — extensão Agent Hive (Load unpacked)
           files: |
             release-assets/**

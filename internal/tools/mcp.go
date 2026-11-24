@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/gilvan-Borges/HiveMind/internal/browserx"
 	"github.com/gilvan-Borges/HiveMind/internal/mcpx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
@@ -52,7 +54,7 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 	}
 	enableTool, err := functiontool.New(functiontool.Config{
 		Name:        "mcp_enable_server",
-		Description: "Pede permissão e liga um servidor MCP desligado só para esta tarefa. Playwright não convive com chrome-devtools. Code Review Graph não convive com codebase-memory. O Toolbox só aceita banco em 127.0.0.1. Ao terminar a execução o servidor pesado desliga de novo.",
+		Description: "Pede permissão e liga um servidor MCP desligado só para esta tarefa. Playwright, chrome-devtools e hivemind-browser não convivem. Code Review Graph não convive com codebase-memory. O Toolbox só aceita banco em 127.0.0.1. Ao terminar a execução o servidor pesado desliga de novo.",
 	}, func(ctx agent.Context, args struct {
 		Name string `json:"name" jsonschema:"Nome do servidor, como em mcp_list_servers."`
 	}) (textResult, error) {
@@ -75,6 +77,9 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 		if strings.EqualFold(name, "playwright") {
 			msg += "\nUso econômico do browser: prefira browser_snapshot (árvore de acessibilidade estrutural, determinística e barata em tokens) para entender a página; tire screenshot apenas quando cores/layout forem essenciais; reaproveite refs do snapshot para click/fill em vez de navegar de novo; re-chame snapshot somente depois de ações que mudam a página."
 		}
+		if strings.EqualFold(name, "hivemind-browser") {
+			msg += "\nA extensão Agent Hive precisa estar conectada (hivemind browser install). read_page devolve as refs. Site novo, envio de formulário, compra e javascript_exec pedem aprovação. Não convive com playwright nem chrome-devtools."
+		}
 		return textResult{Text: msg + "\n" + formatMCPList(d.MCP.Snapshot()) + schemaBlock(d.MCP.ExposedTools(), name)}, nil
 	})
 	if err != nil {
@@ -92,7 +97,7 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 		if err != nil {
 			return textResult{}, err
 		}
-		text, err := d.MCP.Call(ctx, strings.TrimSpace(args.Server), strings.TrimSpace(args.Tool), parsed)
+		text, err := d.MCP.Call(d.mcpCtx(ctx, args.Server), strings.TrimSpace(args.Server), strings.TrimSpace(args.Tool), parsed)
 		if err != nil {
 			return textResult{}, err
 		}
@@ -124,7 +129,7 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 			if err != nil {
 				return textResult{}, err
 			}
-			text, err := d.MCP.Call(ctx, remote.Server, remote.Name, parsed)
+			text, err := d.MCP.Call(d.mcpCtx(ctx, remote.Server), remote.Server, remote.Name, parsed)
 			if err != nil {
 				return textResult{}, err
 			}
@@ -136,6 +141,17 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 		*out = append(*out, exposed)
 	}
 	return nil
+}
+
+func (d Deps) mcpCtx(ctx context.Context, server string) context.Context {
+	if !strings.EqualFold(strings.TrimSpace(server), browserx.ServerName) {
+		return ctx
+	}
+	approve := d.Approve
+	if approve == nil && d.Confirm != nil {
+		approve = func(prompt string) bool { return d.Confirm(prompt) }
+	}
+	return browserx.WithApprover(ctx, approve)
 }
 
 func formatMCPList(views []mcpx.ServerView) string {
