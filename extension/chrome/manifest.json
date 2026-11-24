@@ -26,6 +26,12 @@
     "default_title": "Agent Hive",
     "default_icon": "icon.png"
   },
+  "commands": {
+    "open-side-panel": {
+      "suggested_key": { "default": "Ctrl+Shift+Y" },
+      "description": "Abrir o chat do Agent Hive"
+    }
+  },
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

@@ -429,6 +429,20 @@ async function pressKey(args: Record<string, unknown>): Promise<ToolResult> {
   return { text: `tecla ${key}` };
 }
 
+export async function captureThumb(tabId: number): Promise<string> {
+  await tell(tabId, "hide");
+  await sleep(40);
+  try {
+    const shot = await send<{ data?: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 16 });
+    if (!shot.data || shot.data.length > 90_000) return "";
+    return shot.data;
+  } catch {
+    return "";
+  } finally {
+    await tell(tabId, "show", { label: "No controle" });
+  }
+}
+
 async function screenshot(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = await activeTab(args.tabId);
   await attach(tabId);

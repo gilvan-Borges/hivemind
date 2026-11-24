@@ -1,4 +1,4 @@
-import { abortCall, detachAll, executeTool, NeedsApproval, setCurrentCall } from "./cdp.js";
+import { abortCall, captureThumb, detachAll, executeTool, NeedsApproval, setCurrentCall } from "./cdp.js";
 import { isLoopbackWebSocket, redactSecrets } from "./pure.js";
 
 const HOST = "com.gilvan_borges.hivemind";
@@ -66,12 +66,20 @@ async function onBridge(message: BridgeMessage): Promise<void> {
     abortCall(message.id);
     return;
   }
+  if (message.type === "user_line" && message.text) {
+    broadcast({ type: "user", text: message.text });
+    return;
+  }
   if (message.type !== "call" || !message.id || !message.tool) return;
   controlling = true;
   setCurrentCall(message.id);
+  const label = stepLabel(message.tool, message.args ?? {});
+  broadcast({ type: "step", id: message.id, phase: "start", label });
   broadcast(state());
   try {
     const result = await executeTool(message.tool, message.args ?? {});
+    const thumb = await stepThumb(message.tool);
+    broadcast({ type: "step", id: message.id, phase: "done", label, thumb });
     send({ type: "result", id: message.id, ok: true, text: result.text, image: result.image });
   } catch (err) {
     if (err instanceof NeedsApproval) {
@@ -193,6 +201,45 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "open-side-panel") return;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs[0]?.id;
+  if (tabId) await chrome.sidePanel.open({ tabId });
+});
+
+function stepLabel(tool: string, args: Record<string, unknown>): string {
+  const url = String(args.url ?? "").replace(/^https?:\/\//, "");
+  switch (tool) {
+    case "navigate":
+    case "tabs_create":
+      return "Abrindo " + (url.slice(0, 42) || "a página");
+    case "type":
+    case "form_input":
+      return "Digitando";
+    case "click":
+      return "Clicando";
+    case "read_page":
+    case "find":
+      return "Lendo a página";
+    case "key":
+      return args.key === "Enter" ? "Enviando" : "Tecla";
+    case "screenshot":
+      return "Vendo a tela";
+    default:
+      return tool;
+  }
+}
+
+async function stepThumb(tool: string): Promise<string> {
+  if (tool === "screenshot" || tool === "tabs_list" || tool === "key") return "";
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs[0]?.id;
+  if (!tabId) return "";
+  return captureThumb(tabId);
+}
+
 connectNative();
 
 // O teste end-to-end chama isto no service worker. Sem o token, não conecta.

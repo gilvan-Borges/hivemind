@@ -14,27 +14,27 @@
           <circle cx="16" cy="16" r="3" fill="#E8C881" />
         </svg>
       </div>
-      <div>
+      <div class="titles">
         <strong>Agent Hive</strong>
-        <p>Chrome real, com a sua sessão</p>
+        <p>Chrome real</p>
       </div>
       <span id="status">desconectado</span>
     </header>
-    <main id="log" aria-live="polite">
-      <div class="msg agent">A ponte fica em 127.0.0.1. O host nativo não mostra o código. Se carregou a extensão descompactada, cole o código de <code>hivemind browser pair</code>.</div>
-    </main>
-    <button id="stop" type="button" hidden>Parar o agente</button>
-    <form id="composer">
-      <textarea id="text" rows="2" placeholder="Diga ao Agent Hive o que fazer no Chrome"></textarea>
-      <button type="submit">Enviar</button>
-    </form>
-    <details>
-      <summary>Parear com código</summary>
-      <form id="pair">
-        <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="código local" />
-        <button type="submit">Conectar</button>
+    <main id="log" aria-live="polite"></main>
+    <div class="dock">
+      <button id="stop" type="button">Parar</button>
+      <form id="composer">
+        <textarea id="text" rows="2" placeholder="Pedir ao Agent Hive"></textarea>
+        <button type="submit" aria-label="Enviar">↑</button>
       </form>
-    </details>
+      <details class="pair">
+        <summary>Parear</summary>
+        <form id="pair">
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="código local" />
+          <button type="submit">Conectar</button>
+        </form>
+      </details>
+    </div>
     <script src="sidepanel.js" type="module"></script>
   </body>
 </html>

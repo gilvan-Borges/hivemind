@@ -67,6 +67,9 @@ func serveNative(ctx context.Context, in io.Reader, out io.Writer) error {
 	if json.Unmarshal(data, &hello) != nil || !hello.OK {
 		return fmt.Errorf("a ponte local recusou o host")
 	}
+	if err := writeFrame(out, data); err != nil {
+		return err
+	}
 	errc := make(chan error, 2)
 	go func() { errc <- pumpSocketToNative(ctx, conn, out) }()
 	go func() { errc <- pumpNativeToSocket(ctx, in, conn) }()

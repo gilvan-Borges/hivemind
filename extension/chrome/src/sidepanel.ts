@@ -7,39 +7,92 @@ const pairForm = document.querySelector<HTMLFormElement>("#pair")!;
 const tokenInput = document.querySelector<HTMLInputElement>("#token")!;
 
 const port = chrome.runtime.connect({ name: "panel" });
+const cards = new Map<string, HTMLElement>();
 
-function add(kind: string, text: string): void {
-  const item = document.createElement("div");
-  item.className = "msg " + kind;
-  item.textContent = text;
-  log.append(item);
+function scroll(): void {
   log.scrollTop = log.scrollHeight;
 }
 
-port.onMessage.addListener((message: { type?: string; text?: string; connected?: boolean; controlling?: boolean; mode?: string; activities?: string[] }) => {
+function bubble(kind: string, text: string): void {
+  const item = document.createElement("div");
+  item.className = "bubble " + kind;
+  item.textContent = text;
+  log.append(item);
+  scroll();
+}
+
+function card(id: string, label: string): HTMLElement {
+  const details = document.createElement("details");
+  details.className = "card";
+  details.open = true;
+  const summary = document.createElement("summary");
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = label;
+  const phase = document.createElement("span");
+  phase.className = "phase";
+  phase.textContent = "em curso";
+  summary.append(dot, title, phase);
+  details.append(summary);
+  log.append(details);
+  cards.set(id, details);
+  scroll();
+  return details;
+}
+
+function finish(id: string, thumb?: string): void {
+  const details = cards.get(id);
+  if (!details) return;
+  details.classList.add("done");
+  const phase = details.querySelector(".phase");
+  if (phase) phase.textContent = "feito";
+  if (thumb) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = "data:image/jpeg;base64," + thumb;
+    details.append(img);
+  }
+  scroll();
+}
+
+port.onMessage.addListener((message: {
+  type?: string;
+  text?: string;
+  connected?: boolean;
+  controlling?: boolean;
+  id?: string;
+  label?: string;
+  phase?: string;
+  thumb?: string;
+}) => {
   if (message.type === "state") {
     const on = Boolean(message.connected);
-    statusEl.textContent = on ? `conectado · ${message.mode === "native" ? "host nativo" : "loopback"}` : "desconectado";
+    statusEl.textContent = on ? "conectado" : "desconectado";
     statusEl.classList.toggle("on", on);
-    stopBtn.hidden = !message.controlling;
-    if (log.childElementCount === 0 && message.activities) {
-      for (const line of message.activities) add(line.startsWith("você:") ? "user" : "activity", line);
-    }
+    stopBtn.classList.toggle("live", Boolean(message.controlling));
     return;
   }
-  if (message.type === "activity" && message.text) {
-    if (message.text.startsWith("você:")) return;
-    add("activity", message.text);
+  if (message.type === "user" && message.text) {
+    bubble("user", message.text);
     return;
   }
-  if (message.type === "chat_reply" && message.text) add("agent", message.text);
+  if (message.type === "chat_reply" && message.text) {
+    bubble("agent", message.text);
+    return;
+  }
+  if (message.type === "step" && message.id && message.label) {
+    if (message.phase === "done") finish(message.id, message.thumb);
+    else card(message.id, message.label);
+  }
 });
 
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = input.value.trim();
   if (!text) return;
-  add("user", text);
+  bubble("user", text);
   port.postMessage({ type: "chat", text });
   input.value = "";
 });
@@ -50,10 +103,10 @@ pairForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const token = tokenInput.value.trim();
   if (!/^[0-9a-f]{64}$/i.test(token)) {
-    add("agent", "O código tem 64 caracteres hexadecimais. Rode hivemind browser pair.");
+    bubble("agent", "O código tem 64 caracteres hexadecimais. Rode hivemind browser pair.");
     return;
   }
   port.postMessage({ type: "pair", token, port: 47891 });
   tokenInput.value = "";
-  add("agent", "Código guardado só nesta extensão. Conectando em 127.0.0.1.");
+  bubble("agent", "Conectando em 127.0.0.1.");
 });

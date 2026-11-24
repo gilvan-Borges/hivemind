@@ -299,6 +299,17 @@ func (b *Broker) readAgent(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
+// AnnounceUser mostra uma fala do usuário no side panel já conectado.
+func (b *Broker) AnnounceUser(ctx context.Context, text string) error {
+	b.mu.Lock()
+	link := b.ext
+	b.mu.Unlock()
+	if link == nil {
+		return fmt.Errorf("extensão do Chrome não está conectada")
+	}
+	return link.write(ctx, Message{Type: "user_line", Text: text})
+}
+
 // Call manda a ferramenta para a extensão e espera o resultado.
 func (b *Broker) Call(ctx context.Context, tool string, args map[string]any) (Message, error) {
 	if strings.TrimSpace(tool) == "" {

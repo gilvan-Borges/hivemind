@@ -52,6 +52,10 @@ declare const chrome: {
   };
   sidePanel: {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
+    open(options: { tabId?: number; windowId?: number }): Promise<void>;
+  };
+  commands: {
+    onCommand: { addListener(cb: (command: string) => void): void };
   };
   action: {
     setBadgeText(details: { text: string; tabId?: number }): Promise<void>;
