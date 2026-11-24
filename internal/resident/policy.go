@@ -134,6 +134,7 @@ var phase2AllowedTools = map[string]Tier{
 	"exec_command":          TierExec,
 	"net_fetch":             TierNetwork,
 	"browser_headless":      TierNetwork,
+	"chrome_tab":            TierNetwork,
 	"use_credential":        TierCredentials,
 	"delete_file":           TierDestructive,
 	"cron_add":              TierWrite,
@@ -317,6 +318,26 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			Allow:  false,
 			Ask:    true,
 			Reason: fmt.Sprintf("execução em sandbox (origem %s) exige aprovação humana", call.Origin),
+		}
+
+	case "chrome_tab":
+		if firstNonEmptyStr(strArg(cleanArgs, "credential_name"), strArg(cleanArgs, "secret_name")) != "" {
+			return Decision{Allow: false, Ask: false, Reason: "a extensão do Chrome não lê o cofre"}
+		}
+		if raw := strArg(cleanArgs, "url"); raw != "" {
+			if _, err := validatePublicURL(raw); err != nil {
+				return Decision{Allow: false, Ask: false, Reason: err.Error()}
+			}
+		}
+		switch strings.ToLower(strArg(cleanArgs, "action")) {
+		case "", "read", "navigate", "click", "type", "key":
+		default:
+			return Decision{Allow: false, Ask: false, Reason: "action deve ser read, navigate, click, type ou key"}
+		}
+		return Decision{
+			Allow:  false,
+			Ask:    true,
+			Reason: fmt.Sprintf("agir na aba do Chrome pela extensão (origem %s) exige aprovação humana", call.Origin),
 		}
 
 	case "browser_headless":

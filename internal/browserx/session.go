@@ -150,6 +150,11 @@ func stripApproved(in map[string]any) map[string]any {
 	return out
 }
 
+// CallTool pede uma ação à extensão do Chrome já conectada.
+func CallTool(ctx context.Context, tool string, args map[string]any) (string, error) {
+	return callFromAgent(ctx, tool, args)
+}
+
 func callFromAgent(ctx context.Context, tool string, args map[string]any) (string, error) {
 	tool = strings.TrimSpace(tool)
 	args = stripApproved(args)

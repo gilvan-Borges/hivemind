@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/gilvan-Borges/HiveMind/internal/browserx"
+	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
 // lookHeadlessBrowser resolves Chrome or Edge. A test can replace it.
@@ -88,15 +93,34 @@ func dumpHeadlessDOM(ctx context.Context, bin, pageURL string) (string, error) {
 		}
 		return "", fmt.Errorf("browser headless: %w: %s", err, msg)
 	}
-	const maxBody = 64 * 1024
-	body := stdout.String()
-	if len(body) > maxBody {
-		body = body[:maxBody] + "\n… [resposta truncada]"
-	}
-	if strings.TrimSpace(body) == "" {
-		return "", fmt.Errorf("browser headless não devolveu DOM")
+	body := visiblePageText(stdout.String())
+	if body == "" {
+		return "", fmt.Errorf("browser headless não devolveu texto")
 	}
 	return body, nil
+}
+
+var (
+	headlessSkipBlock = regexp.MustCompile(`(?is)<(script|style|noscript)\b[^>]*>.*?</(script|style|noscript)>`)
+	headlessTag       = regexp.MustCompile(`(?s)<[^>]+>`)
+	headlessSpace     = regexp.MustCompile(`[ \t]+`)
+	headlessBreaks    = regexp.MustCompile(`\n{3,}`)
+)
+
+func visiblePageText(raw string) string {
+	raw = headlessSkipBlock.ReplaceAllString(raw, " ")
+	raw = headlessTag.ReplaceAllString(raw, "\n")
+	raw = html.UnescapeString(raw)
+	raw = headlessSpace.ReplaceAllString(raw, " ")
+	var lines []string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strx.TruncateBytes(headlessBreaks.ReplaceAllString(strings.Join(lines, "\n"), "\n\n"), 6*1024, "\n…")
 }
 
 func (b *Broker) handleBrowserHeadless(ctx context.Context, args map[string]any) (string, error) {
@@ -121,4 +145,42 @@ func (b *Broker) handleBrowserHeadless(ctx context.Context, args map[string]any)
 		return "", err
 	}
 	return "headless " + pageURL + "\n" + body, nil
+}
+
+func (b *Broker) handleChromeTab(ctx context.Context, args map[string]any) (string, error) {
+	_, listening, on, _, err := browserx.Status()
+	if err != nil || !listening || !on {
+		return "", fmt.Errorf("a extensão Agent Hive não está conectada no Chrome")
+	}
+	action := strings.ToLower(strArg(args, "action"))
+	if action == "" {
+		action = "read"
+	}
+	tool := ""
+	callArgs := map[string]any{}
+	switch action {
+	case "read":
+		tool = "read_page"
+	case "navigate":
+		tool = "navigate"
+		callArgs["url"] = strArg(args, "url")
+	case "click":
+		tool = "click"
+		callArgs["ref"] = strArg(args, "ref")
+	case "type":
+		tool = "type"
+		callArgs["ref"] = strArg(args, "ref")
+		callArgs["text"] = strArg(args, "text")
+	case "key":
+		tool = "key"
+		callArgs["key"] = firstNonEmptyStr(strArg(args, "key"), strArg(args, "text"))
+	default:
+		return "", fmt.Errorf("action deve ser read, navigate, click, type ou key")
+	}
+	ctx = browserx.WithApprover(ctx, func(string) bool { return true })
+	text, err := browserx.CallTool(ctx, tool, callArgs)
+	if err != nil {
+		return "", err
+	}
+	return strx.TruncateBytes(text, 8*1024, "\n…"), nil
 }

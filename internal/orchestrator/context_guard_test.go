@@ -706,6 +706,18 @@ func TestDirectModeHasWriteToolsAndJiraIssueNeverTriggersPRReview(t *testing.T) 
 	}
 }
 
+func TestChromeLaneTellsChiefToDriveThePage(t *testing.T) {
+	r := &Runner{
+		LaneID:       "lane-hive",
+		browserArmed: true,
+		Project:      team.File{Settings: team.DefaultSettings()},
+	}
+	got := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "", 1)
+	if !strings.Contains(got, "read_page") || !strings.Contains(got, "delegate_to_squad") {
+		t.Fatal(got[len(got)-400:])
+	}
+}
+
 func TestReviewTurnLetsChiefReadSkill(t *testing.T) {
 	r := &Runner{
 		Workspace:       t.TempDir(),
@@ -727,6 +739,9 @@ func TestReviewTurnLetsChiefReadSkill(t *testing.T) {
 	if !strings.Contains(instr, "chame read_skill") {
 		t.Fatal("protocolo de revisão não manda ler a skill")
 	}
+	if !strings.Contains(instr, "event=APPROVE") || !strings.Contains(instr, "documentação/spec") {
+		t.Fatal("protocolo de revisão não manda aprovar documento consistente")
+	}
 	r.reviewRequested = false
 	plain, err := r.buildTriageBaseTools(r.Workspace, "", false, false, false)
 	if err != nil {
@@ -746,7 +761,7 @@ func TestDirectReviewRequiresRevisarETestar(t *testing.T) {
 		reviewRequested: true,
 	}
 	instr := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "direct", 1)
-	for _, want := range []string{"revisar-e-testar", "read_skill", "NÃO TESTADO", "run_shell"} {
+	for _, want := range []string{"revisar-e-testar", "não chame read_skill", "NÃO TESTADO", "run_shell", "Classifica o diff", "Diff só de documento", "event=APPROVE"} {
 		if !strings.Contains(instr, want) {
 			t.Fatalf("modo direto em revisão não exige %q", want)
 		}

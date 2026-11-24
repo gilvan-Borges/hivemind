@@ -48,6 +48,24 @@ func UserSkillsDir() string {
 	return filepath.Join(home, ".hivemind", "skills")
 }
 
+// ProductSkillBody devolve o SKILL.md embutido no binário. O Cursor CLI não tem
+// a ferramenta read_skill; a revisão cola este texto no prompt.
+func ProductSkillBody(name string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		return "", false
+	}
+	body, err := seedFS.ReadFile("seeds/" + name + ".md")
+	if err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
 // SeedProductSkills grava as skills de produto que ainda não existem.
 // Uma SKILL.md já presente não é reescrita. O estado inicial desliga untangle-codebase
 // só quando o arquivo de estado ainda não existe.

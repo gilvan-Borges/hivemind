@@ -129,6 +129,51 @@ func TestInProcServerDoesNotDialOrLookPath(t *testing.T) {
 	}
 }
 
+func TestArmHiveBrowserParksPlaywrightForTheTurn(t *testing.T) {
+	RegisterInProc("hivemind-browser", func(context.Context) (InProcHandler, error) {
+		return InProcHandler{
+			Tools: func(context.Context) ([]RemoteTool, error) {
+				return []RemoteTool{{Server: "hivemind-browser", Name: "read_page"}}, nil
+			},
+			Call: func(context.Context, string, map[string]any) (string, error) { return "arvore", nil },
+		}, nil
+	})
+	t.Cleanup(func() { RegisterInProc("hivemind-browser", nil) })
+	stubLookPath(t)
+	play := &fakeSession{tools: []RemoteTool{{Server: "playwright", Name: "navigate"}}}
+	h := newHost("", func(_ context.Context, s Server) (session, error) {
+		if s.Name == "playwright" {
+			return play, nil
+		}
+		return &fakeSession{}, nil
+	})
+	h.servers = []Server{
+		{Name: "hivemind-browser", Transport: TransportInProc, Enabled: false, Builtin: true},
+		{Name: "playwright", Transport: TransportStdio, Command: "npx", Enabled: true, Builtin: true},
+	}
+	if err := h.connect(context.Background(), h.servers[1], false); err != nil {
+		t.Fatal(err)
+	}
+	restore, err := h.ArmHiveBrowser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Call(context.Background(), "playwright", "navigate", nil); err == nil {
+		t.Fatal("playwright deveria sair enquanto a extensão conduz o Chrome")
+	}
+	got, err := h.Call(context.Background(), "hivemind-browser", "read_page", map[string]any{})
+	if err != nil || got != "arvore" {
+		t.Fatalf("extensão: %q %v", got, err)
+	}
+	restore()
+	if _, err := h.Call(context.Background(), "playwright", "navigate", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Call(context.Background(), "hivemind-browser", "read_page", nil); err == nil {
+		t.Fatal("a extensão não fica ligada depois do turno")
+	}
+}
+
 func TestDescribeMarksMissingUvx(t *testing.T) {
 	prev := lookPath
 	lookPath = func(name string) (string, error) {

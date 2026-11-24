@@ -2227,7 +2227,7 @@ export function bindGitSidebarEvents() {
         state.draftObjective = `Revisar PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
       }
       if (!pr.isMine) {
-        state.draftObjective += "\n\nSiga a skill nativa revisar-e-testar: chame read_skill com o nome revisar-e-testar antes de publicar o parecer, classifique a superfície e rode o teste. Sem a saída do comando, o parecer é NÃO TESTADO.";
+        state.draftObjective += "\n\nSiga a skill nativa revisar-e-testar que já está nas instruções deste turno. Não chame read_skill e não procure o arquivo da skill. Classifique a superfície e rode o teste se houver código. Código sem a saída do comando é NÃO TESTADO e não aprova. Documento consistente aprova formalmente (event=APPROVE).";
         setRunMode("direct");
         renderComposerModeBar();
         updateStatusBar();

@@ -4,15 +4,16 @@ description: >
   Use when reviewing a change, when the user says revisa, review, testa isso,
   or before declaring a code change done. Classifies the diff as IDE, CLI,
   mobile companion, Chrome extension, or orb and runs that surface's tests.
-  A review without command output is not a review.
+  Code without that command output is not a review. A consistent docs-only
+  diff is a formal APPROVE.
 ---
 
 # Revisar e testar
 
 Use ao revisar, ao terminar código, ou quando pedirem revisa, review ou testa isso.
-Classifica o diff em IDE, CLI, mobile, extensão ou orb e roda o teste dessa superfície. Sem saída de comando, não é revisão.
+Classifica o diff em IDE, CLI, mobile, extensão ou orb e roda o teste dessa superfície. Sem saída de comando, código não é revisão.
 
-Revisão sem comando executado e saída lida não conta. "Li o diff" é NÃO TESTADO.
+Revisão de código sem comando executado e saída lida não conta. "Li o diff" em código é NÃO TESTADO.
 
 ## 1. Classifique pelo diff
 
@@ -28,6 +29,8 @@ Revisão sem comando executado e saída lida não conta. "Li o diff" é NÃO TES
 | `extension/chrome/**` | Extensão Chrome | `extension/chrome`: `npm test` |
 
 Não rode `./...` no monorepo inteiro para um pacote. Não troque o comando da superfície por um teste de outra.
+
+Nenhuma linha da tabela (só `.md`, spec, documento): a leitura do diff é a revisão. Não rode suíte. Não marque NÃO TESTADO por falta de teste.
 
 ## 2. Rode e leia
 
@@ -50,4 +53,10 @@ Não é: mobile, extensão
 Achado: <arquivo:linha, o que quebra, só se viu no teste ou no diff>
 ```
 
-Uma linha por comando, com exit code. Sem exit code, a linha não entra.
+Uma linha por comando, com exit code. Sem exit code, a linha não entra. Documento sem superfície de código entra como leitura do diff, sem exit code.
+
+## 4. Aprovar formalmente
+
+Se a revisão é de um PR e está certo, publique `github_review_pr` com `event=APPROVE`. Vale para código com teste verde e para documento só de `.md` consistente. Um resumo no chat não aprova.
+
+NÃO TESTADO bloqueia APPROVE só quando o diff tem superfície de código e o comando dessa superfície não rodou. Achado que quebra o pedido: `REQUEST_CHANGES`. Menção ou "só comente": `COMMENT`.

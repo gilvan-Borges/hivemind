@@ -446,6 +446,25 @@ func (r *Runner) guidanceForRole(target string, includeDynamic bool) string {
 	return skillx.StubBlockForObjective(r.objectiveText, project, native)
 }
 
+// inlineNativeSkill cola o SKILL.md no prompt. O agente Cursor não recebe a
+// ferramenta read_skill e, sem o corpo, diz que a skill não existe.
+func (r *Runner) inlineNativeSkill(name string) string {
+	body := ""
+	if r.NativeSkillsRoot != "" {
+		if hit := skillx.Find(r.NativeSkills, name); hit != nil {
+			body = strings.TrimSpace(hit.ReadBody(r.NativeSkillsRoot, skillx.DefaultBodyBytes))
+		}
+	}
+	if body == "" {
+		embedded, ok := skillx.ProductSkillBody(name)
+		if !ok {
+			return ""
+		}
+		body = strings.TrimSpace(embedded)
+	}
+	return "\n\nSKILL `" + name + "` (corpo completo neste prompt; não chame read_skill e não procure o arquivo no workspace):\n" + body + "\n"
+}
+
 func (r *Runner) nativeSkillGuide(names ...string) string {
 	if len(names) == 0 || r.NativeSkillsRoot == "" {
 		return ""

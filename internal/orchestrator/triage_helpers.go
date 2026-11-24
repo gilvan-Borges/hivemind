@@ -114,6 +114,15 @@ func (r *Runner) reviewSkillLookup(isAutoReview bool) func(name string) (skillx.
 	return tools.NewSkillLookupWithPreferredNative(r.Workspace, r.NativeSkillsRoot, r.skills, r.NativeSkills, preferred)
 }
 
+func hiveBrowserLane(id string) bool {
+	switch strings.TrimSpace(id) {
+	case "lane-hive", "lane-browser":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Runner) newSDDDocsReadyTool(chief team.Agent) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "sdd_docs_ready",
@@ -379,9 +388,9 @@ func (r *Runner) buildTriageInstructions(ctx context.Context, chief team.Agent, 
 
 PROTOCOLO DE REVISÃO DIFF-FIRST & ORÇAMENTO RÍGIDO DE TOKENS (PADRÃO ANTHROPIC):
 1. ZERO-ROUNDTRIP: quando a seção [Dossiê Pré-Carregado do PR #N] estiver presente na mensagem, os metadados, revisões anteriores, comentários inline/gerais, status do CI, lista de arquivos e os patches [PATCH COMPLETO] JÁ estão carregados. NÃO chame github_get_pr, github_pr_files, github_ci_status nem github_pr_diff para arquivos já marcados como [PATCH COMPLETO].
-2. DIFF-FIRST: avalie diretamente os hunks do diff pré-carregado. Se o PR for de documentação/spec ou se o diff já for autossuficiente para validar a consistência, publique o parecer IMEDIATAMENTE com github_review_pr sem gastar turnos lendo o repositório.
+2. DIFF-FIRST: avalie diretamente os hunks do diff pré-carregado. Se o PR for só documentação/spec e o texto estiver consistente, publique na hora com github_review_pr event=APPROVE. Não deixe em COMMENT e não marque NÃO TESTADO por falta de teste. Diff de código autossuficiente também fecha no mesmo turno, com o teste da superfície quando a skill exigir.
 3. VERIFICAÇÃO CIRÚRGICA (MÁX. 1 A 2 TURNOS): só consulte arquivos fora do diff quando houver risco real de quebra de contrato (assinatura de método/DTO, rota, permissão ou regra RN citada). Faça todas as buscas/leituras estritamente necessárias em 1 único lote paralelo (máx. 4-6 chamadas no total) e NUNCA releia o mesmo arquivo deslocando faixas de linha.
-4. FECHAMENTO IMEDIATO: assim que concluir a verificação (no máximo no 2º ou 3º turno), chame github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT) e encerre com um resumo executivo curto.
+4. FECHAMENTO IMEDIATO: assim que concluir a verificação (no máximo no 2º ou 3º turno), chame github_review_pr e encerre com um resumo executivo curto. Estando certo, inclusive documento, event=APPROVE. REQUEST_CHANGES só com achado. COMMENT só se pediram comentário ou o modo é somente comentar.
 5. SKILL: se alguma skill do catálogo servir a esta revisão, chame read_skill com o nome exato dela antes de publicar o parecer. Sem skill aplicável, publique com o protocolo acima.`
 	}
 
@@ -390,9 +399,9 @@ PROTOCOLO DE REVISÃO DIFF-FIRST & ORÇAMENTO RÍGIDO DE TOKENS (PADRÃO ANTHROP
 	case "auto-review":
 		testRule := "Execução de testes desabilitada nesta configuração (faça auditoria estática focada no diff pré-carregado)."
 		if r.Project.Settings.AutoReview.EffectiveRunTests() {
-			testRule = "Testes habilitados em worktree isolada da branch do PR: quando o PR alterar código executável, você PODE rodar o teste afetado via run_shell e citar o resultado objetivo no parecer. Se o PR alterar apenas documentação/specs (.md), NÃO rode suite de testes."
+			testRule = "Testes habilitados em worktree isolada da branch do PR: quando o PR alterar código executável, você PODE rodar o teste afetado via run_shell e citar o resultado objetivo no parecer. Se o PR alterar apenas documentação/specs (.md), NÃO rode suite de testes; se o texto estiver consistente, event=APPROVE."
 		}
-		actionRule := "Publique o parecer adequado com github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT conforme os achados técnicos)."
+		actionRule := "Se estiver certo, inclusive PR só de documento, publique github_review_pr com event=APPROVE. Achado que quebra o pedido: REQUEST_CHANGES."
 		if r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only" {
 			actionRule = "Modo SOMENTE COMENTAR ativo: publique obrigatoriamente com github_review_pr usando event=\"COMMENT\" (APPROVE e REQUEST_CHANGES estão bloqueados)."
 		}
@@ -411,7 +420,7 @@ REGRAS ABSOLUTAS DESTE MODO:
 	case "direct":
 		reviewRule := "2. Revisão, menção, comentário ou aprovação de PR: leia o PR (github_get_pr e o diff) e PUBLIQUE com github_review_pr. Menção ou \"comente\" → event=COMMENT. \"Aprove\", ou \"comente e aprove\" → event=APPROVE com o parecer no body, num único envio. Um resumo no chat não substitui o envio. Se github_review_pr falhar, use o MCP do GitHub (mcp_list_servers, mcp_enable_server no servidor github, mcp_call) antes de qualquer gh no run_shell."
 		if r.reviewRequested {
-			reviewRule = "2. Revisão de PR: chame read_skill com name \"revisar-e-testar\" ANTES de qualquer parecer e siga o corpo. Classifique o diff e rode o teste da superfície com run_shell. Sem a saída do comando, o parecer é NÃO TESTADO e event não pode ser APPROVE. Depois publique com github_review_pr citando o comando e o exit code, ou NÃO TESTADO e o motivo. Menção ou \"comente\" → event=COMMENT. Se github_review_pr falhar, use o MCP do GitHub antes de gh no run_shell."
+			reviewRule = "2. Revisão de PR: a skill revisar-e-testar está colada neste prompt. Siga o corpo. Não chame read_skill e não procure o arquivo da skill no workspace. Classifique o diff e, se houver superfície de código, rode o teste com run_shell. Código sem a saída do comando é NÃO TESTADO e event não pode ser APPROVE. Diff só de documento (.md, spec), consistente: event=APPROVE, sem suíte e sem marcar NÃO TESTADO. Depois publique com github_review_pr. Menção ou \"comente\" → event=COMMENT. Se github_review_pr falhar, use o MCP do GitHub antes de gh no run_shell."
 		}
 		triageInstr = fmt.Sprintf(`%s
 
@@ -496,6 +505,17 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 
 	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão para testes e build. Ação no GitHub (comentar, aprovar, revisar) usa as ferramentas nativas; se falharem, o MCP github; gh no run_shell só quando o usuário pediu o comando gh ou o MCP não está disponível. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."
 
+	if hiveBrowserLane(r.LaneID) {
+		if r.browserArmed {
+			triageInstr += "\n\nESTE TURNO VEIO DO CHROME. O servidor hivemind-browser já está ligado na aba aberta. Aja na página, não só no chat.\n" +
+				"1. mcp_call com server \"hivemind-browser\", tool \"read_page\" e arguments {}.\n" +
+				"2. Siga com click, type, form_input, key, scroll ou navigate, também por mcp_call. As refs são e1, e2, do read_page.\n" +
+				"3. Não chame delegate_to_squad para mexer na página e não use playwright.\n" +
+				"4. Quando a página chegar no que foi pedido, responda curto."
+		} else {
+			triageInstr += "\n\nO side panel do Chrome pediu este turno, mas a extensão não conectou. Diga isso. Não invente clique na página."
+		}
+	}
 	if catalogBlock := skillx.CatalogBlock(r.skills, r.NativeSkills); catalogBlock != "" {
 		triageInstr += "\n\n" + catalogBlock +
 			"SELEÇÃO DE SKILLS:\n" +
@@ -520,7 +540,7 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 		triageInstr += r.nativeSkillGuide("plan-feature-architect")
 	case "direct":
 		if r.reviewRequested {
-			triageInstr += r.nativeSkillGuide("revisar-e-testar")
+			triageInstr += r.inlineNativeSkill("revisar-e-testar")
 		}
 	}
 	return triageInstr

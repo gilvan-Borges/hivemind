@@ -113,6 +113,7 @@ type Runner struct {
 	RaceCandidateExec func(ctx context.Context, idx int, wtDir, objective string) (summary string, costMicroUSD int64, totalTokens int64, err error)
 
 	autoReviewMode    bool
+	browserArmed      bool
 	resumedSession    bool
 	roundtableMu      sync.Mutex
 	roundtableCalls   int
@@ -323,6 +324,17 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	r.Project.Normalize()
 	ctx = modelx.WithPermissionMode(ctx, r.Project.Settings.EffectivePermissionMode())
 	r.resetTurnState(key, objective, req.Attachments, ctx)
+	if hiveBrowserLane(r.LaneID) && r.MCP != nil {
+		restore, armErr := r.MCP.ArmHiveBrowser(ctx)
+		if armErr != nil {
+			if r.Err != nil {
+				fmt.Fprintf(r.Err, "aviso: a extensão do Chrome não entrou neste turno: %v\n", armErr)
+			}
+		} else {
+			r.browserArmed = true
+			defer restore()
+		}
+	}
 
 	runMode := strings.ToLower(strings.TrimSpace(req.RunMode))
 	if runMode == "plan:feature" {
@@ -512,6 +524,7 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.nestedWorktrees = nil
 	r.issueKey = key
 	r.objectiveText = objective
+	r.browserArmed = false
 	r.reviewRequested = githubx.IsExplicitReviewObjective(objective)
 	r.prNumber = 0
 	r.prBranch = ""

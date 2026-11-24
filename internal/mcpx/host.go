@@ -206,6 +206,60 @@ func missingCommandDetail(s Server) string {
 	return fmt.Sprintf("comando %q não está no PATH. O servidor fica desligado nesta execução.", s.Command)
 }
 
+// ArmHiveBrowser liga a extensão do Chrome nesta tarefa. Playwright e
+// chrome-devtools, se estiverem no ar, saem até o restore. A preferência gravada não muda.
+func (h *Host) ArmHiveBrowser(ctx context.Context) (func(), error) {
+	if h == nil {
+		return nil, fmt.Errorf("MCP não está ativo nesta execução")
+	}
+	var parked []string
+	for _, other := range exclusivePartners("hivemind-browser") {
+		if h.isLive(other) {
+			h.dropLive(other)
+			parked = append(parked, other)
+		}
+	}
+	if _, err := h.EnableForTask(ctx, "hivemind-browser"); err != nil {
+		h.restoreParked(context.Background(), parked)
+		return nil, err
+	}
+	return func() {
+		h.dropLive("hivemind-browser")
+		h.restoreParked(context.Background(), parked)
+	}, nil
+}
+
+func (h *Host) dropLive(name string) {
+	h.mu.Lock()
+	sess := h.live[name]
+	delete(h.live, name)
+	delete(h.tools, name)
+	temp := h.temporary[name]
+	if temp {
+		delete(h.temporary, name)
+	}
+	h.status[name] = "off"
+	if sess != nil && !temp {
+		h.detail[name] = "pausado nesta tarefa"
+	} else {
+		h.detail[name] = ""
+	}
+	h.mu.Unlock()
+	if sess != nil {
+		_ = sess.Close()
+	}
+}
+
+func (h *Host) restoreParked(ctx context.Context, names []string) {
+	for _, name := range names {
+		s := h.server(name)
+		if s == nil || !s.Enabled {
+			continue
+		}
+		_ = h.connect(ctx, *s, false)
+	}
+}
+
 // EnableForTask liga um servidor só nesta execução, sem gravar a preferência.
 // No fim, Close derruba o processo.
 func (h *Host) EnableForTask(ctx context.Context, name string) (string, error) {

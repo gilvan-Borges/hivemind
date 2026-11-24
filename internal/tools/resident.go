@@ -358,8 +358,29 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 	}
 
 	if err := add(functiontool.New(functiontool.Config{
+		Name:        "chrome_tab",
+		Description: "Age na aba do Chrome da pessoa pela extensão Agent Hive. Para buscar no Google: action navigate com a URL de busca, depois action read. action: read, navigate, click, type ou key. ref vem do read (e1, e2). Não lê o cofre.",
+	}, func(ctx agent.Context, args struct {
+		Action string `json:"action,omitempty" jsonschema:"read, navigate, click, type ou key. Vazio lê a aba atual."`
+		URL    string `json:"url,omitempty" jsonschema:"URL http(s) para navigate."`
+		Ref    string `json:"ref,omitempty" jsonschema:"Ref e1 do read, para click ou type."`
+		Text   string `json:"text,omitempty" jsonschema:"Texto para type, ou a tecla para key."`
+		Key    string `json:"key,omitempty" jsonschema:"Tecla para key, como Enter."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "chrome_tab", map[string]any{
+			"action": args.Action, "url": args.URL, "ref": args.Ref, "text": args.Text, "key": args.Key,
+		})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
+	if err := add(functiontool.New(functiontool.Config{
 		Name:        "browser_headless",
-		Description: "Lê uma página http(s) num navegador invisível (sem janela). Só hosts da allowlist. Perfil temporário: não usa o perfil da pessoa e não lê o cofre. Devolve o DOM já renderizado, com teto de tamanho.",
+		Description: "Texto curto de uma página num Chrome invisível, sem cookies da pessoa. Google costuma bloquear. Não use para buscar no Chrome aberto. Só hosts da allowlist. Não lê o cofre.",
 	}, func(ctx agent.Context, args struct {
 		URL string `json:"url" jsonschema:"URL http ou https na allowlist. Sem usuário nem senha na URL."`
 	}) (textResult, error) {
