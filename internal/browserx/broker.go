@@ -228,6 +228,10 @@ func (b *Broker) readExtension(ctx context.Context, conn *websocket.Conn) {
 			if link != nil {
 				go b.handleChat(link, m.Text)
 			}
+		case "allow_host":
+			if host := strings.TrimSpace(strings.ToLower(m.Host)); httpHostOK(host) && !allowHost(host) {
+				_ = rememberHost(host)
+			}
 		}
 	}
 }
@@ -270,9 +274,48 @@ func (b *Broker) handleChat(link *extLink, text string) {
 			reply = Redact(err.Error(), b.token)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	_ = link.write(ctx, Message{Type: "chat_reply", Text: Redact(reply, b.token)})
+	reply = Redact(reply, b.token)
+	code := ""
+	if err != nil {
+		code = "error"
+	}
+	if len(reply) > 80 {
+		const step = 48
+		for i := 0; i < len(reply); i += step {
+			end := i + step
+			if end > len(reply) {
+				end = len(reply)
+			}
+			_ = link.write(ctx, Message{Type: "chat_delta", Text: reply[i:end]})
+		}
+	}
+	_ = link.write(ctx, Message{Type: "chat_reply", Text: reply, Code: code})
+}
+
+func httpHostOK(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, r := range host {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '-' {
+			return false
+		}
+	}
+	return host == "localhost" || strings.Contains(host, ".")
+}
+
+// Push manda um quadro para o side panel. O teste de demonstração usa isto.
+func (b *Broker) Push(ctx context.Context, m Message) error {
+	b.mu.Lock()
+	link := b.ext
+	b.mu.Unlock()
+	if link == nil {
+		return fmt.Errorf("extensão do Chrome não está conectada")
+	}
+	m.Token = ""
+	return link.write(ctx, m)
 }
 
 func (b *Broker) readAgent(ctx context.Context, conn *websocket.Conn) {

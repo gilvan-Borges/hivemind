@@ -1,14 +1,15 @@
 import { abortCall, captureThumb, detachAll, executeTool, NeedsApproval, setCurrentCall } from "./cdp.js";
-import { isLoopbackWebSocket, redactSecrets } from "./pure.js";
+import { hostOf, isLoopbackWebSocket, redactSecrets } from "./pure.js";
 
 const HOST = "com.gilvan_borges.hivemind";
-const activities: string[] = [];
 let nativePort: ChromePort | null = null;
 let socket: WebSocket | null = null;
 let connected = false;
 let controlling = false;
 let mode: "native" | "socket" | "" = "";
+let reconnects = 0;
 const panels = new Set<ChromePort>();
+const decisions = new Map<string, (choice: string) => void>();
 
 interface BridgeMessage {
   type?: string;
@@ -17,6 +18,9 @@ interface BridgeMessage {
   args?: Record<string, unknown>;
   text?: string;
   ok?: boolean;
+  code?: string;
+  host?: string;
+  image?: string;
 }
 
 function broadcast(message: unknown): void {
@@ -29,37 +33,62 @@ function broadcast(message: unknown): void {
   }
 }
 
-function pushActivity(text: string): void {
-  activities.push(text);
-  if (activities.length > 30) activities.shift();
-  broadcast({ type: "activity", text });
-}
-
-function state(): unknown {
-  return { type: "state", connected, controlling, mode, activities };
+async function publish(): Promise<void> {
+  let title = "";
+  let url = "";
+  let tabId = 0;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    title = tab?.title ?? "";
+    url = tab?.url ?? "";
+    tabId = tab?.id ?? 0;
+  } catch {
+    /* sem aba */
+  }
+  broadcast({ type: "state", connected, controlling, mode, title, url, tabId, host: hostOf(url) ?? "" });
 }
 
 function send(message: unknown): void {
-  const payload = message;
   if (mode === "native" && nativePort) {
-    nativePort.postMessage(payload);
+    nativePort.postMessage(message);
     return;
   }
-  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
+
+function askPanel(id: string, text: string, host: string): Promise<string> {
+  if (panels.size === 0) return Promise.resolve("");
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      decisions.delete(id);
+      resolve("");
+    }, 45_000);
+    decisions.set(id, (choice) => {
+      clearTimeout(timer);
+      resolve(choice);
+    });
+    broadcast({ type: "approve", id, text, host });
+  });
 }
 
 async function onBridge(message: BridgeMessage): Promise<void> {
   if (message.type === "hello" && message.ok) {
     connected = true;
-    broadcast(state());
+    reconnects = 0;
+    void publish();
     return;
   }
   if (message.type === "activity" && message.text) {
-    pushActivity(message.text);
+    broadcast({ type: "activity", text: message.text });
     return;
   }
-  if (message.type === "chat_reply") {
-    broadcast({ type: "chat_reply", text: message.text ?? "" });
+  if (message.type === "chat_reply" || message.type === "chat_delta") {
+    broadcast({ type: message.type, text: message.text ?? "", code: message.code ?? "" });
+    return;
+  }
+  if (message.type === "approve") {
+    broadcast({ type: "approve", id: message.id, text: message.text ?? "", host: message.host ?? "" });
     return;
   }
   if (message.type === "abort" && message.id) {
@@ -75,26 +104,46 @@ async function onBridge(message: BridgeMessage): Promise<void> {
   setCurrentCall(message.id);
   const label = stepLabel(message.tool, message.args ?? {});
   broadcast({ type: "step", id: message.id, phase: "start", label });
-  broadcast(state());
+  void publish();
   try {
-    const result = await executeTool(message.tool, message.args ?? {});
-    const thumb = await stepThumb(message.tool);
+    const result = await runCall(message.id, message.tool, message.args ?? {});
+    const thumb = message.tool === "screenshot" ? await stepThumb() : "";
     broadcast({ type: "step", id: message.id, phase: "done", label, thumb });
-    send({ type: "result", id: message.id, ok: true, text: result.text, image: result.image });
+    send({ type: "result", id: message.id, ok: true, text: result.text, image: message.tool === "screenshot" ? result.image : undefined });
   } catch (err) {
+    const text = redactSecrets(err instanceof Error ? err.message : String(err));
+    broadcast({ type: "step", id: message.id, phase: "error", label, text });
     if (err instanceof NeedsApproval) {
       send({ type: "result", id: message.id, ok: false, code: "needs_approval", text: err.message });
     } else {
-      const text = redactSecrets(err instanceof Error ? err.message : String(err));
       send({ type: "result", id: message.id, ok: false, text });
     }
   } finally {
     controlling = false;
-    broadcast(state());
+    void publish();
+  }
+}
+
+async function runCall(id: string, tool: string, args: Record<string, unknown>) {
+  try {
+    return await executeTool(tool, args);
+  } catch (err) {
+    if (!(err instanceof NeedsApproval) || panels.size === 0) throw err;
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const host = hostOf(tabs[0]?.url ?? "") ?? "";
+    const choice = await askPanel(id, err.message, host);
+    if (choice !== "once" && choice !== "always") {
+      if (choice === "deny") throw new Error("negado no painel");
+      throw err;
+    }
+    if (choice === "always" && host) send({ type: "allow_host", host });
+    setCurrentCall(id);
+    return executeTool(tool, { ...args, _approved: true });
   }
 }
 
 function connectNative(): void {
+  if (nativePort) return;
   try {
     const port = chrome.runtime.connectNative(HOST);
     nativePort = port;
@@ -107,14 +156,26 @@ function connectNative(): void {
       if (mode === "native") {
         mode = "";
         connected = false;
-        broadcast(state());
-        void fallbackSocket();
+        void publish();
+        scheduleReconnect();
       }
     });
     port.postMessage({ type: "hello", role: "extension" });
   } catch {
-    void fallbackSocket();
+    scheduleReconnect();
   }
+}
+
+function scheduleReconnect(): void {
+  reconnects += 1;
+  const wait = Math.min(8000, 400 * 2 ** Math.min(reconnects, 4));
+  setTimeout(() => {
+    if (connected) return;
+    if (nativePort) return;
+    void fallbackSocket().then(() => {
+      if (!connected) connectNative();
+    });
+  }, wait);
 }
 
 async function fallbackSocket(): Promise<void> {
@@ -147,7 +208,8 @@ function connectSocket(token: string, port: number): void {
       if (mode === "socket") {
         mode = "";
         connected = false;
-        broadcast(state());
+        void publish();
+        scheduleReconnect();
       }
     }
   };
@@ -158,20 +220,36 @@ function stopNow(): void {
   abortCall("stop");
   controlling = false;
   void detachAll();
-  broadcast(state());
+  void publish();
+}
+
+async function beginPick(): Promise<void> {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs[0]?.id;
+  if (!tabId) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "hivemind-overlay", op: "pick", label: "Aponte um elemento" });
+  } catch {
+    broadcast({ type: "error", text: "Não deu para apontar nesta página. Recarregue a aba e tente de novo." });
+  }
 }
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "panel") return;
   panels.add(port);
   port.onDisconnect.addListener(() => panels.delete(port));
-  port.postMessage(state());
-  port.onMessage.addListener((message: { type?: string; text?: string; token?: string; port?: number }) => {
+  void publish();
+  port.onMessage.addListener((message: { type?: string; text?: string; token?: string; port?: number; id?: string; choice?: string }) => {
     if (message.type === "chat" && message.text) {
-      pushActivity("você: " + message.text.slice(0, 180));
       send({ type: "chat", text: message.text });
     } else if (message.type === "stop") {
       stopNow();
+    } else if (message.type === "pick") {
+      void beginPick();
+    } else if (message.type === "approve" && message.id) {
+      const decide = decisions.get(message.id);
+      decisions.delete(message.id);
+      decide?.(message.choice ?? "deny");
     } else if (message.type === "pair" && message.token) {
       const bridgePort = message.port && message.port > 0 ? message.port : 47891;
       void chrome.storage.local.set({ bridgeToken: message.token, bridgePort });
@@ -187,12 +265,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (message?.type === "hivemind-picked") {
+    broadcast({ type: "picked", text: String(message.text ?? "") });
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type === "hivemind-test-connect" && typeof message.token === "string") {
     connectSocket(message.token, Number(message.port) || 47891);
     sendResponse({ ok: true });
     return true;
   }
   return undefined;
+});
+
+chrome.tabs.onActivated.addListener(() => {
+  void publish();
 });
 
 chrome.alarms.create("hivemind-reconnect", { periodInMinutes: 1 });
@@ -222,18 +309,20 @@ function stepLabel(tool: string, args: Record<string, unknown>): string {
       return "Clicando";
     case "read_page":
     case "find":
+    case "get_page_text":
       return "Lendo a página";
     case "key":
       return args.key === "Enter" ? "Enviando" : "Tecla";
     case "screenshot":
       return "Vendo a tela";
+    case "batch":
+      return "Várias ações";
     default:
       return tool;
   }
 }
 
-async function stepThumb(tool: string): Promise<string> {
-  if (tool === "screenshot" || tool === "tabs_list" || tool === "key") return "";
+async function stepThumb(): Promise<string> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tabs[0]?.id;
   if (!tabId) return "";
@@ -242,7 +331,6 @@ async function stepThumb(tool: string): Promise<string> {
 
 connectNative();
 
-// O teste end-to-end chama isto no service worker. Sem o token, não conecta.
 (globalThis as unknown as { hivemindTestConnect?: (token: string, port?: number) => void }).hivemindTestConnect = (token, port) => {
   connectSocket(token, port ?? 47891);
 };

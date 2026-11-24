@@ -319,10 +319,11 @@ func compactRequestContext(ctx context.Context, req *model.LLMRequest, b Budget)
 	if req == nil || len(req.Contents) == 0 {
 		return 0, 0, false
 	}
+	pruned, prunedSaved := pruneBrowserHistory(req)
 	window := b.window()
 	est := EstimateRequestTokens(req)
 	if est <= 0 {
-		return 0, 0, false
+		return pruned, prunedSaved, false
 	}
 	ratio := float64(est) / float64(window)
 	if ratio < MicroThresholdPct {
@@ -331,9 +332,9 @@ func compactRequestContext(ctx context.Context, req *model.LLMRequest, b Budget)
 		// (subagent_default_context_limits).
 		if b.MaxToolEntryBytes > 0 {
 			c, s := capOversizedOlderToolOutputs(req, b.MaxToolEntryBytes)
-			return c, s, false
+			return pruned + c, prunedSaved + s, false
 		}
-		return 0, 0, false
+		return pruned, prunedSaved, false
 	}
 
 	keepRecent := b.keepRecent()
@@ -355,9 +356,9 @@ func compactRequestContext(ctx context.Context, req *model.LLMRequest, b Budget)
 		// deterministic projection stays authoritative and the state ladder
 		// keeps a broken summarizer from becoming a per-call tax.
 		summarizePending(ctx, b, b.SummaryState, entries, time.Now())
-		return compacted, saved, b.SummaryState.current() != ""
+		return pruned + compacted, prunedSaved + saved, b.SummaryState.current() != ""
 	}
-	return compacted, saved, false
+	return pruned + compacted, prunedSaved + saved, false
 }
 
 // capOversizedOlderToolOutputs applies head-and-tail truncation to older (non-latest-turn)
@@ -824,6 +825,122 @@ func summarizeToolArgs(name string, args map[string]any) string {
 		}
 	}
 	return ""
+}
+
+const browserHistoryStub = "navegador: saída antiga omitida; use read_page para o estado atual"
+
+func browserHeavyOutput(name string, args map[string]any) bool {
+	tool := strings.ToLower(strings.TrimSpace(name))
+	if tool == "mcp_call" {
+		if args == nil {
+			return false
+		}
+		server, _ := args["server"].(string)
+		if !strings.EqualFold(strings.TrimSpace(server), "hivemind-browser") {
+			return false
+		}
+		if named, _ := args["tool"].(string); strings.TrimSpace(named) != "" {
+			tool = strings.ToLower(named)
+		}
+	}
+	for _, key := range []string{"read_page", "get_page_text", "get_dom", "screenshot", "console_read", "network_read", "javascript_exec", "computed_styles"} {
+		if strings.Contains(tool, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneBrowserHistory troca saídas antigas do navegador por uma linha. A
+// última fica inteira: é o estado atual da página. Vale abaixo do limiar de
+// 55% porque uma árvore de acessibilidade repetida enche a janela sozinha.
+func pruneBrowserHistory(req *model.LLMRequest) (compactedCount, bytesSaved int) {
+	if req == nil {
+		return 0, 0
+	}
+	type loc struct{ ci, pi int }
+	callArgs := map[string]map[string]any{}
+	var heavy []loc
+	for ci, content := range req.Contents {
+		if content == nil {
+			continue
+		}
+		for pi, part := range content.Parts {
+			if part == nil {
+				continue
+			}
+			if part.FunctionCall != nil && part.FunctionCall.ID != "" {
+				callArgs[part.FunctionCall.ID] = part.FunctionCall.Args
+			}
+			if part.FunctionResponse == nil {
+				continue
+			}
+			if browserHeavyOutput(part.FunctionResponse.Name, callArgs[part.FunctionResponse.ID]) {
+				heavy = append(heavy, loc{ci, pi})
+			}
+		}
+	}
+	if len(heavy) < 2 {
+		return 0, 0
+	}
+	drop := map[int]map[int]bool{}
+	for _, item := range heavy[:len(heavy)-1] {
+		if drop[item.ci] == nil {
+			drop[item.ci] = map[int]bool{}
+		}
+		drop[item.ci][item.pi] = true
+	}
+	cloned := false
+	for ci, orig := range req.Contents {
+		set := drop[ci]
+		if orig == nil || len(set) == 0 {
+			continue
+		}
+		changed := false
+		var parts []*genai.Part
+		for pi, part := range orig.Parts {
+			if part == nil || !set[pi] || part.FunctionResponse == nil {
+				if changed {
+					parts = append(parts, part)
+				}
+				continue
+			}
+			raw, _ := part.FunctionResponse.Response["text"].(string)
+			if raw == "" || len(raw) <= len(browserHistoryStub) {
+				if changed {
+					parts = append(parts, part)
+				}
+				continue
+			}
+			if !changed {
+				parts = append([]*genai.Part{}, orig.Parts[:pi]...)
+				changed = true
+			}
+			partCopy := *part
+			frCopy := *part.FunctionResponse
+			respCopy := make(map[string]any, len(frCopy.Response))
+			for k, v := range frCopy.Response {
+				respCopy[k] = v
+			}
+			respCopy["text"] = browserHistoryStub
+			frCopy.Response = respCopy
+			partCopy.FunctionResponse = &frCopy
+			parts = append(parts, &partCopy)
+			compactedCount++
+			bytesSaved += len(raw) - len(browserHistoryStub)
+		}
+		if !changed {
+			continue
+		}
+		if !cloned {
+			req.Contents = append([]*genai.Content(nil), req.Contents...)
+			cloned = true
+		}
+		contentCopy := *orig
+		contentCopy.Parts = parts
+		req.Contents[ci] = &contentCopy
+	}
+	return compactedCount, bytesSaved
 }
 
 func parseIntArg(v any) int {

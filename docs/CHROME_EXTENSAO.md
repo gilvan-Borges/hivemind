@@ -56,26 +56,53 @@ Ele não convive com `playwright` nem com `chrome-devtools`. Ligar um desliga os
 
 | Ferramenta | O que faz |
 | --- | --- |
-| `navigate` | Abre http(s) na aba atual |
-| `read_page` | Árvore de acessibilidade com refs `e1`, `e2`… |
-| `find` | Filtra a árvore por texto |
-| `click` | Clica numa ref ou em coordenadas, com evento real de mouse |
-| `type` | Foca a ref e insere texto |
-| `form_input` | Preenche um campo. `submit: true` pede aprovação |
-| `scroll` | Roda do mouse |
-| `key` | Tecla (Enter, Tab, setas, um caractere) |
-| `screenshot` | JPEG da aba para o agente ver a tela |
-| `tabs_list` / `tabs_create` / `tabs_close` / `tabs_switch` | Abas |
-| `console_read` | Últimos logs do console |
-| `network_read` | Método, URL filtrada e status. Sem cookie e sem Authorization |
-| `get_dom` | HTML externo, truncado |
-| `computed_styles` | Cor, fonte, display e caixa da ref |
-| `javascript_exec` | JavaScript na página. Sempre pede aprovação |
-| `wait` | Até 10s, ou até um texto aparecer |
+| `navigate` | Abre http(s) na aba atual. A resposta é `ok`, título e host |
+| `read_page` | Só o que está no viewport e é interativo, com refs `e1`, `e2`… Texto truncado, repetidos colapsados (`×N`) e paginação (`limit`, `offset`). Sem mudança devolve `igual`. `view=delta` devolve só o que mudou. `scope=all` inclui o resto |
+| `find` | Até 6 candidatos por texto e `role` |
+| `get_page_text` | Texto do miolo (`article`/`main`), com `limit` |
+| `click` / `type` / `form_input` / `scroll` / `key` | Ação real. A resposta é curta e, se a árvore mudou pouco, traz o delta. Ref obsoleta é relida pelo papel e pelo nome. O alvo entra na tela antes do clique |
+| `batch` | Até 15 dessas ações numa chamada (preencher um formulário) |
+| `screenshot` | Só quando o agente pede. JPEG (ou WebP) do viewport, `quality` e `scale`. Não vai anexado nas outras ferramentas |
+| `tabs` | `action` `list`, `create`, `close` ou `switch` |
+| `wait` | Rede ociosa e DOM estável, ou até um texto aparecer. Sem `sleep` fixo |
+| `dialog` | `alert`/`confirm`/`prompt`. Aceitar pede aprovação |
+| `pick` | A pessoa aponta um elemento na página |
+| `devtools` | Passa a valer `console_read`, `network_read`, `get_dom`, `computed_styles`, `javascript_exec` e `upload`. Console e rede voltam filtrados (erros, regex, limite) |
+
+`console_read`, `network_read`, `get_dom`, `computed_styles`, `javascript_exec` e `upload` continuam chamáveis, mas o esquema deles não entra no prompt até o agente chamar `devtools`. Os nomes antigos `tabs_list`, `tabs_create`, `tabs_close` e `tabs_switch` ainda funcionam na ponte.
+
+Uma ação que abre aba nova passa a aba para o agente. Download aparece numa linha do resultado. `upload` manda arquivos para um `<input type=file>` e pede aprovação. Iframe entra na árvore quando o Chrome entrega a sessão; shadow DOM entra na lista do que está visível.
+
+O histórico do agente, antes de ir ao modelo, troca saídas antigas de `read_page`, `get_page_text`, `screenshot`, console, rede, DOM e JavaScript por uma linha. A última fica. A extensão também guarda a árvore por URL e hash: a segunda leitura igual não reenvia a página.
+
+## Tokens
+
+Conta é bytes ÷ 4, a mesma do compactador de contexto. Para repetir:
+
+```bash
+cd extension/chrome && npm ci && npm test && npm run bench
+go test -count=1 -run 'TestCatalogShrinks|TestPruneBrowser' -v ./internal/browserx/ ./internal/contextx/
+```
+
+Página sintética (nav repetida, 80 links, 250 parágrafos, 200 nós genéricos). A coluna "antes" é o formatador da v1, que listava até 700 nós.
+
+| Cenário | Antes | Depois | Economia |
+| --- | ---: | ---: | ---: |
+| `read_page` | 13828 tok | 549 tok | 96% |
+| `read_page` sem mudança | 13828 tok | 7 tok | ~100% |
+| delta depois da ação | 13828 tok | 5 tok | ~100% |
+| `find` | 928 tok | 135 tok | 85% |
+| console (só erro/aviso) | 787 tok | 11 tok | 99% |
+| rede (só 4xx/5xx) | 357 tok | 8 tok | 98% |
+| esquema no prompt | 684 tok (2736 bytes) | 429 tok (1713 bytes) | 37% |
+| 3 `read_page` no histórico | 1020 tok | 374 tok | 63% |
+| screenshot da aba (base64) | 63800 caracteres, q40 escala 1 | 16888 caracteres, q28 escala 0,5 | 74% |
+
+O esquema novo é menor mesmo com `batch`, `get_page_text`, `dialog`, `pick` e `devtools`, porque console, rede, DOM, estilos, JavaScript e upload saíram do prompt. No histórico de teste, duas leituras de 1360 bytes viram uma linha e saem 2586 bytes; a terceira leitura fica inteira.
 
 Enquanto o agente controla a aba, um overlay em shadow DOM mostra um brilho dourado pulsante, um cursor fantasma até o clique, o contorno do alvo e um pill "Agent Hive no controle" com Parar. O resto do overlay não recebe clique (`pointer-events: none`). `prefers-reduced-motion` desliga a animação. O screenshot que o agente usa para decidir esconde o overlay; os prints de demonstração mostram ele. O botão **Parar** do pill e o do side panel cortam a ação e soltam o depurador.
 
-O chat do side panel vira um turno na IDE (lane `lane-hive`) ou no `hivemind serve` (lane `lane-browser`). Se já houver execução, a mensagem entra como steer.
+O chat do side panel vira um turno na IDE (lane `lane-hive`) ou no `hivemind serve` (lane `lane-browser`). Se já houver execução, a mensagem entra como steer. A resposta volta em markdown e aparece em partes quando passa de 80 caracteres. Os passos da mesma leva ficam num grupo fechado ("Fez N ações"). Miniatura só no `screenshot`. Aprovação de ação sensível aparece no fio: Permitir uma vez, Sempre neste site, Negar. Enter envia, Shift+Enter quebra a linha, Esc pede parada. O Parar corta a chamada na ponte, marca a ferramenta como interrompida e solta o depurador. O painel mostra a aba atual, uma estimativa de tokens da sessão (preço de referência US$ 3 por milhão) e sugestões quando a conversa daquela aba ainda está vazia. O histórico fica por aba. Apontar pede um clique na página e cola o elemento no campo. Erro de passo ou de turno tem Tentar de novo.
 
 ## Segurança
 
@@ -85,6 +112,20 @@ O chat do side panel vira um turno na IDE (lane `lane-hive`) ou no `hivemind ser
 - O resultado passa por um redator de `Bearer`, prefixos conhecidos de token e o próprio código da ponte.
 - Log e `browser status` não carregam o token. O health `GET /health` também não.
 - A permissão `<all_urls>` do Chrome existe para o depurador alcançar a aba depois que você aprovou o site. Quem decide o site é o HiveMind, não a página.
+
+## Conversa no side panel
+
+A janela inteira, com a aba e o painel, no tema escuro dourado.
+
+![Estado vazio](screenshots/chrome-v2-01-vazio.png)
+
+![Ações agrupadas](screenshots/chrome-v2-02-acoes.png)
+
+![Resposta em markdown](screenshots/chrome-v2-03-resposta.png)
+
+![Aprovação no fio](screenshots/chrome-v2-04-aprovacao.png)
+
+O GIF da janela está em `docs/screenshots/chrome-v2-demo.gif`.
 
 ## Como ficou
 
@@ -100,6 +141,6 @@ O side panel, no mesmo tema escuro do HiveMind. Este print é a página do paine
 
 - Um HiveMind dono da porta. IDE e `hivemind serve` ao mesmo tempo: quem ligou primeiro recebe o chat do painel.
 - A extensão não dirige o Chrome de outro usuário nem um Chrome remoto.
-- Screenshot grande demais é omitido (teto perto de 700 KB, o limite do native messaging).
+- Screenshot grande demais é omitido. A extensão refaz em JPEG menor e recusa acima de ~120 KB; a ponte ainda corta em 700 KB, o teto do native messaging.
 - `javascript_exec` roda de verdade na página. A aprovação é o portão; o retorno pode ter dado da página e por isso é truncado e redatado.
 - Publicar na Chrome Web Store exige uma chave de assinatura que este repositório de propósito não tem. Load unpacked e o zip da Release usam a chave pública só para o id ficar estável.

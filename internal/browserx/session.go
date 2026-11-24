@@ -202,7 +202,7 @@ func callFromAgent(ctx context.Context, tool string, args map[string]any) (strin
 		return "", fmt.Errorf("%s", msg)
 	}
 	text := res.Text
-	if res.Image != "" {
+	if tool == "screenshot" && res.Image != "" {
 		text = strings.TrimSpace(text + "\ndata:image/jpeg;base64," + res.Image)
 	}
 	if strings.TrimSpace(text) == "" {
@@ -234,26 +234,25 @@ func init() {
 // Catalog é o esquema que entra no prompt quando o servidor está ligado.
 func Catalog() []mcpx.RemoteTool {
 	type row struct{ name, desc, schema string }
+	// DevTools (console, rede, DOM, estilos, JavaScript, upload) não entram aqui.
+	// A ferramenta devtools devolve o nome delas quando o agente pedir.
 	rows := []row{
-		{"navigate", "Abre uma URL http(s) na aba atual do Chrome real do usuário. Site fora da lista pede aprovação.", `{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`},
-		{"read_page", "Lê a árvore de acessibilidade da aba e devolve refs e1, e2… para click, type e form_input.", `{"type":"object","properties":{"tabId":{"type":"number"}}}`},
-		{"find", "Procura texto ou papel na última árvore lida e devolve as refs que casam.", `{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`},
-		{"click", "Clica numa ref da árvore ou em coordenadas CSS. Enviar, comprar ou pagar pede aprovação.", `{"type":"object","properties":{"ref":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"submit":{"type":"boolean"},"name":{"type":"string"}}}`},
-		{"type", "Foca a ref e insere texto com eventos reais de teclado. Não use para enviar o formulário.", `{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"}},"required":["text"]}`},
-		{"form_input", "Preenche um campo. Com submit true, pede aprovação antes de enviar.", `{"type":"object","properties":{"ref":{"type":"string"},"value":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","value"]}`},
-		{"scroll", "Rola a página com evento de roda do mouse.", `{"type":"object","properties":{"dx":{"type":"number"},"dy":{"type":"number"},"ref":{"type":"string"}}}`},
-		{"key", "Aperta uma tecla (Enter, Tab, Escape, setas, ou um caractere).", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`},
-		{"screenshot", "Captura a aba em JPEG para o agente ver a tela.", `{"type":"object"}`},
-		{"tabs_list", "Lista as abas abertas.", `{"type":"object"}`},
-		{"tabs_create", "Abre uma aba. URL nova pede aprovação.", `{"type":"object","properties":{"url":{"type":"string"}}}`},
-		{"tabs_close", "Fecha uma aba pelo tabId.", `{"type":"object","properties":{"tabId":{"type":"number"}},"required":["tabId"]}`},
-		{"tabs_switch", "Ativa uma aba pelo tabId.", `{"type":"object","properties":{"tabId":{"type":"number"}},"required":["tabId"]}`},
-		{"console_read", "Devolve os últimos console logs da aba, sem segredos.", `{"type":"object"}`},
-		{"network_read", "Devolve as últimas requisições (método, URL filtrada, status). Sem cookies nem Authorization.", `{"type":"object"}`},
-		{"get_dom", "HTML externo do documento ou da ref, truncado.", `{"type":"object","properties":{"ref":{"type":"string"}}}`},
-		{"computed_styles", "Estilos computados principais da ref (cor, fonte, display, caixa).", `{"type":"object","properties":{"ref":{"type":"string"}},"required":["ref"]}`},
-		{"javascript_exec", "Executa JavaScript na página. Sempre pede aprovação. O resultado pode conter dado da página.", `{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}`},
-		{"wait", "Espera milissegundos (teto 10s) ou até o texto aparecer na árvore.", `{"type":"object","properties":{"ms":{"type":"number"},"text":{"type":"string"}}}`},
+		{"navigate", "Abre http(s). Host novo pede aprovação.", `{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`},
+		{"read_page", "Refs e1 do viewport. Igual se não mudou.", `{"type":"object","properties":{"view":{"type":"string"},"scope":{"type":"string"},"limit":{"type":"number"}}}`},
+		{"find", "Até 6 refs.", `{"type":"object","properties":{"query":{"type":"string"},"role":{"type":"string"}},"required":["query"]}`},
+		{"get_page_text", "Texto principal.", `{"type":"object","properties":{"limit":{"type":"number"}}}`},
+		{"click", "Clica na ref. Comprar pede aprovação.", `{"type":"object","properties":{"ref":{"type":"string"}}}`},
+		{"type", "Digita na ref.", `{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"}},"required":["text"]}`},
+		{"form_input", "Preenche a ref. submit pede aprovação.", `{"type":"object","properties":{"ref":{"type":"string"},"value":{"type":"string"}},"required":["ref","value"]}`},
+		{"scroll", "Rola.", `{"type":"object","properties":{"dy":{"type":"number"}}}`},
+		{"key", "Tecla.", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`},
+		{"screenshot", "JPEG da aba. quality e scale.", `{"type":"object","properties":{"quality":{"type":"number"},"scale":{"type":"number"}}}`},
+		{"batch", "Até 15 ações numa chamada.", `{"type":"object","properties":{"actions":{"type":"array"}},"required":["actions"]}`},
+		{"tabs", "list, create, close ou switch.", `{"type":"object","properties":{"action":{"type":"string"},"url":{"type":"string"},"tabId":{"type":"number"}}}`},
+		{"wait", "Rede ociosa ou um texto.", `{"type":"object","properties":{"text":{"type":"string"}}}`},
+		{"dialog", "alert/confirm. Aceitar pede aprovação.", `{"type":"object","properties":{"accept":{"type":"boolean"}}}`},
+		{"pick", "A pessoa aponta um elemento.", `{"type":"object"}`},
+		{"devtools", "Liga console, rede, DOM, estilos, JS e upload.", `{"type":"object"}`},
 	}
 	out := make([]mcpx.RemoteTool, 0, len(rows))
 	for _, r := range rows {

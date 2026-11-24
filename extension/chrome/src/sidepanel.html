@@ -16,20 +16,27 @@
       </div>
       <div class="titles">
         <strong>Agent Hive</strong>
-        <p>Chrome real</p>
+        <p id="tabctx">Nenhuma aba</p>
       </div>
-      <span id="status">desconectado</span>
+      <span id="status" role="status">desconectado</span>
     </header>
-    <main id="log" aria-live="polite"></main>
+    <p id="meter" class="meter" aria-live="polite">sessão ≈ 0 tok</p>
+    <main id="log" role="log" aria-live="polite" aria-relevant="additions"></main>
     <div class="dock">
-      <button id="stop" type="button">Parar</button>
+      <div class="tools">
+        <button id="stop" type="button">Parar</button>
+        <button id="pick" type="button">Apontar</button>
+      </div>
       <form id="composer">
+        <label class="sr" for="text">Mensagem para o Agent Hive</label>
         <textarea id="text" rows="2" placeholder="Pedir ao Agent Hive"></textarea>
         <button type="submit" aria-label="Enviar">↑</button>
       </form>
+      <p class="hint">Enter envia · Shift+Enter quebra · Esc para</p>
       <details class="pair">
         <summary>Parear</summary>
         <form id="pair">
+          <label class="sr" for="token">Código de pareamento</label>
           <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="código local" />
           <button type="submit">Conectar</button>
         </form>
