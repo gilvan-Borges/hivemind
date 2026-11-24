@@ -95,7 +95,7 @@ export function readPage(nodes: AxNode[]): { text: string; refs: Record<string, 
       refs[ref] = { backendNodeId: node.backendDOMNodeId, role, name };
     }
     lines.push(`- ${ref} ${role}${name ? ` "${name.slice(0, 160)}"` : ""}`);
-    if (lines.length >= 400) break;
+    if (lines.length >= 700) break;
   }
   return { text: lines.join("\n"), refs };
 }

@@ -73,7 +73,7 @@ Ele não convive com `playwright` nem com `chrome-devtools`. Ligar um desliga os
 | `javascript_exec` | JavaScript na página. Sempre pede aprovação |
 | `wait` | Até 10s, ou até um texto aparecer |
 
-Enquanto uma chamada está em curso, a aba ganha uma borda dourada e o selo ON. O botão **Parar o agente** no side panel corta a ação e solta o depurador.
+Enquanto o agente controla a aba, um overlay em shadow DOM mostra um brilho dourado pulsante, um cursor fantasma até o clique, o contorno do alvo e um pill "Agent Hive no controle" com Parar. O resto do overlay não recebe clique (`pointer-events: none`). `prefers-reduced-motion` desliga a animação. O screenshot que o agente usa para decidir esconde o overlay; os prints de demonstração mostram ele. O botão **Parar** do pill e o do side panel cortam a ação e soltam o depurador.
 
 O chat do side panel vira um turno na IDE (lane `lane-hive`) ou no `hivemind serve` (lane `lane-browser`). Se já houver execução, a mensagem entra como steer.
 

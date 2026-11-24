@@ -113,54 +113,92 @@ function assertHttp(raw: string): void {
   if (!hostOf(raw)) throw new Error("só http(s), sem usuário na URL");
 }
 
-async function showOverlay(tabId: number): Promise<void> {
+async function tell(tabId: number, op: string, extra: Record<string, unknown> = {}): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: "hivemind-overlay", op, ...extra });
+      return;
+    } catch {
+      await sleep(120);
+    }
+  }
+}
+
+async function showOverlay(tabId: number, label = "No controle"): Promise<void> {
+  await tell(tabId, "show", { label });
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, func: installHiveFrame });
     await chrome.action.setBadgeText({ text: "ON", tabId });
     await chrome.action.setBadgeBackgroundColor({ color: "#C6A15B" });
   } catch {
-    /* página restrita do Chrome não aceita o overlay */
+    /* página restrita */
   }
 }
 
 async function hideOverlay(tabId: number): Promise<void> {
+  await tell(tabId, "hide");
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, func: removeHiveFrame });
     await chrome.action.setBadgeText({ text: "", tabId });
   } catch {
     /* idem */
   }
 }
 
-function installHiveFrame(): void {
-  if (document.getElementById("hivemind-agent-frame")) return;
-  document.documentElement.setAttribute("data-hivemind-controlling", "1");
-  const style = document.createElement("style");
-  style.id = "hivemind-agent-style";
-  style.textContent =
-    "html[data-hivemind-controlling='1']{box-shadow:inset 0 0 0 3px #C6A15B !important}" +
-    "#hivemind-agent-frame{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:2147483646;" +
-    "background:#111;color:#E8C881;border:1px solid rgba(198,161,91,.45);border-radius:999px;" +
-    "padding:4px 12px;font:12px/1.4 ui-sans-serif,system-ui,sans-serif;pointer-events:none}";
-  const bar = document.createElement("div");
-  bar.id = "hivemind-agent-frame";
-  bar.textContent = "HiveMind · controlando esta aba";
-  document.documentElement.append(style, bar);
+interface Box {
+  x: number;
+  y: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
-function removeHiveFrame(): void {
-  document.documentElement.removeAttribute("data-hivemind-controlling");
-  document.getElementById("hivemind-agent-style")?.remove();
-  document.getElementById("hivemind-agent-frame")?.remove();
+async function clickBox(tabId: number, backendNodeId: number): Promise<Box> {
+  try {
+    const pushed = await send<{ nodeIds?: number[] }>(tabId, "DOM.pushNodesByBackendIdsToFrontend", {
+      backendNodeIds: [backendNodeId],
+    });
+    const nodeId = pushed.nodeIds?.[0];
+    if (nodeId) {
+      const described = await send<{ node?: { nodeName?: string; backendNodeId?: number } }>(tabId, "DOM.describeNode", { nodeId });
+      const name = (described.node?.nodeName ?? "").toUpperCase();
+      if (name !== "A") {
+        const found = await send<{ nodeId?: number }>(tabId, "DOM.querySelector", { nodeId, selector: "a" });
+        if (found.nodeId) {
+          await send(tabId, "DOM.scrollIntoViewIfNeeded", { nodeId: found.nodeId });
+          const model = await send<{ model?: { content?: number[] } }>(tabId, "DOM.getBoxModel", { nodeId: found.nodeId });
+          return boxFromQuad(tabId, model.model?.content);
+        }
+      }
+    }
+  } catch {
+    /* cai no nó acessível */
+  }
+  return boxOf(tabId, backendNodeId);
 }
 
-async function boxCenter(tabId: number, backendNodeId: number): Promise<{ x: number; y: number }> {
+async function boxOf(tabId: number, backendNodeId: number): Promise<Box> {
   const model = await send<{ model?: { content?: number[] } }>(tabId, "DOM.getBoxModel", { backendNodeId });
-  const quad = model.model?.content;
+  return boxFromQuad(tabId, model.model?.content);
+}
+
+async function boxFromQuad(tabId: number, quad: number[] | undefined): Promise<Box> {
   if (!quad || quad.length < 8) throw new Error("elemento sem caixa visível");
   const xs = [quad[0], quad[2], quad[4], quad[6]];
   const ys = [quad[1], quad[3], quad[5], quad[7]];
-  return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const width = Math.max(...xs) - left;
+  const height = Math.max(...ys) - top;
+  let vx = 0;
+  let vy = 0;
+  try {
+    const metrics = await send<{ cssVisualViewport?: { pageX?: number; pageY?: number } }>(tabId, "Page.getLayoutMetrics");
+    vx = metrics.cssVisualViewport?.pageX ?? 0;
+    vy = metrics.cssVisualViewport?.pageY ?? 0;
+  } catch {
+    /* sem métrica, usa a origem do documento */
+  }
+  return { x: left + width / 2 - vx, y: top + height / 2 - vy, left: left - vx, top: top - vy, width, height };
 }
 
 async function clickAt(tabId: number, x: number, y: number): Promise<void> {
@@ -229,6 +267,7 @@ async function navigate(args: Record<string, unknown>): Promise<ToolResult> {
   await chrome.tabs.update(tabId, { url });
   await waitComplete(tabId);
   await attach(tabId);
+  await showOverlay(tabId, "Abrindo a página");
   return { text: `aberto ${url}` };
 }
 
@@ -249,6 +288,7 @@ function sleep(ms: number): Promise<void> {
 async function read(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
+  await tell(tabId, "status", { label: "Lendo a página" });
   const tree = await send<{ nodes?: AxNode[] }>(tabId, "Accessibility.getFullAXTree");
   const page = readPage(tree.nodes ?? []);
   refsByTab.set(tabId, page.refs);
@@ -276,17 +316,35 @@ async function click(args: Record<string, unknown>): Promise<ToolResult> {
   if (args.ref) {
     const info = requireRef(tabId, args.ref);
     name = name || info.name;
+    try {
+      await send(tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: info.backendNodeId });
+    } catch {
+      /* o nó pode não rolar */
+    }
     if ((args.submit === true || isSensitiveLabel(name) || isSensitiveLabel(info.role + " " + info.name)) && !approved(args)) {
       throw new NeedsApproval(`o elemento ${info.role} "${info.name}" parece enviar, comprar ou confirmar`);
     }
-    const center = await boxCenter(tabId, info.backendNodeId);
-    x = center.x;
-    y = center.y;
+    const box = await clickBox(tabId, info.backendNodeId);
+    x = box.left + Math.min(48, Math.max(8, box.width / 3));
+    y = box.top + Math.min(16, Math.max(6, box.height / 2));
+    await tell(tabId, "highlight", { x: box.left, y: box.top, w: box.width, h: box.height, label: "Clicando" });
   } else if (args.submit === true && !approved(args)) {
     throw new NeedsApproval("clique de envio precisa de aprovação");
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("informe ref ou x e y");
+  await tell(tabId, "cursor", { x, y, label: "Clicando" });
+  await sleep(520);
+  await tell(tabId, "ripple", { x, y });
   await clickAt(tabId, x, y);
+  if (args.ref) {
+    try {
+      await send(tabId, "DOM.focus", { backendNodeId: requireRef(tabId, args.ref).backendNodeId });
+      await send(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    } catch {
+      /* o clique do mouse já pode ter navegado */
+    }
+  }
   return { text: `clique em ${Math.round(x)},${Math.round(y)}` };
 }
 
@@ -296,8 +354,26 @@ async function typeText(args: Record<string, unknown>): Promise<ToolResult> {
   if (text.length > 20_000) throw new Error("texto longo demais");
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
-  if (args.ref) await focusRef(tabId, requireRef(tabId, args.ref));
-  await send(tabId, "Input.insertText", { text });
+  await tell(tabId, "status", { label: "Digitando" });
+  if (args.ref) {
+    const info = requireRef(tabId, args.ref);
+    await focusRef(tabId, info);
+    try {
+      const box = await boxOf(tabId, info.backendNodeId);
+      await tell(tabId, "highlight", { x: box.left, y: box.top, w: box.width, h: box.height, label: "Digitando" });
+      await tell(tabId, "cursor", { x: box.x, y: box.y, label: "Digitando" });
+    } catch {
+      /* o campo pode não ter caixa ainda */
+    }
+  }
+  const animated = text.slice(0, 48);
+  const rest = text.slice(animated.length);
+  for (const ch of animated) {
+    ensureLive();
+    await send(tabId, "Input.insertText", { text: ch });
+    await sleep(18);
+  }
+  if (rest) await send(tabId, "Input.insertText", { text: rest });
   return { text: `digitado ${text.length} caracteres` };
 }
 
@@ -320,7 +396,7 @@ async function scroll(args: Record<string, unknown>): Promise<ToolResult> {
   let x = 400;
   let y = 300;
   if (args.ref) {
-    const center = await boxCenter(tabId, requireRef(tabId, args.ref).backendNodeId);
+    const center = await boxOf(tabId, requireRef(tabId, args.ref).backendNodeId);
     x = center.x;
     y = center.y;
   }
@@ -340,6 +416,7 @@ async function pressKey(args: Record<string, unknown>): Promise<ToolResult> {
   if (!key) throw new Error("tecla vazia");
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
+  await tell(tabId, "status", { label: key === "Enter" ? "Enviando" : "Tecla " + key });
   const named = key.length > 1;
   await send(tabId, "Input.dispatchKeyEvent", {
     type: "keyDown",
@@ -355,9 +432,16 @@ async function pressKey(args: Record<string, unknown>): Promise<ToolResult> {
 async function screenshot(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
-  let shot = await send<{ data?: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 40 });
-  if ((shot.data?.length ?? 0) > 700_000) {
-    shot = await send<{ data?: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 20 });
+  await tell(tabId, "hide");
+  await sleep(80);
+  let shot: { data?: string };
+  try {
+    shot = await send<{ data?: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 40 });
+    if ((shot.data?.length ?? 0) > 700_000) {
+      shot = await send<{ data?: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 20 });
+    }
+  } finally {
+    await tell(tabId, "show", { label: "Vendo a tela" });
   }
   if (!shot.data || shot.data.length > 700_000) throw new Error("screenshot grande demais");
   return { text: "screenshot jpeg da aba", image: shot.data };

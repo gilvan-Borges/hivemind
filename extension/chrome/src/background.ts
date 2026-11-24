@@ -174,6 +174,11 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "hivemind-overlay-stop") {
+    stopNow();
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type === "hivemind-test-connect" && typeof message.token === "string") {
     connectSocket(message.token, Number(message.port) || 47891);
     sendResponse({ ok: true });

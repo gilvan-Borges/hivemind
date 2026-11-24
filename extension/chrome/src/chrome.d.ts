@@ -25,6 +25,7 @@ declare const chrome: {
     id: string;
     connect(info?: { name?: string }): ChromePort;
     connectNative(name: string): ChromePort;
+    sendMessage(message: unknown): Promise<unknown>;
     onConnect: { addListener(cb: (port: ChromePort) => void): void };
     onMessage: {
       addListener(cb: (message: any, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void): void;
@@ -43,6 +44,7 @@ declare const chrome: {
     remove(tabId: number): Promise<void>;
     update(tabId: number, props: { url?: string; active?: boolean }): Promise<ChromeTab>;
     get(tabId: number): Promise<ChromeTab>;
+    sendMessage(tabId: number, message: unknown): Promise<unknown>;
     onUpdated: { addListener(cb: (tabId: number, info: { status?: string }) => void): void };
   };
   scripting: {
