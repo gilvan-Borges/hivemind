@@ -47,17 +47,21 @@ type winRect struct {
 }
 
 var (
-	orbUser32                = syscall.NewLazyDLL("user32.dll")
-	orbDwmapi                = syscall.NewLazyDLL("dwmapi.dll")
-	orbProcFindWindowW       = orbUser32.NewProc("FindWindowW")
-	orbProcGetWindowLongPtrW = orbUser32.NewProc("GetWindowLongPtrW")
-	orbProcSetWindowLongPtrW = orbUser32.NewProc("SetWindowLongPtrW")
-	orbProcShowWindow        = orbUser32.NewProc("ShowWindow")
-	orbProcSetWindowPos      = orbUser32.NewProc("SetWindowPos")
-	orbProcGetCursorPos      = orbUser32.NewProc("GetCursorPos")
-	orbProcGetWindowRect     = orbUser32.NewProc("GetWindowRect")
-	orbProcGetAsyncKeyState  = orbUser32.NewProc("GetAsyncKeyState")
-	orbProcDwmSetWindowAttr  = orbDwmapi.NewProc("DwmSetWindowAttribute")
+	orbUser32                  = syscall.NewLazyDLL("user32.dll")
+	orbDwmapi                  = syscall.NewLazyDLL("dwmapi.dll")
+	orbProcFindWindowW         = orbUser32.NewProc("FindWindowW")
+	orbProcGetWindowLongPtrW   = orbUser32.NewProc("GetWindowLongPtrW")
+	orbProcSetWindowLongPtrW   = orbUser32.NewProc("SetWindowLongPtrW")
+	orbProcShowWindow          = orbUser32.NewProc("ShowWindow")
+	orbProcSetWindowPos        = orbUser32.NewProc("SetWindowPos")
+	orbProcGetCursorPos        = orbUser32.NewProc("GetCursorPos")
+	orbProcGetWindowRect       = orbUser32.NewProc("GetWindowRect")
+	orbProcGetAsyncKeyState    = orbUser32.NewProc("GetAsyncKeyState")
+	orbProcGetForegroundWindow = orbUser32.NewProc("GetForegroundWindow")
+	orbProcSetForegroundWindow = orbUser32.NewProc("SetForegroundWindow")
+	orbProcGetDpiForWindow     = orbUser32.NewProc("GetDpiForWindow")
+	orbProcGetSystemMetrics    = orbUser32.NewProc("GetSystemMetrics")
+	orbProcDwmSetWindowAttr    = orbDwmapi.NewProc("DwmSetWindowAttribute")
 
 	orbDragMu     sync.Mutex
 	orbDragActive bool
@@ -212,4 +216,125 @@ func configureOrbNativeWindow(windowTitle string) {
 		)
 		_, _, _ = orbProcShowWindow.Call(hwnd, swShowNoActivate)
 	}
+}
+
+func orbPointerDown() bool {
+	return isLeftMouseDown()
+}
+
+func focusOrbWindow(windowTitle string) {
+	hwnd := findOrbHWND(windowTitle)
+	if hwnd == 0 {
+		return
+	}
+	_, _, _ = orbProcSetForegroundWindow.Call(hwnd)
+}
+
+func orbForegroundIsOther(windowTitle string) bool {
+	hwnd := findOrbHWND(windowTitle)
+	if hwnd == 0 {
+		return false
+	}
+	fg, _, _ := orbProcGetForegroundWindow.Call()
+	return fg != 0 && fg != hwnd
+}
+
+func orbDPIScale(hwnd uintptr) float64 {
+	dpi, _, _ := orbProcGetDpiForWindow.Call(hwnd)
+	if dpi < 96 {
+		return 1
+	}
+	return float64(dpi) / 96
+}
+
+func startOrbNativeResize(windowTitle, edge string, onDone func(w, h int)) bool {
+	hwnd := findOrbHWND(windowTitle)
+	if hwnd == 0 || !isLeftMouseDown() || onDone == nil {
+		return false
+	}
+	var startPt winPoint
+	okPt, _, _ := orbProcGetCursorPos.Call(uintptr(unsafe.Pointer(&startPt)))
+	var startRect winRect
+	okRect, _, _ := orbProcGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&startRect)))
+	if okPt == 0 || okRect == 0 {
+		return false
+	}
+	scale := orbDPIScale(hwnd)
+	screenW, _, _ := orbProcGetSystemMetrics.Call(0)
+	screenH, _, _ := orbProcGetSystemMetrics.Call(1)
+	minW := int32(float64(orbMinExpandedW) * scale)
+	minH := int32(float64(orbMinExpandedH) * scale)
+	maxW := int32(screenW) - 16
+	maxH := int32(screenH) - 16
+	if maxW < minW {
+		maxW = minW
+	}
+	if maxH < minH {
+		maxH = minH
+	}
+	growW := edge == "e" || edge == "se"
+	growH := edge == "s" || edge == "se"
+	startW := startRect.right - startRect.left
+	startH := startRect.bottom - startRect.top
+
+	orbDragMu.Lock()
+	if orbDragActive {
+		orbDragMu.Unlock()
+		return true
+	}
+	orbDragActive = true
+	orbDragMu.Unlock()
+
+	go func(h uintptr, sPt winPoint, base winRect) {
+		defer func() {
+			orbDragMu.Lock()
+			orbDragActive = false
+			orbDragMu.Unlock()
+		}()
+		lastW, lastH := startW, startH
+		ticker := time.NewTicker(8 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !isLeftMouseDown() {
+				onDone(int(float64(lastW)/scale+0.5), int(float64(lastH)/scale+0.5))
+				return
+			}
+			var cur winPoint
+			ok, _, _ := orbProcGetCursorPos.Call(uintptr(unsafe.Pointer(&cur)))
+			if ok == 0 {
+				onDone(int(float64(lastW)/scale+0.5), int(float64(lastH)/scale+0.5))
+				return
+			}
+			nw, nh := startW, startH
+			if growW {
+				nw = startW + (cur.x - sPt.x)
+			}
+			if growH {
+				nh = startH + (cur.y - sPt.y)
+			}
+			if nw < minW {
+				nw = minW
+			}
+			if nh < minH {
+				nh = minH
+			}
+			if nw > maxW {
+				nw = maxW
+			}
+			if nh > maxH {
+				nh = maxH
+			}
+			if nw == lastW && nh == lastH {
+				continue
+			}
+			lastW, lastH = nw, nh
+			_, _, _ = orbProcSetWindowPos.Call(
+				h, 0,
+				uintptr(base.left), uintptr(base.top),
+				uintptr(nw), uintptr(nh),
+				swpNoZOrder|swpNoActivate|swpAsyncWindowPos,
+			)
+		}
+	}(hwnd, startPt, startRect)
+	return true
 }

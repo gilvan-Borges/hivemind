@@ -131,6 +131,32 @@ func (s *ConversationStore) BindSession(workspace, sessionID, laneID, kind, orig
 	return conv, nil
 }
 
+// OpenFreshHive starts a hive thread that is not the IDE conversation already open.
+func (s *ConversationStore) OpenFreshHive(workspace, workstream, origin string) (Conversation, error) {
+	if s == nil {
+		return Conversation{}, fmt.Errorf("conversa indisponível")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return Conversation{}, err
+	}
+	conv := Conversation{
+		ID:         newShortID("conv"),
+		Title:      "Conversa",
+		Workspace:  strings.TrimSpace(workspace),
+		Workstream: SanitizeWorkstream(workstream),
+		Kind:       "hive",
+		Origin:     normalizeOrigin(origin, "hive"),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if err := s.saveLocked(&conv); err != nil {
+		return Conversation{}, err
+	}
+	_ = s.setActiveLocked(conv.Workspace, conv.ID)
+	return conv, nil
+}
+
 // EnsureActive returns the conversation the Hive should continue for this
 // workspace and workstream. An empty session keeps the latest hive thread,
 // or opens one and imports the legacy workstream file the first time.

@@ -491,6 +491,8 @@ func (b *Broker) resolveHandler(name string) (ToolHandler, bool) {
 		return b.handleExecCommand, true
 	case "net_fetch":
 		return b.handleNetFetch, true
+	case "browser_headless":
+		return b.handleBrowserHeadless, true
 	case "cron_add":
 		if b.cfg.Phase3 {
 			return b.handleCronAdd, true

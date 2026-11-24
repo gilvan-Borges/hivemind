@@ -24,7 +24,7 @@ func TestSharedTranscriptDedupesAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("lista = %+v", listed)
 	}
 
-	shared, err := m.prepareSharedTurn(ws, "geral", "continuar pelo Hive", "", "hive")
+	shared, err := m.prepareSharedTurn(ws, "geral", "continuar pelo Hive", "sess-ide", "hive")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,5 +62,34 @@ func TestSharedTranscriptDedupesAndSurvivesRestart(t *testing.T) {
 	again, err := reopened.ListSharedConversations(ws)
 	if err != nil || len(again) != 1 || again[0].MessageCount != 3 {
 		t.Fatalf("reopen = %+v err=%v", again, err)
+	}
+}
+
+func TestFreshHiveTurnDoesNotJoinTheOpenIDESession(t *testing.T) {
+	base := t.TempDir()
+	ws := t.TempDir()
+	m := NewResidentManager(ResidentManagerOptions{BaseDir: base})
+	t.Cleanup(func() { m.Close() })
+
+	m.mirrorIDELine(ws, "lane-principal", "sess-ide", "user", "Você", "revisar o PR", "ide-line-1")
+	shared, err := m.prepareSharedTurn(ws, "geral", "vc enxerga a extensao?", "hive:new", "hive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.Conv.SessionID == "" || shared.Conv.SessionID == "sess-ide" {
+		t.Fatalf("conversa nova reusou a sessão ativa: %q", shared.Conv.SessionID)
+	}
+	if shared.Conv.Kind != "hive" {
+		t.Fatalf("kind = %q", shared.Conv.Kind)
+	}
+	if shared.Conv.LaneID == "lane-principal" {
+		t.Fatal("conversa nova ficou na lane da IDE")
+	}
+	listed, err := m.ListSharedConversations(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("conversas = %d, quero a aberta e a nova", len(listed))
 	}
 }

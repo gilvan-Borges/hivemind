@@ -111,6 +111,16 @@ func keyFor(workspace, laneID string) string {
 	return workspace + "\x00" + laneID
 }
 
+func sameWorkspace(a, b string) bool {
+	key := func(raw string) string {
+		raw = strings.TrimSpace(raw)
+		raw = strings.ReplaceAll(raw, `\`, "/")
+		return strings.TrimRight(strings.ToLower(raw), "/")
+	}
+	left, right := key(a), key(b)
+	return left != "" && left == right
+}
+
 // Hub keeps the live (workspace, laneId) buffer consumed by the HTTP API and
 // fans events out to SSE subscribers.
 type Hub struct {
@@ -556,7 +566,7 @@ func (h *Hub) ClearSession(workspace, sessionID string) {
 	var removed bool
 	h.mu.Lock()
 	for k, st := range h.lanes {
-		if workspace != "" && st.snapshot.Workspace != workspace {
+		if workspace != "" && !sameWorkspace(st.snapshot.Workspace, workspace) {
 			continue
 		}
 		if st.snapshot.Running {
@@ -580,6 +590,64 @@ func (h *Hub) ClearSession(workspace, sessionID string) {
 // ClearWorkspaceLanes removes all non-running lanes for workspace and notifies subscribers.
 func (h *Hub) ClearWorkspaceLanes(workspace string) {
 	h.ClearSession(workspace, "")
+}
+
+// ConversationBusy reports a running lane for this session or lane in the workspace.
+func (h *Hub) ConversationBusy(workspace, sessionID, laneID string) bool {
+	if h == nil {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	laneID = strings.TrimSpace(laneID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, st := range h.lanes {
+		if !st.snapshot.Running {
+			continue
+		}
+		if workspace != "" && !sameWorkspace(st.snapshot.Workspace, workspace) {
+			continue
+		}
+		if laneID != "" && st.snapshot.LaneID == laneID {
+			return true
+		}
+		if sessionID != "" && st.snapshot.SessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// DropIdleLane removes one stopped lane and tells subscribers to refresh.
+func (h *Hub) DropIdleLane(workspace, laneID string) {
+	if h == nil {
+		return
+	}
+	laneID = strings.TrimSpace(laneID)
+	if laneID == "" {
+		return
+	}
+	var removed bool
+	h.mu.Lock()
+	for k, st := range h.lanes {
+		if st.snapshot.LaneID != laneID || st.snapshot.Running {
+			continue
+		}
+		if workspace != "" && !sameWorkspace(st.snapshot.Workspace, workspace) {
+			continue
+		}
+		delete(h.lanes, k)
+		removed = true
+	}
+	h.mu.Unlock()
+	if !removed {
+		return
+	}
+	raw, _ := json.Marshal(map[string]string{
+		"workspace": workspace,
+		"laneId":    laneID,
+	})
+	h.broadcast(StreamEvent{Type: "lanes_cleared", Data: raw})
 }
 
 // PruneDeletedSessions drops finished/idle lanes in workspace whose persisted

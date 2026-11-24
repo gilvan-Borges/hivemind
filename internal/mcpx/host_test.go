@@ -38,14 +38,14 @@ func TestDisabledServerDoesNotExposeTools(t *testing.T) {
 	h.servers = cloneServers(DefaultServers())
 	h.connectEnabled(context.Background())
 
-	if dialed["playwright"] != 0 || dialed["github"] != 0 || dialed["toolbox"] != 0 {
+	if dialed["github"] != 0 || dialed["toolbox"] != 0 {
 		t.Fatalf("servidor desligado não pode ser discado: %#v", dialed)
 	}
-	if dialed["context7"] != 1 || dialed["code-review-graph"] != 1 {
+	if dialed["context7"] != 1 || dialed["code-review-graph"] != 1 || dialed["playwright"] != 1 {
 		t.Fatalf("servidores ligados deveriam conectar uma vez: %#v", dialed)
 	}
 	for _, tool := range h.ExposedTools() {
-		if tool.Server == "playwright" || tool.Server == "github" {
+		if tool.Server == "github" {
 			t.Fatalf("ferramenta de servidor desligado vazou: %+v", tool)
 		}
 	}
@@ -58,12 +58,17 @@ func TestDisabledServerDoesNotExposeTools(t *testing.T) {
 
 func TestEnableForTaskDoesNotPersistAndCloses(t *testing.T) {
 	stubLookPath(t)
-	useTempUserConfig(t)
+	userPath := useTempUserConfig(t)
 	workspace := t.TempDir()
 	h := newHost(workspace, func(_ context.Context, s Server) (session, error) {
 		return &fakeSession{tools: []RemoteTool{{Server: s.Name, Name: "navigate", Schema: `{"type":"object"}`}}}, nil
 	})
 	h.servers = cloneServers(DefaultServers())
+	for i := range h.servers {
+		if h.servers[i].Name == "playwright" {
+			h.servers[i].Enabled = false
+		}
+	}
 	msg, err := h.EnableForTask(context.Background(), "playwright")
 	if err != nil {
 		t.Fatal(err)
@@ -83,11 +88,7 @@ func TestEnableForTaskDoesNotPersistAndCloses(t *testing.T) {
 	if _, err := h.Call(context.Background(), "playwright", "navigate", nil); err == nil {
 		t.Fatal("depois de Close o servidor temporário tem de estar desligado")
 	}
-	loaded, err := Load(workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if findServer(loaded.Servers, "playwright").Enabled {
+	if _, err := os.Stat(userPath); !os.IsNotExist(err) {
 		t.Fatal("enable da tarefa não pode gravar o interruptor")
 	}
 }

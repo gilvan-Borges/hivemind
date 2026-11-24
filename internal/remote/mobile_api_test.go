@@ -19,6 +19,7 @@ type stubControls struct {
 	prURL    string
 	routines []RoutineInfo
 	readID   string
+	deleted  string
 	loops    []LoopInfo
 	stopped  string
 }
@@ -61,6 +62,11 @@ func (s *stubControls) ResumeLoop(string, string) error { return nil }
 
 func (s *stubControls) MarkSessionRead(_ context.Context, _ string, id string) error {
 	s.readID = id
+	return nil
+}
+
+func (s *stubControls) DeleteSession(_ context.Context, _ string, id string) error {
+	s.deleted = id
 	return nil
 }
 
@@ -153,6 +159,33 @@ func TestLoopRoutesListAndStop(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || controls.stopped != "fix-auth" {
 		t.Fatalf("stop %d %s stopped=%s", rec.Code, rec.Body.String(), controls.stopped)
+	}
+}
+
+func TestDeleteSessionKeepsRunningTeam(t *testing.T) {
+	hub := NewHub()
+	hub.RegisterRun("lane-1", `C:\work\acme`, "Alpha", "objetivo", "s1", "auto")
+	controls := &stubControls{}
+	srv := NewServer(hub, controls, Config{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/delete", strings.NewReader(`{"workspace":"C:/work/acme","sessionId":"s1","laneId":"lane-1"}`))
+	req = srv.AttachLocal(req)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || controls.deleted != "" {
+		t.Fatalf("execução viva %d %s deleted=%s", rec.Code, rec.Body.String(), controls.deleted)
+	}
+
+	hub.MarkCancel("lane-1")
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/session/delete", strings.NewReader(`{"workspace":"C:/work/acme","sessionId":"s1","laneId":"lane-1"}`))
+	req = srv.AttachLocal(req)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || controls.deleted != "s1" {
+		t.Fatalf("parada %d %s deleted=%s", rec.Code, rec.Body.String(), controls.deleted)
+	}
+	if hub.ConversationBusy("C:/work/acme", "s1", "lane-1") {
+		t.Fatal("lane parada deveria sair do hub")
 	}
 }
 

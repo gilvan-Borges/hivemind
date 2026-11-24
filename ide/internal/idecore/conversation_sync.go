@@ -22,6 +22,11 @@ func (m *ResidentManager) conversations() *resident.ConversationStore {
 	return resident.NewConversationStore(m.memoryForCurrentAccount().AccountDir())
 }
 
+// freshHiveSession is the session id the Agent Hive panel sends when the
+// turn is a new conversation. It must not join the IDE tab that is focused.
+// shortcut: sentinel string, replace with a bool if RunTurnIn grows a flag.
+const freshHiveSession = "hive:new"
+
 // prepareSharedTurn opens or continues the transcript and stores the user line
 // before the model runs, so a crash still leaves the message on disk.
 func (m *ResidentManager) prepareSharedTurn(workspace, workstream, message, sessionID, origin string) (sharedTurn, error) {
@@ -30,7 +35,15 @@ func (m *ResidentManager) prepareSharedTurn(workspace, workstream, message, sess
 	laneID := m.boundLane
 	boundKind := m.boundKind
 	boundSession := m.boundSession
-	if strings.TrimSpace(sessionID) == "" {
+	fresh := strings.TrimSpace(sessionID) == freshHiveSession
+	if fresh {
+		sessionID = ""
+		// A focused team lane stays put. The new thread only keeps a lane
+		// when the caller already cleared the bound session onto that lane.
+		if boundSession != "" {
+			laneID = ""
+		}
+	} else if strings.TrimSpace(sessionID) == "" {
 		sessionID = boundSession
 	}
 	if workspace == "" {
@@ -42,7 +55,9 @@ func (m *ResidentManager) prepareSharedTurn(workspace, workstream, message, sess
 		conv resident.Conversation
 		err  error
 	)
-	if strings.TrimSpace(sessionID) != "" {
+	if fresh {
+		conv, err = store.OpenFreshHive(workspace, workstream, origin)
+	} else if strings.TrimSpace(sessionID) != "" {
 		kind := "team"
 		if boundKind == "hive" && sessionID == boundSession {
 			kind = "hive"
@@ -82,6 +97,9 @@ func (m *ResidentManager) prepareSharedTurn(workspace, workstream, message, sess
 		}
 		if sid, sErr := sessionx.EnsureChatSession(workspace, conv.SessionID, title, kind); sErr == nil && sid != "" {
 			conv.SessionID = sid
+			if laneID != "" {
+				conv.LaneID = laneID
+			}
 			_ = store.AttachSession(conv.ID, workspace, sid, laneID)
 			_ = sessionx.AppendChatLine(workspace, sid, userID, "user", "Você", message)
 		}

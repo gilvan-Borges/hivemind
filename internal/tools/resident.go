@@ -357,6 +357,21 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	if err := add(functiontool.New(functiontool.Config{
+		Name:        "browser_headless",
+		Description: "Lê uma página http(s) num navegador invisível (sem janela). Só hosts da allowlist. Perfil temporário: não usa o perfil da pessoa e não lê o cofre. Devolve o DOM já renderizado, com teto de tamanho.",
+	}, func(ctx agent.Context, args struct {
+		URL string `json:"url" jsonschema:"URL http ou https na allowlist. Sem usuário nem senha na URL."`
+	}) (textResult, error) {
+		res, err := broker.Execute(ctx, "browser_headless", map[string]any{"url": args.URL})
+		if err != nil {
+			return textResult{}, err
+		}
+		return textResult{Text: res}, nil
+	})); err != nil {
+		return nil, err
+	}
+
 	return out, nil
 }
 

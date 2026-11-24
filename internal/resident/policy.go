@@ -133,6 +133,7 @@ var phase2AllowedTools = map[string]Tier{
 	"memory_forget":         TierWrite,
 	"exec_command":          TierExec,
 	"net_fetch":             TierNetwork,
+	"browser_headless":      TierNetwork,
 	"use_credential":        TierCredentials,
 	"delete_file":           TierDestructive,
 	"cron_add":              TierWrite,
@@ -316,6 +317,19 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			Allow:  false,
 			Ask:    true,
 			Reason: fmt.Sprintf("execução em sandbox (origem %s) exige aprovação humana", call.Origin),
+		}
+
+	case "browser_headless":
+		if firstNonEmptyStr(strArg(cleanArgs, "credential_name"), strArg(cleanArgs, "secret_name")) != "" {
+			return Decision{Allow: false, Ask: false, Reason: "browser headless não lê o cofre"}
+		}
+		if _, err := ValidateOutboundURL(strArg(cleanArgs, "url"), pol.AllowedHosts); err != nil {
+			return Decision{Allow: false, Ask: false, Reason: err.Error()}
+		}
+		return Decision{
+			Allow:  false,
+			Ask:    true,
+			Reason: fmt.Sprintf("leitura headless na allowlist (origem %s) exige aprovação humana", call.Origin),
 		}
 
 	case "net_fetch":

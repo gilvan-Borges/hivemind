@@ -12,10 +12,10 @@ func TestDefaultsLeaveHeavyServersOff(t *testing.T) {
 	for _, s := range DefaultServers() {
 		on[s.Name] = s.Enabled
 	}
-	if !on["context7"] || !on["code-review-graph"] {
-		t.Fatalf("leves deveriam nascer ligados: %#v", on)
+	if !on["context7"] || !on["code-review-graph"] || !on["playwright"] {
+		t.Fatalf("context7, grafo e playwright deveriam nascer ligados: %#v", on)
 	}
-	for _, name := range []string{"playwright", "chrome-devtools", "toolbox", "github", "figma-context", "codebase-memory", "hivemind-browser"} {
+	for _, name := range []string{"chrome-devtools", "toolbox", "github", "figma-context", "codebase-memory", "hivemind-browser"} {
 		if on[name] {
 			t.Fatalf("%s deveria nascer desligado", name)
 		}

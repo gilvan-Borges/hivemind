@@ -2,6 +2,7 @@ package modelx
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -108,6 +109,61 @@ func TestCursorArgsOmitAutoAndNeverCarryTheKey(t *testing.T) {
 	}
 	if found != 1 {
 		t.Fatalf("chave no ambiente %d vezes", found)
+	}
+}
+
+func TestCursorResumeFlagStaysAttachedToThePrompt(t *testing.T) {
+	args := withCursorResume(BuildCursorArgs("auto", `C:\proj`, "", "linux", ".hivemind/cursor-task-abc.md"), "chat_12345678")
+	if len(args) < 3 || args[len(args)-3] != "--resume" || args[len(args)-2] != "chat_12345678" {
+		t.Fatalf("resume fora do lugar: %v", args[len(args)-3:])
+	}
+	if !strings.HasPrefix(args[len(args)-1], "Siga exatamente") {
+		t.Fatalf("prompt deixou de ser o último arg: %s", args[len(args)-1])
+	}
+	if got := withCursorResume(args, "--force"); len(got) != len(args) {
+		t.Fatal("id inválido não pode virar flag")
+	}
+	line := `{"type":"result","session_id":"chat_12345678","result":"ok"}`
+	if cursorSessionIDFromLine(line) != "chat_12345678" {
+		t.Fatal(cursorSessionIDFromLine(line))
+	}
+	slot := NewCursorChatSlot("chat_12345678")
+	ctx := WithCursorChat(context.Background(), slot)
+	if cursorChatID(ctx) != "chat_12345678" {
+		t.Fatal(cursorChatID(ctx))
+	}
+	_, _ = (&Cursor{}).failCursor(ctx, "chat_12345678", fmt.Errorf("could not resume chat"))
+	if id, ok := slot.Persist(); !ok || id != "" {
+		t.Fatalf("chat morto deveria ser esquecido: %q %v", id, ok)
+	}
+}
+
+func TestCursorTasksStaySeparateAcrossLanes(t *testing.T) {
+	dir := t.TempDir()
+	a, err := writeCursorTask(dir, "conversa A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := writeCursorTask(dir, "conversa B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b || filepath.Base(a) == "cursor-task.md" {
+		t.Fatalf("arquivo compartilhado: %s %s", a, b)
+	}
+	left, _ := os.ReadFile(a)
+	right, _ := os.ReadFile(b)
+	if string(left) != "conversa A" || string(right) != "conversa B" {
+		t.Fatalf("conteúdo cruzado: %q %q", left, right)
+	}
+	rel, err := filepath.Rel(dir, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := BuildCursorArgs("auto", dir, "", "linux", filepath.ToSlash(rel))
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, filepath.ToSlash(rel)) || strings.Contains(joined, "Não procure outra sessão") == false {
+		t.Fatalf("prompt sem o arquivo deste turno: %s", joined)
 	}
 }
 
@@ -316,7 +372,7 @@ func TestGenerateContentReadsStreamJSON(t *testing.T) {
 	if !strings.Contains(joined, "olá") || !strings.Contains(joined, "[[hmtool:write:a.go]]") {
 		t.Fatalf("parciais sem texto e ferramenta separados: %v", partials)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".hivemind", "cursor-task.md")); !os.IsNotExist(err) {
+	if matches, _ := filepath.Glob(filepath.Join(dir, ".hivemind", "cursor-task-*.md")); len(matches) != 0 {
 		t.Fatal("o prompt temporário deveria ser apagado")
 	}
 }

@@ -100,7 +100,18 @@ func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira
 		JiraProject:            r.Project.Settings.JiraProject,
 		BaseBranch:             r.Project.Settings.BaseBranch,
 		MCP:                    r.MCP,
+		SkillLookup:            r.reviewSkillLookup(isAutoReview),
 	})
+}
+
+// reviewSkillLookup exposes read_skill on the chief's own review turn.
+// Third-party review does not delegate, so the skill list on delegate_to_squad never runs.
+func (r *Runner) reviewSkillLookup(isAutoReview bool) func(name string) (skillx.Skill, string, bool) {
+	if !r.reviewRequested && !isAutoReview {
+		return nil
+	}
+	_, preferred := r.resolveSkillCatalogs(team.RoleProjectManager, false)
+	return tools.NewSkillLookupWithPreferredNative(r.Workspace, r.NativeSkillsRoot, r.skills, r.NativeSkills, preferred)
 }
 
 func (r *Runner) newSDDDocsReadyTool(chief team.Agent) (tool.Tool, error) {
@@ -370,7 +381,8 @@ PROTOCOLO DE REVISÃO DIFF-FIRST & ORÇAMENTO RÍGIDO DE TOKENS (PADRÃO ANTHROP
 1. ZERO-ROUNDTRIP: quando a seção [Dossiê Pré-Carregado do PR #N] estiver presente na mensagem, os metadados, revisões anteriores, comentários inline/gerais, status do CI, lista de arquivos e os patches [PATCH COMPLETO] JÁ estão carregados. NÃO chame github_get_pr, github_pr_files, github_ci_status nem github_pr_diff para arquivos já marcados como [PATCH COMPLETO].
 2. DIFF-FIRST: avalie diretamente os hunks do diff pré-carregado. Se o PR for de documentação/spec ou se o diff já for autossuficiente para validar a consistência, publique o parecer IMEDIATAMENTE com github_review_pr sem gastar turnos lendo o repositório.
 3. VERIFICAÇÃO CIRÚRGICA (MÁX. 1 A 2 TURNOS): só consulte arquivos fora do diff quando houver risco real de quebra de contrato (assinatura de método/DTO, rota, permissão ou regra RN citada). Faça todas as buscas/leituras estritamente necessárias em 1 único lote paralelo (máx. 4-6 chamadas no total) e NUNCA releia o mesmo arquivo deslocando faixas de linha.
-4. FECHAMENTO IMEDIATO: assim que concluir a verificação (no máximo no 2º ou 3º turno), chame github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT) e encerre com um resumo executivo curto.`
+4. FECHAMENTO IMEDIATO: assim que concluir a verificação (no máximo no 2º ou 3º turno), chame github_review_pr (APPROVE, REQUEST_CHANGES ou COMMENT) e encerre com um resumo executivo curto.
+5. SKILL: se alguma skill do catálogo servir a esta revisão, chame read_skill com o nome exato dela antes de publicar o parecer. Sem skill aplicável, publique com o protocolo acima.`
 	}
 
 	var triageInstr string
@@ -397,17 +409,21 @@ REGRAS ABSOLUTAS DESTE MODO:
 %s`,
 			chief.Instructions, chief.Name, defaultMaxReviewExploreCalls, testRule, actionRule, govRules)
 	case "direct":
+		reviewRule := "2. Revisão, menção, comentário ou aprovação de PR: leia o PR (github_get_pr e o diff) e PUBLIQUE com github_review_pr. Menção ou \"comente\" → event=COMMENT. \"Aprove\", ou \"comente e aprove\" → event=APPROVE com o parecer no body, num único envio. Um resumo no chat não substitui o envio. Se github_review_pr falhar, use o MCP do GitHub (mcp_list_servers, mcp_enable_server no servidor github, mcp_call) antes de qualquer gh no run_shell."
+		if r.reviewRequested {
+			reviewRule = "2. Revisão de PR: chame read_skill com name \"revisar-e-testar\" ANTES de qualquer parecer e siga o corpo. Classifique o diff e rode o teste da superfície com run_shell. Sem a saída do comando, o parecer é NÃO TESTADO e event não pode ser APPROVE. Depois publique com github_review_pr citando o comando e o exit code, ou NÃO TESTADO e o motivo. Menção ou \"comente\" → event=COMMENT. Se github_review_pr falhar, use o MCP do GitHub antes de gh no run_shell."
+		}
 		triageInstr = fmt.Sprintf(`%s
 
 Você é o Agente Executor (%s) operando em MODO DIRETO (1 Único Agente, estilo Antigravity / Cursor — sem delegar ao squad).
 REGRAS DE EXECUÇÃO RÁPIDA E CIRÚRGICA:
 1. Pergunta ou análise sem pedido de publicação no GitHub: no máximo 1 lote curto de leituras/buscas (3 a 5 chamadas) e responda direto.
-2. Revisão, menção, comentário ou aprovação de PR: leia o PR (github_get_pr e o diff) e PUBLIQUE com github_review_pr. Menção ou "comente" → event=COMMENT. "Aprove", ou "comente e aprove" → event=APPROVE com o parecer no body, num único envio. Um resumo no chat não substitui o envio. Se github_review_pr falhar, use o MCP do GitHub (mcp_list_servers, mcp_enable_server no servidor github, mcp_call) antes de qualquer gh no run_shell.
+%s
 3. Se o usuário pediu para resolver uma issue, implementar feature ou corrigir código: VOCÊ MESMO implementa os arquivos e testes diretamente neste turno usando write_file (arquivos novos) e edit_file (arquivos existentes)!
 4. PROIBIDO EXPLORAR EM LOOP: NÃO leia spec.md, plan.md ou tasks.md inteiros de 400 em 400 linhas e NÃO liste nem inspecione PRs antigos (github_list_prs / github_pr_files) durante uma tarefa de implementação. Use search_text com o código da regra/método (ex.: RN-..., nome da classe/evento), leia apenas os 2 a 4 arquivos alvo (orçamento máximo de 8 leituras antes da 1ª edição) e comece IMEDIATAMENTE a criar/editar código com write_file / edit_file já no 2º turno.
 5. DEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare para procurar em outros PRs — implemente todos os contratos, eventos, serviços, consumidores e testes unitários da tarefa atual de forma desacoplada e compilável agora mesmo.
 6. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado.`,
-			chief.Instructions, chief.Name)
+			chief.Instructions, chief.Name, reviewRule)
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s
 
@@ -502,6 +518,10 @@ REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
 		triageInstr += r.nativeSkillGuide("sdd-jira-planner")
 	case "plan":
 		triageInstr += r.nativeSkillGuide("plan-feature-architect")
+	case "direct":
+		if r.reviewRequested {
+			triageInstr += r.nativeSkillGuide("revisar-e-testar")
+		}
 	}
 	return triageInstr
 }

@@ -230,6 +230,17 @@ func (r *Runner) setStateChecked(st session.State, key string, val any) {
 	}
 }
 
+func cursorChatFromSession(sess session.Session) string {
+	if sess == nil || sess.State() == nil {
+		return ""
+	}
+	raw, err := sess.State().Get("cursor_chat_id")
+	if err != nil || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
 func (r *Runner) updateStateChecked(sess session.Session, vals map[string]any) {
 	if sess == nil || len(vals) == 0 {
 		return
@@ -327,6 +338,13 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	result.SessionID = sess.ID()
 	ctx = modelx.WithSessionID(ctx, sess.ID())
+	chatSlot := modelx.NewCursorChatSlot(cursorChatFromSession(sess))
+	ctx = modelx.WithCursorChat(ctx, chatSlot)
+	defer func() {
+		if id, ok := chatSlot.Persist(); ok {
+			r.updateStateChecked(sess, map[string]any{"cursor_chat_id": id})
+		}
+	}()
 	// Emit early so the remote Hub/App can bind sessionId before the turn ends
 	// (mobile StartRun returns Accepted asynchronously).
 	if r.OnEvent != nil {

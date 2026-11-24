@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyResidentLaneEvent,
   formatRiskBadge,
+  hiveSendTarget,
   renderResidentViewHtml,
   residentState,
   type ResidentEventTarget,
 } from "./resident";
+import { state } from "./state";
 import type { ResidentStatus } from "./types";
 
 function status(experimentalUnisolated: boolean): ResidentStatus {
@@ -162,5 +164,43 @@ describe("applyResidentLaneEvent (streaming da conversa — Spec 007 H003)", () 
     applyResidentLaneEvent(target, {});
     applyResidentLaneEvent(target, undefined);
     expect(target.messages).toHaveLength(0);
+  });
+});
+
+describe("abas do projeto no Agent Hive", () => {
+  it("mostra o projeto e as conversas abertas, e uma conversa nova não usa a aba ativa", () => {
+    const prevProject = state.project;
+    const prevTabs = state.projectTabs;
+    const prevLanes = state.lanes;
+    const prevActive = state.activeProjectId;
+    try {
+      state.project = { ...(prevProject || {}), name: "IPG" } as typeof state.project;
+      state.activeProjectId = "p1";
+      state.projectTabs = [{ id: "p1", project: state.project! } as (typeof state.projectTabs)[number]];
+      state.lanes = [
+        { id: "l1", teamName: "principal", label: "principal", sessionId: "s1", running: false },
+        { id: "l2", teamName: "principal", label: "revisão", sessionId: "s2", running: false },
+        { id: "l3", teamName: "principal", label: "menção", sessionId: "s3", running: true },
+      ] as typeof state.lanes;
+      residentState.status = status(false);
+      residentState.messages = [];
+      residentState.subTab = "chat";
+      residentState.hiveLaneId = "";
+      const html = renderResidentViewHtml();
+      expect(html).toContain("IPG");
+      expect(html).toContain("principal");
+      expect(html).toContain("revisão");
+      expect(html).toContain("menção");
+      expect(html).toContain("Nova conversa");
+      expect(html).toContain('data-res-lane="l1"');
+      expect(hiveSendTarget("", state.lanes)).toEqual({ create: true, sessionId: "hive:new" });
+      expect(hiveSendTarget("l2", state.lanes)).toEqual({ create: false, sessionId: "s2" });
+    } finally {
+      state.project = prevProject;
+      state.projectTabs = prevTabs;
+      state.lanes = prevLanes;
+      state.activeProjectId = prevActive;
+      residentState.hiveLaneId = "";
+    }
   });
 });

@@ -219,6 +219,10 @@ func (a *Adapter) MarkSessionRead(ctx context.Context, workspace, sessionID stri
 	return sessionx.MarkSessionRead(ctx, workspace, sessionID)
 }
 
+func (a *Adapter) DeleteSession(ctx context.Context, workspace, sessionID string) error {
+	return sessionx.DeleteWorkspaceSession(ctx, workspace, sessionID)
+}
+
 func (a *Adapter) ListLoops(workspace string) ([]remote.LoopInfo, error) {
 	if a.Resident == nil {
 		return []remote.LoopInfo{}, nil

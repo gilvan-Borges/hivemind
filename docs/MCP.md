@@ -15,16 +15,17 @@ Os padrões (comando, URL, toolsets) ficam no código. O arquivo gravado só gua
 
 `hivemind mcp list` mostra o estado. `hivemind mcp enable nome` e `hivemind mcp disable nome` gravam o interruptor do usuário. `--project` limita ao projeto aberto.
 
-Na IDE, a barra lateral tem a vista MCP, com o mesmo interruptor e a opção "só neste projeto".
+Na IDE, Configurações → Conectores mostra o interruptor de cada servidor. A barra lateral tem a mesma vista, com a opção "só neste projeto".
 
 ## Ligados por padrão
 
 - **context7** — HTTP `https://mcp.context7.com/mcp`. A conexão tenta sem chave. `CONTEXT7_API_KEY` (chave grátis no painel do Context7) entra no header só quando a variável existe. Se o servidor recusar a sessão anônima, o status fica `indisponível` e o texto pede para definir `CONTEXT7_API_KEY`. Isso não derruba a execução.
 - **code-review-graph** — `uvx code-review-graph serve`, com o diretório de trabalho do projeto. Exige [uv](https://docs.astral.sh/uv/) e Python 3.10+. Sem `uvx` no PATH o processo não sobe: o status fica `indisponível` (não "ligado") e a mensagem diz para instalar o uv ou desligar o servidor. Na primeira vez, na pasta do projeto: `uvx code-review-graph build`. O banco `.code-review-graph/` não deve ir para o Git.
+- **playwright** — `npx -y @playwright/mcp@0.0.28`. Nasce ligado. Sem `npx` no PATH o status fica `indisponível` e o turno segue. Ligar o Playwright desliga o Chrome DevTools e a extensão Agent Hive. O interruptor fica em Configurações da IDE, na seção Conectores, e também na vista MCP da barra lateral.
 
 ## Desligados até alguém pedir
 
-Playwright, Chrome DevTools, a extensão Agent Hive (`hivemind-browser`), Toolbox, GitHub, Figma Context e Codebase Memory aparecem na lista, mas o processo não inicia e o esquema das ferramentas não entra no prompt. `hivemind-browser` não sobe um processo: ele mora neste host e só fala com a extensão em `127.0.0.1`. O guia está em [CHROME_EXTENSAO.md](CHROME_EXTENSAO.md).
+Chrome DevTools, a extensão Agent Hive (`hivemind-browser`), Toolbox, GitHub, Figma Context e Codebase Memory aparecem na lista, mas o processo não inicia e o esquema das ferramentas não entra no prompt. `hivemind-browser` não sobe um processo: ele mora neste host e só fala com a extensão em `127.0.0.1`. O guia está em [CHROME_EXTENSAO.md](CHROME_EXTENSAO.md).
 
 O agente tem três ferramentas leves em toda execução:
 

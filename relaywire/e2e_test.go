@@ -67,7 +67,7 @@ func TestAllowedRPC(t *testing.T) {
 	if !AllowedRPC("POST", "/api/v1/runs/steer") {
 		t.Fatal("steer")
 	}
-	if !AllowedRPC("POST", "/api/v1/git/commit") || !AllowedRPC("GET", "/api/v1/routines") || !AllowedRPC("POST", "/api/v1/project/permission") {
+	if !AllowedRPC("POST", "/api/v1/git/commit") || !AllowedRPC("GET", "/api/v1/routines") || !AllowedRPC("POST", "/api/v1/project/permission") || !AllowedRPC("POST", "/api/v1/session/delete") {
 		t.Fatal("rotas novas do app precisam passar pelo relay")
 	}
 	if !AllowedRPC("GET", "/api/v1/loops") || !AllowedRPC("POST", "/api/v1/loops/stop") {

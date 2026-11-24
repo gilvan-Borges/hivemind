@@ -50,6 +50,46 @@ func (s *Server) handleSessionRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"read": true})
 }
 
+func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.controls()
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, "excluir conversa indisponível neste host")
+		return
+	}
+	var req struct {
+		Workspace string `json:"workspace"`
+		SessionID string `json:"sessionId"`
+		LaneID    string `json:"laneId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	req.Workspace = strings.TrimSpace(req.Workspace)
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.LaneID = strings.TrimSpace(req.LaneID)
+	if req.Workspace == "" || (req.SessionID == "" && req.LaneID == "") {
+		writeErr(w, http.StatusBadRequest, "workspace e sessionId ou laneId obrigatórios")
+		return
+	}
+	if s.hub != nil && s.hub.ConversationBusy(req.Workspace, req.SessionID, req.LaneID) {
+		writeErr(w, http.StatusConflict, "a equipe ainda está em execução")
+		return
+	}
+	if req.SessionID != "" {
+		if err := c.DeleteSession(r.Context(), req.Workspace, req.SessionID); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if s.hub != nil {
+			s.hub.ClearSession(req.Workspace, req.SessionID)
+		}
+	}
+	if s.hub != nil && req.LaneID != "" {
+		s.hub.DropIdleLane(req.Workspace, req.LaneID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
 func (s *Server) handleProjectPermission(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.controls()
 	if !ok {

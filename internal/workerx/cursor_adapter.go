@@ -41,7 +41,7 @@ func (a *CursorWorkerAdapter) Provider() string { return "cursor" }
 // Execute runs one governed Cursor CLI worker task:
 //  1. Resolves cursor binary & worktree directory;
 //  2. Starts loopback CallbackServer (/heartbeat, blocking /ask, idempotent /done);
-//  3. Writes the Worker Contract preamble + handoff to .hivemind/cursor-task.md;
+//  3. Writes the Worker Contract preamble + handoff to .hivemind/cursor-task-<id>.md;
 //  4. Launches Cursor CLI with --trust always, and --force ONLY when PermissionMode == full_access;
 //  5. Streams NDJSON lines + fallback inline protocol markers until process exit;
 //  6. Returns the single idempotent DoneEvent (or synthesizes one from git status).
@@ -97,7 +97,11 @@ func (a *CursorWorkerAdapter) Execute(ctx context.Context, req DispatchRequest, 
 	if modelID == "" {
 		modelID = "auto"
 	}
-	cursorArgs := modelx.BuildCursorArgs(modelID, req.WorktreeDir, req.PermissionMode, runtime.GOOS)
+	rel, relErr := filepath.Rel(req.WorktreeDir, taskPath)
+	if relErr != nil || rel == "" {
+		rel = filepath.Base(taskPath)
+	}
+	cursorArgs := modelx.BuildCursorArgs(modelID, req.WorktreeDir, req.PermissionMode, runtime.GOOS, filepath.ToSlash(rel))
 	args := make([]string, 0, len(a.BaseArgs)+len(cursorArgs))
 	args = append(args, a.BaseArgs...)
 	args = append(args, cursorArgs...)

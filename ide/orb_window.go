@@ -21,22 +21,27 @@ import (
 )
 
 const (
-	orbCollapsedW = 152
-	orbCollapsedH = 152
-	orbExpandedW  = 396
-	orbExpandedH  = 540
+	orbCollapsedW   = 152
+	orbCollapsedH   = 152
+	orbExpandedW    = 396
+	orbExpandedH    = 540
+	orbMinExpandedW = 320
+	orbMinExpandedH = 420
 )
 
 // OrbApp is the Wails backend bound inside the independent floating Orb window (`--orb`).
 type OrbApp struct {
-	ctx      context.Context
-	addr     string
-	token    string
-	client   *http.Client
-	mu       sync.Mutex
-	snap     orb.OrbSnapshot
-	expanded bool
-	cancel   context.CancelFunc
+	ctx       context.Context
+	addr      string
+	token     string
+	client    *http.Client
+	mu        sync.Mutex
+	snap      orb.OrbSnapshot
+	expanded  bool
+	expandedW int
+	expandedH int
+	sawFront  bool
+	cancel    context.CancelFunc
 }
 
 func newOrbApp(addr, token string) *OrbApp {
@@ -49,6 +54,8 @@ func newOrbApp(addr, token string) *OrbApp {
 			IDEVisible: true,
 			Items:      []orb.OrbNotice{},
 		},
+		expandedW: orbExpandedW,
+		expandedH: orbExpandedH,
 	}
 }
 
@@ -63,6 +70,7 @@ func (o *OrbApp) startup(ctx context.Context) {
 	o.cancel = cancel
 	o.mu.Unlock()
 	go o.streamLoop(streamCtx)
+	go o.watchOutsideClicks(streamCtx)
 }
 
 func (o *OrbApp) shutdown(_ context.Context) {
@@ -226,7 +234,17 @@ func (o *OrbApp) SetOrbExpanded(expanded bool) {
 	curW, curH := wailsrt.WindowGetSize(o.ctx)
 	targetW, targetH := orbCollapsedW, orbCollapsedH
 	if expanded {
-		targetW, targetH = orbExpandedW, orbExpandedH
+		o.mu.Lock()
+		targetW, targetH = o.expandedW, o.expandedH
+		o.sawFront = false
+		o.mu.Unlock()
+		if targetW < orbMinExpandedW {
+			targetW = orbExpandedW
+		}
+		if targetH < orbMinExpandedH {
+			targetH = orbExpandedH
+		}
+		focusOrbWindow("HiveMind Orb")
 	}
 	nextX := curX + (curW - targetW)
 	nextY := curY + (curH - targetH)
@@ -279,6 +297,77 @@ func (o *OrbApp) clampToScreen(x, y, w, h int) (int, int) {
 // StartOrbDrag initiates a native OS drag move on the floating Orb window.
 func (o *OrbApp) StartOrbDrag() bool {
 	return startOrbNativeDrag("HiveMind Orb")
+}
+
+// StartOrbResize grows the open Agent Hive box from the right edge, the bottom edge, or the corner.
+func (o *OrbApp) StartOrbResize(edge string) bool {
+	edge = strings.TrimSpace(strings.ToLower(edge))
+	if edge != "e" && edge != "s" && edge != "se" {
+		return false
+	}
+	return startOrbNativeResize("HiveMind Orb", edge, func(w, h int) {
+		o.mu.Lock()
+		o.expandedW, o.expandedH = w, h
+		o.mu.Unlock()
+	})
+}
+
+func (o *OrbApp) watchOutsideClicks(ctx context.Context) {
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	outside := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		o.mu.Lock()
+		expanded := o.expanded
+		saw := o.sawFront
+		o.mu.Unlock()
+		if !expanded || orbPointerDown() {
+			outside = 0
+			continue
+		}
+		if !orbForegroundIsOther("HiveMind Orb") {
+			outside = 0
+			if !saw {
+				o.mu.Lock()
+				o.sawFront = true
+				o.mu.Unlock()
+			}
+			continue
+		}
+		if !saw {
+			continue
+		}
+		outside++
+		if outside < 2 {
+			continue
+		}
+		outside = 0
+		o.SetOrbExpanded(false)
+		if o.ctx != nil {
+			wailsrt.EventsEmit(o.ctx, "hivemind:orb-collapse", true)
+		}
+	}
+}
+
+func clampOrbExpanded(w, h, screenW, screenH int) (int, int) {
+	if w < orbMinExpandedW {
+		w = orbMinExpandedW
+	}
+	if h < orbMinExpandedH {
+		h = orbMinExpandedH
+	}
+	if screenW > orbMinExpandedW+16 && w > screenW-16 {
+		w = screenW - 16
+	}
+	if screenH > orbMinExpandedH+16 && h > screenH-16 {
+		h = screenH - 16
+	}
+	return w, h
 }
 
 // ShowIDE restores and focuses the main HiveMind IDE window.

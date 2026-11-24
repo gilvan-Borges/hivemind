@@ -13,8 +13,15 @@ func TestSeedProductSkillsLeavesUntangleOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seeded) != 3 {
+	if len(seeded) != 5 {
 		t.Fatalf("semeadas: %v", seeded)
+	}
+	vpsBody, err := os.ReadFile(filepath.Join(dir, "vps-segura", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(vpsBody), "StrictHostKeyChecking=yes") || strings.Contains(string(vpsBody), "StrictHostKeyChecking=no") {
+		t.Fatal("vps-segura precisa manter a verificação do host")
 	}
 	if desc := Find(LoadNative(dir), "ponytail").Description; !strings.Contains(desc, "lite") {
 		t.Fatalf("descrição do ponytail: %q", desc)
@@ -45,8 +52,11 @@ func TestSeedProductSkillsLeavesUntangleOff(t *testing.T) {
 	for _, s := range catalog {
 		byName[s.Name] = s
 	}
-	if !byName["ponytail"].Enabled || !byName["improve-codebase-architecture"].Enabled {
+	if !byName["ponytail"].Enabled || !byName["improve-codebase-architecture"].Enabled || !byName["revisar-e-testar"].Enabled {
 		t.Fatalf("skills leves deveriam estar ligadas: %+v", catalog)
+	}
+	if !strings.Contains(byName["revisar-e-testar"].Description, "mobile") {
+		t.Fatalf("descrição de revisar-e-testar: %q", byName["revisar-e-testar"].Description)
 	}
 	if byName["untangle-codebase"].Enabled {
 		t.Fatal("untangle-codebase deveria nascer desligada")

@@ -5,7 +5,8 @@ import type { ChatMessage, ExternalSession, LoopSummary, ResidentAuditEntry, Res
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
 import { openIdeSettingsTab } from "./ide-settings";
-import { updateStatusBar } from "./shell";
+import { createLane, laneDisplayName, renderLaneBarOnly } from "./lanes";
+import { switchProjectTab, updateStatusBar } from "./shell";
 import { IDE_SETTINGS_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { noteActivity, publishNotice } from "./companion/host";
 
@@ -40,8 +41,17 @@ export const residentState = {
   loadedOnce: false,
   boundLaneId: "",
   boundSessionId: "",
+  hiveLaneId: "",
   conversations: [] as SharedConversation[],
 };
+
+/** Sessão que o envio do Agent Hive deve usar. Sem aba escolhida, abre outra na IDE. */
+export function hiveSendTarget(hiveLaneId: string, lanes: { id: string; sessionId?: string }[]): { create: boolean; sessionId: string } {
+  const lane = lanes.find((l) => l.id === hiveLaneId);
+  if (!lane) return { create: true, sessionId: "hive:new" };
+  if (!lane.sessionId) return { create: false, sessionId: "hive:new" };
+  return { create: false, sessionId: lane.sessionId };
+}
 
 let onLaneMirrored: (() => void) | null = null;
 
@@ -54,6 +64,8 @@ export async function syncHiveBinding(): Promise<void> {
   const backend = api();
   const lane = state.lanes.find((l) => l.id === state.activeLaneId) ?? state.lanes[0];
   if (!backend?.ResidentBindSession || !lane) return;
+  // A aba que o Hive está escrevendo não segue o foco da IDE.
+  if (residentState.hiveLaneId && residentState.hiveLaneId !== lane.id) return;
   residentState.boundLaneId = lane.id;
   residentState.boundSessionId = lane.sessionId || "";
   try {
@@ -189,7 +201,7 @@ export async function refreshResidentData(): Promise<void> {
     }
     const convs = await backend.ResidentListConversations?.(state.project?.root || "").catch(() => []) ?? [];
     residentState.conversations = Array.isArray(convs) ? convs : [];
-    if (!residentState.loadedOnce && residentState.messages.length === 0 && Array.isArray(sessionMsgs) && sessionMsgs.length > 0) {
+    if (!residentState.loadedOnce && residentState.hiveLaneId && residentState.messages.length === 0 && Array.isArray(sessionMsgs) && sessionMsgs.length > 0) {
       residentState.messages = sessionMsgs.map((m, idx) => ({
         id: m.id || `res-hist-${idx}`,
         kind: m.role === "user" ? "user" : "chief",
@@ -441,8 +453,10 @@ function mirrorResidentToOpenLane(ev: any): void {
   const id = String(ev.messageId || "");
   const text = String(ev.text || "");
   if (!id || !text) return;
-  const sessionId = String(ev.sessionId || residentState.boundSessionId || "");
-  const lane = state.lanes.find((l) => (sessionId && l.sessionId === sessionId) || (residentState.boundLaneId && l.id === residentState.boundLaneId));
+  const sessionId = String(ev.sessionId || "");
+  const hiveLane = state.lanes.find((l) => l.id === residentState.hiveLaneId);
+  const lane = state.lanes.find((l) => sessionId && l.sessionId === sessionId)
+    || (hiveLane && (!hiveLane.sessionId || hiveLane.sessionId === sessionId) ? hiveLane : undefined);
   if (!lane) return;
   const kind = ev.kind === "user_message" ? "user" : "chief";
   const label = kind === "user" ? "Você" : "Agent Hive";
@@ -615,6 +629,76 @@ function renderResidentActivityRowHtml(m: ChatMessage): string {
   return "";
 }
 
+function renderHiveTabStrip(): string {
+  const projects = state.projectTabs;
+  const projectTabs = projects.length > 0
+    ? projects.map((ctx) => `
+        <button type="button" class="project-tab ${ctx.id === state.activeProjectId ? "active" : ""}" data-res-project="${escapeHtml(ctx.id)}">
+          ${icons.folderOpen}<span>${escapeHtml(ctx.project?.name || "Projeto")}</span>
+        </button>
+      `).join("")
+    : `<span class="project-tab active">${icons.folderOpen}<span>${escapeHtml(state.project?.name || "Projeto")}</span></span>`;
+  const laneTabs = state.lanes.map((lane) => {
+    const on = lane.id === residentState.hiveLaneId;
+    return `
+      <button type="button" class="lane-pill ${on ? "active" : ""}" data-res-lane="${escapeHtml(lane.id)}" role="tab" aria-selected="${on ? "true" : "false"}">
+        ${lane.running ? `<span class="lane-dot"></span>` : ""}
+        <span>${escapeHtml(laneDisplayName(lane))}</span>
+      </button>
+    `;
+  }).join("");
+  const empty = state.lanes.length === 0
+    ? `<span class="dim">Nenhuma conversa aberta neste projeto.</span>`
+    : "";
+  return `
+    <div class="resident-sync-tabs">
+      <div class="resident-project-row" role="tablist">${projectTabs}</div>
+      <div class="lane-bar" role="tablist">
+        ${empty}
+        ${laneTabs}
+        <button type="button" class="lane-pill" id="btn-res-new-lane">Nova conversa</button>
+      </div>
+    </div>
+  `;
+}
+
+function showLaneInIDE(id: string): void {
+  state.activeLaneId = id;
+  renderLaneBarOnly();
+  document.querySelector<HTMLElement>(`#lane-bar [data-lane="${CSS.escape(id)}"]`)?.click();
+}
+
+function hiveMessagesFromLane(laneId: string): ChatMessage[] {
+  const lane = state.lanes.find((l) => l.id === laneId);
+  if (!lane) return [];
+  return lane.messages
+    .filter((m) => m.text && (m.kind === "user" || m.kind === "chief" || m.kind === "error"))
+    .map((m) => ({
+      id: m.id,
+      kind: m.kind === "user" ? "user" as const : m.kind === "error" ? "error" as const : "chief" as const,
+      label: m.kind === "user" ? "Você" : (m.label || "IDE"),
+      text: m.text,
+    }));
+}
+
+function startHiveLane() {
+  const team = state.lanes.find((l) => l.id === state.activeLaneId)?.teamName
+    || state.project?.teamConfig?.active
+    || "principal";
+  const lane = createLane(team);
+  const taken = state.lanes.filter((l) => (l.label || "").startsWith("Hive")).length;
+  lane.label = taken === 0 ? "Hive" : `Hive ${taken + 1}`;
+  lane.conversationKind = "hive";
+  lane.sessionId = "";
+  state.lanes.push(lane);
+  residentState.hiveLaneId = lane.id;
+  residentState.boundLaneId = lane.id;
+  residentState.boundSessionId = "";
+  residentState.messages = [];
+  showLaneInIDE(lane.id);
+  return lane;
+}
+
 function renderResidentChatHtml(enabled = true): string {
   const timeline = groupConversationItems(residentState.messages, residentState.running);
   const msgsHtml = timeline.length === 0
@@ -718,12 +802,7 @@ function renderResidentChatHtml(enabled = true): string {
         </div>
       `;
 
-  const convOptions = residentState.conversations
-    .map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === residentState.status?.conversationId ? "selected" : ""}>${escapeHtml(c.title || c.id)} · ${escapeHtml(c.kind || "hive")}</option>`)
-    .join("");
-  const convSelect = convOptions
-    ? `<label class="dim" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">Conversa compartilhada com a IDE<select id="res-conversation">${convOptions}</select></label>`
-    : "";
+  const convSelect = renderHiveTabStrip();
 
   return `
     ${convSelect}
@@ -1028,12 +1107,10 @@ export function bindResidentViewEvents(): void {
     }
   });
 
-  document.getElementById("btn-res-clear-chat")?.addEventListener("click", async () => {
-    const backend = api();
+  document.getElementById("btn-res-clear-chat")?.addEventListener("click", () => {
     residentState.messages = [];
-    if (backend?.ResidentClearSession) {
-      await backend.ResidentClearSession(residentState.workstream).catch(() => {});
-    }
+    residentState.hiveLaneId = "";
+    residentState.boundSessionId = "";
     rerenderResidentIfOpen();
   });
 
@@ -1057,6 +1134,11 @@ export function bindResidentViewEvents(): void {
     const backend = api();
     const text = residentState.draftInput.trim();
     if (!backend?.ResidentStartTurn || !text || residentState.running) return;
+    const target = hiveSendTarget(residentState.hiveLaneId, state.lanes);
+    const lane = target.create ? startHiveLane() : state.lanes.find((l) => l.id === residentState.hiveLaneId);
+    if (target.create && lane) {
+      await backend.ResidentBindSession?.(state.project?.root || "", "", lane.id);
+    }
     residentState.draftInput = "";
     residentState.running = true;
     const optimisticId = `res-u-${Date.now()}`;
@@ -1069,7 +1151,7 @@ export function bindResidentViewEvents(): void {
     updateResidentStatusChip();
     rerenderResidentIfOpen();
     try {
-      const sessionId = residentState.boundSessionId || "";
+      const sessionId = target.sessionId;
       const started = backend.ResidentStartTurnIn
         ? await backend.ResidentStartTurnIn(state.project?.root || "", residentState.workstream, text, sessionId)
         : await backend.ResidentStartTurn(state.project?.root || "", residentState.workstream, text);
@@ -1077,13 +1159,14 @@ export function bindResidentViewEvents(): void {
         const mine = residentState.messages.find((m) => m.id === optimisticId);
         if (mine) mine.id = started.userMessageId;
       }
-      if (started?.sharedSessionId) {
-        residentState.boundSessionId = started.sharedSessionId;
-        const lane = state.lanes.find((l) => l.id === residentState.boundLaneId);
-        if (lane && !lane.sessionId) {
+      if (started?.sharedSessionId && lane) {
+        if (!lane.sessionId) {
           lane.sessionId = started.sharedSessionId;
-          lane.conversationKind = "hive";
+          lane.conversationKind = lane.conversationKind || "hive";
         }
+        residentState.boundSessionId = lane.sessionId;
+        residentState.boundLaneId = lane.id;
+        showLaneInIDE(lane.id);
       }
       setStatus("Hive Residente respondeu.");
     } catch (err: any) {
@@ -1103,24 +1186,34 @@ export function bindResidentViewEvents(): void {
       void sendTurn();
     }
   });
-  document.getElementById("res-conversation")?.addEventListener("change", async (ev) => {
-    const id = (ev.target as HTMLSelectElement).value;
-    const backend = api();
-    if (!backend?.ResidentOpenConversation || !id) return;
-    try {
-      const conv = await backend.ResidentOpenConversation(id);
-      residentState.boundSessionId = conv.sessionId || "";
-      residentState.boundLaneId = conv.laneId || residentState.boundLaneId;
-      residentState.messages = (conv.messages || []).map((m, idx) => ({
-        id: m.id || `res-open-${idx}`,
-        kind: m.role === "user" ? "user" : "chief",
-        label: m.role === "user" ? "Você" : "Agent Hive",
-        text: m.text,
-      }));
+  document.querySelectorAll<HTMLElement>("[data-res-project]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.resProject || "";
+      if (!id || id === state.activeProjectId) return;
+      switchProjectTab(id);
+      residentState.hiveLaneId = "";
+      residentState.messages = [];
       rerenderResidentIfOpen();
-    } catch (err: any) {
-      toastError("abrir a conversa compartilhada", err);
-    }
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-res-lane]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.resLane || "";
+      const lane = state.lanes.find((l) => l.id === id);
+      if (!lane) return;
+      residentState.hiveLaneId = id;
+      residentState.boundLaneId = id;
+      residentState.boundSessionId = lane.sessionId || "";
+      residentState.messages = hiveMessagesFromLane(id);
+      showLaneInIDE(id);
+      void api()?.ResidentBindSession?.(state.project?.root || "", lane.sessionId || "", lane.id);
+      rerenderResidentIfOpen();
+    });
+  });
+  document.getElementById("btn-res-new-lane")?.addEventListener("click", () => {
+    const lane = startHiveLane();
+    void api()?.ResidentBindSession?.(state.project?.root || "", "", lane.id);
+    rerenderResidentIfOpen();
   });
   document.getElementById("btn-res-send")?.addEventListener("click", () => {
     void sendTurn();

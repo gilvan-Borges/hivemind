@@ -36,6 +36,7 @@ export interface NoticeTarget {
 
 export interface DeliveryInput {
   focused: boolean;
+  ideOpen: boolean;
   companion: boolean;
   osNotifications: boolean;
   doNotDisturb: boolean;
@@ -51,7 +52,7 @@ export function clip(text: string, max: number): string {
 
 export function channelFor(input: DeliveryInput): Channel {
   if (input.doNotDisturb) return "silent";
-  if (input.focused) return input.companion ? "bubble" : "silent";
+  if (input.ideOpen) return input.focused && input.companion ? "bubble" : "silent";
   if (input.osNotifications) return "system";
   if (input.companion) return "bubble";
   return "silent";

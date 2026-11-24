@@ -2,6 +2,8 @@ package modelx
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/genai"
@@ -270,9 +273,30 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		return nil, err
 	}
 	defer os.Remove(taskPath)
+	rel, relErr := filepath.Rel(dir, taskPath)
+	if relErr != nil || rel == "" {
+		rel = filepath.Base(taskPath)
+	}
 
-	args := cursorArgs(c.Model, dir, mode)
-	cmd := cliCommand(runCtx, bin, args)
+	resumeID := cursorChatID(ctx)
+	resp, runErr := c.execCursor(ctx, runCtx, bin, dir, mode, filepath.ToSlash(rel), resumeID, emit)
+	if runErr != nil && resumeID != "" && cursorResumeRejected(runErr) {
+		setCursorChat(ctx, "")
+		return c.execCursor(ctx, runCtx, bin, dir, mode, filepath.ToSlash(rel), "", emit)
+	}
+	return resp, runErr
+}
+
+func (c *Cursor) execCursor(ctx, runCtx context.Context, bin, dir, mode, rel, resumeID string, emit func(string) bool) (*model.LLMResponse, error) {
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = defaultCursorTimeout
+	}
+	attemptCtx, attemptCancel := context.WithCancel(runCtx)
+	defer attemptCancel()
+	args := BuildCursorArgs(c.Model, dir, mode, runtime.GOOS, rel)
+	args = withCursorResume(args, resumeID)
+	cmd := cliCommand(attemptCtx, bin, args)
 	cmd.Dir = dir
 	baseEnv := os.Environ()
 	if c.IsolateEnv {
@@ -286,7 +310,7 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	var stderr strings.Builder
 	cmd.Stderr = &limitWriter{w: &stderr, n: 8 * 1024}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("não foi possível executar o Cursor CLI: %s", redactSecret(err.Error(), c.Key))
+		return c.failCursor(ctx, resumeID, fmt.Errorf("não foi possível executar o Cursor CLI: %s", redactSecret(err.Error(), c.Key)))
 	}
 
 	var final string
@@ -297,6 +321,9 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	// corpo do arquivo pode passar de 4 MiB. Parar o scanner sem drenar enche
 	// o pipe e o CLI trava até o timeout.
 	readErr := readCLIStream(stdout, maxCursorLine, func(line string) bool {
+		if id := cursorSessionIDFromLine(line); id != "" {
+			setCursorChat(ctx, id)
+		}
 		notice, ok := parseCursorStreamLine(line)
 		if !ok {
 			return true
@@ -316,18 +343,18 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		return true
 	})
 	if readErr != nil {
-		cancel()
+		attemptCancel()
 		_ = cmd.Wait()
 		if errors.Is(readErr, errStopCLIStream) {
-			return nil, ctx.Err()
+			return c.failCursor(ctx, resumeID, ctx.Err())
 		}
-		return nil, fmt.Errorf("leitura do Cursor CLI: %s", redactSecret(readErr.Error(), c.Key))
+		return c.failCursor(ctx, resumeID, fmt.Errorf("leitura do Cursor CLI: %s", redactSecret(readErr.Error(), c.Key)))
 	}
 	// Wait só depois de esvaziar stdout. Chamar Wait em paralelo fecha o pipe
 	// e, num processo rápido, perde a última linha (o evento result).
 	err = cmd.Wait()
 	if runCtx.Err() != nil && ctx.Err() == nil {
-		return nil, fmt.Errorf("o Cursor CLI excedeu o tempo (%s)", timeout.Truncate(time.Second))
+		return c.failCursor(ctx, resumeID, fmt.Errorf("o Cursor CLI excedeu o tempo (%s)", timeout.Truncate(time.Second)))
 	}
 	modelShown := c.Model
 	if strings.TrimSpace(modelShown) == "" {
@@ -335,11 +362,11 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 	}
 	if failed {
 		detail := truncateText(redactSecret(firstNonEmpty(final, stderr.String()), c.Key), 500)
-		return nil, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI terminou com erro: %s", detail), c.Key))
+		return c.failCursor(ctx, resumeID, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI terminou com erro: %s", detail), c.Key)))
 	}
 	if err != nil {
 		detail := redactSecret(strings.TrimSpace(stderr.String()), c.Key)
-		return nil, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI falhou: %s", truncateText(firstNonEmpty(detail, redactSecret(err.Error(), c.Key)), 500)), c.Key))
+		return c.failCursor(ctx, resumeID, fmt.Errorf("%s", FormatUpstreamError("cursor", modelShown, fmt.Errorf("o Cursor CLI falhou: %s", truncateText(firstNonEmpty(detail, redactSecret(err.Error(), c.Key)), 500)), c.Key)))
 	}
 	if !sawResult {
 		final = redactSecret(strings.TrimSpace(stderr.String()), c.Key)
@@ -349,6 +376,128 @@ func (c *Cursor) generate(ctx context.Context, req *model.LLMRequest, emit func(
 		Content:      genai.NewContentFromText(body, genai.RoleModel),
 		TurnComplete: true,
 	}, nil
+}
+
+type cursorChatKey struct{}
+
+// CursorChatSlot carries the Cursor CLI chat id for one HiveMind session.
+// The CLI flag is --resume. A fresh process otherwise forgets the conversation.
+type CursorChatSlot struct {
+	mu    sync.Mutex
+	id    string
+	store bool
+}
+
+// NewCursorChatSlot starts from the id saved on the previous turn.
+func NewCursorChatSlot(id string) *CursorChatSlot {
+	return &CursorChatSlot{id: validCursorChatID(id)}
+}
+
+// WithCursorChat attaches the slot so the CLI adapter can read and update it.
+func WithCursorChat(ctx context.Context, slot *CursorChatSlot) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, cursorChatKey{}, slot)
+}
+
+func cursorChatSlot(ctx context.Context) *CursorChatSlot {
+	if ctx == nil {
+		return nil
+	}
+	slot, _ := ctx.Value(cursorChatKey{}).(*CursorChatSlot)
+	return slot
+}
+
+func cursorChatID(ctx context.Context) string {
+	slot := cursorChatSlot(ctx)
+	if slot == nil {
+		return ""
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.id
+}
+
+func setCursorChat(ctx context.Context, id string) {
+	slot := cursorChatSlot(ctx)
+	if slot == nil {
+		return
+	}
+	id = validCursorChatID(id)
+	slot.mu.Lock()
+	slot.id = id
+	slot.store = true
+	slot.mu.Unlock()
+}
+
+// Persist reports the id to write back. ok is false when this turn did not touch it.
+func (s *CursorChatSlot) Persist() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id, s.store
+}
+
+func validCursorChatID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) < 8 || len(id) > 128 {
+		return ""
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return ""
+		}
+	}
+	return id
+}
+
+// withCursorResume inserts --resume before the prompt, which is the last arg.
+func withCursorResume(args []string, id string) []string {
+	id = validCursorChatID(id)
+	if id == "" || len(args) == 0 {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, args[:len(args)-1]...)
+	out = append(out, "--resume", id, args[len(args)-1])
+	return out
+}
+
+func cursorSessionIDFromLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") {
+		return ""
+	}
+	var ev cursorLine
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return ""
+	}
+	for _, raw := range []string{ev.SessionID, ev.ChatID, ev.ChatIDSnake} {
+		if id := validCursorChatID(raw); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func cursorResumeRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "resume") || strings.Contains(msg, "chat not found") || strings.Contains(msg, "no conversation")
+}
+
+func (c *Cursor) failCursor(ctx context.Context, resumeID string, err error) (*model.LLMResponse, error) {
+	if resumeID != "" && cursorResumeRejected(err) {
+		setCursorChat(ctx, "")
+	}
+	return nil, err
 }
 
 func cursorModelID(modelName string) string {
@@ -391,13 +540,14 @@ func rejectForeignCursorModel(id string) error {
 }
 
 func cursorArgs(modelID, workspace, permissionMode string) []string {
-	return BuildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS)
+	return BuildCursorArgs(modelID, workspace, permissionMode, runtime.GOOS, "")
 }
 
 // BuildCursorArgs builds the CLI argument list for Cursor `agent`.
 // --trust is required by the current CLI before it will run in a folder.
 // --force is only added in full_access.
-func BuildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
+// taskFile is the brief for this turn. Empty falls back to the legacy shared name.
+func BuildCursorArgs(modelID, workspace, permissionMode, goos, taskFile string) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -407,10 +557,13 @@ func BuildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
 	if CursorTrustForce(permissionMode) {
 		args = append(args, "--force")
 	}
+	if strings.TrimSpace(taskFile) == "" {
+		taskFile = ".hivemind/cursor-task.md"
+	}
 	args = append(args,
 		"--sandbox", cursorSandboxMode(goos),
 		"--workspace", workspace,
-		"Siga exatamente o arquivo .hivemind/cursor-task.md neste workspace. Resuma em português ao terminar.",
+		"Siga exatamente o arquivo "+taskFile+" neste workspace. Ele é o pedido desta conversa, com o histórico. Não procure outra sessão, transcript, worktree ou arquivo de tarefa. Resuma em português ao terminar.",
 	)
 	if modelID != "" && modelID != "auto" {
 		args = append([]string{"--model", modelID}, args...)
@@ -424,7 +577,7 @@ func CursorTrustForce(permissionMode string) bool {
 }
 
 func buildCursorArgs(modelID, workspace, permissionMode, goos string) []string {
-	return BuildCursorArgs(modelID, workspace, permissionMode, goos)
+	return BuildCursorArgs(modelID, workspace, permissionMode, goos, "")
 }
 
 func cursorTrustForce(permissionMode string) bool {
@@ -470,7 +623,8 @@ func cursorChildEnv(base []string, key string) []string {
 	return append(out, "CURSOR_API_KEY="+key)
 }
 
-// WriteCursorTask writes prompt into <dir>/.hivemind/cursor-task.md with mode 0600.
+// WriteCursorTask writes prompt into a new <dir>/.hivemind/cursor-task-<id>.md (mode 0600).
+// One file per turn: parallel lanes used to delete each other's brief.
 func WriteCursorTask(dir, prompt string) (string, error) {
 	return writeCursorTask(dir, prompt)
 }
@@ -480,7 +634,11 @@ func writeCursorTask(dir, prompt string) (string, error) {
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(folder, "cursor-task.md")
+	var buf [6]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	path := filepath.Join(folder, "cursor-task-"+hex.EncodeToString(buf[:])+".md")
 	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
 		return "", err
 	}
@@ -491,6 +649,7 @@ func buildCursorPrompt(req *model.LLMRequest, images []SavedImage) string {
 	var b strings.Builder
 	b.WriteString("Você é o agente Cursor chamado pelo HiveMind, via CLI oficial em modo headless.\n")
 	b.WriteString("Trabalhe só neste workspace.\n")
+	b.WriteString("Este arquivo é a conversa inteira deste turno. Não leia outras sessões, transcripts, logs ou worktrees para descobrir o pedido.\n")
 	b.WriteString("Se a instrução do time (Chefe/Arquiteto) pedir commit, push ou PR, faça. Dev e QA não devem commit/push/PR.\n")
 	b.WriteString("Se a instrução disser que você não pode gravar código, não altere arquivos.\n")
 	b.WriteString("O modo headless não pergunta nada: o que exigiria aprovação é recusado pelo CLI.\n")

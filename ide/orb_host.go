@@ -364,6 +364,7 @@ func (a *App) beforeClose(_ context.Context) bool {
 	if !running && !a.tray.isActive() {
 		return false
 	}
+	a.setIDEWindowOpen(false)
 	wailsrt.WindowHide(a.ctx)
 	if hub != nil {
 		hub.SetIDEVisible(false)

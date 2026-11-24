@@ -50,7 +50,7 @@ A opção menor, se um dia quiser cortar o instalador do host, é ficar só com 
 
 ## Ferramentas
 
-O servidor MCP `hivemind-browser` nasce desligado, como o Playwright. O agente liga com `mcp_enable_server` (a IDE e o app Android recebem o `approval_required` de sempre). No fim da tarefa o esquema sai do prompt. A ponte pode continuar no ar para o side panel.
+O servidor MCP `hivemind-browser` nasce desligado. O Playwright nasce ligado; ligar a extensão desliga o Playwright. O agente liga com `mcp_enable_server` (a IDE e o app Android recebem o `approval_required` de sempre). No fim da tarefa o esquema sai do prompt. A ponte pode continuar no ar para o side panel.
 
 Ele não convive com `playwright` nem com `chrome-devtools`. Ligar um desliga os outros.
 

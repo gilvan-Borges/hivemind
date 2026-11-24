@@ -65,6 +65,7 @@ export interface WailsOrbApp {
   GetOrbState?(): Promise<OrbSnapshot>;
   SetOrbExpanded?(expanded: boolean): Promise<void>;
   StartOrbDrag?(): Promise<boolean>;
+  StartOrbResize?(edge: string): Promise<boolean>;
   ShowIDE?(): Promise<void>;
   OpenNotice?(id: string): Promise<void>;
   DismissNotice?(id: string): Promise<void>;
@@ -573,6 +574,13 @@ export function mountOrbWindow(): void {
     }
   };
 
+  const collapsePanel = (): void => {
+    if (!expanded) return;
+    expanded = false;
+    void orbApi()?.SetOrbExpanded?.(false);
+    render();
+  };
+
   const render = (): void => {
     cleanupLife();
     const mood = (snap.mood || "idle") as Mood;
@@ -806,6 +814,9 @@ export function mountOrbWindow(): void {
 
         <div class="orb-body">${bodyContent}</div>
 
+        <div class="orb-resize orb-resize-e" data-orb-resize="e" title="Arraste para a largura"></div>
+        <div class="orb-resize orb-resize-s" data-orb-resize="s" title="Arraste para a altura"></div>
+        <div class="orb-resize orb-resize-se" data-orb-resize="se" title="Arraste para aumentar"></div>
         <footer class="orb-foot">
           <div class="orb-foot-left">
             ${activeTab === "chat"
@@ -826,10 +837,14 @@ export function mountOrbWindow(): void {
       </section>
     `;
 
-    host.querySelector("#orb-collapse")?.addEventListener("click", () => {
-      expanded = false;
-      void orbApi()?.SetOrbExpanded?.(false);
-      render();
+    host.querySelector("#orb-collapse")?.addEventListener("click", () => collapsePanel());
+    host.querySelectorAll<HTMLElement>("[data-orb-resize]").forEach((el) => {
+      el.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        void orbApi()?.StartOrbResize?.(el.dataset.orbResize || "se");
+      });
     });
     host.querySelector("#orb-open-ide")?.addEventListener("click", () => {
       void orbApi()?.OpenHiveInIDE?.();
@@ -1023,4 +1038,5 @@ export function mountOrbWindow(): void {
   window.runtime?.EventsOn?.("hivemind:orb-state", (next: OrbSnapshot) => {
     applyOrbSnapshot(next);
   });
+  window.runtime?.EventsOn?.("hivemind:orb-collapse", () => collapsePanel());
 }

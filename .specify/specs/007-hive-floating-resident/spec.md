@@ -61,6 +61,9 @@ Hoje existem duas experiências separadas para o mesmo conceito:
    - O mascote entra em estado `notify`/`attention`, emite o alarme/pulso redondo configurado e aguarda a decisão sem obrigar abrir a IDE.
 5. **Se o usuário clicar em "Abrir IDE" no Agent Hive flutuante:**
    - A janela principal da IDE vem para frente já abrindo/focando a aba **Agent Hive** (`hive:resident`) com toda a conversa sincronizada.
+6. **Clique fora da caixa** (depois que o painel esteve em primeiro plano) recolhe o Agent Hive ao mascote.
+7. **Arrastar a borda direita, a base ou o canto** muda a largura e a altura. O próximo abrir usa esse tamanho, com mínimo 320×420.
+8. **Notificação do sistema** só quando a janela da IDE está oculta ou minimizada. Com a IDE aberta na tela, não há toast nem balão.
 
 ---
 

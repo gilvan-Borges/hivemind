@@ -68,6 +68,7 @@ type App struct {
 	desk                *notify.Hub
 	orb                 orbHostState
 	tray                nativeTray
+	ideWindowOpen       bool
 }
 
 // UpdateCheckResult summarizes whether a newer HiveMind release is available.
@@ -226,6 +227,7 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.setIDEWindowOpen(true)
 	applyWindowIcons()
 	// Semeia as skills nativas padrão (planejamento e SDD) no catálogo da IDE,
 	// sem sobrescrever edições do usuário feitas no painel de Skills.
@@ -393,6 +395,20 @@ func (a *App) DownloadUpdate(versionStr, artifactName, downloadURL, sha256Hex st
 		URL: urlStr,
 	}
 	return a.updaterClient().DownloadArtifact(ctx, upd, destDir)
+}
+
+func (a *App) setIDEWindowOpen(open bool) {
+	a.mu.Lock()
+	a.ideWindowOpen = open
+	a.mu.Unlock()
+}
+
+// IDEWindowOpen reports whether the main window is on screen.
+// Hidden to the tray is closed for notifications. Minimised is checked by the frontend.
+func (a *App) IDEWindowOpen() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ideWindowOpen
 }
 
 // WindowMinimize minimizes the IDE window.

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -188,7 +189,6 @@ func TestReviewModelOverrideUsedOnlyOnPRReview(t *testing.T) {
 	}
 }
 
-
 func TestInTurnCompactionTrimsOldWriteAndEditArgs(t *testing.T) {
 	bigBody := strings.Repeat("linha de código relevante\n", 120)
 	req := &model.LLMRequest{
@@ -250,7 +250,6 @@ func TestInTurnCompactionTrimsOldWriteAndEditArgs(t *testing.T) {
 		t.Fatalf("most recent edit_file call should remain intact")
 	}
 }
-
 
 type stubNamedTool struct{ name string }
 
@@ -491,8 +490,8 @@ func TestSystemInstructionAndToolsStayInvariantAcrossTurns(t *testing.T) {
 	keys := []string{"objective", "chief_plan", "dev_dev_2_report"}
 
 	state := fakeReminderState{m: map[string]any{
-		"objective":   "Implementar a tarefa 42",
-		"chief_plan":  "plano estável do chefe",
+		"objective":  "Implementar a tarefa 42",
+		"chief_plan": "plano estável do chefe",
 	}}
 	ctxFake := &reminderCtxFake{state: state}
 
@@ -707,4 +706,54 @@ func TestDirectModeHasWriteToolsAndJiraIssueNeverTriggersPRReview(t *testing.T) 
 	}
 }
 
+func TestReviewTurnLetsChiefReadSkill(t *testing.T) {
+	r := &Runner{
+		Workspace:       t.TempDir(),
+		Project:         team.File{Settings: team.DefaultSettings()},
+		reviewRequested: true,
+	}
+	got, err := r.buildTriageBaseTools(r.Workspace, "", false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tl := range got {
+		seen[tl.Name()] = true
+	}
+	if !seen["read_skill"] {
+		t.Fatal("revisão do Chefe precisa de read_skill")
+	}
+	instr := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "", 1)
+	if !strings.Contains(instr, "chame read_skill") {
+		t.Fatal("protocolo de revisão não manda ler a skill")
+	}
+	r.reviewRequested = false
+	plain, err := r.buildTriageBaseTools(r.Workspace, "", false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range plain {
+		if tl.Name() == "read_skill" {
+			t.Fatal("fora da revisão o Chefe não ganha read_skill")
+		}
+	}
+}
 
+func TestDirectReviewRequiresRevisarETestar(t *testing.T) {
+	r := &Runner{
+		Workspace:       t.TempDir(),
+		Project:         team.File{Settings: team.DefaultSettings()},
+		reviewRequested: true,
+	}
+	instr := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "direct", 1)
+	for _, want := range []string{"revisar-e-testar", "read_skill", "NÃO TESTADO", "run_shell"} {
+		if !strings.Contains(instr, want) {
+			t.Fatalf("modo direto em revisão não exige %q", want)
+		}
+	}
+	r.reviewRequested = false
+	plain := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "direct", 1)
+	if strings.Contains(plain, "revisar-e-testar") {
+		t.Fatal("direto sem revisão não pode exigir a skill")
+	}
+}

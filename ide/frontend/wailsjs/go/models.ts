@@ -1176,6 +1176,68 @@ export namespace jirax {
 
 }
 
+export namespace loopx {
+	
+	export class Summary {
+	    id: string;
+	    name?: string;
+	    kind?: string;
+	    status: string;
+	    outcome?: string;
+	    iteration: number;
+	    phase?: string;
+	    lastVerdict?: string;
+	    lastReason?: string;
+	    spentMicroUsd?: number;
+	    tokens?: number;
+	    // Go type: time
+	    updatedAt?: any;
+	    prUrl?: string;
+	    workspace?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Summary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.status = source["status"];
+	        this.outcome = source["outcome"];
+	        this.iteration = source["iteration"];
+	        this.phase = source["phase"];
+	        this.lastVerdict = source["lastVerdict"];
+	        this.lastReason = source["lastReason"];
+	        this.spentMicroUsd = source["spentMicroUsd"];
+	        this.tokens = source["tokens"];
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	        this.prUrl = source["prUrl"];
+	        this.workspace = source["workspace"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace main {
 	
 	export class AgyBootstrap {
@@ -2696,6 +2758,8 @@ export namespace resident {
 	    outcome?: string;
 	    errorClass?: string;
 	    reason?: string;
+	    loopId?: string;
+	    iteration?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AuditEntry(source);
@@ -2720,9 +2784,151 @@ export namespace resident {
 	        this.outcome = source["outcome"];
 	        this.errorClass = source["errorClass"];
 	        this.reason = source["reason"];
+	        this.loopId = source["loopId"];
+	        this.iteration = source["iteration"];
 	    }
 	}
+	export class ConvMessage {
+	    id: string;
+	    role: string;
+	    author?: string;
+	    text: string;
+	    // Go type: time
+	    at: any;
+	    kind?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConvMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.role = source["role"];
+	        this.author = source["author"];
+	        this.text = source["text"];
+	        this.at = this.convertValues(source["at"], null);
+	        this.kind = source["kind"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Conversation {
+	    id: string;
+	    title: string;
+	    workspace?: string;
+	    workstream?: string;
+	    kind: string;
+	    origin: string;
+	    sessionId?: string;
+	    laneId?: string;
+	    // Go type: time
+	    updatedAt: any;
+	    messages?: ConvMessage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Conversation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.workspace = source["workspace"];
+	        this.workstream = source["workstream"];
+	        this.kind = source["kind"];
+	        this.origin = source["origin"];
+	        this.sessionId = source["sessionId"];
+	        this.laneId = source["laneId"];
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	        this.messages = this.convertValues(source["messages"], ConvMessage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ConversationSummary {
+	    id: string;
+	    title: string;
+	    workspace?: string;
+	    workstream?: string;
+	    kind: string;
+	    origin: string;
+	    sessionId?: string;
+	    laneId?: string;
+	    // Go type: time
+	    updatedAt: any;
+	    messageCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConversationSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.workspace = source["workspace"];
+	        this.workstream = source["workstream"];
+	        this.kind = source["kind"];
+	        this.origin = source["origin"];
+	        this.sessionId = source["sessionId"];
+	        this.laneId = source["laneId"];
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	        this.messageCount = source["messageCount"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class LocalTurnMessage {
+	    id?: string;
 	    role: string;
 	    text: string;
 	    // Go type: time
@@ -2734,6 +2940,7 @@ export namespace resident {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.role = source["role"];
 	        this.text = source["text"];
 	        this.at = this.convertValues(source["at"], null);
@@ -2806,6 +3013,8 @@ export namespace resident {
 	    workstream?: string;
 	    classes?: string[];
 	    enabled: boolean;
+	    loopId?: string;
+	    workspace?: string;
 	    // Go type: time
 	    lastFired?: any;
 	    day?: string;
@@ -2824,6 +3033,8 @@ export namespace resident {
 	        this.workstream = source["workstream"];
 	        this.classes = source["classes"];
 	        this.enabled = source["enabled"];
+	        this.loopId = source["loopId"];
+	        this.workspace = source["workspace"];
 	        this.lastFired = this.convertValues(source["lastFired"], null);
 	        this.day = source["day"];
 	        this.dayTurns = source["dayTurns"];
@@ -2876,6 +3087,12 @@ export namespace resident {
 	    isolatedBrowserReason?: string;
 	    isolatedDesktop: boolean;
 	    isolatedDesktopReason?: string;
+	    conversationId?: string;
+	    sharedSessionId?: string;
+	    laneId?: string;
+	    permissionMode?: string;
+	    fullAccess?: boolean;
+	    allowFullUnattended?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -2911,6 +3128,12 @@ export namespace resident {
 	        this.isolatedBrowserReason = source["isolatedBrowserReason"];
 	        this.isolatedDesktop = source["isolatedDesktop"];
 	        this.isolatedDesktopReason = source["isolatedDesktopReason"];
+	        this.conversationId = source["conversationId"];
+	        this.sharedSessionId = source["sharedSessionId"];
+	        this.laneId = source["laneId"];
+	        this.permissionMode = source["permissionMode"];
+	        this.fullAccess = source["fullAccess"];
+	        this.allowFullUnattended = source["allowFullUnattended"];
 	    }
 	}
 	export class TurnResult {
@@ -2924,6 +3147,10 @@ export namespace resident {
 	    totalTokens: number;
 	    toolCalls: number;
 	    promptBuildMs: number;
+	    conversationId?: string;
+	    sharedSessionId?: string;
+	    userMessageId?: string;
+	    replyMessageId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TurnResult(source);
@@ -2941,6 +3168,10 @@ export namespace resident {
 	        this.totalTokens = source["totalTokens"];
 	        this.toolCalls = source["toolCalls"];
 	        this.promptBuildMs = source["promptBuildMs"];
+	        this.conversationId = source["conversationId"];
+	        this.sharedSessionId = source["sharedSessionId"];
+	        this.userMessageId = source["userMessageId"];
+	        this.replyMessageId = source["replyMessageId"];
 	    }
 	}
 
@@ -2993,6 +3224,7 @@ export namespace sessionx {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    kind?: string;
 	    agentUsage: Record<string, TokenStat>;
 	    messages: RestoredMessage[];
 	
@@ -3008,6 +3240,7 @@ export namespace sessionx {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.kind = source["kind"];
 	        this.agentUsage = this.convertValues(source["agentUsage"], TokenStat, true);
 	        this.messages = this.convertValues(source["messages"], RestoredMessage);
 	    }
@@ -3038,6 +3271,9 @@ export namespace sessionx {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    kind?: string;
+	    preview?: string;
+	    unread?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionSummary(source);
@@ -3052,6 +3288,9 @@ export namespace sessionx {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.kind = source["kind"];
+	        this.preview = source["preview"];
+	        this.unread = source["unread"];
 	    }
 	}
 	

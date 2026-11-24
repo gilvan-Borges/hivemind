@@ -141,6 +141,7 @@ func AllowedRPC(method, path string) bool {
 		"GET /api/v1/sessions",
 		"GET /api/v1/session",
 		"POST /api/v1/session/read",
+		"POST /api/v1/session/delete",
 		"GET /api/v1/approvals",
 		"POST /api/v1/project/permission",
 		"POST /api/v1/runs/start",

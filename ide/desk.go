@@ -47,6 +47,7 @@ func (a *App) bringIDEToFront() {
 	if a.ctx == nil {
 		return
 	}
+	a.setIDEWindowOpen(true)
 	wailsrt.WindowUnminimise(a.ctx)
 	wailsrt.WindowShow(a.ctx)
 	notify.FocusMainWindow(notify.WindowTitle)

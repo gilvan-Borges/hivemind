@@ -234,6 +234,10 @@ export function GitHubStatus(arg1) {
   return window['go']['main']['App']['GitHubStatus'](arg1);
 }
 
+export function IDEWindowOpen() {
+  return window['go']['main']['App']['IDEWindowOpen']();
+}
+
 export function ImportJiraFromMCP(arg1) {
   return window['go']['main']['App']['ImportJiraFromMCP'](arg1);
 }
@@ -498,6 +502,10 @@ export function ResidentAuditLog(arg1) {
   return window['go']['main']['App']['ResidentAuditLog'](arg1);
 }
 
+export function ResidentBindSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ResidentBindSession'](arg1, arg2, arg3);
+}
+
 export function ResidentCancel() {
   return window['go']['main']['App']['ResidentCancel']();
 }
@@ -522,12 +530,32 @@ export function ResidentGetSoul() {
   return window['go']['main']['App']['ResidentGetSoul']();
 }
 
+export function ResidentListConversations(arg1) {
+  return window['go']['main']['App']['ResidentListConversations'](arg1);
+}
+
+export function ResidentListLoops(arg1) {
+  return window['go']['main']['App']['ResidentListLoops'](arg1);
+}
+
 export function ResidentListMemory(arg1) {
   return window['go']['main']['App']['ResidentListMemory'](arg1);
 }
 
 export function ResidentListRoutines() {
   return window['go']['main']['App']['ResidentListRoutines']();
+}
+
+export function ResidentOpenConversation(arg1) {
+  return window['go']['main']['App']['ResidentOpenConversation'](arg1);
+}
+
+export function ResidentPauseLoop(arg1, arg2) {
+  return window['go']['main']['App']['ResidentPauseLoop'](arg1, arg2);
+}
+
+export function ResidentResumeLoop(arg1, arg2) {
+  return window['go']['main']['App']['ResidentResumeLoop'](arg1, arg2);
 }
 
 export function ResidentReviewSkill(arg1) {
@@ -554,6 +582,10 @@ export function ResidentSessionMessages(arg1) {
   return window['go']['main']['App']['ResidentSessionMessages'](arg1);
 }
 
+export function ResidentSetAllowFullUnattended(arg1) {
+  return window['go']['main']['App']['ResidentSetAllowFullUnattended'](arg1);
+}
+
 export function ResidentSetEnabled(arg1) {
   return window['go']['main']['App']['ResidentSetEnabled'](arg1);
 }
@@ -564,6 +596,10 @@ export function ResidentSetEventTriggers(arg1) {
 
 export function ResidentSetExperimentalUnisolated(arg1) {
   return window['go']['main']['App']['ResidentSetExperimentalUnisolated'](arg1);
+}
+
+export function ResidentSetFullAccess(arg1) {
+  return window['go']['main']['App']['ResidentSetFullAccess'](arg1);
 }
 
 export function ResidentSetIsolatedSandbox(arg1) {
@@ -590,8 +626,16 @@ export function ResidentStartTurn(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResidentStartTurn'](arg1, arg2, arg3);
 }
 
+export function ResidentStartTurnIn(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ResidentStartTurnIn'](arg1, arg2, arg3, arg4);
+}
+
 export function ResidentStatus() {
   return window['go']['main']['App']['ResidentStatus']();
+}
+
+export function ResidentStopLoop(arg1, arg2) {
+  return window['go']['main']['App']['ResidentStopLoop'](arg1, arg2);
 }
 
 export function ResizePTY(arg1, arg2, arg3) {
@@ -700,6 +744,10 @@ export function SetActiveTeam(arg1, arg2) {
 
 export function SetAutoReviewConfig(arg1, arg2) {
   return window['go']['main']['App']['SetAutoReviewConfig'](arg1, arg2);
+}
+
+export function SetComposerMode(arg1, arg2) {
+  return window['go']['main']['App']['SetComposerMode'](arg1, arg2);
 }
 
 export function SetMCPServerEnabled(arg1, arg2, arg3, arg4) {

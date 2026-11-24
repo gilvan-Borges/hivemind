@@ -311,11 +311,7 @@ func summarizePriorSessionContext(sess session.Session) string {
 		if ev.LLMResponse.Content.Role == genai.RoleUser || who == "" || strings.EqualFold(who, "user") {
 			who = "Usuário"
 		}
-		joined := strings.Join(parts, "\n")
-		if len(joined) > 600 {
-			joined = joined[:600] + "…"
-		}
-		items = append(items, entry{who: who, text: joined})
+		items = append(items, entry{who: who, text: strings.Join(parts, "\n")})
 	}
 	if len(items) == 0 {
 		return ""
@@ -324,7 +320,22 @@ func summarizePriorSessionContext(sess session.Session) string {
 	if len(items) > maxItems {
 		items = items[len(items)-maxItems:]
 	}
-	const maxTotal = 3600
+	// The newest agent text is the handoff ("PR mergeable", commit). Older
+	// scraps stay short. TruncateBytes keeps the cut on a UTF-8 boundary.
+	lastAgent := -1
+	for i := range items {
+		if items[i].who != "Usuário" {
+			lastAgent = i
+		}
+	}
+	for i := range items {
+		max := 600
+		if i == lastAgent {
+			max = 8 * 1024
+		}
+		items[i].text = strx.TruncateBytes(items[i].text, max, "…")
+	}
+	const maxTotal = 12 * 1024
 	var lines []string
 	total := 0
 	for i := len(items) - 1; i >= 0; i-- {

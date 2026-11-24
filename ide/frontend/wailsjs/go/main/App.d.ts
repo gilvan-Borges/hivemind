@@ -13,6 +13,7 @@ import {sessionx} from '../models';
 import {gitx} from '../models';
 import {relayclient} from '../models';
 import {resident} from '../models';
+import {loopx} from '../models';
 import {orchestrator} from '../models';
 
 export function ActivateAgyAccount(arg1:string,arg2:string):Promise<modelx.ProfilesOverview>;
@@ -130,6 +131,8 @@ export function GitBlameFile(arg1:string,arg2:string):Promise<Array<idecore.Blam
 export function GitFileHistory(arg1:string,arg2:string,arg3:number):Promise<Array<idecore.FileCommitEntry>>;
 
 export function GitHubStatus(arg1:string):Promise<idecore.GitHubStatusInfo>;
+
+export function IDEWindowOpen():Promise<boolean>;
 
 export function ImportJiraFromMCP(arg1:string):Promise<jirax.ConnectorStatus>;
 
@@ -263,6 +266,8 @@ export function ResidentAddMemory(arg1:string,arg2:string,arg3:boolean):Promise<
 
 export function ResidentAuditLog(arg1:number):Promise<Array<resident.AuditEntry>>;
 
+export function ResidentBindSession(arg1:string,arg2:string,arg3:string):Promise<resident.Conversation>;
+
 export function ResidentCancel():Promise<boolean>;
 
 export function ResidentClearSession(arg1:string):Promise<void>;
@@ -275,9 +280,19 @@ export function ResidentDeleteSecret(arg1:string):Promise<resident.Status>;
 
 export function ResidentGetSoul():Promise<string>;
 
+export function ResidentListConversations(arg1:string):Promise<Array<resident.ConversationSummary>>;
+
+export function ResidentListLoops(arg1:string):Promise<Array<loopx.Summary>>;
+
 export function ResidentListMemory(arg1:string):Promise<Array<resident.MemoryFact>>;
 
 export function ResidentListRoutines():Promise<Array<resident.Routine>>;
+
+export function ResidentOpenConversation(arg1:string):Promise<resident.Conversation>;
+
+export function ResidentPauseLoop(arg1:string,arg2:string):Promise<void>;
+
+export function ResidentResumeLoop(arg1:string,arg2:string):Promise<void>;
 
 export function ResidentReviewSkill(arg1:string):Promise<string>;
 
@@ -291,11 +306,15 @@ export function ResidentSaveSoul(arg1:string):Promise<void>;
 
 export function ResidentSessionMessages(arg1:string):Promise<Array<resident.LocalTurnMessage>>;
 
+export function ResidentSetAllowFullUnattended(arg1:boolean):Promise<resident.Status>;
+
 export function ResidentSetEnabled(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetEventTriggers(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetExperimentalUnisolated(arg1:boolean):Promise<resident.Status>;
+
+export function ResidentSetFullAccess(arg1:boolean):Promise<resident.Status>;
 
 export function ResidentSetIsolatedSandbox(arg1:boolean):Promise<resident.Status>;
 
@@ -309,7 +328,11 @@ export function ResidentSetSecret(arg1:string,arg2:string):Promise<resident.Stat
 
 export function ResidentStartTurn(arg1:string,arg2:string,arg3:string):Promise<resident.TurnResult>;
 
+export function ResidentStartTurnIn(arg1:string,arg2:string,arg3:string,arg4:string):Promise<resident.TurnResult>;
+
 export function ResidentStatus():Promise<resident.Status>;
+
+export function ResidentStopLoop(arg1:string,arg2:string):Promise<void>;
 
 export function ResizePTY(arg1:string,arg2:number,arg3:number):Promise<void>;
 
@@ -364,6 +387,8 @@ export function SearchText(arg1:string,arg2:string):Promise<Array<idecore.TextSe
 export function SetActiveTeam(arg1:string,arg2:string):Promise<team.File>;
 
 export function SetAutoReviewConfig(arg1:string,arg2:team.AutoReviewSettings):Promise<remote.AutoReviewStatus>;
+
+export function SetComposerMode(arg1:string,arg2:string):Promise<void>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<Array<mcpx.ServerView>>;
 

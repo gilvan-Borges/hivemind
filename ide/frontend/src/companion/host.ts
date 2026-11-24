@@ -170,7 +170,19 @@ export function noteActivity(signal: LaneSignal): void {
   if (!view.current()) view.setMood(mood, mood === "success" || mood === "error" || mood === "attention");
 }
 
-function deliverDraft(draft: NoticeDraft, target: NoticeTarget): void {
+async function ideIsOpen(): Promise<boolean> {
+  if (document.hidden) return false;
+  try {
+    if (await window.runtime?.WindowIsMinimised?.()) return false;
+    const open = await api()?.IDEWindowOpen?.();
+    if (typeof open === "boolean") return open;
+  } catch {
+    /* a janela visível segue aberta */
+  }
+  return true;
+}
+
+async function deliverDraft(draft: NoticeDraft, target: NoticeTarget): Promise<void> {
   const settings = loadSettings();
   if (settings.doNotDisturb) return;
   const notice: Stored = {
@@ -193,6 +205,7 @@ function deliverDraft(draft: NoticeDraft, target: NoticeTarget): void {
   );
   const channel = channelFor({
     focused,
+    ideOpen: await ideIsOpen(),
     companion: settings.enabled,
     osNotifications: settings.osNotifications,
     doNotDisturb: settings.doNotDisturb,
@@ -224,7 +237,7 @@ export function publishNotice(signal: LaneSignal, target: NoticeTarget): void {
     noteActivity(signal);
     return;
   }
-  deliverDraft(draft, target);
+  void deliverDraft(draft, target);
 }
 
 export function publishGitHubNotice(events: GitHubNotificationEvent[], projectId: string, projectName?: string): void {

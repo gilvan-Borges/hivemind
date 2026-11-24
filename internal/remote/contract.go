@@ -177,6 +177,7 @@ type ProjectControls interface {
 	ListRoutines() ([]RoutineInfo, error)
 	SetRoutineEnabled(id string, enabled bool) error
 	MarkSessionRead(ctx context.Context, workspace, sessionID string) error
+	DeleteSession(ctx context.Context, workspace, sessionID string) error
 	PermissionMode(workspace string) string
 }
 

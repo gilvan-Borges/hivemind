@@ -1,0 +1,10 @@
+---
+description: Revisão de mudança só vale com o teste da superfície (IDE, CLI, mobile, extensão). Vale ao terminar código e quando a pessoa pede revisão.
+alwaysApply: true
+---
+
+# Revisão testada
+
+Antes de dizer que uma mudança está pronta, ou quando a pessoa pedir revisão (`revisa`, `review`, `testa isso`), leia e siga `.agents/skills/revisar-e-testar/SKILL.md`. O texto canônico também está em `internal/skillx/seeds/revisar-e-testar.md`, semeado no catálogo nativo da IDE e da CLI. Não deixe cópia só em `.cursor/skills/`.
+
+Classifique o diff. Rode o comando daquela superfície. Mobile (`internal/remote`, `relaywire`, `companion`, `HiveMind-App`) não se prova com teste da IDE. Sem saída do comando, o relatório diz NÃO TESTADO.

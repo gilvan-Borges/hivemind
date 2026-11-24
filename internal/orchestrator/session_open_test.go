@@ -107,6 +107,37 @@ func TestSummarizePriorSessionKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestSummarizePriorKeepsTheLastAgentHandoff(t *testing.T) {
+	ctx := context.Background()
+	svc, err := sessionx.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.Create(ctx, &session.CreateRequest{AppName: sessionx.AppName, UserID: sessionx.UserID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := "resolvi o conflito " + strings.Repeat("á", 400) + " MERGEABLE-af1ff86"
+	turns := []struct {
+		author, role, text string
+	}{
+		{"Usuário", genai.RoleUser, "atende o PR"},
+		{"chief", genai.RoleModel, long},
+		{"Usuário", genai.RoleUser, "pode mergear"},
+	}
+	for _, turn := range turns {
+		ev := &session.Event{Author: turn.author}
+		ev.LLMResponse.Content = &genai.Content{Role: turn.role, Parts: []*genai.Part{{Text: turn.text}}}
+		if err := svc.AppendEvent(ctx, created.Session, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := summarizePriorSessionContext(created.Session)
+	if !strings.Contains(got, "MERGEABLE-af1ff86") || !strings.Contains(got, "pode mergear") {
+		t.Fatalf("resumo perdeu o fechamento: %s", got)
+	}
+}
+
 func TestOpenSessionPreservesPRContextAfterQAApproved(t *testing.T) {
 	ctx := context.Background()
 	svc, err := sessionx.Open(t.TempDir())

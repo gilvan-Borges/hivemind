@@ -15,26 +15,30 @@ import {
 import { normalizeSettings } from "./settings";
 
 describe("channelFor", () => {
-  const base = { companion: true, osNotifications: true, doNotDisturb: false };
+  const base = { companion: true, osNotifications: true, doNotDisturb: false, ideOpen: false };
 
   it("em foco mostra só o balão", () => {
-    expect(channelFor({ ...base, focused: true })).toBe("bubble");
+    expect(channelFor({ ...base, focused: true, ideOpen: true })).toBe("bubble");
   });
 
-  it("fora de foco manda o aviso do sistema e não o balão", () => {
-    expect(channelFor({ ...base, focused: false })).toBe("system");
+  it("IDE aberta fora de foco não notifica", () => {
+    expect(channelFor({ ...base, focused: false, ideOpen: true })).toBe("silent");
+  });
+
+  it("IDE oculta manda o aviso do sistema e não o balão", () => {
+    expect(channelFor({ ...base, focused: false, ideOpen: false })).toBe("system");
   });
 
   it("não perturbe cala os dois canais", () => {
-    expect(channelFor({ ...base, focused: true, doNotDisturb: true })).toBe("silent");
+    expect(channelFor({ ...base, focused: true, ideOpen: true, doNotDisturb: true })).toBe("silent");
     expect(channelFor({ ...base, focused: false, doNotDisturb: true })).toBe("silent");
   });
 
   it("sem companion e em foco não duplica no sistema", () => {
-    expect(channelFor({ ...base, companion: false, focused: true })).toBe("silent");
+    expect(channelFor({ ...base, companion: false, focused: true, ideOpen: true })).toBe("silent");
   });
 
-  it("sem aviso do sistema e fora de foco guarda o balão", () => {
+  it("sem aviso do sistema e IDE oculta guarda o balão", () => {
     expect(channelFor({ ...base, osNotifications: false, focused: false })).toBe("bubble");
   });
 });

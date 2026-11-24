@@ -15,6 +15,9 @@ type cursorLine struct {
 	ModelCallID string          `json:"model_call_id"`
 	IsError     bool            `json:"is_error"`
 	Result      string          `json:"result"`
+	SessionID   string          `json:"session_id"`
+	ChatID      string          `json:"chatId"`
+	ChatIDSnake string          `json:"chat_id"`
 	Message     cursorMessage   `json:"message"`
 	ToolCall    json.RawMessage `json:"tool_call"`
 	Usage       *cursorUsage    `json:"usage"`

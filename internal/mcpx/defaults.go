@@ -1,11 +1,12 @@
 package mcpx
 
 // DefaultServers é o catálogo que o produto conhece.
-// Context7 e o Code Review Graph nascem ligados na configuração. O processo
-// do grafo não sobe quando uvx não está no PATH, e o Context7 conecta sem
-// chave (a variável só entra no header quando existe). O resto fica presente
-// e desligado: o processo não sobe e o esquema das ferramentas não entra no
-// contexto do agente até alguém ligar.
+// Context7, o Code Review Graph e o Playwright nascem ligados. O processo
+// do grafo não sobe quando uvx não está no PATH, o Context7 conecta sem
+// chave (a variável só entra no header quando existe) e o Playwright só
+// sobe se npx estiver no PATH. Chrome DevTools e a extensão Agent Hive
+// nascem desligados: os três são controle de browser e só um fica ligado.
+// O resto fica presente e desligado até alguém ligar.
 func DefaultServers() []Server {
 	return []Server{
 		{
@@ -34,7 +35,7 @@ func DefaultServers() []Server {
 			Transport:   TransportStdio,
 			Command:     "npx",
 			Args:        []string{"-y", "@playwright/mcp@0.0.28"},
-			Enabled:     false,
+			Enabled:     true,
 			Builtin:     true,
 		},
 		{

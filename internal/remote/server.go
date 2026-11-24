@@ -193,6 +193,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/v1/session", s.handleSession)
 	mux.HandleFunc("POST /api/v1/session/read", s.handleSessionRead)
+	mux.HandleFunc("POST /api/v1/session/delete", s.handleSessionDelete)
 	mux.HandleFunc("GET /api/v1/approvals", s.handleApprovals)
 	mux.HandleFunc("POST /api/v1/project/permission", s.handleProjectPermission)
 	mux.HandleFunc("POST /api/v1/runs/start", s.handleRunStart)

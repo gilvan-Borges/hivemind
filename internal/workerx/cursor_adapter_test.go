@@ -23,8 +23,11 @@ func TestHelperCursorWorkerProcess(t *testing.T) {
 	taskID := os.Getenv("HIVEMIND_WORKER_TASK_ID")
 	cwd, _ := os.Getwd()
 
-	// Verify cursor-task.md was delivered inside the isolated worktree.
-	taskBytes, err := os.ReadFile(filepath.Join(cwd, ".hivemind", "cursor-task.md"))
+	matches, err := filepath.Glob(filepath.Join(cwd, ".hivemind", "cursor-task-*.md"))
+	if err != nil || len(matches) != 1 {
+		os.Exit(2)
+	}
+	taskBytes, err := os.ReadFile(matches[0])
 	if err != nil || !strings.Contains(string(taskBytes), dispID) {
 		os.Exit(2)
 	}

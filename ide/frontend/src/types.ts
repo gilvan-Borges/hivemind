@@ -1270,6 +1270,8 @@ export interface WailsBackendApp {
   WindowMinimize(): Promise<void>;
   WindowToggleMaximize(): Promise<void>;
   WindowClose(): Promise<void>;
+  WindowIsMinimised?(): Promise<boolean>;
+  IDEWindowOpen?(): Promise<boolean>;
   ShowDesktopNotification?(id: string, title: string, body: string, sound: boolean): Promise<void>;
   PlayAlertSound?(mood: string): Promise<boolean>;
   StartRun(laneID: string, workspace: string, teamName: string, objective: string, jiraKey: string, sessionID: string): Promise<RunResultPayload>;

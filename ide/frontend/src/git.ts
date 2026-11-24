@@ -1,7 +1,7 @@
 import { fileBadge, icons } from "./icons";
 import type { AutoReviewSettings, AutoReviewStatus, ChatMessage, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, PullRequestActivityDetail, TeamLane, WorkspaceGitRepo } from "./types";
 import { escapeHtml, formatTokens } from "./utils";
-import { rebuildChatMessagesFull, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
+import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
 import { autoResizeTextarea } from "./chat-timeline";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindConflictResolutionEvents, refreshConflictedFiles, renderConflictsSectionHtml } from "./git-history";
@@ -10,7 +10,7 @@ import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
 import { renderGuard } from "./render-guard";
 import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
-import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
+import { api, askConfirm, normalizePathKey, setRunMode, setStatus, state, toast, toastError } from "./state";
 import { bindWorktreesTabEvents, refreshWorktreesPanel, renderWorktreesTabHtml } from "./worktrees";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -2216,7 +2216,7 @@ export function bindGitSidebarEvents() {
       if (!pr) return;
       const repoTag = getEffectiveGitRepos().length > 1 && pr.repo ? ` [${pr.repo}]` : "";
       const branchInfo = pr.headRef && pr.baseRef ? ` (${pr.headRef} → ${pr.baseRef})` : "";
-      const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body.slice(0, 1200)}` : "";
+      const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body}` : "";
       if (pr.isMine) {
         state.draftObjective = `Atender feedback do nosso PR #${pr.number}${repoTag}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
       } else if (pr.mentionedMe) {
@@ -2225,6 +2225,12 @@ export function bindGitSidebarEvents() {
         state.draftObjective = `Reavaliar PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Houve ${pr.attentionReason ? pr.attentionReason.toLowerCase() : "nova atualização"} após minha última revisão; leia os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else {
         state.draftObjective = `Revisar PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}${bodyPart}`;
+      }
+      if (!pr.isMine) {
+        state.draftObjective += "\n\nSiga a skill nativa revisar-e-testar: chame read_skill com o nome revisar-e-testar antes de publicar o parecer, classifique a superfície e rode o teste. Sem a saída do comando, o parecer é NÃO TESTADO.";
+        setRunMode("direct");
+        renderComposerModeBar();
+        updateStatusBar();
       }
       if (activeLane()?.id === "lane-autoreview") {
         const manualLane = state.lanes.find((lane) => lane.id !== "lane-autoreview");

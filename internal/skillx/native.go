@@ -18,6 +18,8 @@ var ProductSkills = []string{
 	"ponytail",
 	"improve-codebase-architecture",
 	"untangle-codebase",
+	"vps-segura",
+	"revisar-e-testar",
 }
 
 const optionalSkill = "untangle-codebase"

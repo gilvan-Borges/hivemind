@@ -52,6 +52,8 @@ Cada sessão ganha:
 
 `POST /api/v1/session/read` com `{ "workspace", "sessionId" }` zera `unread`.
 
+`POST /api/v1/session/delete` com `{ "workspace", "sessionId", "laneId" }` apaga a sessão salva e tira a lane parada da lista. `sessionId` ou `laneId` precisa vir preenchido. Se a equipe ainda está em execução, a resposta é `409` com `a equipe ainda está em execução`. Host sem IDE responde `501`.
+
 Continuar: `POST /api/v1/runs/start` com o `sessionId` dessa conversa.
 
 - Equipe: `runMode` `auto` (ou `direct`, `plan`, `squad`) e `laneId` da lane.

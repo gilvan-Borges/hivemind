@@ -12,9 +12,9 @@ function escapeHtml(s: string): string {
 
 export async function refreshMCP(): Promise<void> {
   const backend = api();
-  if (!backend?.ListMCPServers || !state.project) return;
+  if (!backend?.ListMCPServers) return;
   try {
-    state.mcpServers = (await backend.ListMCPServers(state.project.root)) || [];
+    state.mcpServers = (await backend.ListMCPServers(state.project?.root || "")) || [];
   } catch {
     state.mcpServers = [];
   }
@@ -31,7 +31,7 @@ export function renderMCPSidebar(): string {
       <button class="icon-btn" id="btn-mcp-refresh" title="Atualizar">${icons.refresh}</button>
     </div>
     <div class="sidebar-body">
-      <div class="dim" style="margin-bottom:8px">Context7 nasce ligado e funciona sem chave. O Code Review Graph também nasce ligado, mas fica indisponível se uvx ou Python 3.10+ não estiverem instalados. O resto fica desligado até você pedir. Segredos ficam em variáveis de ambiente, não no Git.</div>
+      <div class="dim" style="margin-bottom:8px">Context7, o Code Review Graph e o Playwright nascem ligados. O grafo fica indisponível sem uvx e Python 3.10+. Playwright, Chrome DevTools e a extensão Agent Hive não ficam ligados juntos. O mesmo interruptor está em Configurações da IDE. Segredos ficam em variáveis de ambiente, não no Git.</div>
       ${rows || `<div class="dim">Nenhum servidor MCP.</div>`}
     </div>
   `;
@@ -81,7 +81,7 @@ export function bindMCPSidebarEvents(rerender: () => void): void {
         const el = btn as HTMLElement;
         const name = projectOnly ? el.dataset.mcpToggleProject! : el.dataset.mcpToggle!;
         const enabled = el.dataset.mcpEnabled !== "1";
-        void toggleMCP(name, enabled, projectOnly).then(rerender);
+        void setMCPEnabled(name, enabled, projectOnly).then(rerender);
       });
     });
   };
@@ -89,11 +89,12 @@ export function bindMCPSidebarEvents(rerender: () => void): void {
   bind("[data-mcp-toggle-project]", true);
 }
 
-async function toggleMCP(name: string, enabled: boolean, projectOnly: boolean): Promise<void> {
+export async function setMCPEnabled(name: string, enabled: boolean, projectOnly: boolean): Promise<void> {
   const backend = api();
-  if (!backend?.SetMCPServerEnabled || !state.project) return;
+  if (!backend?.SetMCPServerEnabled) return;
+  if (projectOnly && !state.project) return;
   try {
-    state.mcpServers = (await backend.SetMCPServerEnabled(state.project.root, name, enabled, projectOnly)) || [];
+    state.mcpServers = (await backend.SetMCPServerEnabled(state.project?.root || "", name, enabled, projectOnly)) || [];
     setStatus(`MCP ${name} ${enabled ? "ligado" : "desligado"}${projectOnly ? " neste projeto" : ""}.`);
   } catch (err: any) {
     toastError(`alterar o MCP ${name}`, err);

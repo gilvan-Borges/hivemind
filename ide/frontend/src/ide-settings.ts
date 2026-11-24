@@ -20,6 +20,7 @@ import {
   runProvidersScan,
 } from "./modals";
 import { openResidentTab, refreshResidentData, residentState, updateResidentStatusChip } from "./resident";
+import { refreshMCP, setMCPEnabled } from "./mcp";
 import { openSidebarView, syncActivityButtons, toggleChatExpanded, updateStatusBar } from "./shell";
 import { IDE_SETTINGS_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
 import { openTeamConfigTab } from "./teamconfig";
@@ -92,6 +93,7 @@ export async function refreshIdeSettingsSection(section: IdeSettingsSection): Pr
         refreshJiraStatusAndProjects(),
         backend?.MobileBridgeStatus ? backend.MobileBridgeStatus().then((mb) => { state.mobileStatus = mb; }).catch(() => {}) : Promise.resolve(),
         backend?.RelayStatus ? backend.RelayStatus().then((rs) => { state.relayStatus = rs; }).catch(() => {}) : Promise.resolve(),
+        refreshMCP(),
       ]);
     } else if (section === "general") {
       const backend = api();
@@ -221,7 +223,7 @@ function renderAgentHiveSectionHtml(): string {
             <input type="checkbox" id="ide-comp-os" ${comp.osNotifications ? "checked" : ""} />
             <div>
               <div class="ide-settings-toggle-title">Notificações do sistema</div>
-              <div class="dim">Exibir notificações do Windows quando a IDE estiver em segundo plano.</div>
+              <div class="dim">Só quando a janela da IDE está oculta ou minimizada.</div>
             </div>
           </label>
           <label class="ide-settings-toggle-row">
@@ -384,15 +386,41 @@ function renderIntegrationsSectionHtml(): string {
             <h3>Catálogos Globais (MCP &amp; Skills)</h3>
             <span class="ide-settings-pill" style="font-variant-numeric:tabular-nums">${mcpCount} MCP · ${skillCount} Skills</span>
           </div>
-          <div class="dim">Servidores MCP do usuário e catálogo de Skills nativas em <code>%LOCALAPPDATA%\\HiveMind</code>.</div>
+          <div class="dim">Skills nativas em <code>%LOCALAPPDATA%\\HiveMind</code>. O interruptor de cada servidor MCP fica abaixo e vale para este PC.</div>
           <div style="display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap">
-            <button type="button" class="mini" id="ide-int-mcp">${icons.mcp}<span>Abrir MCP</span></button>
             <button type="button" class="mini" id="ide-int-skills">${icons.skills}<span>Abrir Skills</span></button>
           </div>
         </section>
       </div>
+      <section class="ide-settings-card">
+        <div class="ide-settings-card-head">
+          <div>
+            <h3>Servidores MCP</h3>
+            <div class="dim">O Playwright nasce ligado. Chrome DevTools e a extensão Agent Hive desligam quando ele está ligado. Desmarcar grava o interruptor neste PC.</div>
+          </div>
+        </div>
+        ${renderMCPSettingsRows()}
+      </section>
     </div>
   `;
+}
+
+function renderMCPSettingsRows(): string {
+  if (state.mcpServers.length === 0) {
+    return `<div class="dim">Nenhum servidor MCP carregado.</div>`;
+  }
+  return state.mcpServers.map((s) => {
+    const detail = [s.description, s.detail].filter(Boolean).join(" · ");
+    return `
+      <label class="ide-settings-toggle-row">
+        <input type="checkbox" data-ide-mcp="${escapeHtml(s.name)}" ${s.enabled ? "checked" : ""} />
+        <div>
+          <div class="ide-settings-toggle-title">${escapeHtml(s.name)}</div>
+          <div class="dim">${escapeHtml(detail)}</div>
+        </div>
+      </label>
+    `;
+  }).join("");
 }
 
 function renderGeneralSectionHtml(): string {
@@ -594,8 +622,14 @@ export function bindIdeSettingsEvents(): void {
     document.getElementById("ide-int-github")?.addEventListener("click", () => void openGitHubModal());
     document.getElementById("ide-int-jira")?.addEventListener("click", () => void openJiraModal());
     document.getElementById("ide-int-mobile")?.addEventListener("click", () => void openMobileModal());
-    document.getElementById("ide-int-mcp")?.addEventListener("click", () => openSidebarView("mcp"));
     document.getElementById("ide-int-skills")?.addEventListener("click", () => openSidebarView("skills"));
+    document.querySelectorAll<HTMLInputElement>("[data-ide-mcp]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const name = input.dataset.ideMcp || "";
+        if (!name) return;
+        void setMCPEnabled(name, input.checked, false).then(rerenderSelf);
+      });
+    });
     return;
   }
 
