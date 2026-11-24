@@ -46,10 +46,15 @@ declare const chrome: {
     remove(tabId: number): Promise<void>;
     update(tabId: number, props: { url?: string; active?: boolean }): Promise<ChromeTab>;
     get(tabId: number): Promise<ChromeTab>;
+    group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
+    ungroup(tabIds: number | number[]): Promise<void>;
     sendMessage(tabId: number, message: unknown): Promise<unknown>;
     onUpdated: { addListener(cb: (tabId: number, info: { status?: string }) => void): void };
     onCreated: { addListener(cb: (tab: ChromeTab) => void): void };
     onActivated: { addListener(cb: (info: { tabId: number }) => void): void };
+  };
+  tabGroups?: {
+    update(groupId: number, updateProperties: { title?: string; color?: string; collapsed?: boolean }): Promise<unknown>;
   };
   scripting: {
     executeScript(injection: { target: { tabId: number }; func: () => void }): Promise<unknown>;

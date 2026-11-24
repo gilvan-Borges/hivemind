@@ -1,6 +1,7 @@
 import { icons } from "./icons";
 import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownStreamed } from "./markdown";
+import { bindModelPickerPairs, renderModelPickerPairHtml } from "./models";
 import type { ChatMessage, ExternalSession, LoopSummary, ResidentAuditEntry, ResidentMemoryFact, ResidentRoutine, ResidentStatus, SharedConversation } from "./types";
 import { escapeHtml } from "./utils";
 import { renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
@@ -513,6 +514,37 @@ export function handleResidentLaneEvent(payload: any): void {
   rerenderResidentIfOpen();
 }
 
+export function residentModelSpec(prov?: string, mod?: string): string {
+  const p = (prov || "").trim();
+  const m = (mod || "").trim();
+  if ((!p || p === "auto" || p === "jev") && (!m || m === "auto" || m === "jev:auto")) {
+    return "jev:auto";
+  }
+  if (p === "jev" && m) {
+    return m.startsWith("jev:") ? m : `jev:${m}`;
+  }
+  if (!m || m === "auto") {
+    return p ? `${p}:auto` : "jev:auto";
+  }
+  if (m.includes(":") || m.includes("/")) {
+    return m;
+  }
+  return p && p !== "auto" ? `${p}:${m}` : m;
+}
+
+export function parseResidentPickerSelection(provVal: string, modVal: string): { provider: string; model: string } {
+  const p = (provVal || "").trim();
+  const m = (modVal || "").trim();
+  if (p === "jev" || m === "jev:auto") {
+    if (!m || m === "jev:auto") return { provider: "", model: "" };
+    if (m.startsWith("jev:")) return { provider: m.slice(4), model: "auto" };
+  }
+  if (m === `${p}:auto` || m === "auto") {
+    return { provider: p, model: "auto" };
+  }
+  return { provider: p, model: m };
+}
+
 export function renderResidentViewHtml(): string {
   const st = residentState.status;
   const acct = st?.accountId || "local";
@@ -546,12 +578,12 @@ export function renderResidentViewHtml(): string {
         </div>
         <div class="resident-header-controls">
           <input id="res-workstream-input" class="res-compact-input" style="width:115px" value="${escapeHtml(residentState.workstream)}" placeholder="workstream" title="Workstream ativo para memória e sessão" />
-          <select id="res-provider-select" class="res-compact-input" title="Provedor HTTP (internal/modelx)">
-            ${["auto", "openrouter", "opencode", "gemini", "openai", "anthropic", "cursor"].map((p) =>
-              `<option value="${p}" ${prov === p ? "selected" : ""}>${p}</option>`
-            ).join("")}
-          </select>
-          <input id="res-model-input" class="res-compact-input" style="width:180px" value="${escapeHtml(mod)}" placeholder="auto ou slug do modelo" title="Modelo do residente (padrão barato/auto)" />
+          ${renderModelPickerPairHtml({
+            pairKey: "res-hive",
+            selectId: "res-model-select",
+            currentModel: residentModelSpec(prov, mod),
+            compact: true,
+          })}
           <label class="dim" title="Acordar no arquivo salvo, no fim da lane ou numa aprovação. Não executa ferramenta."><input type="checkbox" id="res-event-triggers" ${st?.eventTriggers ? "checked" : ""}/> eventos</label>
           <button type="button" class="mini" id="btn-res-save-cfg">Salvar</button>
         </div>
@@ -1085,14 +1117,17 @@ export function bindResidentViewEvents(): void {
     }
   });
 
+  bindModelPickerPairs(document.querySelector(".resident-header-controls"));
+
   document.getElementById("btn-res-save-cfg")?.addEventListener("click", async () => {
     const backend = api();
     if (!backend?.ResidentSaveConfig) return;
-    const prov = (document.getElementById("res-provider-select") as HTMLSelectElement | null)?.value || "auto";
-    const mod = (document.getElementById("res-model-input") as HTMLInputElement | null)?.value || "";
+    const provSel = document.querySelector<HTMLSelectElement>('[data-mp-provider="res-hive"]');
+    const modSel = document.getElementById("res-model-select") as HTMLSelectElement | null;
+    const { provider: prov, model: mod } = parseResidentPickerSelection(provSel?.value || "", modSel?.value || "");
     const ws = (document.getElementById("res-workstream-input") as HTMLInputElement | null)?.value || "geral";
     try {
-      let st = await backend.ResidentSaveConfig(prov === "auto" ? "" : prov, mod, ws);
+      let st = await backend.ResidentSaveConfig(prov, mod, ws);
       const eventsOn = Boolean((document.getElementById("res-event-triggers") as HTMLInputElement | null)?.checked);
       if (backend.ResidentSetEventTriggers) {
         st = await backend.ResidentSetEventTriggers(eventsOn);

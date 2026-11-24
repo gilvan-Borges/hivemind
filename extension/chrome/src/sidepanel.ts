@@ -8,13 +8,14 @@ const pairForm = document.querySelector<HTMLFormElement>("#pair")!;
 const tokenInput = document.querySelector<HTMLInputElement>("#token")!;
 const tabctx = document.querySelector<HTMLElement>("#tabctx")!;
 const meter = document.querySelector<HTMLElement>("#meter")!;
+const clearBtn = document.querySelector<HTMLButtonElement>("#clear")!;
 
 const port = chrome.runtime.connect({ name: "panel" });
 
 type Step = { id: string; label: string; phase: string; text?: string; thumb?: string };
 type Item =
   | { k: "user"; text: string }
-  | { k: "agent"; text: string; error?: boolean }
+  | { k: "agent"; text: string; error?: boolean; pending?: boolean }
   | { k: "group"; steps: Step[]; live: boolean }
   | { k: "approve"; id: string; text: string; host: string; choice?: string };
 
@@ -52,16 +53,23 @@ function escapeHtml(text: string): string {
 }
 
 function renderMarkdown(src: string): string {
-  let html = escapeHtml(src);
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, (block) => `<ul>${block}</ul>`);
-  html = html.replace(/\n/g, "<br>");
-  return html;
+  const codeBlocks: string[] = [];
+  let text = escapeHtml(src).replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre><code>${code.replace(/\n$/, "")}</code></pre>`);
+    return `\u0000CB${idx}\u0000`;
+  });
+  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+  text = text.replace(/^## (.+)$/gm, "<h3>$1</h3>");
+  text = text.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  text = text.replace(/^- (.+)$/gm, "<li>$1</li>");
+  text = text.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, (block) => `<ul>${block}</ul>`);
+  text = text.replace(/\n/g, "<br>");
+  text = text.replace(/\u0000CB(\d+)\u0000/g, (_m, idx) => codeBlocks[Number(idx)] ?? "");
+  return text;
 }
 
 function scroll(): void {
@@ -96,6 +104,7 @@ async function load(next: number): Promise<void> {
 
 function paint(): void {
   log.replaceChildren();
+  clearBtn.hidden = items.length === 0;
   if (items.length === 0) {
     const empty = document.createElement("section");
     empty.className = "empty";
@@ -115,7 +124,7 @@ function paint(): void {
   }
   for (const item of items) {
     if (item.k === "user") log.append(bubble("user", item.text));
-    if (item.k === "agent") log.append(agentBubble(item.text, item.error));
+    if (item.k === "agent") log.append(agentBubble(item.text, item.error, item.pending));
     if (item.k === "group") log.append(groupCard(item));
     if (item.k === "approve") log.append(approveCard(item));
   }
@@ -130,8 +139,13 @@ function bubble(kind: string, text: string): HTMLElement {
   return item;
 }
 
-function agentBubble(text: string, error?: boolean): HTMLElement {
+function agentBubble(text: string, error?: boolean, pending?: boolean): HTMLElement {
   const item = document.createElement("div");
+  if (pending && !text) {
+    item.className = "bubble agent thinking";
+    item.innerHTML = `<span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Pensando…</span>`;
+    return item;
+  }
   item.className = "bubble agent" + (error ? " error" : "");
   item.innerHTML = renderMarkdown(text);
   const actions = document.createElement("div");
@@ -139,7 +153,14 @@ function agentBubble(text: string, error?: boolean): HTMLElement {
   const copy = document.createElement("button");
   copy.type = "button";
   copy.textContent = "Copiar";
-  copy.addEventListener("click", () => void copyText(text));
+  copy.addEventListener("click", () => {
+    void copyText(text).then(() => {
+      copy.textContent = "Copiado!";
+      setTimeout(() => {
+        copy.textContent = "Copiar";
+      }, 1400);
+    });
+  });
   actions.append(copy);
   if (error) {
     const retry = document.createElement("button");
@@ -257,8 +278,9 @@ function send(text: string): void {
   lastUser = clean;
   items.push({ k: "user", text: clean });
   stream = "";
-  items.push({ k: "agent", text: "Pensando…" });
+  items.push({ k: "agent", text: "", pending: true });
   input.value = "";
+  input.style.height = "";
   port.postMessage({ type: "chat", text: clean });
   paint();
   void save();
@@ -274,6 +296,7 @@ function agentItem(): Extract<Item, { k: "agent" }> | undefined {
 async function reveal(text: string, error: boolean): Promise<void> {
   const item = agentItem() ?? { k: "agent" as const, text: "" };
   if (!items.includes(item)) items.push(item);
+  item.pending = false;
   item.error = error;
   if (reduceMotion || text.length < 40) {
     item.text = text;
@@ -331,8 +354,12 @@ port.onMessage.addListener((message: {
   if (message.type === "chat_delta" && message.text) {
     stream += message.text;
     const item = agentItem();
-    if (item) item.text = stream;
-    else items.push({ k: "agent", text: stream });
+    if (item) {
+      item.pending = false;
+      item.text = stream;
+    } else {
+      items.push({ k: "agent", text: stream });
+    }
     paint();
     return;
   }
@@ -363,7 +390,7 @@ port.onMessage.addListener((message: {
   }
   if (message.type === "step" && message.id && message.label) {
     const thinking = agentItem();
-    if (thinking && thinking.text === "Pensando…") {
+    if (thinking && (thinking.pending || thinking.text === "Pensando…") && !thinking.text) {
       items.splice(items.indexOf(thinking), 1);
     }
     const group = ensureGroup();
@@ -398,6 +425,18 @@ input.addEventListener("keydown", (event) => {
     event.preventDefault();
     port.postMessage({ type: "stop" });
   }
+});
+
+clearBtn.addEventListener("click", () => {
+  items = [];
+  stream = "";
+  paint();
+  void save();
+});
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
 });
 
 stopBtn.addEventListener("click", () => port.postMessage({ type: "stop" }));

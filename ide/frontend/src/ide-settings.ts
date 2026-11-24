@@ -19,7 +19,8 @@ import {
   renderProvidersContentHtml,
   runProvidersScan,
 } from "./modals";
-import { openResidentTab, refreshResidentData, residentState, updateResidentStatusChip } from "./resident";
+import { bindModelPickerPairs, renderModelPickerPairHtml } from "./models";
+import { openResidentTab, parseResidentPickerSelection, refreshResidentData, residentModelSpec, residentState, updateResidentStatusChip } from "./resident";
 import { refreshMCP, setMCPEnabled } from "./mcp";
 import { openSidebarView, syncActivityButtons, toggleChatExpanded, updateStatusBar } from "./shell";
 import { IDE_SETTINGS_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
@@ -168,17 +169,13 @@ function renderAgentHiveSectionHtml(): string {
         </div>
 
         <div class="ide-settings-grid">
-          <div class="ide-settings-field">
-            <label for="ide-hive-provider">Provedor HTTP</label>
-            <select id="ide-hive-provider">
-              ${["auto", "openrouter", "opencode", "gemini", "openai", "anthropic", "cursor"].map((p) =>
-                `<option value="${p}" ${prov === p ? "selected" : ""}>${escapeHtml(p)}</option>`
-              ).join("")}
-            </select>
-          </div>
-          <div class="ide-settings-field">
-            <label for="ide-hive-model">Modelo (slug ou auto)</label>
-            <input id="ide-hive-model" value="${escapeHtml(mod)}" placeholder="openrouter/auto" />
+          <div class="ide-settings-field" style="grid-column: span 2;">
+            <label for="ide-hive-model">Provedor &amp; Modelo (Antigravity, Jev, OpenRouter, OpenCode, Gemini, etc.)</label>
+            ${renderModelPickerPairHtml({
+              pairKey: "ide-hive",
+              selectId: "ide-hive-model",
+              currentModel: residentModelSpec(prov, mod),
+            })}
           </div>
           <div class="ide-settings-field">
             <label for="ide-hive-workstream">Workstream padrão</label>
@@ -736,14 +733,17 @@ export function bindIdeSettingsEvents(): void {
     }
   });
 
+  bindModelPickerPairs(document.querySelector(".ide-settings-section"));
+
   document.getElementById("ide-hive-save-cfg")?.addEventListener("click", async () => {
     const backend = api();
     if (!backend?.ResidentSaveConfig) return;
-    const prov = (document.getElementById("ide-hive-provider") as HTMLSelectElement | null)?.value || "auto";
-    const mod = (document.getElementById("ide-hive-model") as HTMLInputElement | null)?.value || "";
+    const provSel = document.querySelector<HTMLSelectElement>('[data-mp-provider="ide-hive"]');
+    const modSel = document.getElementById("ide-hive-model") as HTMLSelectElement | null;
+    const { provider: prov, model: mod } = parseResidentPickerSelection(provSel?.value || "", modSel?.value || "");
     const ws = (document.getElementById("ide-hive-workstream") as HTMLInputElement | null)?.value || "geral";
     try {
-      const st = await backend.ResidentSaveConfig(prov === "auto" ? "" : prov, mod, ws);
+      const st = await backend.ResidentSaveConfig(prov, mod, ws);
       residentState.status = st;
       residentState.workstream = st.workstream || "geral";
       updateResidentStatusChip();

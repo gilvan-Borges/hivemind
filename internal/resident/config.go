@@ -97,22 +97,28 @@ func DefaultModelRoute() (provider, modelName string) {
 func ResolveModelRoute(cfg Config) (provider, modelName string) {
 	p := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	m := strings.TrimSpace(cfg.Model)
-	if m == "" || strings.EqualFold(m, "auto") {
-		if p == "" || p == "auto" {
+	lowM := strings.ToLower(m)
+	if m == "" || lowM == "auto" || strings.HasSuffix(lowM, ":auto") {
+		if p == "" && strings.HasSuffix(lowM, ":auto") {
+			p = strings.TrimSuffix(lowM, ":auto")
+		}
+		if p == "" || p == "auto" || p == "jev" {
 			return DefaultModelRoute()
 		}
-		switch p {
-		case "openrouter":
+		switch {
+		case p == "agy" || p == "antigravity" || strings.HasPrefix(p, "agy@"):
+			return p, "agy"
+		case p == "openrouter":
 			return "openrouter", "openrouter/auto"
-		case "opencode", "opencode-go", "opencode-zen":
+		case p == "opencode" || p == "opencode-go" || p == "opencode-zen":
 			return "opencode", "opencode:minimax-m2.5-free"
-		case "gemini", "vertex":
+		case p == "gemini" || p == "vertex":
 			return p, "gemini-2.5-flash"
-		case "openai", "openai-responses":
+		case p == "openai" || p == "openai-responses":
 			return p, "gpt-4o-mini"
-		case "anthropic":
+		case p == "anthropic":
 			return "anthropic", "claude-3-5-haiku-latest"
-		case "cursor":
+		case p == "cursor":
 			return "cursor", "cursor:auto"
 		default:
 			return DefaultModelRoute()
@@ -202,11 +208,10 @@ func buildThroughJev(ctx context.Context, cfg Config, deps jevRouteDeps) (model.
 
 func explicitResidentPin(cfg Config) bool {
 	p := strings.ToLower(strings.TrimSpace(cfg.Provider))
-	m := strings.TrimSpace(cfg.Model)
 	if p == "" || p == "auto" || p == "jev" {
 		return false
 	}
-	return m != "" && !strings.EqualFold(m, "auto")
+	return true
 }
 
 // adjustResidentRoute shifts the next auto route from the last measured input.

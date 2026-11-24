@@ -20,7 +20,10 @@
       </div>
       <span id="status" role="status">desconectado</span>
     </header>
-    <p id="meter" class="meter" aria-live="polite">sessão ≈ 0 tok</p>
+    <div class="meter-row">
+      <p id="meter" class="meter" aria-live="polite">sessão ≈ 0 tok</p>
+      <button id="clear" type="button" class="clear-btn" hidden title="Limpar conversa">Limpar</button>
+    </div>
     <main id="log" role="log" aria-live="polite" aria-relevant="additions"></main>
     <div class="dock">
       <div class="tools">

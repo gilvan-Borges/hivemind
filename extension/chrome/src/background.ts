@@ -8,8 +8,78 @@ let connected = false;
 let controlling = false;
 let mode: "native" | "socket" | "" = "";
 let reconnects = 0;
+let hiveGroupId: number | null = null;
+let activeOverlayTabId: number | null = null;
+const groupedTabs = new Set<number>();
 const panels = new Set<ChromePort>();
 const decisions = new Map<string, (choice: string) => void>();
+
+async function ensureTabGroup(tabId: number): Promise<void> {
+  if (!chrome.tabs.group) return;
+  try {
+    let gid: number;
+    if (hiveGroupId !== null) {
+      try {
+        gid = await chrome.tabs.group({ tabIds: [tabId], groupId: hiveGroupId });
+      } catch {
+        gid = await chrome.tabs.group({ tabIds: [tabId] });
+      }
+    } else {
+      gid = await chrome.tabs.group({ tabIds: [tabId] });
+    }
+    hiveGroupId = gid;
+    groupedTabs.add(tabId);
+    await chrome.tabGroups?.update(gid, { title: "Agent Hive", color: "yellow", collapsed: false });
+  } catch {
+    // Some internal or restricted tabs cannot be grouped; ignore cleanly.
+  }
+}
+
+async function clearTabGroup(): Promise<void> {
+  if (!chrome.tabs.ungroup || groupedTabs.size === 0) {
+    hiveGroupId = null;
+    groupedTabs.clear();
+    return;
+  }
+  const ids = Array.from(groupedTabs);
+  groupedTabs.clear();
+  hiveGroupId = null;
+  for (const tid of ids) {
+    try {
+      await chrome.tabs.ungroup(tid);
+    } catch {
+      // Tab may already be closed or ungrouped.
+    }
+  }
+}
+
+async function syncTabVisualEffect(active: boolean, label?: string): Promise<void> {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs[0]?.id ?? null;
+  if (active && tabId !== null) {
+    if (activeOverlayTabId !== null && activeOverlayTabId !== tabId) {
+      void chrome.tabs.sendMessage(activeOverlayTabId, { type: "hivemind-overlay", op: "hide" }).catch(() => {});
+    }
+    activeOverlayTabId = tabId;
+    await ensureTabGroup(tabId);
+    void chrome.tabs.sendMessage(tabId, {
+      type: "hivemind-overlay",
+      op: "show",
+      label: label || "Agindo na página…",
+    }).catch(() => {});
+    return;
+  }
+  if (!active) {
+    if (activeOverlayTabId !== null) {
+      const prev = activeOverlayTabId;
+      activeOverlayTabId = null;
+      void chrome.tabs.sendMessage(prev, { type: "hivemind-overlay", op: "hide" }).catch(() => {});
+    }
+    if (tabId !== null) {
+      void chrome.tabs.sendMessage(tabId, { type: "hivemind-overlay", op: "hide" }).catch(() => {});
+    }
+  }
+}
 
 interface BridgeMessage {
   type?: string;
@@ -104,6 +174,7 @@ async function onBridge(message: BridgeMessage): Promise<void> {
   setCurrentCall(message.id);
   const label = stepLabel(message.tool, message.args ?? {});
   broadcast({ type: "step", id: message.id, phase: "start", label });
+  void syncTabVisualEffect(true, label);
   void publish();
   try {
     const result = await runCall(message.id, message.tool, message.args ?? {});
@@ -120,6 +191,7 @@ async function onBridge(message: BridgeMessage): Promise<void> {
     }
   } finally {
     controlling = false;
+    void syncTabVisualEffect(false);
     void publish();
   }
 }
@@ -220,6 +292,8 @@ function stopNow(): void {
   abortCall("stop");
   controlling = false;
   void detachAll();
+  void syncTabVisualEffect(false);
+  void clearTabGroup();
   void publish();
 }
 
@@ -241,6 +315,9 @@ chrome.runtime.onConnect.addListener((port) => {
   void publish();
   port.onMessage.addListener((message: { type?: string; text?: string; token?: string; port?: number; id?: string; choice?: string }) => {
     if (message.type === "chat" && message.text) {
+      void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+        if (tabs[0]?.id !== undefined) void ensureTabGroup(tabs[0].id);
+      });
       send({ type: "chat", text: message.text });
     } else if (message.type === "stop") {
       stopNow();
@@ -279,6 +356,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.tabs.onActivated.addListener(() => {
+  if (controlling) {
+    void syncTabVisualEffect(true, "Agindo na página…");
+  }
   void publish();
 });
 
