@@ -66,6 +66,8 @@ function mount(): ShadowRoot {
         padding: 2px 8px; font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif;
         white-space: nowrap;
       }
+      .stage.picking { pointer-events: auto; cursor: crosshair; }
+      .stage.picking .vignette { box-shadow: inset 0 0 0 3px rgba(232, 200, 129, .95); }
       .pill {
         position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
         display: flex; align-items: center; gap: 10px;
@@ -121,7 +123,29 @@ function mount(): ShadowRoot {
     event.stopPropagation();
     void chrome.runtime.sendMessage({ type: "hivemind-overlay-stop" });
   });
+  const stage = root.querySelector(".stage") as HTMLElement;
+  stage.addEventListener("click", (event) => {
+    if (!stage.classList.contains("picking")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const x = event.clientX;
+    const y = event.clientY;
+    stage.classList.remove("picking");
+    stage.style.pointerEvents = "none";
+    const el = document.elementFromPoint(x, y);
+    const name = el instanceof Element ? elementLabel(el) : "página";
+    void chrome.runtime.sendMessage({ type: "hivemind-picked", text: name });
+  });
   return root;
+}
+
+function elementLabel(el: Element): string {
+  const role = el.getAttribute("role") || el.tagName.toLowerCase();
+  const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.textContent || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return `${role}${name ? ` "${name}"` : ""}`;
 }
 
 function stageOf(root: ShadowRoot): HTMLElement {
@@ -135,6 +159,13 @@ function apply(msg: OverlayMsg): void {
   if (msg.label && action) action.textContent = msg.label;
   if (msg.op === "hide") {
     stage.hidden = true;
+    stage.classList.remove("picking");
+    return;
+  }
+  if (msg.op === "pick") {
+    stage.hidden = false;
+    stage.classList.add("picking");
+    if (action && msg.label) action.textContent = msg.label;
     return;
   }
   if (msg.op === "show" || msg.op === "status") stage.hidden = false;

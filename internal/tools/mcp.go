@@ -78,7 +78,7 @@ func (d Deps) addMCP(out *[]tool.Tool) error {
 			msg += "\nUso econômico do browser: prefira browser_snapshot (árvore de acessibilidade estrutural, determinística e barata em tokens) para entender a página; tire screenshot apenas quando cores/layout forem essenciais; reaproveite refs do snapshot para click/fill em vez de navegar de novo; re-chame snapshot somente depois de ações que mudam a página."
 		}
 		if strings.EqualFold(name, "hivemind-browser") {
-			msg += "\nA extensão Agent Hive precisa estar conectada (hivemind browser install). read_page devolve as refs. Site novo, envio de formulário, compra e javascript_exec pedem aprovação. Não convive com playwright nem chrome-devtools."
+			msg += "\nA extensão Agent Hive precisa estar conectada (hivemind browser install). read_page devolve refs curtas do viewport; se nada mudou, responde igual. Screenshot só quando pedir. console, rede, DOM e JavaScript entram com a ferramenta devtools. Não convive com playwright nem chrome-devtools."
 		}
 		return textResult{Text: msg + "\n" + formatMCPList(d.MCP.Snapshot()) + schemaBlock(d.MCP.ExposedTools(), name)}, nil
 	})

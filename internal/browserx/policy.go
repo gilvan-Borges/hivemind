@@ -79,18 +79,41 @@ func classify(tool string, args map[string]any, allowed func(string) bool) (need
 		if truthy(args["submit"]) || sensitiveText(asString(args["name"])) {
 			return true, "Clique que pode enviar, comprar ou confirmar no Chrome?", "", nil
 		}
+	case "upload":
+		return true, "Enviar um arquivo para a página aberta no Chrome?", "", nil
+	case "dialog":
+		if truthy(args["accept"]) {
+			return true, "Aceitar o diálogo (alert, confirm ou prompt) aberto no Chrome?", "", nil
+		}
+	case "batch":
+		if batchNeeds(args) {
+			return true, "O lote inclui navegação nova, envio, compra ou JavaScript no Chrome.", "", nil
+		}
+	case "tabs":
+		action := strings.ToLower(strings.TrimSpace(asString(args["action"])))
+		if action == "" {
+			action = strings.ToLower(strings.TrimSpace(asString(args["op"])))
+		}
+		if action == "create" {
+			return hostGate(asString(args["url"]), allowed)
+		}
 	case "navigate", "tabs_create":
-		raw := strings.TrimSpace(asString(args["url"]))
-		if raw == "" || raw == "about:blank" {
-			return false, "", "", nil
-		}
-		h, herr := httpHost(raw)
-		if herr != nil {
-			return false, "", "", herr
-		}
-		if !allowed(h) {
-			return true, fmt.Sprintf("O Agent Hive quer abrir %s no seu Chrome. Esse site ainda não está na lista permitida.", h), h, nil
-		}
+		return hostGate(asString(args["url"]), allowed)
+	}
+	return false, "", "", nil
+}
+
+func hostGate(raw string, allowed func(string) bool) (bool, string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "about:blank" {
+		return false, "", "", nil
+	}
+	h, err := httpHost(raw)
+	if err != nil {
+		return false, "", "", err
+	}
+	if !allowed(h) {
+		return true, fmt.Sprintf("O Agent Hive quer abrir %s no seu Chrome. Esse site ainda não está na lista permitida.", h), h, nil
 	}
 	return false, "", "", nil
 }
@@ -112,6 +135,25 @@ func httpHost(raw string) (string, error) {
 		return "", fmt.Errorf("url sem host")
 	}
 	return host, nil
+}
+
+func batchNeeds(args map[string]any) bool {
+	raw, _ := args["actions"].([]any)
+	for _, item := range raw {
+		step, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		tool := asString(step["tool"])
+		switch tool {
+		case "javascript_exec", "upload", "navigate", "tabs_create":
+			return true
+		}
+		if truthy(step["submit"]) || sensitiveText(asString(step["name"])) {
+			return true
+		}
+	}
+	return false
 }
 
 func activityText(tool string, args map[string]any) string {

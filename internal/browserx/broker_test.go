@@ -231,7 +231,7 @@ func TestNativeHostRelays(t *testing.T) {
 	if json.Unmarshal(frame, &msg) != nil {
 		t.Fatalf("quadro: %s", frame)
 	}
-	if msg.Type == "activity" {
+	for msg.Type == "activity" || msg.Type == "hello" {
 		frame, err = readFrame(testRead)
 		if err != nil {
 			t.Fatal(err)

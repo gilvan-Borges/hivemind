@@ -23,6 +23,7 @@ type Message struct {
 	Text  string         `json:"text,omitempty"`
 	Code  string         `json:"code,omitempty"`
 	Image string         `json:"image,omitempty"`
+	Host  string         `json:"host,omitempty"`
 }
 
 func (m Message) public() Message {

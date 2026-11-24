@@ -1,5 +1,6 @@
 interface ChromeDebuggee {
   tabId?: number;
+  sessionId?: string;
 }
 
 interface ChromePort {
@@ -17,6 +18,7 @@ interface ChromeTab {
   active?: boolean;
   windowId?: number;
   status?: string;
+  openerTabId?: number;
 }
 
 declare const chrome: {
@@ -46,6 +48,8 @@ declare const chrome: {
     get(tabId: number): Promise<ChromeTab>;
     sendMessage(tabId: number, message: unknown): Promise<unknown>;
     onUpdated: { addListener(cb: (tabId: number, info: { status?: string }) => void): void };
+    onCreated: { addListener(cb: (tab: ChromeTab) => void): void };
+    onActivated: { addListener(cb: (info: { tabId: number }) => void): void };
   };
   scripting: {
     executeScript(injection: { target: { tabId: number }; func: () => void }): Promise<unknown>;
@@ -63,6 +67,10 @@ declare const chrome: {
   };
   storage: {
     local: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(items: Record<string, unknown>): Promise<void>;
+    };
+    session: {
       get(keys: string[]): Promise<Record<string, unknown>>;
       set(items: Record<string, unknown>): Promise<void>;
     };

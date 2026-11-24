@@ -27,16 +27,53 @@ func buildTurnRequest(n int) (*model.LLMRequest, []string) {
 	for i := 0; i < n; i++ {
 		callID := fmt.Sprintf("call-read-%02d", i)
 		contents = append(contents, &genai.Content{
-			Role: genai.RoleModel,
+			Role:  genai.RoleModel,
 			Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: callID, Name: "read_file", Args: map[string]any{"path": fmt.Sprintf("src/module_%02d.ts", i)}}}},
 		})
 		texts[i] = bigPayload(fmt.Sprintf("FILE-%02d", i))
 		contents = append(contents, &genai.Content{
-			Role: genai.RoleUser,
+			Role:  genai.RoleUser,
 			Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: callID, Name: "read_file", Response: map[string]any{"text": texts[i]}}}},
 		})
 	}
 	return &model.LLMRequest{Contents: contents}, texts
+}
+
+func TestPruneBrowserHistoryKeepsOnlyLatest(t *testing.T) {
+	contents := []*genai.Content{
+		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "olhe a página"}}},
+	}
+	payloads := make([]string, 3)
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("c%d", i)
+		payloads[i] = strings.Repeat(fmt.Sprintf("e%d button item-%d\n", i, i), 80)
+		contents = append(contents,
+			&genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+				ID: id, Name: "mcp_call", Args: map[string]any{"server": "hivemind-browser", "tool": "read_page"},
+			}}}},
+			&genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+				ID: id, Name: "mcp_call", Response: map[string]any{"text": payloads[i]},
+			}}}},
+		)
+	}
+	req := &model.LLMRequest{Contents: contents}
+	orig := payloads[0]
+	compacted, saved := CompactRequest(req, Budget{ContextWindow: DefaultContextWindow})
+	if compacted != 2 || saved <= 0 {
+		t.Fatalf("poda do navegador: compacted=%d saved=%d", compacted, saved)
+	}
+	last := req.Contents[len(req.Contents)-1].Parts[0].FunctionResponse.Response["text"].(string)
+	if last != payloads[2] {
+		t.Fatal("a última leitura tem de permanecer inteira")
+	}
+	first := req.Contents[2].Parts[0].FunctionResponse.Response["text"].(string)
+	if !strings.Contains(first, "omitida") || len(first) >= len(orig) {
+		t.Fatalf("primeira leitura não foi resumida: %s", first)
+	}
+	if contents[2].Parts[0].FunctionResponse.Response["text"].(string) != orig {
+		t.Fatal("o histórico original foi alterado")
+	}
+	t.Logf("histórico do navegador %d -> stub, %d bytes", len(orig), saved)
 }
 
 func TestCompactRequestBelowMicroThresholdIsNoOp(t *testing.T) {
