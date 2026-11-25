@@ -27,12 +27,13 @@ func (a *App) browserChat(text string) (string, error) {
 			ws = recent[0]
 		}
 	}
-	if ws == "" {
-		return "", fmt.Errorf("abra um projeto na IDE para o Agent Hive receber o chat")
+	res, err := a.ResidentStartTurn(ws, "", text)
+	if err != nil {
+		return "", err
 	}
-	if a.SteerRun("lane-hive", text) {
-		return "instrução enviada para a execução em andamento", nil
+	reply := strings.TrimSpace(res.FinalText)
+	if reply == "" {
+		return "Concluído.", nil
 	}
-	go func() { _, _ = a.StartRun("lane-hive", ws, "", text, "", "") }()
-	return "turno do Agent Hive iniciado na IDE", nil
+	return reply, nil
 }
