@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
+	"github.com/gilvan-Borges/HiveMind/internal/jirax"
+	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
@@ -453,12 +456,13 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 	if !d.DisableMerge {
 		mergePR, err := functiontool.New(functiontool.Config{
 			Name:        "github_merge_pr",
-			Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor — ou um PR do próprio usuário sem revisor externo quando o usuário ordenar explicitamente no chat (passe force_owner_merge=true). Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access).",
+			Description: "Exclusivo do Chefe/Arquiteto: mescla um PR APÓS aprovação do revisor — ou um PR do próprio usuário sem revisor externo quando o usuário ordenar explicitamente no chat (passe force_owner_merge=true). Automático quando a branch alvo é homolog; quando a branch alvo é main, solicita permissão explícita ao usuário (salvo em modo full_access). Quando o Jira estiver conectado e o PR referenciar uma task (ou jira_key for informado), move automaticamente a issue para Concluído/Done e registra comentário com o merge.",
 		}, func(ctx agent.Context, args struct {
 			Number          int    `json:"number" jsonschema:"Número do pull request."`
 			Method          string `json:"method,omitempty" jsonschema:"Método: merge (padrão), squash ou rebase."`
 			CommitTitle     string `json:"commit_title,omitempty" jsonschema:"Título opcional do commit de merge."`
 			ForceOwnerMerge bool   `json:"force_owner_merge,omitempty" jsonschema:"Use true APENAS quando o usuário ordenou explicitamente no chat mesclar um PR DELE mesmo sem revisor externo (ex.: repositório solo)."`
+			JiraKey         string `json:"jira_key,omitempty" jsonschema:"Chave opcional da task no Jira vinculada ao PR (ex.: PROJ-123) para mover para Concluído após o merge. Se omitido, detecta automaticamente pelo título/descrição/branch do PR."`
 		}) (textResult, error) {
 			pr, err := d.GitHub.GetPullRequest(ctx, args.Number)
 			if err != nil {
@@ -491,7 +495,11 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 			if d.Git != nil && strings.TrimSpace(pr.HeadRef) != "" {
 				gitx.CleanupMergedWorktrees(ctx, d.Git, d.Root, pr.BaseRef)
 			}
-			return textResult{Text: fmt.Sprintf("PR #%d mesclado com sucesso em %s", pr.Number, pr.BaseRef)}, nil
+			msg := fmt.Sprintf("PR #%d mesclado com sucesso em %s", pr.Number, pr.BaseRef)
+			if jiraNote := d.syncJiraAfterPRMerge(ctx, pr, args.JiraKey); jiraNote != "" {
+				msg += ". " + jiraNote
+			}
+			return textResult{Text: msg}, nil
 		})
 		if err != nil {
 			return err
@@ -499,6 +507,68 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		*out = append(*out, mergePR)
 	}
 	return nil
+}
+
+// syncJiraAfterPRMerge transitions linked Jira issue(s) to Done/Concluído right
+// after a PR is merged so merged work never leaves its Jira task stuck open.
+func (d Deps) syncJiraAfterPRMerge(ctx context.Context, pr githubx.PullRequestDetail, explicitKey string) string {
+	if d.Jira == nil || !d.Jira.Enabled() {
+		return ""
+	}
+	type candidate struct {
+		key      string
+		explicit bool
+	}
+	seen := make(map[string]bool)
+	var candidates []candidate
+	addCand := func(raw string, explicit bool) {
+		k := names.IssueKey(raw)
+		if k == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		candidates = append(candidates, candidate{key: k, explicit: explicit})
+	}
+	addCand(explicitKey, true)
+	addCand(d.JiraKey, true)
+	for _, k := range jirax.ExtractIssueKeys(d.JiraProject, pr.Title, pr.Body, pr.HeadRef) {
+		addCand(k, false)
+		if len(candidates) >= 3 {
+			break
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	var notes []string
+	for _, c := range candidates {
+		issue, err := d.Jira.GetIssue(ctx, c.key)
+		if err != nil {
+			if c.explicit {
+				notes = append(notes, fmt.Sprintf("aviso Jira %s: não foi possível consultar (%v)", c.key, err))
+			}
+			continue
+		}
+		key := strings.TrimSpace(issue.Key)
+		if key == "" {
+			key = c.key
+		}
+		if jirax.IsDoneStatus(issue.Status) {
+			notes = append(notes, fmt.Sprintf("Jira %s já estava em %s", key, issue.Status))
+			continue
+		}
+		if err := d.Jira.Transition(ctx, key, "Concluído"); err != nil {
+			notes = append(notes, fmt.Sprintf("aviso Jira %s: não foi possível mover para Concluído (%v) — use jira_transition manualmente", key, err))
+			continue
+		}
+		commentBody := fmt.Sprintf("PR #%d mesclado em %s.", pr.Number, pr.BaseRef)
+		if strings.TrimSpace(pr.URL) != "" {
+			commentBody = fmt.Sprintf("PR #%d mesclado em %s (%s).", pr.Number, pr.BaseRef, strings.TrimSpace(pr.URL))
+		}
+		_ = d.Jira.Comment(ctx, key, commentBody)
+		notes = append(notes, fmt.Sprintf("Jira %s atualizado para Concluído", key))
+	}
+	return strings.Join(notes, "; ")
 }
 
 func formatPRDetail(pr githubx.PullRequestDetail, issueComments []githubx.Comment, currentUser string) string {

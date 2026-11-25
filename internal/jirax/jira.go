@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,66 @@ func IsDoneStatus(status string) bool {
 		return true
 	}
 	return strings.Contains(s, "conclu") || strings.Contains(s, "done") || strings.Contains(s, "fechad")
+}
+
+var issueKeyTokenRe = regexp.MustCompile(`\b([A-Z][A-Z0-9]{1,9}-\d+)\b`)
+
+var nonJiraKeyPrefixes = map[string]bool{
+	"D": true, "RN": true, "FT": true, "T": true, "ADR": true,
+	"UTF": true, "SHA": true, "ISO": true, "HTTP": true, "HTTPS": true,
+	"CVE": true, "PR": true, "RFC": true, "SQL": true, "API": true,
+	"SDK": true, "TLS": true, "SSL": true, "JWT": true, "DNS": true,
+	"TCP": true, "UDP": true, "UUID": true, "AWS": true, "GCP": true,
+	"CI": true, "CD": true, "UI": true, "UX": true, "SDD": true,
+	"MCP": true, "LSP": true, "CLI": true, "IDE": true, "URL": true,
+	"URI": true, "XML": true, "CSV": true, "PDF": true, "PNG": true,
+	"JPG": true, "SVG": true, "CSS": true, "DOM": true, "EOF": true,
+	"SPEC": true, "TASK": true, "STEP": true, "WAVE": true, "GATE": true,
+	"RULE": true, "CASE": true, "ISSUE": true, "FEAT": true, "FIX": true,
+	"DOCS": true, "TEST": true, "CHORE": true, "HEAD": true, "BASE": true,
+}
+
+// ExtractIssueKeys scans texts (such as a PR title, body, and branch name) for
+// candidate Jira issue keys (e.g. "PROJ-123"), filtering out common technical
+// codes. When preferredProject is set (and not "*" / "NONE"), keys belonging to
+// that project are placed first.
+func ExtractIssueKeys(preferredProject string, texts ...string) []string {
+	prefProj := strings.ToUpper(strings.TrimSpace(preferredProject))
+	if prefProj == "*" || prefProj == "NONE" {
+		prefProj = ""
+	}
+	seen := make(map[string]bool)
+	var preferred []string
+	var others []string
+	for _, raw := range texts {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		for _, m := range issueKeyTokenRe.FindAllStringSubmatch(raw, -1) {
+			if len(m) < 2 {
+				continue
+			}
+			cand := strings.ToUpper(strings.TrimSpace(m[1]))
+			if seen[cand] {
+				continue
+			}
+			dash := strings.IndexByte(cand, '-')
+			if dash <= 0 {
+				continue
+			}
+			prefix := cand[:dash]
+			if nonJiraKeyPrefixes[prefix] {
+				continue
+			}
+			seen[cand] = true
+			if prefProj != "" && prefix == prefProj {
+				preferred = append(preferred, cand)
+			} else {
+				others = append(others, cand)
+			}
+		}
+	}
+	return append(preferred, others...)
 }
 
 // Client is the Jira surface used by tools and `hivemind run --jira`.

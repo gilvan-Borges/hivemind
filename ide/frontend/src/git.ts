@@ -2474,7 +2474,7 @@ export function bindGitSidebarEvents() {
       const branchInfo = pr.headRef && pr.baseRef ? ` (${pr.headRef} → ${pr.baseRef})` : "";
       const bodyPart = pr.body ? `\n\nDescrição do PR:\n${pr.body}` : "";
       if (pr.isMine) {
-        state.draftObjective = `Atender feedback do nosso PR #${pr.number}${repoTag}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir.${bodyPart}`;
+        state.draftObjective = `Atender feedback do nosso PR #${pr.number}${repoTag}${branchInfo} — ${pr.title}. Leia o PR completo e todos os comentários/revisões dos revisores com github_get_pr antes de agir. Se o PR já estiver aprovado e você realizar o merge, atualize também o status da task vinculada no Jira para Concluído.${bodyPart}`;
       } else if (pr.mentionedMe) {
         state.draftObjective = `Responder menção no PR #${pr.number}${repoTag} de @${pr.author || "terceiro"}${branchInfo} — ${pr.title}. Fui marcado por ${pr.lastActivityAuthor ? "@" + pr.lastActivityAuthor : "um colega"}; leia o PR e os comentários mais recentes com github_get_pr antes de responder.${bodyPart}`;
       } else if (pr.needsAttention && pr.myResponse) {

@@ -411,3 +411,20 @@ func TestMatchJiraTransitionIDSemanticAndPlural(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractIssueKeys(t *testing.T) {
+	got := ExtractIssueKeys(
+		"PROJ",
+		"feat(outbox): expurgo publicado (016-T009)",
+		"Spec 016, task **016-T009** (PROJ-450). Regras RN-016-15, FT-12, D-179, ADR-004, APP-77.",
+		"feat/sdd-016-t009-expurgo",
+	)
+	if len(got) != 2 || got[0] != "PROJ-450" || got[1] != "APP-77" {
+		t.Fatalf("ExtractIssueKeys = %v, want [PROJ-450 APP-77]", got)
+	}
+
+	none := ExtractIssueKeys("", "chore(docs): RN-016-15 D-179 T-009 HTTP-200 PR-12")
+	if len(none) != 0 {
+		t.Fatalf("ExtractIssueKeys deveria ignorar códigos técnicos, obteve %v", none)
+	}
+}

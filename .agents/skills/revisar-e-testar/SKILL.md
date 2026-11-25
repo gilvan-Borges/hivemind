@@ -51,3 +51,10 @@ Estruture o parecer como um **Engenheiro Sênior / Tech Lead humano**:
 - Diff exclusivamente de documentação/spec (`.md`) consistente: `github_review_pr` com `event=APPROVE` direto.
 - Defeito funcional, quebra de contrato, falha de segurança ou teste quebrando: `event=REQUEST_CHANGES`.
 - Pedido explícito de apenas comentar ou modo somente-comentário: `event=COMMENT`.
+
+## 5. Pós-merge: atualizar a task no Jira
+
+- Sempre que realizar o merge de um PR (`github_merge_pr`) e o título, descrição, branch ou contexto da conversa referenciar uma task do Jira (ex.: `PROJ-123`):
+  1. Passe `jira_key` ao chamar `github_merge_pr` (a ferramenta atualiza automaticamente a issue para **Concluído/Done** quando o Jira estiver conectado).
+  2. Confira no retorno do `github_merge_pr` se a task foi movida para **Concluído**. Se houver aviso ou se a atualização automática não tiver ocorrido, chame `jira_transition` para mover a issue para **Concluído** (e registre o link do PR com `jira_comment` se aplicável).
+  3. Informe no resumo final ao usuário tanto o merge do PR quanto a atualização do status da task no Jira.

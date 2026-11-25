@@ -1,10 +1,13 @@
 package tools
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
+	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -133,5 +136,86 @@ func TestAutoReviewToolsNeverExposeMerge(t *testing.T) {
 		if !names[expected] {
 			t.Fatalf("auto-review mode missing expected tool %s", expected)
 		}
+	}
+}
+
+type fakeMergeJira struct {
+	issues      map[string]jirax.Issue
+	transitions map[string]string
+	comments    map[string]string
+}
+
+func (f *fakeMergeJira) Enabled() bool { return true }
+func (f *fakeMergeJira) GetIssue(_ context.Context, key string) (jirax.Issue, error) {
+	if iss, ok := f.issues[key]; ok {
+		return iss, nil
+	}
+	return jirax.Issue{}, fmt.Errorf("404 issue %s not found", key)
+}
+func (f *fakeMergeJira) Search(context.Context, string, int) ([]jirax.Issue, error) { return nil, nil }
+func (f *fakeMergeJira) CreateIssue(context.Context, string, string, string, string, string) (jirax.Issue, error) {
+	return jirax.Issue{}, nil
+}
+func (f *fakeMergeJira) CreateSubtask(context.Context, string, string, string) (jirax.Issue, error) {
+	return jirax.Issue{}, nil
+}
+func (f *fakeMergeJira) Comment(_ context.Context, key, body string) error {
+	if f.comments == nil {
+		f.comments = map[string]string{}
+	}
+	f.comments[key] = body
+	return nil
+}
+func (f *fakeMergeJira) Transition(_ context.Context, key, nameOrID string) error {
+	if f.transitions == nil {
+		f.transitions = map[string]string{}
+	}
+	f.transitions[key] = nameOrID
+	return nil
+}
+
+func TestSyncJiraAfterPRMerge(t *testing.T) {
+	ctx := context.Background()
+	fj := &fakeMergeJira{
+		issues: map[string]jirax.Issue{
+			"PROJ-123": {Key: "PROJ-123", Status: "Em Revisão"},
+			"PROJ-999": {Key: "PROJ-999", Status: "Concluído"},
+		},
+	}
+	deps := Deps{
+		Jira:        fj,
+		JiraProject: "PROJ",
+	}
+	pr := githubx.PullRequestDetail{
+		Number:  42,
+		Title:   "feat(core): expurgo em lote (016-T009)",
+		Body:    "Entrega da task **016-T009** (PROJ-123). Regras RN-016-15 e D-179. Código inexistente FAKE-77.",
+		HeadRef: "feat/sdd-016-t009",
+		BaseRef: "homolog",
+		URL:     "https://github.com/acme/app/pull/42",
+	}
+
+	note := deps.syncJiraAfterPRMerge(ctx, pr, "")
+	if !strings.Contains(note, "Jira PROJ-123 atualizado para Concluído") {
+		t.Fatalf("nota esperada com PROJ-123 atualizado, obteve: %q", note)
+	}
+	if fj.transitions["PROJ-123"] != "Concluído" {
+		t.Fatalf("transição esperada Concluído, obteve: %q", fj.transitions["PROJ-123"])
+	}
+	if !strings.Contains(fj.comments["PROJ-123"], "PR #42 mesclado em homolog") {
+		t.Fatalf("comentário esperado no Jira, obteve: %q", fj.comments["PROJ-123"])
+	}
+	if strings.Contains(note, "FAKE-77") {
+		t.Fatalf("código inexistente extraído do texto não deveria gerar erro: %q", note)
+	}
+
+	// Issue já concluída não deve tentar transicionar novamente.
+	prDone := githubx.PullRequestDetail{Number: 43, Title: "fix: ajuste (PROJ-999)", BaseRef: "homolog"}
+	noteDone := deps.syncJiraAfterPRMerge(ctx, prDone, "")
+	if !strings.Contains(noteDone, "Jira PROJ-999 já estava em Concluído") {
+		t.Fatalf("nota para issue já concluída inesperada: %q", noteDone)
+	}
+	if _, called := fj.transitions["PROJ-999"]; called {
+		t.Fatalf("não deveria transicionar issue já concluída")
 	}
 }
