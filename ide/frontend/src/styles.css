@@ -9081,6 +9081,12 @@ button.brand-logo {
   min-height: 0;
   min-width: 0;
   flex-shrink: 0;
+  container-type: inline-size;
+}
+@container (max-width: 430px) {
+  .side-tab > span:not(.ms):not(.act-badge) {
+    display: none;
+  }
 }
 .left-sidebar {
   width: auto;
@@ -9092,18 +9098,23 @@ button.brand-logo {
   box-shadow: none;
   background: transparent;
 }
-.side-rail {
+.side-rail,
+.activity-bar.side-rail {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
-  width: auto;
+  width: 100%;
   height: auto;
-  padding: var(--space-2);
+  padding: 6px;
   overflow-x: auto;
+  overflow-y: hidden;
   flex-shrink: 0;
   background: transparent;
 }
 .side-tab {
+  flex: 0 0 auto;
   width: auto;
   height: 32px;
   padding: 0 10px;
@@ -9111,6 +9122,7 @@ button.brand-logo {
   border-radius: 999px;
   font-size: var(--font-meta);
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 .side-tab svg {
   width: 16px;
@@ -9157,26 +9169,62 @@ button.brand-logo {
 .sistema-popover[hidden] {
   display: none !important;
 }
-.left-dock.is-rail-only {
-  width: 56px !important;
-}
-.left-dock.is-rail-only .side-rail {
-  flex-direction: column;
-  align-items: center;
-  width: 56px;
-  overflow: visible;
-}
-.left-dock.is-rail-only .side-tab span,
-.left-dock.is-rail-only .side-more {
-  margin-left: 0;
-}
-.left-dock.is-rail-only .side-tab span {
+.left-dock.is-rail-only .side-tab > span:not(.ms):not(.act-badge) {
   display: none;
 }
 .left-dock.is-rail-only .side-more-menu {
-  left: calc(100% + 8px);
+  left: 0;
   right: auto;
-  top: 0;
+  top: calc(100% + 6px);
+}
+
+/* Vista de centro ou lateral recolhida: o trilho vira uma linha e o centro ocupa a largura. */
+.workbench:has(.center-area.has-stage),
+.workbench:has(.left-dock.is-rail-only) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8px minmax(220px, 380px);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "rail rail rail"
+    "center gap chat";
+}
+.workbench:has(.center-area.has-stage) .left-dock,
+.workbench:has(.left-dock.is-rail-only) .left-dock {
+  display: contents;
+}
+.workbench:has(.center-area.has-stage) .side-rail,
+.workbench:has(.left-dock.is-rail-only) .side-rail {
+  grid-area: rail;
+  width: auto;
+}
+.workbench:has(.center-area.has-stage) .left-sidebar,
+.workbench:has(.center-area.has-stage) #resizer-left,
+.workbench:has(.left-dock.is-rail-only) .left-sidebar,
+.workbench:has(.left-dock.is-rail-only) #resizer-left {
+  display: none !important;
+}
+.workbench:has(.center-area.has-stage) .center-area,
+.workbench:has(.left-dock.is-rail-only) .center-area {
+  grid-area: center;
+  min-width: 0;
+  min-height: 0;
+}
+.workbench:has(.center-area.has-stage) #resizer-right,
+.workbench:has(.left-dock.is-rail-only) #resizer-right {
+  grid-area: gap;
+}
+.workbench:has(.center-area.has-stage) .right-ai-pane,
+.workbench:has(.left-dock.is-rail-only) .right-ai-pane {
+  grid-area: chat;
+  width: auto !important;
+  max-width: none;
+  min-width: 0;
+}
+.workbench:has(.right-ai-pane.hidden) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "rail"
+    "center";
 }
 
 .sidebar-header {
@@ -9205,9 +9253,13 @@ button.brand-logo {
 
 .center-stage {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: var(--space-5);
+  container-type: inline-size;
 }
 .center-stage[hidden] {
   display: none !important;
@@ -9216,27 +9268,75 @@ button.brand-logo {
 .center-area.has-stage #editor-body {
   display: none;
 }
-.git-center-hint {
-  display: none;
-  margin: var(--space-3) 0 0;
-  color: var(--text-secondary);
-  font-size: var(--font-meta);
+.git-subtabs-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
-body:has(.center-area.has-stage) .git-center-hint {
-  display: block;
+.git-subtabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+}
+.git-subtab {
+  flex: 0 0 auto;
+  color: var(--text-body);
+  white-space: nowrap;
+}
+.git-subtab.active {
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.center-stage > .git-subtabs-scroll {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 0 var(--space-4);
+  background: var(--surface-panel);
+}
+.workbench:has(.center-area.has-stage) .center-area {
+  overflow: hidden;
 }
 .git-center-board,
 .flow-board-cols,
-.jira-task-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-4);
-  align-items: start;
-}
+.jira-task-grid,
 .center-stage .git-center-board,
 .center-stage .flow-board-cols,
 .center-stage .jira-task-grid {
-  grid-template-columns: 1fr 1fr;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.git-center-board > *,
+.flow-board-cols > *,
+.jira-task-grid > *,
+.git-section,
+#git-prs-list,
+#git-issues-list {
+  min-width: 0;
+}
+#git-prs-list,
+#git-issues-list,
+.flow-board .git-section > div {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+@container (min-width: 960px) {
+  .git-center-board,
+  .flow-board-cols,
+  .jira-task-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 .flow-board,
 .jira-area,
@@ -9268,8 +9368,54 @@ body:has(.center-area.has-stage) .git-center-hint {
 }
 .issue-card,
 .pr-card {
-  margin-bottom: 0;
-  gap: var(--space-2);
+  margin: 0;
+  gap: 12px;
+  padding: 18px 20px;
+  min-width: 0;
+  overflow: visible;
+}
+.pr-card-title,
+.pr-branch-flow,
+.pr-activity-snippet,
+.pr-event-loc,
+.pr-card-top,
+.issue-parent-title,
+.subtask-row-summary {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.pr-activity-snippet {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+.pr-card-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pr-card-actions .mini,
+.git-section-head .mini,
+.jira-strip .mini,
+.jira-strip-actions .mini,
+.empty-panel .mini,
+.autoreview-card .mini,
+.center-stage .mini {
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  min-height: 32px;
+  padding: 6px 12px;
+}
+.pr-card-actions .mini.primary,
+.git-section-head .mini.primary,
+.jira-strip .mini.primary,
+.empty-panel .mini.primary,
+.autoreview-card .mini.primary,
+.center-stage .mini.primary,
+button.primary {
+  background: var(--action-primary);
+  color: var(--action-primary-text);
 }
 .empty-panel {
   display: flex;
@@ -9495,16 +9641,25 @@ body:has(.center-area.has-stage) .git-center-hint {
   padding: var(--space-6) var(--space-5);
 }
 
+@media (max-width: 1280px) {
+  .welcome-cards,
+  .ide-settings-body {
+    grid-template-columns: 1fr;
+  }
+  .title-center-cmd {
+    min-width: 120px;
+    max-width: 180px;
+  }
+}
 @media (max-width: 1024px) {
   .titlebar {
     height: 48px;
   }
   .title-center-cmd {
-    min-width: 112px;
-    max-width: 148px;
+    min-width: 40px;
+    max-width: 120px;
   }
-  .project-tab span,
-  .side-tab span {
+  .project-tab span {
     max-width: 88px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -9518,15 +9673,56 @@ body:has(.center-area.has-stage) .git-center-hint {
     order: 3;
     flex-basis: 100%;
   }
-  .center-stage .git-center-board,
-  .center-stage .flow-board-cols,
-  .center-stage .jira-task-grid {
-    grid-template-columns: 1fr;
-  }
   .center-stage {
     padding: var(--space-3);
   }
+  .left-dock {
+    width: 220px !important;
+  }
   .right-ai-pane {
-    min-width: 280px;
+    width: 260px !important;
+    min-width: 0;
+  }
+  .status-bar {
+    overflow-x: auto;
+  }
+}
+@media (max-width: 900px) {
+  .workbench:has(.center-area.has-stage),
+  .workbench:has(.left-dock.is-rail-only) {
+    grid-template-columns: minmax(0, 1fr) 6px 200px;
+  }
+  .git-subtab {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
+@media (max-width: 860px) {
+  .brand-suffix,
+  .project-tab-add span,
+  .team-strip-action span,
+  .status-bar #status-env {
+    display: none;
+  }
+  .left-dock {
+    width: 200px !important;
+  }
+  .side-tab {
+    padding: 0 8px;
+  }
+  .right-ai-pane {
+    width: min(220px, 38vw) !important;
+  }
+  .composer-footer {
+    flex-wrap: wrap;
+  }
+  .composer-send {
+    margin-left: auto;
+  }
+  .titlebar {
+    gap: 4px;
+  }
+  .project-tabs-bar {
+    min-width: 0;
   }
 }
