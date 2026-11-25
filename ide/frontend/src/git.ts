@@ -896,29 +896,43 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
 
   const history = (st?.history || []).slice(0, 5);
   const hasAutoLane = state.lanes.some((l) => l.id === "lane-autoreview");
+  const collapsed = state.autoReviewCollapsed;
+  const compactBadge = isReviewing
+    ? `Revisando #${st!.activePr}`
+    : enabled
+      ? `Ativa · ${st?.reviewedLastHour ?? 0}/${maxPerHour}/h`
+      : "Desligada";
 
   return `
-    <div class="autoreview-card ${enabled ? "is-on" : ""}">
+    <div class="autoreview-card ${enabled ? "is-on" : ""} ${collapsed ? "is-collapsed" : ""}">
       <div class="autoreview-head">
+        <button type="button" class="autoreview-collapse-btn" id="btn-toggle-autoreview-card" aria-expanded="${collapsed ? "false" : "true"}" title="${collapsed ? "Expandir configurações e histórico da Revisão Automática" : "Recolher Revisão Automática"}">
+          ${collapsed ? icons.chevronRight : icons.chevronDown}
+        </button>
         <label class="autoreview-toggle-label" title="Quando ligada, monitora a aba Fluxo e revisa PRs de terceiros automaticamente sem nunca fazer merge">
           <input type="checkbox" id="ar-enabled-toggle" ${enabled ? "checked" : ""} />
           <span><strong>Revisão Automática</strong></span>
         </label>
         <span class="autoreview-badge-nomerge" title="Bloqueio técnico em código: github_merge_pr é removida no modo automático">Sem Merge</span>
-        <span class="tok-pill" title="A revisão automática vigia a aba Fluxo e não faz merge">Vigiar fluxo</span>
+        <span class="tok-pill" title="${escapeHtml(statusLine)}">${escapeHtml(compactBadge)}</span>
+        <div class="spacer"></div>
+        ${collapsed && enabled ? `<button type="button" class="mini" id="ar-poll-now" ${isReviewing ? "disabled" : ""}>${icons.refresh}<span>Verificar</span></button>` : ""}
+        ${collapsed && enabled && isReviewing ? `<button type="button" class="mini danger" id="ar-stop-pr">${icons.stop}<span>Parar #${st!.activePr}</span></button>` : ""}
+        <button type="button" class="ghost mini autoreview-toggle-text" data-toggle-autoreview-card>${collapsed ? "Configurar" : "Recolher"}</button>
       </div>
-      <div class="autoreview-status ${st?.state === "error" || st?.state === "paused_limit" ? "warn" : isReviewing ? "active" : ""}">
-        ${isReviewing || st?.state === "polling" ? icons.spinner : ""}
-        <span>${escapeHtml(statusLine)}</span>
-      </div>
-      ${enabled ? `
-        <div class="autoreview-actions">
-          <button type="button" class="mini" id="ar-poll-now" ${isReviewing ? "disabled" : ""}>${icons.refresh}<span>Verificar agora</span></button>
-          ${isReviewing ? `<button type="button" class="mini danger" id="ar-stop-pr">${icons.stop}<span>Parar #${st!.activePr}</span></button>` : ""}
-          ${hasAutoLane ? `<button type="button" class="mini" id="ar-open-lane" title="Acompanhar ao vivo na lane auto-review">${icons.sparkle}<span>Acompanhar</span></button>` : ""}
+      ${collapsed ? "" : `
+        <div class="autoreview-status ${st?.state === "error" || st?.state === "paused_limit" ? "warn" : isReviewing ? "active" : ""}">
+          ${isReviewing || st?.state === "polling" ? icons.spinner : ""}
+          <span>${escapeHtml(statusLine)}</span>
         </div>
-      ` : ""}
-      <div class="autoreview-cfg">
+        ${enabled ? `
+          <div class="autoreview-actions">
+            <button type="button" class="mini" id="ar-poll-now" ${isReviewing ? "disabled" : ""}>${icons.refresh}<span>Verificar agora</span></button>
+            ${isReviewing ? `<button type="button" class="mini danger" id="ar-stop-pr">${icons.stop}<span>Parar #${st!.activePr}</span></button>` : ""}
+            ${hasAutoLane ? `<button type="button" class="mini" id="ar-open-lane" title="Acompanhar ao vivo na lane auto-review">${icons.sparkle}<span>Acompanhar</span></button>` : ""}
+          </div>
+        ` : ""}
+        <div class="autoreview-cfg">
           <label class="autoreview-cfg-check">
             <input type="checkbox" id="ar-run-tests" ${runTests ? "checked" : ""} />
             <span>Rodar testes do PR em worktree isolada</span>
@@ -942,19 +956,20 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
             <input type="number" id="ar-max-hour" min="1" max="30" value="${maxPerHour}" style="width:72px;padding:4px 8px" />
           </div>
         </div>
-      ${history.length > 0 ? `
-        <div class="autoreview-history">
-          <div class="dim" style="font-size:10px;margin-bottom:3px">Últimas revisões automáticas</div>
-          ${history.map((h) => `
-            <div class="autoreview-hist-row" title="${escapeHtml(h.error || h.summary || h.title)}">
-              <span class="tok-pill">#${h.prNumber}</span>
-              <span class="autoreview-hist-status ${escapeHtml(h.status)}">${h.status === "reviewed" ? "ok" : h.status === "canceled" ? "parado" : "erro"}</span>
-              <span class="autoreview-hist-title">${escapeHtml(h.title)}</span>
-              ${h.tokens ? `<span class="dim" style="font-family:var(--mono);font-size:10px">${formatTokens(h.tokens)}</span>` : ""}
-            </div>
-          `).join("")}
-        </div>
-      ` : `<div class="autoreview-history"><div class="dim">Nenhuma revisão automática ainda.</div></div>`}
+        ${history.length > 0 ? `
+          <div class="autoreview-history">
+            <div class="dim" style="font-size:10px;margin-bottom:3px">Últimas revisões automáticas</div>
+            ${history.map((h) => `
+              <div class="autoreview-hist-row" title="${escapeHtml(h.error || h.summary || h.title)}">
+                <span class="tok-pill">#${h.prNumber}</span>
+                <span class="autoreview-hist-status ${escapeHtml(h.status)}">${h.status === "reviewed" ? "ok" : h.status === "canceled" ? "parado" : "erro"}</span>
+                <span class="autoreview-hist-title">${escapeHtml(h.title)}</span>
+                ${h.tokens ? `<span class="dim" style="font-family:var(--mono);font-size:10px">${formatTokens(h.tokens)}</span>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="autoreview-history"><div class="dim">Nenhuma revisão automática ainda.</div></div>`}
+      `}
     </div>
   `;
 }
@@ -1414,6 +1429,15 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         </div>
       ` : `<button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>`}
     </div>
+    <div class="git-subtabs-scroll">
+      <div class="git-subtabs scm-tabs-pad">
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
+        <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
+        <button type="button" class="git-subtab ${activeGitTab === "jira" ? "active" : ""}" data-git-tab="jira">Jira</button>
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
+        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
+      </div>
+    </div>
     <div class="sidebar-body scm-body">
       ${state.gitRefreshError ? `<div class="dim" style="padding:6px 10px">${escapeHtml(state.gitRefreshError)}</div>` : ""}
       <div class="scm-repo-strip">
@@ -1429,16 +1453,6 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       </div>
       ${gitOpPanelHtml()}
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
-
-      <div class="git-subtabs-scroll">
-      <div class="git-subtabs scm-tabs-pad">
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
-        <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
-        <button type="button" class="git-subtab ${activeGitTab === "jira" ? "active" : ""}" data-git-tab="jira">Jira</button>
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
-        ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
-      </div>
-      </div>
 
       ${tabContentHtml}
     </div>
@@ -2122,6 +2136,15 @@ export function bindGitSidebarEvents() {
   };
   document.getElementById("btn-comment-jira")?.addEventListener("click", () => void commentJiraAction());
   document.getElementById("menu-comment-jira")?.addEventListener("click", () => void commentJiraAction());
+
+  const toggleAutoReviewCard = () => {
+    state.autoReviewCollapsed = !state.autoReviewCollapsed;
+    rerenderGitSidebarAnchored();
+  };
+  document.getElementById("btn-toggle-autoreview-card")?.addEventListener("click", toggleAutoReviewCard);
+  document.querySelectorAll("[data-toggle-autoreview-card]").forEach((btn) => {
+    btn.addEventListener("click", toggleAutoReviewCard);
+  });
 
   document.getElementById("btn-toggle-prs-section")?.addEventListener("click", () => {
     state.prsCollapsed = !state.prsCollapsed;

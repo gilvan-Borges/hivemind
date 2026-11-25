@@ -9254,13 +9254,14 @@ button.brand-logo {
 }
 
 .center-stage {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   max-width: 100%;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: var(--space-5);
+  overflow: hidden;
+  padding: 0;
   container-type: inline-size;
 }
 .center-stage[hidden] {
@@ -9271,6 +9272,7 @@ button.brand-logo {
   display: none;
 }
 .git-subtabs-scroll {
+  flex-shrink: 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -9280,6 +9282,20 @@ button.brand-logo {
 }
 .git-subtabs-scroll::-webkit-scrollbar {
   display: none;
+}
+.left-sidebar > .git-subtabs-scroll {
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--border-divider);
+  background: var(--surface-panel);
+}
+.left-sidebar > .git-subtabs-scroll .git-subtabs {
+  flex-wrap: wrap;
+  width: 100%;
+  gap: 5px;
+}
+.left-sidebar > .git-subtabs-scroll .git-subtab {
+  padding: 4px 8px;
+  font-size: 11.5px;
 }
 .git-subtabs {
   display: flex;
@@ -9303,11 +9319,51 @@ button.brand-logo {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 .center-stage > .git-subtabs-scroll {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
+  position: relative;
   z-index: 3;
-  margin: 0 0 var(--space-4);
+  margin: 0;
+  padding: 10px var(--space-5);
   background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-divider);
+}
+.center-stage > #git-tab-content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+.scm-repo-strip {
+  flex-shrink: 0;
+}
+.autoreview-card.is-collapsed {
+  gap: 0;
+  padding: 10px 14px;
+}
+.autoreview-head {
+  flex-wrap: wrap;
+}
+.autoreview-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+}
+.autoreview-collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.autoreview-toggle-text {
+  font-size: var(--font-meta);
+  color: var(--text-secondary);
 }
 .workbench:has(.center-area.has-stage) .center-area {
   overflow: hidden;
@@ -9693,7 +9749,10 @@ button.primary {
     order: 3;
     flex-basis: 100%;
   }
-  .center-stage {
+  .center-stage > .git-subtabs-scroll {
+    padding: 8px var(--space-3);
+  }
+  .center-stage > #git-tab-content {
     padding: var(--space-3);
   }
   .workbench:not(.chat-expanded) .left-dock {

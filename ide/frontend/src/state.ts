@@ -206,6 +206,7 @@ export const state = {
   },
   prsCollapsed: false,
   issuesCollapsed: false,
+  autoReviewCollapsed: true,
   prDetails: {} as Record<number, { open: boolean; loading: boolean; error: string; data?: PullRequestActivityDetail }>,
   gitGraph: {
     commits: [] as GitGraphCommit[],

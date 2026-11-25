@@ -339,7 +339,9 @@ export function renderLeftSidebar() {
     ? (sidebar.querySelector<HTMLElement>(".sidebar-body")?.scrollTop ?? 0)
     : 0;
   const stageEl = document.getElementById("center-stage");
-  const prevStageScrollTop = preserveScroll ? (stageEl?.scrollTop ?? 0) : 0;
+  const prevStageScrollTop = preserveScroll
+    ? ((stageEl?.querySelector<HTMLElement>("#git-tab-content")?.scrollTop ?? stageEl?.scrollTop) || 0)
+    : 0;
   sidebar.dataset.renderedView = state.sidebarView;
   sidebar.dataset.renderedGitTab = state.sidebarView === "git" ? state.gitTab : "";
 
@@ -354,7 +356,8 @@ export function renderLeftSidebar() {
       if (nextBody) nextBody.scrollTop = prevScrollTop;
     }
     if (preserveScroll && prevStageScrollTop > 0 && stageEl && !stageEl.hidden) {
-      stageEl.scrollTop = prevStageScrollTop;
+      const stageScroll = stageEl.querySelector<HTMLElement>("#git-tab-content") || stageEl;
+      stageScroll.scrollTop = prevStageScrollTop;
     }
   }
 }

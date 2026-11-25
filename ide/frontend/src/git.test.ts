@@ -259,12 +259,20 @@ describe("PRs & Issues collapsible sections, details drawer and scroll preservat
     expect(jira).toContain("jira-area-bind");
 
     state.gitTab = "flow";
-    const flow = renderGitSidebarHtml(state.project);
-    expect(flow).toContain("flow-board");
-    expect(flow).toContain("Revisão Automática");
-    expect(flow).toContain("Para revisar");
-    expect(flow).toContain("Meus PRs");
-    expect(flow).toContain("Aguardando / Respondidos");
+    state.autoReviewCollapsed = true;
+    const flowCollapsed = renderGitSidebarHtml(state.project);
+    expect(flowCollapsed).toContain("flow-board");
+    expect(flowCollapsed).toContain("Revisão Automática");
+    expect(flowCollapsed).toContain('id="btn-toggle-autoreview-card"');
+    expect(flowCollapsed).not.toContain('id="ar-run-tests"');
+    expect(flowCollapsed).toContain("Para revisar");
+    expect(flowCollapsed).toContain("Meus PRs");
+    expect(flowCollapsed).toContain("Aguardando / Respondidos");
+
+    state.autoReviewCollapsed = false;
+    const flowExpanded = renderGitSidebarHtml(state.project);
+    expect(flowExpanded).toContain('id="ar-run-tests"');
+    expect(flowExpanded).toContain("autoreview-history");
   });
 
   it("explorer.ts preserva scrollTop da .sidebar-body ao re-renderizar a mesma aba", async () => {

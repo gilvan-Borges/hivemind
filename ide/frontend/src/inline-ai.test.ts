@@ -4,6 +4,7 @@ import { ghostTextField, nextGhostWord, setGhostTextEffect } from "./cm-editor";
 import { buildInlineDiffDecorations } from "./inline-ai";
 import { renderAutoReviewCardHtml } from "./git";
 import { applyLaneLabel, createLane, laneDisplayName } from "./lanes";
+import { state } from "./state";
 import type { AutoReviewStatus, FileDiff } from "./types";
 
 describe("Fase 3 — Ghost Text StateField (CodeMirror 6)", () => {
@@ -89,12 +90,20 @@ describe("Auto-Review Fluxo — renderAutoReviewCardHtml", () => {
         { prNumber: 722, title: "docs: FT-159", status: "reviewed", tokens: 87264, reviewedAt: "2026-11-19T13:02:00Z" },
       ],
     };
+    state.autoReviewCollapsed = true;
+    const collapsedHtml = renderAutoReviewCardHtml(st);
+    expect(collapsedHtml).toContain("Sem Merge");
+    expect(collapsedHtml).toContain("Parar #723");
+    expect(collapsedHtml).not.toContain("autoreview-cfg");
+
+    state.autoReviewCollapsed = false;
     const html = renderAutoReviewCardHtml(st);
     expect(html).toContain("Sem Merge");
     expect(html).toContain("Revisando PR #723");
     expect(html).toContain("Parar #723");
     expect(html).toContain("#722");
     expect(html).toContain("docs: FT-159");
+    state.autoReviewCollapsed = true;
   });
 });
 
