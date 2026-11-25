@@ -590,11 +590,24 @@ export async function boot() {
     }
     state.goVersion = init.goVersion || "";
     state.os = init.os || "windows";
-    applyProject(init.initialProject);
-    if (!init.initialProject?.hasTeam) {
-      void openTeamConfigTab();
+    if (init.initialProject?.root) {
+      applyProject(init.initialProject);
+      if (!init.initialProject.hasTeam) {
+        void openTeamConfigTab();
+      }
+      bootstrapAsync(init.initialProject.root);
+    } else {
+      syncActivityButtons();
+      syncLayoutVisibility();
+      renderProjectTabsBar();
+      updateHeaderAndStatusBar();
+      renderLeftSidebar();
+      renderEditorTabs();
+      renderEditorBody();
+      renderRightPane();
+      setStatus("Escolha uma pasta de projeto para começar.");
+      bootstrapAsync();
     }
-    bootstrapAsync(init.initialProject?.root);
   } catch (err: any) {
     toastError("iniciar a conexão com o backend (reinicie o app se o problema persistir)", err);
   }

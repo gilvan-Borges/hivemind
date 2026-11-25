@@ -20,9 +20,15 @@ func (a *App) ChooseDirectory() (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("janela não inicializada")
 	}
+	defaultDir := a.initialDir
+	if defaultDir == "" || isNonProjectLaunchDir(defaultDir) {
+		if home, err := os.UserHomeDir(); err == nil {
+			defaultDir = home
+		}
+	}
 	return wailsrt.OpenDirectoryDialog(a.ctx, wailsrt.OpenDialogOptions{
 		Title:            "Abrir Pasta do Projeto",
-		DefaultDirectory: a.initialDir,
+		DefaultDirectory: defaultDir,
 	})
 }
 
@@ -36,7 +42,9 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 	if err != nil || !info.IsDir() {
 		return ProjectInfo{}, fmt.Errorf("pasta inválida: %s", abs)
 	}
-	_, _ = idecore.RecordRecentProject("", abs)
+	if !isNonProjectLaunchDir(abs) {
+		_, _ = idecore.RecordRecentProject("", abs)
+	}
 	_, _ = loopx.PauseRunning(abs)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

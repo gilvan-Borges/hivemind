@@ -71,7 +71,9 @@ func main() {
 	}
 	if initialDir == "" {
 		if cwd, err := os.Getwd(); err == nil {
-			initialDir = cwd
+			if smokeCheck || serveBridge || !isNonProjectLaunchDir(cwd) {
+				initialDir = cwd
+			}
 		}
 	}
 

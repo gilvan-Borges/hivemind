@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -15,14 +16,89 @@ import (
 	wailsrt "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// isNonProjectLaunchDir reports directories that should never be auto-opened as
+// a user workspace (the HiveMind installation folder containing the binaries or
+// Inno Setup uninstaller, or Windows System32). Source checkouts (.git/go.mod)
+// are always allowed.
+func isNonProjectLaunchDir(dir string) bool {
+	trimmed := strings.TrimSpace(dir)
+	if trimmed == "" {
+		return true
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	if _, err := os.Stat(filepath.Join(abs, ".git")); err == nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(abs, "go.mod")); err == nil {
+		return false
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		exeDir := filepath.Clean(filepath.Dir(exe))
+		if strings.EqualFold(abs, exeDir) {
+			return true
+		}
+	}
+	if _, err := os.Stat(filepath.Join(abs, "unins000.exe")); err == nil {
+		return true
+	}
+	_, hasIDE := os.Stat(filepath.Join(abs, "hivemind-ide.exe"))
+	_, hasCLI := os.Stat(filepath.Join(abs, "hivemind.exe"))
+	if hasIDE == nil && hasCLI == nil {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		low := strings.ToLower(filepath.ToSlash(abs))
+		if strings.HasSuffix(low, "/windows/system32") || strings.HasSuffix(low, "/windows/syswow64") {
+			return true
+		}
+	}
+	return false
+}
+
+func filterValidRecentProjects(recent []string) []string {
+	out := make([]string, 0, len(recent))
+	for _, r := range recent {
+		if isNonProjectLaunchDir(r) {
+			continue
+		}
+		if info, err := os.Stat(r); err != nil || !info.IsDir() {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func resolveInitialWorkspace(explicitDir string, recent []string, smokeCheck bool) string {
+	if smokeCheck {
+		if explicitDir != "" {
+			return explicitDir
+		}
+		cwd, _ := os.Getwd()
+		return cwd
+	}
+	if strings.TrimSpace(explicitDir) != "" && !isNonProjectLaunchDir(explicitDir) {
+		return explicitDir
+	}
+	for _, r := range filterValidRecentProjects(recent) {
+		return r
+	}
+	return ""
+}
+
 // GetInitialState loads the initial workspace and recent list without blocking on agy.
 func (a *App) GetInitialState() InitialState {
-	dir := a.initialDir
-	if dir == "" {
-		dir, _ = os.Getwd()
+	recent := filterValidRecentProjects(idecore.LoadRecentProjects(""))
+	dir := resolveInitialWorkspace(a.initialDir, recent, a.smokeCheck)
+	var proj ProjectInfo
+	if dir != "" {
+		proj, _ = a.OpenProject(dir)
+		recent = filterValidRecentProjects(idecore.LoadRecentProjects(""))
 	}
-	proj, _ := a.OpenProject(dir)
-	recent := idecore.LoadRecentProjects("")
 
 	a.mu.Lock()
 	agy := a.agyStatus

@@ -1,7 +1,7 @@
 import { fileBadge, icons } from "./icons";
 import type { AgentRuntime, ChatMessage, FileNode, PermissionMode, ProjectWorkspaceContext } from "./types";
 import { chipForAgent, escapeHtml, exactTokens, formatTokens, matchAgentRuntime, modelChipHtml, permissionModeLabel, reasonPhrase, roleLabelPt } from "./utils";
-import { refreshSessions } from "./boot";
+import { openFolderDialog, refreshSessions } from "./boot";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindGitSidebarEvents, clearCenterStage, getGitStatusMap, placeGitTabContent, renderGitSidebarHtml } from "./git";
@@ -735,7 +735,15 @@ export function bindSessionsSidebarEvents() {
 
 export function renderExplorerTreeHtml(): string {
   const rootNodes = state.dirCache.get("") ?? state.project?.files ?? [];
-  if (!state.project) return `<div class="dim" style="padding:8px">Abra uma pasta</div>`;
+  if (!state.project) {
+    return `
+      <div class="empty-panel" style="padding:14px 10px">
+        <strong>Nenhum projeto aberto</strong>
+        <span>Abra a pasta de um repositório ou projeto para começar.</span>
+        <button type="button" class="mini primary" id="btn-explorer-open-folder">${icons.folderOpen}<span>Abrir Pasta do Projeto</span></button>
+      </div>
+    `;
+  }
   const gitMap = getGitStatusMap();
   const q = state.explorerFilter.trim();
   if (q && state.explorerFilterResults.length > 0) {
@@ -836,6 +844,9 @@ export function updateTeamStatusPills() {
 }
 
 export function bindExplorerEvents() {
+  document.getElementById("btn-explorer-open-folder")?.addEventListener("click", () => {
+    void openFolderDialog(true);
+  });
   const filterIn = document.getElementById("explorer-filter") as HTMLInputElement | null;
   filterIn?.addEventListener("input", () => {
     state.explorerFilter = filterIn.value;

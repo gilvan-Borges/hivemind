@@ -124,3 +124,31 @@ func TestAutoReviewReusesGitHubMonitorCache(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveInitialWorkspaceSkipsInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(installDir, "hivemind-ide.exe"), []byte("bin"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "unins000.exe"), []byte("unins"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isNonProjectLaunchDir(installDir) {
+		t.Fatalf("expected %s to be detected as install dir", installDir)
+	}
+
+	realProject := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realProject, "go.mod"), []byte("module example.com/acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isNonProjectLaunchDir(realProject) {
+		t.Fatalf("expected %s with go.mod to be treated as real project", realProject)
+	}
+
+	if got := resolveInitialWorkspace(installDir, []string{installDir, realProject}, false); got != realProject {
+		t.Fatalf("expected fallback to recent real project %s, got %q", realProject, got)
+	}
+	if got := resolveInitialWorkspace(installDir, []string{installDir}, false); got != "" {
+		t.Fatalf("expected empty workspace on first install without recent projects, got %q", got)
+	}
+}
