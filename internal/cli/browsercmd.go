@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/gilvan-Borges/HiveMind/internal/browserx"
+	"github.com/gilvan-Borges/HiveMind/internal/resident"
+	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 )
 
 func newBrowserCmd() *cobra.Command {
@@ -92,8 +96,44 @@ func newBrowserStatus() *cobra.Command {
 func newBrowserServe() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
-		Short: "Sobe a ponte do Chrome em 127.0.0.1 até Ctrl+C",
+		Short: "Sobe a ponte independente do Chrome em 127.0.0.1 até Ctrl+C (sem precisar da IDE aberta)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			browserx.SetChatHandler(func(text string) (string, error) {
+				msg := strings.TrimSpace(text)
+				if msg == "" {
+					return "", fmt.Errorf("mensagem vazia")
+				}
+				baseDir := resident.DefaultBaseDir()
+				cfg, err := resident.LoadConfig(baseDir)
+				if err != nil {
+					return "", err
+				}
+				pol, _ := resident.LoadPolicy(baseDir)
+				runner := &resident.Runner{
+					BaseDir:      baseDir,
+					Config:       cfg,
+					Policy:       &pol,
+					Audit:        resident.NewFileAuditLogger(filepath.Join(baseDir, "audit.jsonl")),
+					SkillsDir:    skillx.UserSkillsDir(),
+					AllowedTiers: []resident.Tier{resident.TierRead, resident.TierNetwork},
+					ApproveDetailed: func(_ context.Context, req resident.ApprovalRequest) bool {
+						return req.ToolName == "chrome_tab"
+					},
+				}
+				res, err := runner.RunTurn(cmd.Context(), resident.TurnRequest{
+					Message:    msg,
+					Workspace:  "",
+					Workstream: "chrome-extension",
+					Origin:     resident.OriginLocal,
+				})
+				if err != nil {
+					return "", err
+				}
+				if strings.TrimSpace(res.FinalText) == "" {
+					return "Concluído.", nil
+				}
+				return strings.TrimSpace(res.FinalText), nil
+			})
 			br, err := browserx.Listen(cmd.Context())
 			if err != nil {
 				return err

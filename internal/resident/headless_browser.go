@@ -161,21 +161,52 @@ func (b *Broker) handleChromeTab(ctx context.Context, args map[string]any) (stri
 	switch action {
 	case "read":
 		tool = "read_page"
+		callArgs["fresh"] = true
+	case "text":
+		tool = "get_page_text"
+	case "find":
+		tool = "find"
+		if q := firstNonEmptyStr(strArg(args, "query"), strArg(args, "text")); q != "" {
+			callArgs["query"] = q
+		}
+		if r := strArg(args, "role"); r != "" {
+			callArgs["role"] = r
+		}
 	case "navigate":
 		tool = "navigate"
 		callArgs["url"] = strArg(args, "url")
 	case "click":
 		tool = "click"
-		callArgs["ref"] = strArg(args, "ref")
+		if ref := strArg(args, "ref"); ref != "" {
+			callArgs["ref"] = ref
+		}
+		if name := firstNonEmptyStr(strArg(args, "name"), strArg(args, "text")); name != "" {
+			callArgs["name"] = name
+		}
 	case "type":
 		tool = "type"
-		callArgs["ref"] = strArg(args, "ref")
+		if ref := strArg(args, "ref"); ref != "" {
+			callArgs["ref"] = ref
+		}
+		if name := strArg(args, "name"); name != "" {
+			callArgs["name"] = name
+		}
 		callArgs["text"] = strArg(args, "text")
 	case "key":
 		tool = "key"
 		callArgs["key"] = firstNonEmptyStr(strArg(args, "key"), strArg(args, "text"))
+	case "scroll":
+		tool = "scroll"
+		if dir := strArg(args, "direction"); dir != "" {
+			callArgs["direction"] = dir
+		}
+	case "wait":
+		tool = "wait"
+		if t := strArg(args, "text"); t != "" {
+			callArgs["text"] = t
+		}
 	default:
-		return "", fmt.Errorf("action deve ser read, navigate, click, type ou key")
+		return "", fmt.Errorf("action deve ser read, text, find, navigate, click, type, key, scroll ou wait")
 	}
 	ctx = browserx.WithApprover(ctx, func(string) bool { return true })
 	text, err := browserx.CallTool(ctx, tool, callArgs)

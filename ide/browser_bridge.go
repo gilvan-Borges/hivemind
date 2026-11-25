@@ -5,7 +5,6 @@ import (
 	"log"
 	"strings"
 
-	"github.com/gilvan-Borges/HiveMind/ide/internal/idecore"
 	"github.com/gilvan-Borges/HiveMind/internal/browserx"
 )
 
@@ -21,13 +20,10 @@ func (a *App) browserChat(text string) (string, error) {
 	if text == "" {
 		return "", fmt.Errorf("mensagem vazia")
 	}
-	ws := strings.TrimSpace(a.initialDir)
-	if ws == "" {
-		if recent := idecore.LoadRecentProjects(""); len(recent) > 0 {
-			ws = recent[0]
-		}
+	if a.resident == nil {
+		return "", fmt.Errorf("Agent Hive indisponível")
 	}
-	res, err := a.ResidentStartTurn(ws, "", text)
+	res, err := a.resident.RunBrowserExtensionTurn(a.ctx, text)
 	if err != nil {
 		return "", err
 	}

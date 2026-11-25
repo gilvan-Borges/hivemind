@@ -330,9 +330,9 @@ func DecideWithPolicy(call Call, pol Policy) Decision {
 			}
 		}
 		switch strings.ToLower(strArg(cleanArgs, "action")) {
-		case "", "read", "navigate", "click", "type", "key":
+		case "", "read", "text", "find", "navigate", "click", "type", "key", "scroll", "wait":
 		default:
-			return Decision{Allow: false, Ask: false, Reason: "action deve ser read, navigate, click, type ou key"}
+			return Decision{Allow: false, Ask: false, Reason: "action deve ser read, text, find, navigate, click, type, key, scroll ou wait"}
 		}
 		return Decision{
 			Allow:  false,

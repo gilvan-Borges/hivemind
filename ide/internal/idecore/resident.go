@@ -551,6 +551,68 @@ type turnOpts struct {
 	skipCommand  bool
 }
 
+// RunBrowserExtensionTurn executes a completely isolated Agent Hive turn for the
+// Chrome sidepanel extension:
+//   - NEVER reads or touches any open IDE workspace, file, or shared conversation;
+//   - NEVER emits events to IDE lanes/tabs or triggers SquadHandoff / IDE actions;
+//   - Keeps its own private short-term session under workstream "chrome-extension".
+func (m *ResidentManager) RunBrowserExtensionTurn(
+	parentCtx context.Context,
+	message string,
+) (resident.TurnResult, error) {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return resident.TurnResult{}, fmt.Errorf("mensagem vazia")
+	}
+	m.turns.Add(1)
+	defer m.turns.Done()
+
+	cfg, err := resident.LoadConfig(m.baseDir)
+	if err != nil {
+		return resident.TurnResult{}, err
+	}
+	if !cfg.Enabled {
+		return resident.TurnResult{}, fmt.Errorf("Agent Hive está desativado nas Configurações")
+	}
+	pol, _ := resident.LoadPolicy(m.baseDir)
+	acct, devID := m.currentAccount()
+	mem := resident.NewMemoryStore(m.baseDir, acct)
+	prov, mod := resident.ResolveModelRoute(cfg)
+	soul, _ := resident.LoadSoul(m.baseDir)
+
+	runner := &resident.Runner{
+		BaseDir:      m.baseDir,
+		Config:       cfg,
+		Policy:       &pol,
+		Sandbox:      m.sandbox,
+		Vault:        m.vault,
+		Audit:        m.audit,
+		Memory:       mem,
+		Model:        m.testModel,
+		SkillsDir:    skillx.UserSkillsDir(),
+		AllowedTiers: []resident.Tier{resident.TierRead, resident.TierNetwork},
+		ApproveDetailed: func(_ context.Context, req resident.ApprovalRequest) bool {
+			// Host-level approval happens inside the Chrome sidepanel itself.
+			return req.ToolName == "chrome_tab"
+		},
+		OnEvent: func(ev resident.Event) {
+			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
+				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
+			}
+		},
+	}
+
+	return runner.RunTurn(parentCtx, resident.TurnRequest{
+		Message:    msg,
+		Workspace:  "",
+		Workstream: "chrome-extension",
+		Origin:     resident.OriginLocal,
+		AccountID:  acct,
+		DeviceID:   devID,
+		Soul:       soul,
+	})
+}
+
 func (m *ResidentManager) runTurn(
 	parentCtx context.Context,
 	workspaceDir, workstream, message string,
