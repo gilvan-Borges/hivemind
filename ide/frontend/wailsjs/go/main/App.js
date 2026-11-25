@@ -562,6 +562,10 @@ export function ResidentReviewSkill(arg1) {
   return window['go']['main']['App']['ResidentReviewSkill'](arg1);
 }
 
+export function ResidentRunRoutineNow(arg1) {
+  return window['go']['main']['App']['ResidentRunRoutineNow'](arg1);
+}
+
 export function ResidentSaveConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResidentSaveConfig'](arg1, arg2, arg3);
 }

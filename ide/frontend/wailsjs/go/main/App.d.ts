@@ -296,6 +296,8 @@ export function ResidentResumeLoop(arg1:string,arg2:string):Promise<void>;
 
 export function ResidentReviewSkill(arg1:string):Promise<string>;
 
+export function ResidentRunRoutineNow(arg1:string):Promise<void>;
+
 export function ResidentSaveConfig(arg1:string,arg2:string,arg3:string):Promise<resident.Status>;
 
 export function ResidentSavePolicy(arg1:Array<string>,arg2:Array<string>):Promise<resident.Status>;
