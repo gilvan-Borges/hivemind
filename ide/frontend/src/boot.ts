@@ -16,6 +16,7 @@ import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
 import { countTurnFiles } from "./companion/logic";
+import { maybeSeedLayoutPreview } from "./layout-preview";
 import { dismissMessage, mountCompanion, noteActivity, publishGitHubNotice, publishNotice } from "./companion/host";
 
 function noticeProjectId(isActive: boolean, ctx?: ProjectWorkspaceContext): string {
@@ -59,6 +60,7 @@ export async function boot() {
     renderEditorTabs();
     renderEditorBody();
     renderRightPane();
+    maybeSeedLayoutPreview();
     setStatus("Modo preview (sem runtime Wails)");
     return;
   }

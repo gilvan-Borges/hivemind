@@ -8,10 +8,10 @@ import { setProjectPermissionMode } from "./explorer";
 import { openInlineEdit, toggleGhostText } from "./inline-ai";
 import { openIdeSettingsTab } from "./ide-settings";
 import { openGitHubModal, openJiraModal } from "./modals";
-import { openSidebarView, updateStatusBar } from "./shell";
+import { openSidebarView, runStackTests, syncLayoutVisibility, updateStatusBar } from "./shell";
 import { api, setRunMode, state } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
-import { renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
+import { toggleTerminal } from "./terminal";
 
 export let quickOpenTimer = 0;
 
@@ -36,7 +36,9 @@ export function getCommandActions(): CommandAction[] {
     { id: "toggle-ghost", label: `Ghost Text Inline (${state.ghostTextEnabled ? "Desativar" : "Ativar"})`, shortcut: "Tab", run: () => toggleGhostText() },
     { id: "diff-toggle", label: `Alternar Modo de Diff (${state.diffViewMode === "split" ? "Lado a Lado → Unificado" : "Unificado → Lado a Lado"})`, run: () => { state.diffViewMode = state.diffViewMode === "split" ? "unified" : "split"; renderEditorBody(); } },
     { id: "search", label: "Busca Global no Código", shortcut: "Ctrl+Shift+F", run: () => { openSidebarView("search"); (document.getElementById("global-search-input") as HTMLInputElement | null)?.focus(); } },
-    { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => { if (!state.terminal.open) { state.terminal.open = true; renderTerminalDrawer(); } runTerminalCommand(state.project?.stack?.testHint || "git status"); } },
+    { id: "test", label: `Rodar Testes da Stack (${state.project?.stack?.testHint || "git status"})`, run: () => runStackTests() },
+    { id: "toggle-left", label: "Alternar barra lateral", run: () => { state.showLeftSidebar = !state.showLeftSidebar; syncLayoutVisibility(); } },
+    { id: "toggle-right", label: "Alternar painel da equipe", run: () => { state.showRightAI = !state.showRightAI; syncLayoutVisibility(); } },
     { id: "term", label: "Alternar Terminal Integrado", shortcut: "Ctrl+J", run: () => toggleTerminal() },
     { id: "wizard", label: "Configurar Equipe do Projeto e Skills (.hivemind/team.yaml)", run: () => void openTeamConfigTab() },
     { id: "providers-pool", label: "Provedores & Contas (Pool de Chaves e Google Antigravity)", run: () => void openIdeSettingsTab("providers", { providersTab: "profiles" }) },

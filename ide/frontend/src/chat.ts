@@ -2,7 +2,7 @@ import { icons } from "./icons";
 import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownLite, renderMarkdownStreamed } from "./markdown";
 import type { ChatMessage, PermissionMode, RunMode, TeamLane } from "./types";
-import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatMicroUsd, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
+import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatMicroUsd, formatTokens, modelChipHtml, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
 import { refreshSessions } from "./boot";
 import { bindDesignModeEvents, formatDesignModeContext, loadDesignModePages, renderDesignModeChipHtml, renderDesignModePopoverHtml } from "./design-mode";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs } from "./editor";
@@ -11,7 +11,7 @@ import { refreshDiffs, refreshDiffsAndSummarize } from "./git";
 import { activeLane, buildAgentRuntimes, createLane, ensureThinkingTicker, formatElapsedThinking, getVisibleSplitLanes, markThinkingDone, markToolsDone, renderLaneBarOnly, renderPipelineBar, stopLaneRunningAgents, toggleSplitLanes } from "./lanes";
 import { syncHiveBinding } from "./resident";
 import { renderModalLayer } from "./modals";
-import { openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
+import { dismissShellPopovers, openSidebarView, renderProjectTabsBar, syncChatExpandLayout, toggleChatExpanded, updateStatusBar } from "./shell";
 import { api, setRunMode, setStatus, state, toastError } from "./state";
 import { mountLanePTY } from "./terminal";
 import { openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
@@ -19,6 +19,15 @@ import { openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
 export let chatFlushRaf = 0;
 
 export let mentionTimer = 0;
+
+let chatActionsOpen = false;
+
+export function closeChatActionsMenu() {
+  chatActionsOpen = false;
+  const menu = document.getElementById("chat-actions-menu");
+  if (menu) menu.hidden = true;
+  document.getElementById("btn-chat-actions")?.setAttribute("aria-expanded", "false");
+}
 
 const laneIdleWaiters = new Map<string, Array<() => void>>();
 const laneRedirecting = new Set<string>();
@@ -120,18 +129,24 @@ export function renderRightPane() {
             <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
           </div>`;
 
+  const isPty = lane?.viewMode === "pty";
+  const expandLabel = state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA";
   right.innerHTML = `
-    <div class="sidebar-header">
-      <span class="eyebrow">${icons.sparkle}<span>Equipe IA</span></span>
-      <div class="spacer"></div>
-      <button type="button" class="icon-btn" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}" aria-label="${state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA"}">${icons.expand}</button>
-      <button class="mini ghost" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
-      <button class="mini" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
-      <button type="button" class="mini ${splitLanes.length >= 2 ? "primary" : "ghost"}" id="btn-toggle-split-lanes" title="Dividir painel com 2 lanes lado a lado" aria-pressed="${splitLanes.length >= 2 ? "true" : "false"}">${icons.swarm}<span>Dividir</span></button>
+    <div class="chat-top">
+      <div class="lane-bar" id="lane-bar"></div>
+      <div class="dropdown chat-actions">
+        <button type="button" class="icon-btn" id="btn-chat-actions" title="Ações da conversa" aria-haspopup="menu" aria-expanded="${chatActionsOpen ? "true" : "false"}" aria-controls="chat-actions-menu">${icons.moreHoriz}</button>
+        <div class="dropdown-menu chat-actions-menu" id="chat-actions-menu" role="menu" ${chatActionsOpen ? "" : "hidden"}>
+          <button type="button" class="dropdown-item" id="btn-new-session" title="Começar uma nova conversa limpa">${icons.plus}<span>Nova conversa</span></button>
+          <button type="button" class="dropdown-item" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.swarm}<span>Paralela</span></button>
+          <button type="button" class="dropdown-item" id="btn-toggle-split-lanes" title="Dividir painel com 2 lanes lado a lado" aria-pressed="${splitLanes.length >= 2 ? "true" : "false"}">${icons.swarm}<span>${splitLanes.length >= 2 ? "Juntar" : "Dividir"}</span></button>
+          <button type="button" class="dropdown-item" id="btn-open-sessions-bar" title="Ver sessões salvas e o total do projeto">${icons.sessions}<span>Histórico</span></button>
+          <button type="button" class="icon-btn dropdown-item" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}" aria-label="${expandLabel}">${icons.expand}<span>${expandLabel}</span></button>
+          <button type="button" class="dropdown-item ${!isPty ? "active" : ""}" id="btn-lane-mode-chat" title="Conversa dos agentes">${icons.sparkle}<span>Chat</span></button>
+          <button type="button" class="dropdown-item ${isPty ? "active" : ""}" id="btn-lane-mode-pty" title="Terminal PTY compartilhado">${icons.terminal}<span>Terminal da conversa</span></button>
+        </div>
+      </div>
     </div>
-    <div class="lane-bar" id="lane-bar"></div>
-    <div class="pipeline-bar" id="pipeline-bar"></div>
-    <div class="token-bar" id="token-bar"></div>
     ${bodyHtml}
     <div class="composer-wrap">
       <div id="design-mode-popover-slot">${renderDesignModePopoverHtml()}</div>
@@ -144,9 +159,6 @@ export function renderRightPane() {
         <div class="composer-footer">
           <div class="composer-mode-bar" id="composer-mode-bar"></div>
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
-          <button type="button" class="composer-icon-btn ${state.designMode.open ? "active" : ""}" id="btn-design-mode" title="Design Mode — inspecionar elemento no Chrome via CDP" aria-label="Design Mode">${icons.target}</button>
-          <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}</button>
-          <input id="jira-key-input" class="composer-jira-input" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
           <span class="dim composer-lane-tag" id="composer-team-label"></span>
           <div class="spacer"></div>
           <button type="button" class="danger mini composer-stop-btn" id="btn-cancel-run" ${lane?.running ? "" : "disabled"} style="${lane?.running ? "" : "display:none"}" title="Interromper execução atual">${icons.stop}<span>Parar</span></button>
@@ -281,8 +293,7 @@ export function renderComposerModeBar() {
 
   const allModes = [...execModes, ...planModes];
   const curMode = allModes.find((m) => m.id === state.runMode) || execModes[0];
-  const modeOpen = state.composerMenuOpen === "mode";
-  const permOpen = state.composerMenuOpen === "perm";
+  const toolsOpen = state.composerMenuOpen === "tools";
 
   const permOptions: Array<{ id: PermissionMode; label: string; dotClass: string; desc: string }> = [
     {
@@ -325,30 +336,19 @@ export function renderComposerModeBar() {
 
   bar.innerHTML = `
     <div class="composer-select-wrap">
-      <button type="button" class="composer-select-trigger ${modeOpen ? "open" : ""} ${state.runMode.startsWith("plan") ? "is-plan" : ""}" id="btn-composer-mode-select" title="Escolher modo de execução ou planejamento">
+      <button type="button" class="composer-select-trigger ${toolsOpen ? "open" : ""} ${state.runMode.startsWith("plan") ? "is-plan" : ""}" id="btn-composer-tools" title="Modo, autonomia, Jira, memória, Design Mode e anexos">
         <span class="composer-trigger-icon">${curMode.icon}</span>
-        <span class="composer-trigger-label">${escapeHtml(curMode.shortLabel)}</span>
+        <span class="composer-trigger-label">${escapeHtml(curMode.shortLabel)} · ${escapeHtml(curPerm.label)}</span>
         <span class="composer-trigger-caret">${icons.chevronDown}</span>
       </button>
-      ${modeOpen ? `
-        <div class="composer-popover composer-popover-mode" id="composer-mode-popover" role="listbox">
+      ${toolsOpen ? `
+        <div class="composer-popover composer-popover-tools" id="composer-tools-popover" role="listbox">
           <div class="composer-popover-section">Modo de execução</div>
           ${execModes.map(renderModeOption).join("")}
           <div class="composer-popover-divider"></div>
           <div class="composer-popover-section">Planejamento com aprovação</div>
           ${planModes.map(renderModeOption).join("")}
-        </div>
-      ` : ""}
-    </div>
-
-    <div class="composer-select-wrap">
-      <button type="button" class="composer-select-trigger ${permOpen ? "open" : ""}" id="btn-composer-perm-select" title="Escolher nível de permissão e autonomia">
-        <span class="perm-dot ${curPerm.dotClass}"></span>
-        <span class="composer-trigger-label">${escapeHtml(curPerm.label)}</span>
-        <span class="composer-trigger-caret">${icons.chevronDown}</span>
-      </button>
-      ${permOpen ? `
-        <div class="composer-popover composer-popover-perm" id="composer-perm-popover" role="listbox">
+          <div class="composer-popover-divider"></div>
           <div class="composer-popover-section">Autonomia da equipe</div>
           ${permOptions.map((p) => {
             const active = perm === p.id;
@@ -356,35 +356,32 @@ export function renderComposerModeBar() {
               <button type="button" class="composer-popover-item ${active ? "active" : ""}" data-perm-mode="${p.id}">
                 <span class="composer-popover-icon"><span class="perm-dot ${p.dotClass}"></span></span>
                 <span class="composer-popover-body">
-                  <span class="composer-popover-title-row">
-                    <strong>${escapeHtml(p.label)}</strong>
-                  </span>
+                  <span class="composer-popover-title-row"><strong>${escapeHtml(p.label)}</strong></span>
                   <span class="composer-popover-desc">${escapeHtml(p.desc)}</span>
                 </span>
                 <span class="composer-popover-check">${active ? icons.check : ""}</span>
               </button>
             `;
           }).join("")}
-          ${state.cursorCLI?.sandboxWarning ? `<div class="composer-popover-desc" style="padding:8px 12px 10px">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
+          ${state.cursorCLI?.sandboxWarning ? `<div class="composer-popover-desc" style="padding:8px 12px 4px">${escapeHtml(state.cursorCLI.sandboxWarning)}</div>` : ""}
+          <div class="composer-popover-divider"></div>
+          <label class="composer-jira-field">
+            <span>Jira</span>
+            <input id="jira-key-input" class="composer-jira-input" placeholder="PROJ-123" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
+          </label>
+          <div class="composer-tools-actions">
+            <button type="button" class="composer-icon-btn" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)" aria-label="Memória compartilhada">${icons.memory}<span>Memória</span></button>
+            <button type="button" class="composer-icon-btn ${state.designMode.open ? "active" : ""}" id="btn-design-mode" title="Design Mode — inspecionar elemento no Chrome via CDP" aria-label="Design Mode">${icons.target}<span>Design</span></button>
+            <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto ou print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}<span>Anexo</span></button>
+          </div>
         </div>
       ` : ""}
     </div>
-
-    <button type="button" class="composer-icon-btn" id="btn-composer-memory" title="Abrir Memória Compartilhada (.hivemind/MEMORY.md)" aria-label="Memória compartilhada">
-      ${icons.memory}
-    </button>
   `;
 
-  bar.querySelector("#btn-composer-mode-select")?.addEventListener("click", (e) => {
+  bar.querySelector("#btn-composer-tools")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    state.composerMenuOpen = state.composerMenuOpen === "mode" ? "" : "mode";
-    state.planMenuOpen = false;
-    renderComposerModeBar();
-  });
-
-  bar.querySelector("#btn-composer-perm-select")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    state.composerMenuOpen = state.composerMenuOpen === "perm" ? "" : "perm";
+    state.composerMenuOpen = state.composerMenuOpen === "tools" ? "" : "tools";
     state.planMenuOpen = false;
     renderComposerModeBar();
   });
@@ -411,69 +408,43 @@ export function renderComposerModeBar() {
     });
   });
 
-  bar.querySelector("#btn-composer-memory")?.addEventListener("click", () => openTeamMemoryFile());
+  bar.querySelector("#btn-composer-memory")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.composerMenuOpen = "";
+    openTeamMemoryFile();
+  });
+  bar.querySelector("#btn-design-mode")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.designMode.open = !state.designMode.open;
+    refreshDesignModeUI();
+    renderComposerModeBar();
+    if (state.designMode.open) void loadDesignModePages(refreshDesignModeUI);
+  });
+  const fileInput = document.getElementById("chat-image-input") as HTMLInputElement | null;
+  bar.querySelector("#btn-attach-image")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    fileInput?.click();
+  });
+  bar.querySelector("#jira-key-input")?.addEventListener("input", (e) => {
+    state.jiraKeyInput = (e.target as HTMLInputElement).value;
+  });
+  bar.querySelector("#jira-key-input")?.addEventListener("click", (e) => e.stopPropagation());
 }
 
 export function renderTokenBar() {
-  const bar = document.getElementById("token-bar");
+  updateStatusBar();
   const lane = activeLane();
-  if (!bar || !lane) return;
+  const tokEl = document.getElementById("status-tokens");
+  if (!lane || !tokEl) return;
   const maxTok = state.project?.teamConfig?.settings?.max_tokens || 0;
-  const warnBudget = maxTok > 0 && lane.turnTotalTokens >= maxTok * 0.8;
   const turnCost = Number(lane.turnCostMicroUsd || 0);
   const sessCost = Number(lane.sessionCostMicroUsd || 0);
-  const roleParts = Object.entries(lane.costByRole || {})
-    .filter(([, v]) => v > 0)
-    .map(([k, v]) => `${k}: ${formatMicroUsd(v)}`)
-    .join(" | ");
-  const agentParts = lane.agents
-    .filter((a) => (a.costMicroUsd || 0) > 0)
-    .map((a) => `${a.name}: ${formatMicroUsd(a.costMicroUsd)}`)
-    .join(" · ");
-  const costTitle = [roleParts && `Por papel — ${roleParts}`, agentParts && `Por agente — ${agentParts}`]
-    .filter(Boolean)
-    .join("\n") || "Custo USD acumulado no turno e na sessão (catálogo Jev)";
-
-  const isPty = lane.viewMode === "pty";
-  bar.innerHTML = `
-    <span class="tok-pill" title="Turno atual — Entrada: ${exactTokens(lane.turnInTokens)} | Saída: ${exactTokens(lane.turnOutTokens)}">
-      ${icons.bolt}
-      <span>Turno: ${formatTokens(lane.turnTotalTokens)}</span>
-      <span class="dim">(↑${formatTokens(lane.turnInTokens)} ↓${formatTokens(lane.turnOutTokens)})</span>
-    </span>
-    <span class="tok-pill" title="Total desta sessão (${escapeHtml(lane.sessionId || "nova")}) — Entrada: ${exactTokens(lane.sessionInTokens)} | Saída: ${exactTokens(lane.sessionOutTokens)}">
-      <span>Sessão: ${formatTokens(lane.sessionTotalTokens)} tok</span>
-    </span>
-    ${
-      turnCost > 0 || sessCost > 0
-        ? `<span class="tok-pill cost-pill" title="${escapeHtml(costTitle)}">USD: ${formatMicroUsd(turnCost)}${sessCost > turnCost ? ` · ses ${formatMicroUsd(sessCost)}` : ""}</span>`
-        : ""
-    }
-    ${maxTok > 0 ? `<span class="tok-pill ${warnBudget ? "warn" : ""}" title="Limite configurado em .hivemind/team.yaml">Limite: ${formatTokens(lane.turnTotalTokens)}/${formatTokens(maxTok)}</span>` : ""}
-    ${isPty ? `<span class="tok-pill dim" title="HIVEMIND_SESSION_ID compartilhado">PTY: ${escapeHtml(lane.sessionId || lane.id)}</span>` : ""}
-    <div class="spacer"></div>
-    <div class="lane-mode-seg" role="group" aria-label="Visão da lane">
-      <button type="button" class="lane-mode-btn ${!isPty ? "active" : ""}" id="btn-lane-mode-chat" title="Conversa dos agentes">${icons.sparkle}<span>Chat</span></button>
-      <button type="button" class="lane-mode-btn ${isPty ? "active" : ""}" id="btn-lane-mode-pty" title="Terminal PTY compartilhado">${icons.terminal}<span>Terminal</span></button>
-    </div>
-    <button class="ghost mini" id="btn-open-sessions-bar" style="padding:1px 6px;font-size:11px" title="Ver todas as sessões salvas e total do projeto">Histórico</button>
-  `;
-  bar.querySelector("#btn-lane-mode-chat")?.addEventListener("click", () => {
-    if (lane.viewMode !== "chat") {
-      lane.viewMode = "chat";
-      renderRightPane();
-    }
-  });
-  bar.querySelector("#btn-lane-mode-pty")?.addEventListener("click", () => {
-    if (lane.viewMode !== "pty") {
-      lane.viewMode = "pty";
-      renderRightPane();
-    }
-  });
-  bar.querySelector("#btn-open-sessions-bar")?.addEventListener("click", () => {
-    openSidebarView("sessions");
-    refreshSessions();
-  });
+  const extra = [
+    turnCost > 0 || sessCost > 0 ? `USD turno ${formatMicroUsd(turnCost)} · sessão ${formatMicroUsd(sessCost)}` : "",
+    maxTok > 0 ? `Limite ${formatTokens(lane.turnTotalTokens)}/${formatTokens(maxTok)}` : "",
+    lane.viewMode === "pty" ? `PTY ${lane.sessionId || lane.id}` : "",
+  ].filter(Boolean);
+  if (extra.length) tokEl.title = `${tokEl.title} · ${extra.join(" · ")}`;
 }
 
 export function renderComposerImages() {
@@ -1387,6 +1358,15 @@ export function renderMentionPopup() {
 }
 
 export function bindRightStaticEvents() {
+  document.getElementById("btn-chat-actions")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dismissShellPopovers();
+    chatActionsOpen = !chatActionsOpen;
+    const menu = document.getElementById("chat-actions-menu");
+    if (menu) menu.hidden = !chatActionsOpen;
+    document.getElementById("btn-chat-actions")?.setAttribute("aria-expanded", chatActionsOpen ? "true" : "false");
+  });
+
   document.getElementById("btn-expand-chat")?.addEventListener("click", () => {
     toggleChatExpanded();
   });
@@ -1417,16 +1397,9 @@ export function bindRightStaticEvents() {
       state.lanes.push(createLane(nextTeam));
     }
     state.splitLaneIds = toggleSplitLanes(state.lanes, state.activeLaneId, state.splitLaneIds);
+    chatActionsOpen = false;
     renderRightPane();
     updateStatusBar();
-  });
-
-  document.getElementById("btn-design-mode")?.addEventListener("click", () => {
-    state.designMode.open = !state.designMode.open;
-    refreshDesignModeUI();
-    if (state.designMode.open) {
-      void loadDesignModePages(refreshDesignModeUI);
-    }
   });
 
   document.getElementById("btn-new-session")?.addEventListener("click", () => {
@@ -1537,7 +1510,6 @@ export function bindRightStaticEvents() {
   });
 
   const fileInput = document.getElementById("chat-image-input") as HTMLInputElement | null;
-  document.getElementById("btn-attach-image")?.addEventListener("click", () => fileInput?.click());
   fileInput?.addEventListener("change", () => {
     if (fileInput.files && fileInput.files.length > 0) {
       attachImageFiles(fileInput.files);
@@ -1561,9 +1533,25 @@ export function bindRightStaticEvents() {
     }
   });
 
-  const jiraInput = document.getElementById("jira-key-input") as HTMLInputElement | null;
-  jiraInput?.addEventListener("input", () => {
-    state.jiraKeyInput = jiraInput.value;
+  document.getElementById("btn-lane-mode-chat")?.addEventListener("click", () => {
+    const lane = activeLane();
+    if (lane && lane.viewMode !== "chat") {
+      lane.viewMode = "chat";
+      chatActionsOpen = false;
+      renderRightPane();
+    }
+  });
+  document.getElementById("btn-lane-mode-pty")?.addEventListener("click", () => {
+    const lane = activeLane();
+    if (lane && lane.viewMode !== "pty") {
+      lane.viewMode = "pty";
+      chatActionsOpen = false;
+      renderRightPane();
+    }
+  });
+  document.getElementById("btn-open-sessions-bar")?.addEventListener("click", () => {
+    openSidebarView("sessions");
+    refreshSessions();
   });
 
   document.getElementById("btn-send-run")?.addEventListener("click", () => sendToChief());

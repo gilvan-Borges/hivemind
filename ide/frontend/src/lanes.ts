@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 import type { AgentRuntime, ChatMessage, TeamLane } from "./types";
-import { completePreviousStageAgents, escapeHtml, formatElapsedDuration, formatTokens, matchAgentRuntime, stopRunningAgentRuntimes, transitionAgentToRunning, updateAgentRuntimeStatus } from "./utils";
+import { completePreviousStageAgents, escapeHtml, formatElapsedDuration, matchAgentRuntime, stopRunningAgentRuntimes, transitionAgentToRunning, updateAgentRuntimeStatus } from "./utils";
 import { rebuildChatMessagesFull, renderTokenBar, syncComposerButtons } from "./chat";
 import { renderEditorBody } from "./editor";
 import { renderLeftSidebar } from "./explorer";
@@ -400,7 +400,6 @@ export function renderLaneBarOnly() {
           ? `<input type="text" class="lane-rename-input" id="lane-rename-input" value="${escapeHtml(display)}" maxlength="40" aria-label="Novo nome da aba" />`
           : `<span class="lane-pill-name" data-dbl-rename="${l.id}" title="Duplo clique para renomear (${escapeHtml(l.teamName)})">${escapeHtml(display)}</span>`
         }
-        ${!isEditing && l.sessionTotalTokens > 0 ? `<span class="dim" style="font-size:10px">${formatTokens(l.sessionTotalTokens)}</span>` : ""}
         ${!isEditing ? `<button type="button" class="lane-edit-btn" data-rename-lane="${l.id}" title="Renomear aba desta equipe" aria-label="Renomear ${escapeHtml(display)}">${icons.editPen}</button>` : ""}
         <button type="button" class="lane-close-x" data-close-lane="${l.id}" title="Excluir equipe e parar todos os serviços" aria-label="Excluir equipe ${escapeHtml(display)}">${icons.closeSmall}</button>
       </div>

@@ -3,7 +3,7 @@ import { refreshMCP } from "./mcp";
 import type { SidebarView } from "./types";
 import { escapeHtml, exactTokens, formatTokens, permissionModeLabel, runModeLabel, shouldExpandChat } from "./utils";
 import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
-import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
+import { closeChatActionsMenu, renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { clearGitHubUnread, loadGitGraph, refreshDiffs, updateGitActivityBadge } from "./git";
@@ -105,12 +105,10 @@ export function renderProjectTabsBar() {
       const isAct = ctx.id === state.activeProjectId;
       const isRunning = ctx.lanes.some((l) => l.running);
       const isDirty = ctx.editorTabs.some((t) => t.kind === "file" && t.dirty);
-      const branch = ctx.project.branch || "sem git";
       return `
         <div class="project-tab ${isAct ? "active" : ""}" data-proj-tab="${escapeHtml(ctx.id)}" title="${escapeHtml(ctx.project.root)} — Contexto e Chat 100% isolados">
           ${icons.folderOpen}
           <span>${escapeHtml(ctx.project.name)}</span>
-          <span class="proj-branch-tag">${escapeHtml(branch)}</span>
           ${isRunning ? `<span class="proj-run-dot" title="Equipe executando em segundo plano neste projeto"></span>` : ""}
           ${isDirty ? `<span class="proj-dirty-dot" title="Arquivos com edições não salvas">${icons.dot}</span>` : ""}
           ${state.projectTabs.length > 1
@@ -159,34 +157,18 @@ export function mountShell() {
   rootEl.innerHTML = `
     <div class="ide-shell">
       <header class="titlebar" id="titlebar">
-        <span class="brand-logo">${icons.brand}<span>HiveMind</span><span class="brand-suffix">IDE</span></span>
         <div class="dropdown">
-          <button class="ghost titlebar-interactive" id="btn-file-menu">Arquivo</button>
+          <button type="button" class="brand-logo ghost titlebar-interactive" id="btn-file-menu" title="Menu Arquivo">${icons.brand}<span>HiveMind</span><span class="brand-suffix">IDE</span></button>
           <div class="dropdown-menu" id="file-menu-dropdown" style="display:none"></div>
         </div>
-        <button class="jb-vcs-pill titlebar-interactive" id="btn-header-vcs" title="Branch Git (clique para trocar ou criar)">
-          ${icons.gitSmall}
-          <span id="header-vcs-label">sem git</span>
-        </button>
-        <div class="spacer"></div>
-        <button class="title-center-cmd titlebar-interactive" id="btn-quick-open" title="Buscar arquivos (Ctrl+P) ou Comandos (Ctrl+K)">
-          ${icons.search}
-          <span class="cmd-proj" id="title-cmd-proj">Buscar arquivo (Ctrl+P)</span>
-          <span class="stack-tag" id="title-stack-tag" style="display:none"></span>
-        </button>
-        <div class="spacer"></div>
-        <button class="jb-swarm-btn titlebar-interactive" id="btn-header-swarm" title="Abrir Quadro Multiagente (Ctrl+Shift+A)">
-          ${icons.swarm}
-          <span>Quadro</span>
-        </button>
-        <button class="jb-run-btn titlebar-interactive" id="btn-header-run" title="Rodar comando de teste/build da stack no Terminal">
-          ${icons.play}
-          <span id="header-run-label">Testar</span>
-        </button>
-        <button class="icon-btn titlebar-interactive" id="btn-cmd-palette" title="Paleta de Comandos (Ctrl+K)">${icons.command}</button>
-        <button class="icon-btn titlebar-interactive" id="btn-toggle-term" title="Alternar Terminal (Ctrl+J)">${icons.terminal}</button>
-        <button class="icon-btn titlebar-interactive" id="btn-toggle-left" title="Alternar barra lateral">${icons.sidebarLeft}</button>
-        <button class="icon-btn titlebar-interactive" id="btn-toggle-right" title="Alternar painel AI">${icons.sidebarRight}</button>
+        <div class="project-tabs-bar titlebar-interactive" id="project-tabs-bar"></div>
+        <div class="title-search titlebar-interactive">
+          <button type="button" class="title-center-cmd" id="btn-quick-open" title="Buscar arquivos (Ctrl+P). Paleta de comandos: Ctrl+K">
+            ${icons.search}
+            <span class="cmd-proj" id="title-cmd-proj">Buscar arquivo</span>
+          </button>
+          <button type="button" class="title-palette" id="btn-cmd-palette" title="Paleta de Comandos (Ctrl+K)">Ctrl+K</button>
+        </div>
         <div class="win-controls">
           <button class="win-btn" id="win-min" title="Minimizar">${icons.winMin}</button>
           <button class="win-btn" id="win-max" title="Maximizar / Restaurar">${icons.winMax}</button>
@@ -194,29 +176,40 @@ export function mountShell() {
         </div>
       </header>
 
-      <div class="project-tabs-bar" id="project-tabs-bar"></div>
+      <div class="team-strip" id="team-strip">
+        <button type="button" class="team-strip-btn" id="btn-team-strip-team" title="Abrir o painel Equipe">
+          <span id="status-team">Equipe · Auto (Triagem)</span>
+        </button>
+        <div class="pipeline-bar" id="pipeline-bar" aria-label="Etapas da equipe"></div>
+        <button type="button" class="team-strip-btn" id="status-tokens" title="Sessões e consumo de tokens">0 tok</button>
+        <button type="button" class="team-strip-btn" id="btn-header-swarm" title="Abrir Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}<span>Quadro</span></button>
+        <button type="button" class="team-strip-btn" id="act-ide-settings" title="Configurações da IDE (Ctrl+,)">${icons.settings}<span>Configurar</span></button>
+      </div>
 
       <div class="workbench">
-        <nav class="activity-bar" id="activity-bar">
-          <button class="act-btn active" data-act="explorer" title="Explorador de Arquivos">${icons.explorer}</button>
-          <button class="act-btn" data-act="search" title="Busca Global no Projeto (Ctrl+Shift+F)">${icons.searchLarge}</button>
-          <button class="act-btn" data-act="team" title="Equipe & Modelos">${icons.team}</button>
-          <button class="act-btn" data-act="git" title="Git / Diffs / PR / Issues">
-            ${icons.gitBranch}
-            <span class="act-badge" id="git-badge" style="display:none">0</span>
-            <span class="act-badge act-badge-gh" id="git-gh-badge" style="display:none" title="Novidades no GitHub">0</span>
-          </button>
-          <button class="act-btn" data-act="sessions" title="Sessões Salvas & Consumo de Tokens">${icons.sessions}</button>
-          <button class="act-btn" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}</button>
-          <button class="act-btn" data-act="mcp" title="Servidores MCP">${icons.mcp}</button>
-          <div class="spacer"></div>
-          <button class="act-btn" id="act-resident" title="Agent Hive">${icons.sparkle}</button>
-          <button class="act-btn" id="act-ai-usage" title="Uso & Limites das IAs (Antigravity, OpenCode…)">${icons.aiUsage}</button>
-          <button class="act-btn" id="act-mission" title="Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}</button>
-          <button class="act-btn" id="act-ide-settings" title="Configurações da IDE (Ctrl+,)">${icons.settings}</button>
-        </nav>
-
-        <aside class="left-sidebar" id="left-sidebar" style="width:${state.leftWidth}px"></aside>
+        <div class="left-rail" id="left-rail" style="width:${state.leftWidth}px">
+          <nav class="side-tabs" id="activity-bar" aria-label="Painéis">
+            <button type="button" class="side-tab active" data-act="explorer" title="Explorador de Arquivos"><span>Explorador</span></button>
+            <button type="button" class="side-tab" data-act="search" title="Busca Global no Projeto (Ctrl+Shift+F)"><span>Busca</span></button>
+            <button type="button" class="side-tab" data-act="git" title="Git / Diffs / PR / Issues">
+              <span>Git</span>
+              <span class="act-badge" id="git-badge" style="display:none">0</span>
+              <span class="act-badge act-badge-gh" id="git-gh-badge" style="display:none" title="Novidades no GitHub">0</span>
+            </button>
+            <button type="button" class="side-tab" data-act="sessions" title="Sessões Salvas e Consumo de Tokens"><span>Sessões</span></button>
+            <div class="dropdown side-more">
+              <button type="button" class="side-tab" id="btn-side-more" title="Skills, MCP, Agent Hive, Uso das IAs e Equipe" aria-haspopup="menu" aria-expanded="false" aria-controls="side-more-menu">${icons.moreHoriz}</button>
+              <div class="dropdown-menu side-more-menu" id="side-more-menu" hidden>
+                <button type="button" class="dropdown-item" data-act="team" title="Equipe e Modelos">${icons.team}<span>Equipe</span></button>
+                <button type="button" class="dropdown-item" data-act="skills" title="Skills — nativas da IDE e do projeto">${icons.skills}<span>Skills</span></button>
+                <button type="button" class="dropdown-item" data-act="mcp" title="Servidores MCP">${icons.mcp}<span>MCP</span></button>
+                <button type="button" class="dropdown-item" id="act-resident" title="Agent Hive">${icons.sparkle}<span>Agent Hive</span></button>
+                <button type="button" class="dropdown-item" id="act-ai-usage" title="Uso e Limites das IAs">${icons.aiUsage}<span>Uso das IAs</span></button>
+              </div>
+            </div>
+          </nav>
+          <aside class="left-sidebar" id="left-sidebar"></aside>
+        </div>
         <div class="resizer-v" id="resizer-left"></div>
 
         <section class="center-area" id="center-area">
@@ -232,20 +225,24 @@ export function mountShell() {
       <footer class="status-bar">
         <button type="button" class="status-chip" id="status-branch" title="Clique para trocar ou criar branch Git">${icons.gitSmall} sem git</button>
         <span id="status-stack"></span>
-        <span id="status-team">Equipe: -</span>
-        <button type="button" class="status-chip" id="status-tokens" title="Clique para abrir Sessões & Consumo de Tokens">${icons.tokens} 0 tok</button>
-        <button type="button" id="status-providers" class="dim plain-chip" title="Pool de Provedores & Contas LLM — clique para gerenciar ou varrer">provedor: …</button>
-        <button type="button" id="status-jira" class="dim plain-chip" title="Clique para conectar ao Jira Cloud">jira: …</button>
-        <button type="button" id="status-ghost" class="dim plain-chip" title="Ghost Text inline (Tab aceita)">ghost: …</button>
-        <button type="button" id="status-autoreview" class="dim plain-chip" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
-        <button type="button" id="status-lsp" class="dim plain-chip" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
-        <button type="button" id="status-mobile" class="dim plain-chip" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
-        <button type="button" id="status-resident" class="dim plain-chip" title="Agent Hive — clique para abrir">hive: ocioso</button>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir/fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
         <span id="status-text">Pronto</span>
-        <div class="spacer"></div>
-        <span id="status-env"></span>
+        <div class="status-system">
+          <button type="button" class="status-system-btn" id="btn-status-system" title="Provedor, Jira, ghost, auto-rev, LSP, mobile e hive" aria-expanded="false" aria-controls="status-system-pop">
+            <span>sistema</span>${icons.arrowUp}
+          </button>
+          <div class="status-system-pop" id="status-system-pop" hidden>
+            <button type="button" id="status-providers" class="status-system-item" title="Pool de Provedores e Contas LLM — clique para gerenciar ou varrer">provedor: …</button>
+            <button type="button" id="status-jira" class="status-system-item" title="Clique para conectar ao Jira Cloud">jira: …</button>
+            <button type="button" id="status-ghost" class="status-system-item" title="Ghost Text inline (Tab aceita)">ghost: …</button>
+            <button type="button" id="status-autoreview" class="status-system-item" title="Revisão Automática do Fluxo de PRs (Sem Merge)">auto-rev: off</button>
+            <button type="button" id="status-lsp" class="status-system-item" title="LSP gopls (F12 definição, hover, diagnósticos)">lsp: …</button>
+            <button type="button" id="status-mobile" class="status-system-item" title="App Mobile — continuar e comandar os trabalhos pelo celular">mobile: …</button>
+            <button type="button" id="status-resident" class="status-system-item" title="Agent Hive — clique para abrir">hive: ocioso</button>
+            <span id="status-env"></span>
+          </div>
+        </div>
       </footer>
     </div>
     <div id="branch-popover-layer"></div>
@@ -302,6 +299,46 @@ export async function toggleBranchPopover(anchorTop: boolean, targetRepoRoot?: s
   }
 }
 
+let sideMoreOpen = false;
+let systemMenuOpen = false;
+
+function setSideMore(open: boolean) {
+  sideMoreOpen = open;
+  const menu = document.getElementById("side-more-menu");
+  if (menu) menu.hidden = !open;
+  document.getElementById("btn-side-more")?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function setSystemMenu(open: boolean) {
+  systemMenuOpen = open;
+  const menu = document.getElementById("status-system-pop");
+  if (menu) menu.hidden = !open;
+  document.getElementById("btn-status-system")?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+export function dismissShellPopovers() {
+  if (state.showFileMenu) {
+    state.showFileMenu = false;
+    renderFileMenu();
+  }
+  if (sideMoreOpen) setSideMore(false);
+  if (systemMenuOpen) setSystemMenu(false);
+}
+
+function closeLooseMenus() {
+  dismissShellPopovers();
+  closeChatActionsMenu();
+}
+
+export function runStackTests() {
+  const cmd = state.project?.stack?.testHint || "git status";
+  if (!state.terminal.open) {
+    state.terminal.open = true;
+    renderTerminalDrawer();
+  }
+  runTerminalCommand(cmd);
+}
+
 export function bindStaticShellEvents() {
   const titlebar = document.getElementById("titlebar");
   titlebar?.addEventListener("dblclick", (e) => {
@@ -328,30 +365,25 @@ export function bindStaticShellEvents() {
     api()?.WindowClose();
   });
 
-  document.getElementById("btn-toggle-term")?.addEventListener("click", () => toggleTerminal());
   document.getElementById("status-term-btn")?.addEventListener("click", () => toggleTerminal());
-  document.getElementById("btn-toggle-left")?.addEventListener("click", () => {
-    state.showLeftSidebar = !state.showLeftSidebar;
-    syncLayoutVisibility();
-  });
-  document.getElementById("btn-toggle-right")?.addEventListener("click", () => {
-    state.showRightAI = !state.showRightAI;
-    syncLayoutVisibility();
-  });
 
   document.getElementById("btn-header-swarm")?.addEventListener("click", () => openMissionControlTab());
-  document.getElementById("act-mission")?.addEventListener("click", () => openMissionControlTab());
 
-  document.getElementById("btn-header-run")?.addEventListener("click", () => {
-    const cmd = state.project?.stack?.testHint || "git status";
-    if (!state.terminal.open) {
-      state.terminal.open = true;
-      renderTerminalDrawer();
-    }
-    runTerminalCommand(cmd);
-  });
+  document.getElementById("btn-team-strip-team")?.addEventListener("click", () => openSidebarView("team"));
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
+  document.getElementById("btn-side-more")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const next = !sideMoreOpen;
+    closeLooseMenus();
+    setSideMore(next);
+  });
+  document.getElementById("btn-status-system")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const next = !systemMenuOpen;
+    closeLooseMenus();
+    setSystemMenu(next);
+  });
   document.getElementById("status-providers")?.addEventListener("click", () => void openIdeSettingsTab("providers"));
   document.getElementById("status-jira")?.addEventListener("click", () => void openJiraModal());
   document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
@@ -366,7 +398,10 @@ export function bindStaticShellEvents() {
   });
   document.getElementById("status-mobile")?.addEventListener("click", () => void openMobileModal());
   document.getElementById("status-resident")?.addEventListener("click", () => openResidentTab());
-  document.getElementById("act-resident")?.addEventListener("click", () => openResidentTab());
+  document.getElementById("act-resident")?.addEventListener("click", () => {
+    setSideMore(false);
+    openResidentTab();
+  });
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -377,14 +412,11 @@ export function bindStaticShellEvents() {
     e.stopPropagation();
     toggleBranchPopover(false);
   });
-  document.getElementById("btn-header-vcs")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleBranchPopover(true);
-  });
-
   document.getElementById("btn-file-menu")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    state.showFileMenu = !state.showFileMenu;
+    const next = !state.showFileMenu;
+    closeLooseMenus();
+    state.showFileMenu = next;
     renderFileMenu();
   });
   document.addEventListener("click", (e) => {
@@ -398,8 +430,11 @@ export function bindStaticShellEvents() {
       state.showFileMenu = false;
       renderFileMenu();
     }
+    if (sideMoreOpen) setSideMore(false);
+    if (systemMenuOpen) setSystemMenu(false);
+    closeChatActionsMenu();
     if (state.branchPopover.open) {
-      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-header-vcs") && !target.closest("#btn-scm-branch-switch")) {
+      if (!target.closest("#branch-popover-layer") && !target.closest("#status-branch") && !target.closest("#btn-scm-branch-switch")) {
         state.branchPopover.open = false;
         renderBranchPopover();
       }
@@ -422,6 +457,7 @@ export function bindStaticShellEvents() {
 
   document.querySelectorAll("[data-act]").forEach((el) => {
     el.addEventListener("click", () => {
+      if ((el as HTMLElement).closest("#side-more-menu")) setSideMore(false);
       const view = (el as HTMLElement).dataset.act as SidebarView;
       if (state.sidebarView === view && state.showLeftSidebar) {
         state.showLeftSidebar = false;
@@ -447,8 +483,8 @@ export function bindStaticShellEvents() {
   });
 
   setupResizer("resizer-left", (dx) => {
-    state.leftWidth = Math.max(190, Math.min(480, state.leftWidth + dx));
-    const el = document.getElementById("left-sidebar");
+    state.leftWidth = Math.max(248, Math.min(480, state.leftWidth + dx));
+    const el = document.getElementById("left-rail");
     if (el) el.style.width = `${state.leftWidth}px`;
   });
   setupResizer("resizer-right", (dx) => {
@@ -779,22 +815,26 @@ export function toggleChatExpanded() {
 }
 
 export function syncLayoutVisibility() {
-  const left = document.getElementById("left-sidebar");
+  const rail = document.getElementById("left-rail");
   const resL = document.getElementById("resizer-left");
   const right = document.getElementById("right-pane");
   const resR = document.getElementById("resizer-right");
-  left?.classList.toggle("hidden", !state.showLeftSidebar);
+  rail?.classList.toggle("hidden", !state.showLeftSidebar);
   if (resL) resL.style.display = state.showLeftSidebar ? "" : "none";
   right?.classList.toggle("hidden", !state.showRightAI);
   if (resR) resR.style.display = state.showRightAI ? "" : "none";
   syncChatExpandLayout();
 }
 
+const primarySidebarViews = new Set(["explorer", "search", "git", "sessions"]);
+
 export function syncActivityButtons() {
   document.querySelectorAll("[data-act]").forEach((el) => {
     const view = (el as HTMLElement).dataset.act;
     el.classList.toggle("active", state.showLeftSidebar && state.sidebarView === view);
   });
+  const moreActive = state.showLeftSidebar && !primarySidebarViews.has(state.sidebarView);
+  document.getElementById("btn-side-more")?.classList.toggle("active", moreActive);
   document.getElementById("act-ide-settings")?.classList.toggle("active", state.activeEditorPath === IDE_SETTINGS_TAB_KEY);
 }
 
@@ -812,6 +852,11 @@ export function renderFileMenu() {
     <button class="dropdown-item" id="menu-open-memory">${icons.memory}<span>Memória do Time (.hivemind/MEMORY.md)</span></button>
     <button class="dropdown-item" id="menu-new-team">${icons.team}<span>Configurar Equipe do Projeto…</span></button>
     <button class="dropdown-item" id="menu-ide-settings">${icons.settings}<span>Configurações da IDE… (Ctrl+,)</span></button>
+    <button class="dropdown-item" id="menu-mission">${icons.swarm}<span>Quadro Multiagente (Ctrl+Shift+A)</span></button>
+    <button class="dropdown-item" id="menu-run-tests">${icons.play}<span>Rodar testes da stack</span></button>
+    <button class="dropdown-item" id="menu-toggle-term">${icons.terminal}<span>Alternar Terminal (Ctrl+J)</span></button>
+    <button class="dropdown-item" id="menu-toggle-left">${icons.sidebarLeft}<span>Alternar barra lateral</span></button>
+    <button class="dropdown-item" id="menu-toggle-right">${icons.sidebarRight}<span>Alternar painel da equipe</span></button>
     <button class="dropdown-item" id="menu-providers-pool">${icons.cloud}<span>Provedores &amp; Contas (Pool)…</span></button>
     <button class="dropdown-item" id="menu-providers-scan">${icons.search}<span>Varredura de Provedores (Diagnóstico)…</span></button>
     <button type="button" class="dropdown-item" id="menu-companion" aria-pressed="${loadSettings().enabled ? "true" : "false"}">${icons.sparkle}<span>${loadSettings().enabled ? "Companion ligado" : "Companion desligado"}</span></button>
@@ -848,6 +893,33 @@ export function renderFileMenu() {
     state.showFileMenu = false;
     renderFileMenu();
     void openIdeSettingsTab();
+  });
+  menu.querySelector("#menu-mission")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    openMissionControlTab();
+  });
+  menu.querySelector("#menu-run-tests")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    runStackTests();
+  });
+  menu.querySelector("#menu-toggle-term")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    toggleTerminal();
+  });
+  menu.querySelector("#menu-toggle-left")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    state.showLeftSidebar = !state.showLeftSidebar;
+    syncLayoutVisibility();
+  });
+  menu.querySelector("#menu-toggle-right")?.addEventListener("click", () => {
+    state.showFileMenu = false;
+    renderFileMenu();
+    state.showRightAI = !state.showRightAI;
+    syncLayoutVisibility();
   });
   menu.querySelector("#menu-providers-pool")?.addEventListener("click", () => {
     state.showFileMenu = false;
@@ -887,27 +959,14 @@ export function renderFileMenu() {
 export function updateHeaderAndStatusBar() {
   const proj = state.project;
   const cmdProj = document.getElementById("title-cmd-proj");
-  const stackTag = document.getElementById("title-stack-tag");
-  const headerVcs = document.getElementById("header-vcs-label");
-  const headerRun = document.getElementById("header-run-label");
-
   if (cmdProj) {
-    cmdProj.textContent = proj ? `${proj.name} — Arquivos (Ctrl+P) · Comandos (Ctrl+K)` : "Buscar arquivo (Ctrl+P)";
+    cmdProj.textContent = proj ? proj.name : "Buscar arquivo";
   }
-  if (stackTag) {
-    if (proj?.stack?.summary) {
-      stackTag.textContent = proj.stack.summary;
-      stackTag.style.display = "inline-block";
-    } else {
-      stackTag.style.display = "none";
-    }
-  }
-  if (headerVcs) {
-    headerVcs.textContent = proj?.branch || "sem git";
-  }
-  if (headerRun) {
-    const hint = proj?.stack?.testHint || "Testar";
-    headerRun.textContent = hint.length > 18 ? "Testar Stack" : hint;
+  const searchBtn = document.getElementById("btn-quick-open");
+  if (searchBtn) {
+    searchBtn.title = proj
+      ? `Buscar em ${proj.name} (Ctrl+P). Paleta de comandos: Ctrl+K`
+      : "Buscar arquivos (Ctrl+P). Paleta de comandos: Ctrl+K";
   }
   updateStatusBar();
 }
@@ -992,6 +1051,7 @@ export function updateStatusBar() {
   const branchEl = document.getElementById("status-branch");
   const stackEl = document.getElementById("status-stack");
   const teamEl = document.getElementById("status-team");
+  const teamBtn = document.getElementById("btn-team-strip-team");
   const tokEl = document.getElementById("status-tokens");
   const envEl = document.getElementById("status-env");
 
@@ -1009,14 +1069,16 @@ export function updateStatusBar() {
   const perm = proj?.teamConfig?.settings?.permission_mode || "governed";
   if (teamEl) {
     const label = laneDisplayName(lane);
-    teamEl.textContent = `${label} (${lane?.agents.length || 0}) · ${runModeLabel(state.runMode)}`;
-    teamEl.title = `Equipe: ${label} (${lane?.teamName || "-"} · ${lane?.agents.length || 0}) · Modo: ${runModeLabel(state.runMode)} · Permissão: ${permissionModeLabel(perm)}`;
+    teamEl.textContent = `Equipe · ${runModeLabel(state.runMode)}`;
+    const detail = `Equipe: ${label} (${lane?.teamName || "-"} · ${lane?.agents.length || 0}) · Modo: ${runModeLabel(state.runMode)} · Permissão: ${permissionModeLabel(perm)} — clique para abrir o painel`;
+    if (teamBtn) teamBtn.title = detail;
   }
   if (tokEl) {
     const sessTok = lane?.sessionTotalTokens || 0;
     const projTok = Math.max(state.sessionsSummary.projectTotalTokens, sessTok);
-    tokEl.innerHTML = `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
-    tokEl.title = `Sessão atual: ${exactTokens(sessTok)} tok (Entrada: ${exactTokens(lane?.sessionInTokens)} / Saída: ${exactTokens(lane?.sessionOutTokens)}) | Projeto: ${exactTokens(projTok)} tok — Clique para ver histórico`;
+    const turnTok = lane?.turnTotalTokens || 0;
+    tokEl.textContent = `${formatTokens(sessTok)} tok`;
+    tokEl.title = `Sessão: ${exactTokens(sessTok)} tok (entrada ${exactTokens(lane?.sessionInTokens)} / saída ${exactTokens(lane?.sessionOutTokens)}) · Turno: ${exactTokens(turnTok)} · Projeto: ${exactTokens(projTok)} — clique para o histórico`;
   }
 
   const jiraEl = document.getElementById("status-jira");
