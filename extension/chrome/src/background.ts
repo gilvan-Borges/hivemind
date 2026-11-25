@@ -119,12 +119,16 @@ async function publish(): Promise<void> {
   broadcast({ type: "state", connected, controlling, mode, title, url, tabId, host: hostOf(url) ?? "" });
 }
 
-function send(message: unknown): void {
+function send(message: unknown): boolean {
   if (mode === "native" && nativePort) {
     nativePort.postMessage(message);
-    return;
+    return true;
   }
-  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
+    return true;
+  }
+  return false;
 }
 
 function askPanel(id: string, text: string, host: string): Promise<string> {
@@ -326,7 +330,14 @@ chrome.runtime.onConnect.addListener((port) => {
       void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
         if (tabs[0]?.id !== undefined) void ensureTabGroup(tabs[0].id);
       });
-      send({ type: "chat", text: message.text });
+      if (!send({ type: "chat", text: message.text })) {
+        scheduleReconnect();
+        broadcast({
+          type: "chat_reply",
+          code: "error",
+          text: "Extensão **desconectada** da HiveMind IDE.\n\n1. Abra a **HiveMind IDE** (ou rode `hivemind browser pair` no terminal).\n2. Se precisar, clique em **Parear** abaixo e cole o código local.",
+        });
+      }
     } else if (message.type === "stop") {
       stopNow();
     } else if (message.type === "pick") {

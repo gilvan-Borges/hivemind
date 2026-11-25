@@ -376,7 +376,11 @@ port.onMessage.addListener((message: {
     stream = "";
     closeLive();
     void reveal(message.text || "Sem resposta.", message.code === "error");
-    statusEl.textContent = "conectado";
+    if (message.code !== "error") {
+      statusEl.textContent = "conectado";
+    } else if (statusEl.textContent === "pensando") {
+      statusEl.textContent = "desconectado";
+    }
     statusEl.classList.remove("busy");
     return;
   }
