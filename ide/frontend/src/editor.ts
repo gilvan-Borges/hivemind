@@ -8,7 +8,7 @@ import { openCommandPalette, openQuickOpen } from "./quickopen";
 import { bindResidentViewEvents, renderResidentViewHtml } from "./resident";
 import { bindIdeSettingsEvents, renderIdeSettingsPageHtml } from "./ide-settings";
 import { renderProjectTabsBar, syncActivityButtons, syncChatExpandLayout, syncLayoutVisibility } from "./shell";
-import { api, askConfirm, setStatus, state, toastError } from "./state";
+import { api, askConfirm, beginBusyOp, endBusyOp, setStatus, state, toastError, triggerEnterMotion } from "./state";
 import { bindAIUsagePageEvents, renderAIUsagePageHtml } from "./modals";
 import { bindMissionBoardEvents, bindTeamConfigEvents, openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, renderMissionBoardHtml, renderTeamConfigPageHtml } from "./teamconfig";
 import { activeEditorView, currentSelection, forgetTabState, mountCodeMirror, selectRange, syncCodeMirrorDoc, unmountCodeMirror } from "./cm-editor";
@@ -96,6 +96,7 @@ export async function openFileInEditor(relPath: string, name: string, targetLine
   }
   const backend = api();
   if (!backend || !state.project) return;
+  beginBusyOp("open-file", `Abrindo ${name}…`);
   try {
     const content = await backend.ReadFile(state.project.root, relPath);
     state.editorTabs.push({
@@ -113,6 +114,8 @@ export async function openFileInEditor(relPath: string, name: string, targetLine
     jumpEditorToLine(targetLine, targetCol);
   } catch (err: any) {
     toastError(`abrir o arquivo ${relPath}`, err);
+  } finally {
+    endBusyOp("open-file");
   }
 }
 
@@ -670,6 +673,11 @@ export function renderEditorBody() {
   const body = document.getElementById("editor-body");
   if (!body) return;
   const activeTab = state.editorTabs.find((t) => t.relPath === state.activeEditorPath);
+  const nextTabKey = activeTab
+    ? `${activeTab.kind}:${activeTab.relPath}`
+    : (state.projectLoading.active && !state.project ? "welcome:loading" : "welcome:idle");
+  const tabChanged = body.dataset.renderedTabKey !== nextTabKey;
+  body.dataset.renderedTabKey = nextTabKey;
   const isFileSource =
     !!activeTab && activeTab.kind === "file" && !(/\.md$/i.test(activeTab.name) && activeTab.mdView !== "source");
   const isMdFile = !!activeTab && activeTab.kind === "file" && /\.md$/i.test(activeTab.name);
@@ -677,9 +685,37 @@ export function renderEditorBody() {
   if (!isFileSource) {
     unmountCodeMirror();
   }
+  if (tabChanged) {
+    triggerEnterMotion(body, "hm-page-enter");
+  }
 
   if (!activeTab) {
     const proj = state.project;
+    if (!proj && state.projectLoading.active) {
+      body.innerHTML = `
+        <div class="empty-welcome">
+          <div class="welcome-hero">
+            <div class="welcome-hero-logo">${icons.brandHero}</div>
+            <h1 class="welcome-title">${escapeHtml(state.projectLoading.label || "Abrindo projeto…")}</h1>
+            <p class="welcome-subtitle">Carregando estrutura de arquivos, Git e configuração da equipe…</p>
+            <div class="welcome-loading-pill" role="status" aria-live="polite">${icons.spinner}<span>Preparando workspace…</span></div>
+          </div>
+          <div class="hm-skeleton-grid" aria-hidden="true">
+            <div class="hm-skeleton-card">
+              <div class="hm-skeleton-line w-45"></div>
+              <div class="hm-skeleton-line w-85"></div>
+              <div class="hm-skeleton-line w-65"></div>
+            </div>
+            <div class="hm-skeleton-card">
+              <div class="hm-skeleton-line w-50"></div>
+              <div class="hm-skeleton-line w-80"></div>
+              <div class="hm-skeleton-line w-60"></div>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
     const branchTag = proj?.branch ? `<span class="welcome-meta-pill">${icons.gitSmall}<span>${escapeHtml(proj.branch)}</span></span>` : "";
     const stackTag = proj?.stack?.summary ? `<span class="welcome-meta-pill">${escapeHtml(proj.stack.summary)}</span>` : "";
     body.innerHTML = `

@@ -1,7 +1,7 @@
 import { icons } from "./icons";
-import { api, askConfirm, setStatus, state, toast, toastError } from "./state";
+import { api, askConfirm, beginBusyOp, endBusyOp, setStatus, state, toast, toastError } from "./state";
 import type { WorktreeCheckpoint, WorktreeInfo } from "./types";
-import { escapeHtml } from "./utils";
+import { escapeHtml, renderSkeletonCardsHtml } from "./utils";
 
 export function formatBytesCompact(bytes: number): string {
   const b = Number(bytes || 0);
@@ -18,6 +18,7 @@ export async function refreshWorktreesPanel(onRender: () => void) {
   if (!backend?.ListWorktrees || !ws) return;
   state.worktrees.loading = true;
   state.worktrees.error = "";
+  beginBusyOp("worktrees", "Carregando worktrees…");
   onRender();
   try {
     const [list, cps] = await Promise.all([
@@ -31,6 +32,7 @@ export async function refreshWorktreesPanel(onRender: () => void) {
     state.worktrees.error = String(err?.message || err || "Falha ao listar worktrees");
   } finally {
     state.worktrees.loading = false;
+    endBusyOp("worktrees");
     onRender();
   }
 }
@@ -75,7 +77,7 @@ export function renderWorktreesTabHtml(): string {
 
   let bodyHtml = "";
   if (wt.loading && !wt.loadedOnce) {
-    bodyHtml = `<div class="dim" style="padding:14px;text-align:center">${icons.spinner} Carregando worktrees e checkpoints…</div>`;
+    bodyHtml = renderSkeletonCardsHtml(2, "Carregando worktrees e checkpoints…");
   } else if (wt.error) {
     bodyHtml = `
       <div class="wt-err-bar" style="margin-top:8px">

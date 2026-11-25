@@ -222,6 +222,13 @@ export const state = {
   commitMsgByRepo: {} as Record<string, string>,
   changesCollapsed: false,
   gitMoreMenuOpen: false,
+  diffRefreshing: false,
+  commitRunning: false,
+  projectLoading: {
+    active: false,
+    label: "",
+  },
+  busyOps: new Map<string, string>(),
   gitOp: {
     running: false,
     action: "",
@@ -473,6 +480,51 @@ export function setStatus(msg: string) {
   state.statusText = msg;
   const el = document.getElementById("status-text");
   if (el) el.textContent = msg;
+}
+
+export function syncGlobalBusyUi(): void {
+  if (typeof document === "undefined") return;
+  const entries = Array.from(state.busyOps.entries());
+  const active = entries.length > 0;
+  const latestLabel = active ? entries[entries.length - 1][1] : "";
+
+  const bar = document.getElementById("global-progress-bar");
+  if (bar) {
+    bar.classList.toggle("is-active", active);
+    bar.setAttribute("aria-busy", active ? "true" : "false");
+    if (latestLabel) bar.setAttribute("aria-label", latestLabel);
+  }
+
+  const pill = document.getElementById("status-busy-indicator");
+  const labelEl = document.getElementById("status-busy-label");
+  if (pill) {
+    pill.hidden = !active;
+    if (labelEl) {
+      labelEl.textContent = latestLabel || "Carregando…";
+    }
+  }
+}
+
+export function beginBusyOp(key: string, label = "Carregando…"): void {
+  state.busyOps.set(key, label);
+  syncGlobalBusyUi();
+}
+
+export function endBusyOp(key: string): void {
+  state.busyOps.delete(key);
+  syncGlobalBusyUi();
+}
+
+export function triggerEnterMotion(el: HTMLElement | null, cls = "hm-view-enter"): void {
+  if (!el || typeof window === "undefined") return;
+  el.classList.remove(cls);
+  // Reinicia o keyframe em um único reflow leve somente quando há troca real de tela/aba.
+  void el.offsetWidth;
+  el.classList.add(cls);
+  const onEnd = () => {
+    el.classList.remove(cls);
+  };
+  el.addEventListener("animationend", onEnd, { once: true });
 }
 
 export type ToastKind = "info" | "success" | "error";

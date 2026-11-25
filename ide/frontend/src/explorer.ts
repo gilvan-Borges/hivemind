@@ -1,6 +1,6 @@
 import { fileBadge, icons } from "./icons";
 import type { AgentRuntime, ChatMessage, FileNode, PermissionMode, ProjectWorkspaceContext } from "./types";
-import { chipForAgent, escapeHtml, exactTokens, formatTokens, matchAgentRuntime, modelChipHtml, permissionModeLabel, reasonPhrase, roleLabelPt } from "./utils";
+import { chipForAgent, escapeHtml, exactTokens, formatTokens, matchAgentRuntime, modelChipHtml, permissionModeLabel, reasonPhrase, renderSkeletonRowsHtml, roleLabelPt } from "./utils";
 import { openFolderDialog, refreshSessions } from "./boot";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
@@ -12,7 +12,7 @@ import { notifyRegionRendered } from "./render-guard";
 import { bindMCPSidebarEvents, refreshMCP, renderMCPSidebar } from "./mcp";
 import { bindModelPickerPairs, handleInlineModelChange, refreshSkills, renderModelPickerPairHtml, renderSkillRowHtml } from "./models";
 import { syncLayoutVisibility, updateStatusBar } from "./shell";
-import { api, askConfirm, normalizePathKey, setStatus, state, toast, toastError } from "./state";
+import { api, askConfirm, beginBusyOp, endBusyOp, normalizePathKey, setStatus, state, toast, toastError, triggerEnterMotion } from "./state";
 import { syncCodeMirrorDoc } from "./cm-editor";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile, updateMissionBoardIfOpen } from "./teamconfig";
 
@@ -100,21 +100,31 @@ export async function applyExternalFileChanges(ctx: ProjectWorkspaceContext, cha
 export async function refreshExplorerTree() {
   const backend = api();
   if (!backend || !state.project) return;
-  const rootNodes = await backend.ListDirectory(state.project.root, "");
-  state.dirCache.clear();
-  state.dirCache.set("", rootNodes || []);
-  for (const dir of [...state.expandedDirs]) {
-    try {
-      const ch = await backend.ListDirectory(state.project.root, dir);
-      state.dirCache.set(dir, ch || []);
-    } catch {
-      state.expandedDirs.delete(dir);
+  const refreshBtn = document.getElementById("btn-refresh-tree") as HTMLButtonElement | null;
+  refreshBtn?.classList.add("is-spinning");
+  if (refreshBtn) refreshBtn.disabled = true;
+  beginBusyOp("explorer-refresh", "Atualizando arquivos…");
+  try {
+    const rootNodes = await backend.ListDirectory(state.project.root, "");
+    state.dirCache.clear();
+    state.dirCache.set("", rootNodes || []);
+    for (const dir of [...state.expandedDirs]) {
+      try {
+        const ch = await backend.ListDirectory(state.project.root, dir);
+        state.dirCache.set(dir, ch || []);
+      } catch {
+        state.expandedDirs.delete(dir);
+      }
     }
-  }
-  const body = document.getElementById("explorer-tree-body");
-  if (body) {
-    body.innerHTML = renderExplorerTreeHtml();
-    bindTreeRowClicks();
+    const body = document.getElementById("explorer-tree-body");
+    if (body) {
+      body.innerHTML = renderExplorerTreeHtml();
+      bindTreeRowClicks();
+    }
+  } finally {
+    endBusyOp("explorer-refresh");
+    refreshBtn?.classList.remove("is-spinning");
+    if (refreshBtn) refreshBtn.disabled = false;
   }
 }
 
@@ -358,6 +368,12 @@ export function renderLeftSidebar() {
     if (preserveScroll && prevStageScrollTop > 0 && stageEl && !stageEl.hidden) {
       const stageScroll = stageEl.querySelector<HTMLElement>("#git-tab-content") || stageEl;
       stageScroll.scrollTop = prevStageScrollTop;
+    }
+    if (!sameView) {
+      triggerEnterMotion(sidebar.querySelector<HTMLElement>(".sidebar-body"), "hm-view-enter");
+    }
+    if (state.sidebarView === "git" && (!sameView || !sameGitTab)) {
+      triggerEnterMotion(document.getElementById("git-tab-content"), "hm-view-enter");
     }
   }
 }
@@ -739,6 +755,14 @@ export function bindSessionsSidebarEvents() {
 export function renderExplorerTreeHtml(): string {
   const rootNodes = state.dirCache.get("") ?? state.project?.files ?? [];
   if (!state.project) {
+    if (state.projectLoading.active) {
+      return `
+        <div class="explorer-loading-wrap">
+          <div class="dim" style="display:flex;align-items:center;gap:6px;padding:6px 10px">${icons.spinner}<span>${escapeHtml(state.projectLoading.label || "Abrindo projeto…")}</span></div>
+          ${renderSkeletonRowsHtml(7, state.projectLoading.label || "Abrindo projeto…")}
+        </div>
+      `;
+    }
     return `
       <div class="empty-panel" style="padding:14px 10px">
         <strong>Nenhum projeto aberto</strong>

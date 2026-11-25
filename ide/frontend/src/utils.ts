@@ -465,3 +465,40 @@ export function cursorToolPhrase(name: string, target: string): { verb: string; 
   if (n.includes("list")) return { verb: "Listou", target: rel || "diretório" };
   return { verb: "Executou", target: rel || name };
 }
+
+export function renderSkeletonCardsHtml(count = 3, ariaLabel = "Carregando…"): string {
+  const n = Math.max(1, Math.min(6, count));
+  const cards: string[] = [];
+  for (let i = 0; i < n; i++) {
+    cards.push(`
+      <div class="hm-skeleton-card" aria-hidden="true">
+        <div class="hm-skeleton-head">
+          <span class="hm-skeleton-pill"></span>
+          <span class="hm-skeleton-line w-35"></span>
+        </div>
+        <div class="hm-skeleton-line w-85"></div>
+        <div class="hm-skeleton-line w-60"></div>
+        <div class="hm-skeleton-foot">
+          <span class="hm-skeleton-pill wide"></span>
+          <span class="hm-skeleton-pill"></span>
+        </div>
+      </div>
+    `);
+  }
+  return `<div class="hm-skeleton-stack" role="status" aria-live="polite" aria-label="${escapeHtml(ariaLabel)}">${cards.join("")}</div>`;
+}
+
+export function renderSkeletonRowsHtml(count = 5, ariaLabel = "Carregando…"): string {
+  const n = Math.max(1, Math.min(10, count));
+  const widths = ["w-75", "w-60", "w-85", "w-50", "w-70"];
+  const rows: string[] = [];
+  for (let i = 0; i < n; i++) {
+    rows.push(`
+      <div class="hm-skeleton-row" aria-hidden="true">
+        <span class="hm-skeleton-dot"></span>
+        <span class="hm-skeleton-line ${widths[i % widths.length]}"></span>
+      </div>
+    `);
+  }
+  return `<div class="hm-skeleton-rows" role="status" aria-live="polite" aria-label="${escapeHtml(ariaLabel)}">${rows.join("")}</div>`;
+}

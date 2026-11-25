@@ -15,7 +15,7 @@ import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
 import { openResidentTab, updateResidentStatusChip } from "./resident";
 import { loadSettings, toggleCompanionEnabled } from "./companion/settings";
-import { IDE_SETTINGS_TAB_KEY, api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
+import { IDE_SETTINGS_TAB_KEY, api, askConfirm, hasAnyProjectDirtyTabs, hasDirtyTabs, loadFromProjectContext, normalizePathKey, saveActiveToProjectContext, setStatus, state, syncGlobalBusyUi, toastError, triggerEnterMotion } from "./state";
 import { openMissionControlTab, openTeamConfigTab, openTeamMemoryFile } from "./teamconfig";
 import { countProblems, refreshLSPStatus } from "./lsp";
 import { openProblemsPanel, renderTerminalDrawer, runTerminalCommand, toggleTerminal } from "./terminal";
@@ -37,6 +37,9 @@ export function switchProjectTab(projectId: string) {
   renderTerminalDrawer();
   renderRightPane();
   updateGitActivityBadge();
+  triggerEnterMotion(document.getElementById("left-sidebar"), "hm-view-enter");
+  triggerEnterMotion(document.getElementById("center-area"), "hm-page-enter");
+  triggerEnterMotion(document.getElementById("right-pane"), "hm-view-enter");
   setStatus(`Projeto ativo: ${target.project.name} (${target.project.root})`);
   void refreshJiraStatusAndProjects();
   void refreshProviderProfiles();
@@ -119,9 +122,9 @@ export function renderProjectTabsBar() {
         </div>
       `;
     }).join("")}
-    <button class="project-tab-add" id="btn-add-project-tab" title="Abrir outro projeto em uma nova aba isolada (Ctrl+Shift+O)">
-      ${icons.plus}
-      <span>Novo Projeto</span>
+    <button class="project-tab-add ${state.projectLoading.active ? "is-loading" : ""}" id="btn-add-project-tab" ${state.projectLoading.active ? "disabled" : ""} title="${escapeHtml(state.projectLoading.active ? state.projectLoading.label : "Abrir outro projeto em uma nova aba isolada (Ctrl+Shift+O)")}">
+      ${state.projectLoading.active ? icons.spinner : icons.plus}
+      <span>${state.projectLoading.active ? escapeHtml(state.projectLoading.label || "Abrindo…") : "Novo Projeto"}</span>
     </button>
   `;
 
@@ -174,6 +177,9 @@ export function mountShell() {
           <button class="win-btn close" id="win-close" title="Fechar">${icons.winClose}</button>
         </div>
       </header>
+      <div class="global-progress-bar" id="global-progress-bar" role="progressbar" aria-label="Carregando" aria-busy="false">
+        <div class="global-progress-bar-fill"></div>
+      </div>
 
       <div class="team-strip" id="team-strip">
         <button type="button" class="team-strip-label" id="team-strip-label" title="Abrir Equipe e modelos">Equipe · Auto (Triagem)</button>
@@ -231,6 +237,7 @@ export function mountShell() {
         <span id="status-stack"></span>
         <button type="button" id="status-problems" class="status-chip" title="Painel de Problemas (Ctrl+Shift+M)">✕ 0 · ▲ 0</button>
         <button type="button" class="ghost mini" id="status-term-btn" title="Abrir ou fechar Terminal (Ctrl+J)">${icons.terminal}<span>Terminal</span></button>
+        <span class="status-busy-pill" id="status-busy-indicator" hidden aria-live="polite">${icons.spinner}<span id="status-busy-label"></span></span>
         <span id="status-text">Pronto</span>
         <div class="spacer"></div>
         <div class="sistema-wrap">
@@ -255,6 +262,7 @@ export function mountShell() {
 
   bindStaticShellEvents();
   syncChatExpandLayout();
+  syncGlobalBusyUi();
 }
 
 export function openSidebarView(view: SidebarView) {

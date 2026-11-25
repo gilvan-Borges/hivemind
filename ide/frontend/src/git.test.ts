@@ -351,4 +351,47 @@ describe("PRs & Issues collapsible sections, details drawer and scroll preservat
     expect(state.activeLaneId).toBe(l1.id);
     expect(state.lanes.length).toBe(2);
   });
+
+  it("renderiza skeletons shimmer durante cargas de PRs, Jira e Git Graph e fixa o banner de pull/push fora da área rolável", async () => {
+    const { beginBusyOp, endBusyOp } = await import("./state");
+
+    // 1) Git pull em execução: banner fixado antes de .scm-body + barra de progresso + botão pull is-busy
+    state.gitTab = "changes";
+    state.gitOp = { running: true, action: "pull", label: "Puxando de origin/main…", log: "", result: "", error: "" };
+    state.gitGraph = { commits: [], loading: true, loadedOnce: false, allBranches: true, collapsed: false, repoRoot: "c:/hivemind" };
+    const changesHtml = renderGitSidebarHtml(state.project);
+    const opIdx = changesHtml.indexOf("scm-git-op is-running");
+    const bodyIdx = changesHtml.indexOf("sidebar-body scm-body");
+    expect(opIdx).toBeGreaterThan(-1);
+    expect(bodyIdx).toBeGreaterThan(opIdx);
+    expect(changesHtml).toContain("scm-git-op-progress");
+    expect(changesHtml).toContain('icon-btn is-busy" data-git-action="pull"');
+    expect(changesHtml).toContain("hm-skeleton-rows");
+
+    // 2) PRs & Issues carregando: renderiza cards skeleton
+    state.gitOp = { running: false, action: "", label: "", log: "", result: "", error: "" };
+    state.gitTab = "prs_issues";
+    state.prs = { list: [], loading: true, loadedOnce: false };
+    state.issues = { list: [], loading: true, loadedOnce: false };
+    const prHtml = renderGitSidebarHtml(state.project);
+    expect(prHtml).toContain("hm-skeleton-stack");
+    expect(prHtml).toContain("hm-skeleton-card");
+
+    // 3) Jira carregando: renderiza cards skeleton
+    state.gitTab = "jira";
+    const jiraHtml = renderGitSidebarHtml(state.project);
+    expect(jiraHtml).toContain("hm-skeleton-stack");
+    expect(jiraHtml).toContain("Carregando tasks do Jira");
+
+    // 4) Controle de operações simultâneas na barra global (beginBusyOp/endBusyOp)
+    state.busyOps.clear();
+    beginBusyOp("git-op", "Puxando de origin/main…");
+    beginBusyOp("open-project", "Abrindo acme…");
+    expect(state.busyOps.size).toBe(2);
+    endBusyOp("git-op");
+    expect(state.busyOps.size).toBe(1);
+    expect(state.busyOps.get("open-project")).toBe("Abrindo acme…");
+    endBusyOp("open-project");
+    expect(state.busyOps.size).toBe(0);
+  });
 });

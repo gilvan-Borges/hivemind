@@ -1,6 +1,6 @@
 import { fileBadge, icons } from "./icons";
 import type { AutoReviewSettings, AutoReviewStatus, ChatMessage, FileDiff, GitGraphCommit, GitHubStatus, GitSubTab, ProjectInfo, ProjectIssue, ProjectPullRequest, PullRequestActivityDetail, TeamLane, WorkspaceGitRepo } from "./types";
-import { escapeHtml, formatTokens } from "./utils";
+import { escapeHtml, formatTokens, renderSkeletonCardsHtml, renderSkeletonRowsHtml } from "./utils";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar, scheduleChatFlush, syncComposerButtons } from "./chat";
 import { autoResizeTextarea } from "./chat-timeline";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs, renderEditorBody, renderEditorTabs } from "./editor";
@@ -10,7 +10,7 @@ import { activeLane, applyLaneLabel, createLane, renderLaneBarOnly, renderPipeli
 import { openGitHubModal, openJiraModal } from "./modals";
 import { renderGuard } from "./render-guard";
 import { syncChatExpandLayout, syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
-import { api, askConfirm, normalizePathKey, setRunMode, setStatus, state, toast, toastError } from "./state";
+import { api, askConfirm, beginBusyOp, endBusyOp, normalizePathKey, setRunMode, setStatus, state, toast, toastError } from "./state";
 import { bindWorktreesTabEvents, refreshWorktreesPanel, renderWorktreesTabHtml } from "./worktrees";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -286,8 +286,28 @@ export function refreshDiffs(): Promise<void> {
     diffAgain.add(targetKey);
     return pending;
   }
+  state.diffRefreshing = true;
+  beginBusyOp("git-diff", "Atualizando Git…");
+  if (typeof document !== "undefined") {
+    const refreshBtn = document.getElementById("btn-refresh-diff") as HTMLButtonElement | null;
+    if (refreshBtn) {
+      refreshBtn.classList.add("is-spinning");
+      refreshBtn.disabled = true;
+    }
+  }
   const run = refreshDiffsOnce(targetKey).finally(() => {
     diffInflight.delete(targetKey);
+    if (diffInflight.size === 0) {
+      state.diffRefreshing = false;
+      endBusyOp("git-diff");
+      if (typeof document !== "undefined") {
+        const refreshBtn = document.getElementById("btn-refresh-diff") as HTMLButtonElement | null;
+        if (refreshBtn) {
+          refreshBtn.classList.remove("is-spinning");
+          refreshBtn.disabled = false;
+        }
+      }
+    }
     if (!diffAgain.delete(targetKey)) return;
     if (normalizePathKey(state.project?.root || "") === targetKey) void refreshDiffs();
   });
@@ -599,15 +619,15 @@ export function renderGitGraphSectionHtml(): string {
           ${icons.gitSmall}
           <span>${g.allBranches ? "Auto" : "Branch"}</span>
         </button>
-        <button type="button" class="icon-btn" data-git-action="fetch" title="Fetch (buscar atualizações)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "fetch" ? icons.spinner : icons.arrowDown}</button>
-        <button type="button" class="icon-btn" data-git-action="pull" title="Pull (baixar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "pull" ? icons.spinner : icons.download}</button>
-        <button type="button" class="icon-btn" data-git-action="push" title="Push (enviar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "push" ? icons.spinner : icons.arrowUp}</button>
-        <button type="button" class="icon-btn" id="btn-refresh-graph" title="Atualizar Graph">${icons.refresh}</button>
+        <button type="button" class="icon-btn ${state.gitOp.running && state.gitOp.action === "fetch" ? "is-busy" : ""}" data-git-action="fetch" title="Fetch (buscar atualizações)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "fetch" ? icons.spinner : icons.arrowDown}</button>
+        <button type="button" class="icon-btn ${state.gitOp.running && state.gitOp.action === "pull" ? "is-busy" : ""}" data-git-action="pull" title="Pull (baixar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "pull" ? icons.spinner : icons.download}</button>
+        <button type="button" class="icon-btn ${state.gitOp.running && state.gitOp.action === "push" ? "is-busy" : ""}" data-git-action="push" title="Push (enviar commits)" ${state.gitOp.running ? "disabled" : ""}>${state.gitOp.running && state.gitOp.action === "push" ? icons.spinner : icons.arrowUp}</button>
+        <button type="button" class="icon-btn ${g.loading ? "is-spinning" : ""}" id="btn-refresh-graph" title="Atualizar Graph" ${g.loading ? "disabled" : ""}>${icons.refresh}</button>
       </div>
       ${g.collapsed ? "" : `
         <div class="scm-graph-list" id="scm-graph-list">
           ${g.loading && !g.loadedOnce
-            ? `<div class="dim" style="padding:8px 10px">${icons.spinner} Carregando histórico…</div>`
+            ? renderSkeletonRowsHtml(5, "Carregando histórico…")
             : g.commits.length === 0
               ? `<div class="dim" style="padding:8px 10px">Nenhum commit neste repositório ainda.</div>`
               : g.commits.map((c, i) => `
@@ -661,7 +681,7 @@ export function renderPrDetailsDrawerHtml(
 ): string {
   if (!entry?.open) return "";
   if (entry.loading && !entry.data) {
-    return `<div class="pr-details-drawer"><div class="dim">${icons.spinner} Carregando últimos eventos do PR…</div></div>`;
+    return `<div class="pr-details-drawer">${renderSkeletonRowsHtml(3, "Carregando últimos eventos do PR…")}</div>`;
   }
   if (entry.error && !entry.data) {
     return `
@@ -976,14 +996,15 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
 
 function renderRepoCommitBoxHtml(repo: WorkspaceGitRepo, compact = false): string {
   const hasDiffs = (repo.diffs?.length || 0) > 0;
+  const busy = state.commitRunning || state.gitOp.running;
   const draft = getRepoCommitDraft(repo.root);
-  const menuOpenHere = state.commitMenuOpen && normalizePathKey(state.commitMenuRepoRoot || getActiveGitRepo()?.root || "") === normalizePathKey(repo.root);
+  const menuOpenHere = !busy && state.commitMenuOpen && normalizePathKey(state.commitMenuRepoRoot || getActiveGitRepo()?.root || "") === normalizePathKey(repo.root);
   return `
     <div class="scm-commit-box ${compact ? "is-compact" : ""}">
-      <input data-commit-input-repo="${escapeHtml(repo.root)}" placeholder='Mensagem (Ctrl+Enter em "${escapeHtml(repo.branch)}")' value="${escapeHtml(draft)}" />
+      <input data-commit-input-repo="${escapeHtml(repo.root)}" placeholder='Mensagem (Ctrl+Enter em "${escapeHtml(repo.branch)}")' value="${escapeHtml(draft)}" ${busy ? "disabled" : ""} />
       <div class="scm-split-btn">
-        <button type="button" class="primary scm-commit-main" data-commit-repo="${escapeHtml(repo.root)}" ${hasDiffs ? "" : "disabled"}>${icons.check}<span>Commit</span></button>
-        <button type="button" class="primary scm-commit-arrow" data-commit-menu-repo="${escapeHtml(repo.root)}" ${hasDiffs ? "" : "disabled"} title="Mais opções de Commit">${icons.chevronDown}</button>
+        <button type="button" class="primary scm-commit-main" data-commit-repo="${escapeHtml(repo.root)}" ${hasDiffs && !busy ? "" : "disabled"}>${state.commitRunning ? icons.spinner : icons.check}<span>${state.commitRunning ? "Commitando…" : "Commit"}</span></button>
+        <button type="button" class="primary scm-commit-arrow" data-commit-menu-repo="${escapeHtml(repo.root)}" ${hasDiffs && !busy ? "" : "disabled"} title="Mais opções de Commit">${icons.chevronDown}</button>
         ${menuOpenHere ? `
           <div class="scm-dropdown" id="scm-commit-dropdown">
             <button type="button" class="dropdown-item" data-commit-mode="commit" data-repo-root="${escapeHtml(repo.root)}">Commit</button>
@@ -1102,7 +1123,7 @@ function renderJiraAreaHtml(proj: ProjectInfo | null): string {
       </div>
       <div class="jira-task-grid">
         ${state.issues.loading && !state.issues.loadedOnce
-          ? `<div class="empty-panel">${icons.spinner} Carregando tasks…</div>`
+          ? renderSkeletonCardsHtml(3, "Carregando tasks do Jira…")
           : !state.issues.loadedOnce
             ? `<div class="empty-panel"><strong>Tasks do Jira</strong><p>Carregue para ver as tasks atribuídas a você, com subtasks e progresso.</p><button type="button" class="mini primary" id="btn-load-jira-tasks">Carregar</button></div>`
             : jiraIssues.length === 0
@@ -1276,7 +1297,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         ${state.prsCollapsed ? "" : `
           <div id="git-prs-list">
             ${state.prs.loading && !state.prs.loadedOnce
-              ? `<div class="dim">${icons.spinner} Carregando PRs…</div>`
+              ? renderSkeletonCardsHtml(3, "Carregando Pull Requests…")
               : !state.prs.loadedOnce
                 ? `<div class="dim">Clique em "Carregar" para buscar PRs e Issues.</div>`
                 : state.prs.list.length === 0
@@ -1357,7 +1378,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
               ` : ""}
               <div id="git-issues-list">
                 ${state.issues.loading && !state.issues.loadedOnce
-                  ? `<div class="dim">${icons.spinner} Carregando suas tasks…</div>`
+                  ? renderSkeletonCardsHtml(3, "Carregando suas tasks…")
                   : !state.issues.loadedOnce
                     ? `<div class="dim">Aguardando carregamento…</div>`
                     : allIssues.length === 0
@@ -1395,7 +1416,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         </div>
         <div>
           ${state.prs.loading && !state.prs.loadedOnce
-            ? `<div class="dim">${icons.spinner} Analisando seus PRs e revisões…</div>`
+            ? renderSkeletonCardsHtml(2, "Analisando seus PRs e revisões…")
             : !state.prs.loadedOnce
               ? `<div class="dim">Clique em "Carregar" para ver seu fluxo de revisões.</div>`
               : pendingReviews.length === 0
@@ -1413,7 +1434,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         </div>
         <div>
           ${!state.prs.loadedOnce
-            ? `<div class="dim">Carregando…</div>`
+            ? (state.prs.loading ? renderSkeletonCardsHtml(1, "Carregando seus PRs…") : `<div class="dim">Aguardando carregamento…</div>`)
             : myPrs.length === 0
               ? `<div class="dim">Nenhum PR seu aguardando ação sua.</div>`
               : myPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showMineBadge: false })).join("")
@@ -1448,8 +1469,8 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <span class="eyebrow">Controle de Código</span>
       <div class="spacer"></div>
       ${hasGit ? `
-        <button type="button" class="icon-btn" id="btn-header-commit" title="Commitar alterações (${escapeHtml(activeRepo?.name || proj?.name || "")})" ${activeHasDiffs ? "" : "disabled"}>${icons.check}</button>
-        <button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>
+        <button type="button" class="icon-btn ${state.commitRunning ? "is-busy" : ""}" id="btn-header-commit" title="Commitar alterações (${escapeHtml(activeRepo?.name || proj?.name || "")})" ${activeHasDiffs && !state.commitRunning && !state.gitOp.running ? "" : "disabled"}>${state.commitRunning ? icons.spinner : icons.check}</button>
+        <button type="button" class="icon-btn ${state.diffRefreshing ? "is-spinning" : ""}" id="btn-refresh-diff" title="Atualizar Source Control" ${state.diffRefreshing ? "disabled" : ""}>${icons.refresh}</button>
         <div class="scm-more-wrap">
           <button type="button" class="icon-btn" id="btn-scm-more" title="Mais ações Git…" ${state.gitOp.running ? "disabled" : ""}>${icons.moreHoriz}</button>
           ${state.gitMoreMenuOpen && !state.gitOp.running ? `
@@ -1471,7 +1492,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
             </div>
           ` : ""}
         </div>
-      ` : `<button type="button" class="icon-btn" id="btn-refresh-diff" title="Atualizar Source Control">${icons.refresh}</button>`}
+      ` : `<button type="button" class="icon-btn ${state.diffRefreshing ? "is-spinning" : ""}" id="btn-refresh-diff" title="Atualizar Source Control" ${state.diffRefreshing ? "disabled" : ""}>${icons.refresh}</button>`}
     </div>
     <div class="git-subtabs-scroll">
       <div class="git-subtabs scm-tabs-pad">
@@ -1482,6 +1503,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
       </div>
     </div>
+    ${gitOpPanelHtml()}
     <div class="sidebar-body scm-body">
       ${state.gitRefreshError ? `<div class="dim" style="padding:6px 10px">${escapeHtml(state.gitRefreshError)}</div>` : ""}
       <div class="scm-repo-strip">
@@ -1495,7 +1517,6 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           ${gh?.loggedIn ? `@${escapeHtml(gh.user)}` : "Conectar GitHub"}
         </button>
       </div>
-      ${gitOpPanelHtml()}
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
 
       ${tabContentHtml}
@@ -1514,6 +1535,7 @@ export async function loadGitGraph() {
   const allBranches = targetGraph.allBranches;
   targetGraph.repoRoot = targetRoot;
   targetGraph.loading = true;
+  beginBusyOp("git-graph", "Carregando histórico Git…");
   if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     const commits = (await withTimeout(backend.ListGitGraph(targetRoot, 60, allBranches), 20000, "carregar o Graph de commits")) || [];
@@ -1530,6 +1552,7 @@ export async function loadGitGraph() {
     }
   } finally {
     targetGraph.loading = false;
+    endBusyOp("git-graph");
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
       renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
@@ -1599,16 +1622,22 @@ function gitOpPanelHtml(): string {
   if (!op.running && !op.result && !op.error) return "";
   const headline = op.running ? op.label : op.error || op.result;
   return `
-    <div class="scm-git-op ${op.error ? "is-error" : ""}" role="status" aria-live="polite">
+    <div class="scm-git-op ${op.running ? "is-running" : ""} ${op.error ? "is-error" : ""}" role="status" aria-live="polite">
       <div class="scm-git-op-head">
         ${op.running ? icons.spinner : ""}
         <span id="scm-git-label">${escapeHtml(headline)}</span>
-        ${op.running ? `<button type="button" class="mini" id="btn-cancel-git" aria-label="Cancelar operação Git">Cancelar</button>` : ""}
+        ${op.running
+          ? `<button type="button" class="mini" id="btn-cancel-git" aria-label="Cancelar operação Git">Cancelar</button>`
+          : `<button type="button" class="icon-btn" id="btn-dismiss-git-op" title="Fechar aviso" aria-label="Fechar aviso">${icons.closeSmall}</button>`
+        }
       </div>
-      <details class="scm-git-log-wrap" ${op.running ? "open" : ""}>
-        <summary>Saída do git</summary>
-        <pre id="scm-git-log" class="scm-git-log" title="Limite ${gitTimeoutSec()}s. Ajuste hivemind.gitTimeoutSec ou HIVEMIND_GIT_TIMEOUT.">${escapeHtml(op.log)}</pre>
-      </details>
+      ${op.running ? `<div class="scm-git-op-progress" aria-hidden="true"><div class="scm-git-op-progress-fill"></div></div>` : ""}
+      ${op.log ? `
+        <details class="scm-git-log-wrap" ${op.running ? "open" : ""}>
+          <summary>Saída do git</summary>
+          <pre id="scm-git-log" class="scm-git-log" title="Limite ${gitTimeoutSec()}s. Ajuste hivemind.gitTimeoutSec ou HIVEMIND_GIT_TIMEOUT.">${escapeHtml(op.log)}</pre>
+        </details>
+      ` : ""}
     </div>`;
 }
 
@@ -1649,6 +1678,7 @@ export async function runGitScmAction(action: string, repoRoot?: string) {
   const label = gitTargetLabel(action);
   state.gitMoreMenuOpen = false;
   state.gitOp = { running: true, action, label, log: "", result: "", error: "" };
+  beginBusyOp("git-op", label);
   setStatus(label);
   if (state.sidebarView === "git") renderLeftSidebar();
   try {
@@ -1656,14 +1686,17 @@ export async function runGitScmAction(action: string, repoRoot?: string) {
       ? await backend.RunGitActionTimeout(targetRoot, action, gitTimeoutSec())
       : await backend.RunGitAction(targetRoot, action);
     const summary = out || `Git ${action} concluído.`;
+    state.gitOp.label = "Atualizando alterações e histórico…";
+    beginBusyOp("git-op", state.gitOp.label);
+    if (state.sidebarView === "git") renderLeftSidebar();
+    await refreshDiffs();
+    await loadGitGraph();
     state.gitOp.running = false;
     state.gitOp.result = summary;
     state.gitOp.error = "";
     state.gitOp.label = summary;
     setStatus(summary);
     toast(summary, "success");
-    await refreshDiffs();
-    await loadGitGraph();
   } catch (err: any) {
     const reason = err instanceof Error ? err.message : typeof err === "string" ? err : err?.message || "";
     const clean = String(reason || "").trim();
@@ -1681,6 +1714,8 @@ export async function runGitScmAction(action: string, repoRoot?: string) {
       toastError(`executar git ${action}`, err);
     }
   } finally {
+    state.gitOp.running = false;
+    endBusyOp("git-op");
     if (state.sidebarView === "git") renderLeftSidebar();
   }
 }
@@ -1764,6 +1799,7 @@ export async function loadGitHubPRs() {
   const projectKey = normalizePathKey(state.project.root);
   const targetPrs = state.prs;
   targetPrs.loading = true;
+  beginBusyOp("git-prs", "Carregando Pull Requests…");
   if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     targetPrs.list = (await withTimeout(backend.ListPullRequests(targetRoot), 20000, "buscar os Pull Requests")) || [];
@@ -1774,6 +1810,7 @@ export async function loadGitHubPRs() {
     }
   } finally {
     targetPrs.loading = false;
+    endBusyOp("git-prs");
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === projectKey) {
       renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
@@ -1787,6 +1824,7 @@ export async function loadProjectIssues() {
   const targetKey = normalizePathKey(targetRoot);
   const targetIssues = state.issues;
   targetIssues.loading = true;
+  beginBusyOp("git-issues", "Carregando tasks & issues…");
   if (state.sidebarView === "git") renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
   try {
     targetIssues.list = (await withTimeout(backend.ListIssues(targetRoot), 20000, "buscar as issues do GitHub")) || [];
@@ -1797,6 +1835,7 @@ export async function loadProjectIssues() {
     }
   } finally {
     targetIssues.loading = false;
+    endBusyOp("git-issues");
     if (state.sidebarView === "git" && state.project && normalizePathKey(state.project.root) === targetKey) {
       renderGuard.guardedRender("left-sidebar", renderLeftSidebar);
     }
@@ -1815,27 +1854,38 @@ export function bindGitSidebarEvents() {
 
   const doCommit = async (mode: "commit" | "push" | "sync", repoRoot?: string) => {
     const backend = api();
-    if (!backend || !state.project) return;
+    if (!backend || !state.project || state.commitRunning || state.gitOp.running) return;
     const targetRepo = resolveRepoForRoot(repoRoot);
     const targetRoot = targetRepo?.root || state.project.root;
     const message = getRepoCommitDraft(targetRoot);
+    const label = mode === "push" ? "Commitando e enviando…" : mode === "sync" ? "Commitando e sincronizando…" : "Commitando alterações…";
     state.commitMenuOpen = false;
     state.commitMenuRepoRoot = "";
+    state.commitRunning = true;
+    beginBusyOp("git-commit", label);
+    setStatus(label);
+    if (state.sidebarView === "git") renderLeftSidebar();
     try {
       const msg = await backend.CommitChanges(targetRoot, message, mode === "push");
       setRepoCommitDraft(targetRoot, "");
       if (mode === "sync") {
         setStatus(msg);
         toast(msg, "success");
+        state.commitRunning = false;
+        endBusyOp("git-commit");
         await runGitScmAction("sync", targetRoot);
-      } else {
-        setStatus(msg);
-        toast(msg, "success");
+        return;
       }
+      setStatus(msg);
+      toast(msg, "success");
       await refreshDiffs();
       await loadGitGraph();
     } catch (err: any) {
       toastError(mode === "commit" ? "commitar alterações" : `executar ${mode}`, err);
+    } finally {
+      state.commitRunning = false;
+      endBusyOp("git-commit");
+      if (state.sidebarView === "git") renderLeftSidebar();
     }
   };
 
@@ -2002,6 +2052,10 @@ export function bindGitSidebarEvents() {
   });
   document.getElementById("btn-cancel-git")?.addEventListener("click", () => {
     void cancelGitAction();
+  });
+  document.getElementById("btn-dismiss-git-op")?.addEventListener("click", () => {
+    state.gitOp = { running: false, action: "", label: "", log: "", result: "", error: "" };
+    if (state.sidebarView === "git") renderLeftSidebar();
   });
 
   document.getElementById("menu-github-connector")?.addEventListener("click", () => {

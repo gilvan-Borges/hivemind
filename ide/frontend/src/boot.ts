@@ -11,7 +11,7 @@ import { refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer
 import { handleResidentLaneEvent, openResidentTab, refreshResidentStatus, setResidentLaneMirrorHook, syncHiveBinding } from "./resident";
 import { installRenderGuardFlushHooks, renderGuard } from "./render-guard";
 import { mountShell, renderFileMenu, renderProjectTabsBar, switchProjectTab, syncActivityButtons, syncLayoutVisibility, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
-import { TEAM_CONFIG_TAB_KEY, api, askConfirm, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError } from "./state";
+import { TEAM_CONFIG_TAB_KEY, api, askConfirm, beginBusyOp, endBusyOp, findLaneWithContext, hasDirtyTabs, loadFromProjectContext, nextProjectSeq, normalizePathKey, saveActiveToProjectContext, setStatus, state, toastError, triggerEnterMotion } from "./state";
 import { openTeamConfigTab, updateMissionBoardIfOpen } from "./teamconfig";
 import { handleLSPDiagnosticsEvent, initLSPHooks, refreshLSPStatus } from "./lsp";
 import { handlePTYOutputEvent, renderTerminalDrawer } from "./terminal";
@@ -578,6 +578,7 @@ export async function boot() {
     }
   });
 
+  beginBusyOp("boot", "Iniciando workspace…");
   try {
     const init = await backend.GetInitialState();
     state.recent = init.recentProjects || [];
@@ -610,6 +611,8 @@ export async function boot() {
     }
   } catch (err: any) {
     toastError("iniciar a conexão com o backend (reinicie o app se o problema persistir)", err);
+  } finally {
+    endBusyOp("boot");
   }
 }
 
@@ -815,6 +818,8 @@ export function applyProject(proj: ProjectInfo, inNewTab = true) {
   renderEditorBody();
   renderTerminalDrawer();
   renderRightPane();
+  triggerEnterMotion(document.getElementById("left-sidebar"), "hm-view-enter");
+  triggerEnterMotion(document.getElementById("center-area"), "hm-page-enter");
   setStatus(`Projeto aberto em aba isolada: ${proj.root}`);
   refreshDiffs();
 }
@@ -838,12 +843,23 @@ export async function openProjectPath(dir: string, inNewTab = true) {
     switchProjectTab(existingTab.id);
     return;
   }
+  const folderName = dir.split(/[\\/]/).filter(Boolean).pop() || "projeto";
   const doOpen = async () => {
+    const label = `Abrindo ${folderName}…`;
+    state.projectLoading = { active: true, label };
+    state.showFileMenu = false;
+    renderFileMenu();
+    beginBusyOp("open-project", label);
+    setStatus(label);
+    renderProjectTabsBar();
+    if (!state.project) {
+      renderLeftSidebar();
+      renderEditorBody();
+    }
     try {
       const proj = await backend.OpenProject(dir);
       state.recent = await backend.GetRecentProjects();
-      state.showFileMenu = false;
-      renderFileMenu();
+      state.projectLoading = { active: false, label: "" };
       applyProject(proj, inNewTab);
       bootstrapAsync(proj.root);
       if (!proj.hasTeam) {
@@ -851,6 +867,14 @@ export async function openProjectPath(dir: string, inNewTab = true) {
       }
     } catch (err: any) {
       toastError("abrir a pasta do projeto", err);
+    } finally {
+      state.projectLoading = { active: false, label: "" };
+      endBusyOp("open-project");
+      renderProjectTabsBar();
+      if (!state.project) {
+        renderLeftSidebar();
+        renderEditorBody();
+      }
     }
   };
   if (!inNewTab && hasDirtyTabs()) {
