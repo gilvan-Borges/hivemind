@@ -225,9 +225,51 @@ func NewApp(initialDir string, smokeCheck bool) *App {
 	return app
 }
 
+func computeStartupWindowSize(screenW, screenH int) (w, h int, maximize bool) {
+	if screenW <= 0 || screenH <= 0 {
+		return 1180, 700, false
+	}
+	availW := screenW - 40
+	availH := screenH - 80
+	w = min(1360, max(760, availW))
+	h = min(840, max(520, availH))
+	if w > screenW {
+		w = screenW
+	}
+	if h > screenH-40 && screenH > 40 {
+		h = screenH - 40
+	}
+	maximize = screenW <= 1440 || screenH <= 900
+	return w, h, maximize
+}
+
+func (a *App) fitWindowToScreen(ctx context.Context) {
+	if ctx == nil || a.smokeCheck {
+		return
+	}
+	screens, err := wailsrt.ScreenGetAll(ctx)
+	if err != nil || len(screens) == 0 {
+		return
+	}
+	target := screens[0]
+	for _, sc := range screens {
+		if sc.IsCurrent || sc.IsPrimary {
+			target = sc
+			break
+		}
+	}
+	w, h, maximize := computeStartupWindowSize(target.Size.Width, target.Size.Height)
+	wailsrt.WindowSetSize(ctx, w, h)
+	wailsrt.WindowCenter(ctx)
+	if maximize {
+		wailsrt.WindowMaximise(ctx)
+	}
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.setIDEWindowOpen(true)
+	a.fitWindowToScreen(ctx)
 	applyWindowIcons()
 	// Semeia as skills nativas padrão (planejamento e SDD) no catálogo da IDE,
 	// sem sobrescrever edições do usuário feitas no painel de Skills.

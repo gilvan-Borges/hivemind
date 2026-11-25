@@ -9726,6 +9726,30 @@ button.primary {
     min-width: 120px;
     max-width: 180px;
   }
+  .workbench:not(.chat-expanded) .left-dock {
+    max-width: 280px;
+  }
+  .workbench:not(.chat-expanded) .right-ai-pane {
+    max-width: 390px;
+  }
+}
+@media (max-height: 780px) {
+  .titlebar {
+    height: 44px;
+  }
+  .team-strip {
+    min-height: 36px;
+    padding: 0 var(--space-3) 6px;
+  }
+  .status-bar {
+    height: 32px;
+  }
+  .composer-wrap {
+    padding: 6px 10px 10px;
+  }
+  .composer-box {
+    padding: 8px 10px;
+  }
 }
 @media (max-width: 1024px) {
   .titlebar {

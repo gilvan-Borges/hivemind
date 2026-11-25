@@ -152,3 +152,18 @@ func TestResolveInitialWorkspaceSkipsInstallDir(t *testing.T) {
 		t.Fatalf("expected empty workspace on first install without recent projects, got %q", got)
 	}
 }
+
+func TestComputeStartupWindowSize(t *testing.T) {
+	w, h, maxWin := computeStartupWindowSize(1280, 800)
+	if w > 1280 || h > 760 || !maxWin {
+		t.Fatalf("1280x800 should fit inside screen and maximize, got (%d, %d, %v)", w, h, maxWin)
+	}
+	w, h, maxWin = computeStartupWindowSize(1366, 768)
+	if w > 1366 || h > 728 || !maxWin {
+		t.Fatalf("1366x768 should fit inside screen and maximize, got (%d, %d, %v)", w, h, maxWin)
+	}
+	w, h, maxWin = computeStartupWindowSize(1920, 1080)
+	if w != 1360 || h != 840 || maxWin {
+		t.Fatalf("1920x1080 should use 1360x840 normal window, got (%d, %d, %v)", w, h, maxWin)
+	}
+}
