@@ -85,6 +85,21 @@
   --blue: var(--color-info);
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   --sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* D4 — Visual arejado: respiro, raio e sombra. Cores continuam nos tokens de papel. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 22px;
+  --font-ui: 13px;
+  --font-meta: 12px;
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.45);
 }
 
 /* Modularização: fundações (scrollbars, inputs, resets de controles). */
@@ -8908,5 +8923,610 @@ body.is-orb-mode #app {
   }
   button.mini {
     min-height: 24px;
+  }
+}
+
+/* D4 — Visual arejado. Fora de @layer para vencer os refrescos anteriores.
+   Separação por tom de fundo, dourado só no estado ativo e no foco. */
+button,
+input,
+select,
+textarea {
+  border-radius: var(--radius-sm);
+}
+button {
+  border-color: transparent;
+  background: var(--surface-card);
+}
+button.primary {
+  border-color: transparent;
+  box-shadow: none;
+}
+button.ghost,
+button.icon-btn,
+.win-btn,
+.act-btn,
+.dropdown-item {
+  background: transparent;
+}
+input,
+select,
+textarea {
+  border-color: transparent;
+  background: var(--surface-input);
+  padding: 8px 12px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: transparent;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-strong);
+}
+
+.ide-shell {
+  border: none;
+  background: var(--surface-page);
+}
+.titlebar {
+  height: 52px;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: none;
+  background: var(--surface-page);
+}
+button.brand-logo {
+  height: 36px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+}
+.titlebar .project-tabs-bar {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  gap: var(--space-2);
+  background: transparent;
+}
+.project-tab,
+.project-tab-add {
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: 0 var(--space-3);
+}
+.project-tab.active {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.title-center-cmd {
+  height: 34px;
+  min-width: 148px;
+  max-width: 220px;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-card);
+  padding: 0 14px;
+}
+
+.team-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 42px;
+  padding: 0 var(--space-4) var(--space-2);
+  background: var(--surface-page);
+  flex-shrink: 0;
+}
+.team-strip-label,
+.team-strip-tok,
+.team-strip-action {
+  border: none;
+  background: var(--surface-card);
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: var(--text-primary);
+  font-size: var(--font-meta);
+}
+.team-strip-label {
+  font-weight: 650;
+}
+.team-strip .pipeline-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+.team-strip .pipe-step {
+  color: var(--text-secondary);
+  font-size: var(--font-meta);
+  text-transform: none;
+}
+.team-strip .pipe-step.active {
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+.team-strip .pipe-sep {
+  color: var(--text-tertiary);
+}
+
+.workbench {
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+  background: var(--surface-page);
+}
+.left-dock,
+.center-area,
+.right-ai-pane {
+  border: none;
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  background: var(--surface-panel);
+  overflow: hidden;
+}
+.left-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.left-sidebar {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.side-rail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  height: auto;
+  padding: var(--space-2);
+  overflow-x: auto;
+  flex-shrink: 0;
+  background: transparent;
+}
+.side-tab {
+  width: auto;
+  height: 32px;
+  padding: 0 10px;
+  gap: 6px;
+  border-radius: 999px;
+  font-size: var(--font-meta);
+  color: var(--text-secondary);
+}
+.side-tab svg {
+  width: 16px;
+  height: 16px;
+}
+.act-btn.active,
+.side-tab.active {
+  color: var(--accent-strong);
+  background: var(--accent-subtle);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.act-btn.active::before {
+  display: none;
+}
+.side-tab .act-badge {
+  position: static;
+  margin-left: 2px;
+}
+.side-more {
+  position: relative;
+  margin-left: auto;
+}
+.side-more-menu,
+.chat-actions-menu,
+.composer-tools-menu,
+.sistema-popover,
+.dropdown-menu {
+  background: var(--surface-elevated);
+  border: none;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-2);
+}
+.side-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 220px;
+}
+.side-more-menu[hidden],
+.chat-actions-menu[hidden],
+.composer-tools-menu[hidden],
+.sistema-popover[hidden] {
+  display: none !important;
+}
+.left-dock.is-rail-only {
+  width: 56px !important;
+}
+.left-dock.is-rail-only .side-rail {
+  flex-direction: column;
+  align-items: center;
+  width: 56px;
+  overflow: visible;
+}
+.left-dock.is-rail-only .side-tab span,
+.left-dock.is-rail-only .side-more {
+  margin-left: 0;
+}
+.left-dock.is-rail-only .side-tab span {
+  display: none;
+}
+.left-dock.is-rail-only .side-more-menu {
+  left: calc(100% + 8px);
+  right: auto;
+  top: 0;
+}
+
+.sidebar-header {
+  height: auto;
+  min-height: 44px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: none;
+}
+.sidebar-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.sidebar-filter {
+  padding: 0 var(--space-4) var(--space-2);
+}
+.tree-row {
+  height: 28px;
+  line-height: 28px;
+  border-radius: var(--radius-sm);
+  margin: 2px 0;
+}
+.tree-row.active {
+  background: var(--accent-subtle);
+  box-shadow: none;
+  color: var(--text-primary);
+}
+
+.center-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-5);
+}
+.center-stage[hidden] {
+  display: none !important;
+}
+.center-area.has-stage .editor-tabs,
+.center-area.has-stage #editor-body {
+  display: none;
+}
+.git-center-hint {
+  display: none;
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-meta);
+}
+body:has(.center-area.has-stage) .git-center-hint {
+  display: block;
+}
+.git-center-board,
+.flow-board-cols,
+.jira-task-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+.center-stage .git-center-board,
+.center-stage .flow-board-cols,
+.center-stage .jira-task-grid {
+  grid-template-columns: 1fr 1fr;
+}
+.flow-board,
+.jira-area,
+.flow-board-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.center-stage .git-section {
+  padding: 0;
+  background: transparent;
+}
+.issue-card,
+.pr-card,
+.session-card,
+.mc-agent-card,
+.mission-top-card,
+.ide-settings-card,
+.autoreview-card,
+.welcome-card,
+.gh-card,
+.search-hit,
+.empty-panel {
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  padding: var(--space-4);
+  box-shadow: none;
+}
+.issue-card,
+.pr-card {
+  margin-bottom: 0;
+  gap: var(--space-2);
+}
+.empty-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}
+.empty-panel strong {
+  color: var(--text-primary);
+}
+.jira-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+}
+.jira-strip-status,
+.jira-strip-actions,
+.jira-strip-bind {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.jira-strip-bind {
+  flex-direction: column;
+  align-items: flex-start;
+  font-size: var(--font-meta);
+  color: var(--text-secondary);
+}
+.autoreview-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.autoreview-cfg,
+.autoreview-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) 0;
+  min-height: 44px;
+}
+.chat-top .lane-bar {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+}
+.chat-actions {
+  position: relative;
+}
+.chat-actions-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 210px;
+}
+.chat-messages {
+  padding: var(--space-4);
+  gap: var(--space-3);
+  background: transparent;
+}
+.msg-card {
+  border: none !important;
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--surface-card);
+}
+.composer-wrap {
+  flex-shrink: 0;
+  padding: 8px 12px 12px;
+  background: transparent;
+}
+.composer-footer {
+  flex-wrap: nowrap;
+}
+.composer-lane-tag {
+  display: none;
+}
+.composer-send,
+.composer-stop-btn {
+  flex-shrink: 0;
+}
+.composer-box {
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  padding: var(--space-3);
+  box-shadow: none;
+}
+.composer-box textarea {
+  border: none;
+  background: transparent;
+  padding: var(--space-2);
+  box-shadow: none;
+}
+.composer-tools {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.composer-tools-trigger {
+  max-width: 100%;
+  min-width: 0;
+}
+#composer-tools-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.composer-tools-trigger {
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  padding: 6px 12px;
+}
+.composer-tools-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: min(340px, 70vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.composer-tools-menu .composer-mode-bar {
+  flex-wrap: wrap;
+}
+.composer-tools-icons {
+  display: flex;
+  gap: var(--space-2);
+}
+.composer-tools-menu .composer-jira-input {
+  width: 100%;
+}
+
+.status-bar {
+  height: 36px;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-top: none;
+  background: var(--surface-page);
+  font-size: var(--font-meta);
+}
+.status-bar .spacer {
+  display: block;
+  flex: 1 1 auto;
+}
+.status-chip,
+.status-bar .ghost.mini {
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-card);
+  padding: 4px 10px;
+}
+.sistema-wrap {
+  position: relative;
+}
+.sistema-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  min-width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sistema-popover .plain-chip {
+  width: 100%;
+  justify-content: flex-start;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.editor-tabs {
+  border-bottom: none;
+  height: 42px;
+  padding: var(--space-2);
+  background: transparent;
+}
+.editor-tab {
+  border: none;
+  border-radius: var(--radius-md);
+}
+.editor-tab.active {
+  background: var(--surface-card);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.modal-box,
+.quick-open-modal {
+  border: none;
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-5);
+}
+.terminal-drawer {
+  border: none;
+  border-radius: var(--radius-md);
+  margin: var(--space-2);
+  background: var(--surface-page);
+}
+.welcome-cards,
+.mission-grid,
+.ide-settings-grid {
+  gap: var(--space-4);
+}
+.empty-welcome {
+  padding: var(--space-6) var(--space-5);
+}
+
+@media (max-width: 1024px) {
+  .titlebar {
+    height: 48px;
+  }
+  .title-center-cmd {
+    min-width: 112px;
+    max-width: 148px;
+  }
+  .project-tab span,
+  .side-tab span {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .team-strip {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding-bottom: var(--space-2);
+  }
+  .team-strip .pipeline-bar {
+    order: 3;
+    flex-basis: 100%;
+  }
+  .center-stage .git-center-board,
+  .center-stage .flow-board-cols,
+  .center-stage .jira-task-grid {
+    grid-template-columns: 1fr;
+  }
+  .center-stage {
+    padding: var(--space-3);
+  }
+  .right-ai-pane {
+    min-width: 280px;
   }
 }

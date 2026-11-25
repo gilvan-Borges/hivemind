@@ -603,7 +603,7 @@ export interface GitHubSyncEvent {
   syncedAt: string;
 }
 
-export type GitSubTab = "changes" | "prs_issues" | "flow" | "worktrees";
+export type GitSubTab = "changes" | "prs_issues" | "flow" | "worktrees" | "jira";
 
 export interface WorktreeInfo {
   path: string;

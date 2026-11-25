@@ -756,6 +756,11 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
   const detailOpen = Boolean(detailEntry?.open);
   const whenLabel = formatPrRelativeTime(pr.lastActivityAt || pr.updatedAt);
   const multiRepo = getEffectiveGitRepos().length > 1;
+  const actionLabel = pr.isMine
+    ? "Trabalhar c/ Equipe"
+    : pr.needsAttention && pr.myResponse
+      ? "Nova resposta"
+      : "Revisar c/ Equipe";
   return `
     <div class="issue-card pr-card">
       <div class="pr-card-top">
@@ -773,7 +778,7 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
       ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
       ${!detailOpen && pr.lastActivitySnippet ? `<div class="pr-activity-snippet" title="${escapeHtml(pr.lastActivitySnippet)}">${pr.lastActivityAuthor ? `<strong>@${escapeHtml(pr.lastActivityAuthor)}:</strong> ` : ""}${escapeHtml(pr.lastActivitySnippet)}</div>` : ""}
       <div class="pr-card-actions">
-        <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${pr.isMine ? "Trabalhar c/ Equipe" : "Revisar c/ Equipe"}</span></button>
+        <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${actionLabel}</span></button>
         <button type="button" class="mini pr-details-btn ${detailOpen ? "active" : ""}" data-toggle-pr-details="${pr.number}" aria-expanded="${detailOpen ? "true" : "false"}" title="Ver últimos comentários, revisões e arquivos do PR">
           ${detailOpen ? icons.chevronDown : icons.chevronRight}
           <span>Detalhes</span>
@@ -900,10 +905,7 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
           <span><strong>Revisão Automática</strong></span>
         </label>
         <span class="autoreview-badge-nomerge" title="Bloqueio técnico em código: github_merge_pr é removida no modo automático">Sem Merge</span>
-        <div class="spacer"></div>
-        <button type="button" class="icon-btn" id="ar-toggle-cfg" title="Configurações da Revisão Automática">
-          ${state.autoReviewConfigOpen ? icons.chevronDown : icons.chevronRight}
-        </button>
+        <span class="tok-pill" title="A revisão automática vigia a aba Fluxo e não faz merge">Vigiar fluxo</span>
       </div>
       <div class="autoreview-status ${st?.state === "error" || st?.state === "paused_limit" ? "warn" : isReviewing ? "active" : ""}">
         ${isReviewing || st?.state === "polling" ? icons.spinner : ""}
@@ -916,8 +918,7 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
           ${hasAutoLane ? `<button type="button" class="mini" id="ar-open-lane" title="Acompanhar ao vivo na lane auto-review">${icons.sparkle}<span>Acompanhar</span></button>` : ""}
         </div>
       ` : ""}
-      ${state.autoReviewConfigOpen ? `
-        <div class="autoreview-cfg">
+      <div class="autoreview-cfg">
           <label class="autoreview-cfg-check">
             <input type="checkbox" id="ar-run-tests" ${runTests ? "checked" : ""} />
             <span>Rodar testes do PR em worktree isolada</span>
@@ -938,10 +939,9 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
               <option value="600" ${interval === 600 ? "selected" : ""}>10 min</option>
             </select>
             <span class="dim">Máx/h:</span>
-            <input type="number" id="ar-max-hour" min="1" max="30" value="${maxPerHour}" style="width:52px;padding:2px 6px" />
+            <input type="number" id="ar-max-hour" min="1" max="30" value="${maxPerHour}" style="width:72px;padding:4px 8px" />
           </div>
         </div>
-      ` : ""}
       ${history.length > 0 ? `
         <div class="autoreview-history">
           <div class="dim" style="font-size:10px;margin-bottom:3px">Últimas revisões automáticas</div>
@@ -954,7 +954,7 @@ export function renderAutoReviewCardHtml(st: AutoReviewStatus | null): string {
             </div>
           `).join("")}
         </div>
-      ` : ""}
+      ` : `<div class="autoreview-history"><div class="dim">Nenhuma revisão automática ainda.</div></div>`}
     </div>
   `;
 }
@@ -1051,6 +1051,73 @@ function renderMultiRepoChangesHtml(repos: WorkspaceGitRepo[], activeRepo: Works
   `;
 }
 
+function renderJiraAreaHtml(proj: ProjectInfo | null): string {
+  const jira = state.jiraStatus;
+  const profiles = jira?.profiles || [];
+  const wsRoot = proj?.root || "";
+  const statusText = jira?.connected
+    ? `Conectado · ${jira.user || jira.email || "ok"}${jira.activeProfileName ? ` · ${jira.activeProfileName}` : ""}`
+    : jira?.detail || "Desconectado — importe do MCP ou gere um token";
+  const jiraIssues = state.issues.list
+    .map((iss, idx) => ({ iss, idx }))
+    .filter(({ iss }) => iss.source === "jira");
+  return `
+    <div class="jira-area">
+      <div class="jira-strip">
+        <div class="jira-strip-status">
+          <span class="gh-dot ${jira?.connected ? "ok" : "off"}"></span>
+          <div>
+            <strong>Jira Cloud</strong>
+            <div class="dim">${escapeHtml(statusText)}</div>
+          </div>
+        </div>
+        <label class="jira-strip-bind">
+          <span>Vínculo</span>
+          <select id="jira-area-bind" ${wsRoot ? "" : "disabled"} title="Vínculo automático pela organização Git">
+            <option value="auto" ${!jira?.bindingMode ? "selected" : ""}>Auto (detectar pela org)</option>
+            <option value="none" ${jira?.bindingMode === "none" ? "selected" : ""}>Sem Jira neste projeto</option>
+            ${profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${jira?.bindingMode === p.id ? "selected" : ""}>Fixar: ${escapeHtml(p.name)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="jira-strip-actions">
+          <button type="button" class="mini" id="jira-area-import" title="Importar de .agents/mcp_config.json, .mcp.json ou .cursor/mcp.json">${icons.download}<span>Importar MCP</span></button>
+          <button type="button" class="mini" id="jira-area-token" title="Abrir a página da Atlassian para criar um API Token">${icons.openInNew}<span>Gerar Token</span></button>
+          <button type="button" class="mini" id="jira-area-profiles" title="Editar perfis, e-mail e token">Perfis</button>
+        </div>
+      </div>
+      <div class="jira-task-grid">
+        ${state.issues.loading && !state.issues.loadedOnce
+          ? `<div class="empty-panel">${icons.spinner} Carregando tasks…</div>`
+          : !state.issues.loadedOnce
+            ? `<div class="empty-panel"><strong>Tasks do Jira</strong><p>Carregue para ver as tasks atribuídas a você, com subtasks e progresso.</p><button type="button" class="mini primary" id="btn-load-jira-tasks">Carregar</button></div>`
+            : jiraIssues.length === 0
+              ? `<div class="empty-panel"><strong>Nenhuma task Jira</strong><p>Quando houver tasks atribuídas a você, elas aparecem aqui com subtasks, barra de progresso e Resolver c/ Equipe.</p></div>`
+              : jiraIssues.map(({ iss, idx }) => renderIssueCardHtml(iss, idx)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+const CENTER_GIT_TABS = new Set<GitSubTab>(["prs_issues", "flow", "jira"]);
+
+export function placeGitTabContent(sidebar: HTMLElement) {
+  const stage = document.getElementById("center-stage");
+  const area = document.getElementById("center-area");
+  const useCenter = state.sidebarView === "git" && state.showLeftSidebar && CENTER_GIT_TABS.has(state.gitTab);
+  const content = sidebar.querySelector("#git-tab-content");
+  if (useCenter && stage && content) {
+    stage.hidden = false;
+    stage.replaceChildren(content);
+    area?.classList.add("has-stage");
+    return;
+  }
+  if (stage) {
+    stage.hidden = true;
+    stage.replaceChildren();
+  }
+  area?.classList.remove("has-stage");
+}
+
 export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
   const gh = state.ghStatus;
   const repos = getEffectiveGitRepos();
@@ -1072,8 +1139,9 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
     (pr.isMine && !pr.needsAttention) || (!pr.isMine && Boolean(pr.myResponse) && !pr.needsAttention)
   );
 
+  const visibleIssueCount = state.issues.list.filter((iss) => iss.source !== "jira").length;
   const prsIssuesTotal = state.prs.loadedOnce || state.issues.loadedOnce
-    ? ` (${state.prs.list.length + state.issues.list.length})`
+    ? ` (${state.prs.list.length + visibleIssueCount})`
     : "";
   const flowPendingCount = pendingReviews.length + myPrs.length;
   const flowBadge = state.prs.loadedOnce ? ` (${flowPendingCount})` : "";
@@ -1111,10 +1179,13 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         ${renderGitGraphSectionHtml()}
       `;
     }
+  } else if (activeGitTab === "jira") {
+    tabContentHtml = renderJiraAreaHtml(proj);
   } else if (activeGitTab === "prs_issues") {
     const loadingAny = state.prs.loading || state.issues.loading;
     tabContentHtml = `
-      <div class="git-section" id="git-prs-section" style="padding:10px">
+      <div class="git-center-board">
+      <div class="git-section" id="git-prs-section">
         <div class="git-section-head">
           <button type="button" class="scm-collapse-btn" id="btn-toggle-prs-section" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
             ${state.prsCollapsed ? icons.chevronRight : icons.chevronDown}
@@ -1144,7 +1215,8 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
 
       <div class="git-section" id="git-issues-section" style="padding:10px">
         ${(() => {
-          const allIssues = state.issues.list.map((iss, idx) => ({ iss, idx }));
+          const jiraTaskCount = state.issues.list.filter((iss) => iss.source === "jira").length;
+          const allIssues = state.issues.list.map((iss, idx) => ({ iss, idx })).filter(({ iss }) => iss.source !== "jira");
           const jiraCount = allIssues.filter((x) => x.iss.source === "jira").length;
           const ghCount = allIssues.filter((x) => x.iss.source === "github").length;
           const hasBothSources = jiraCount > 0 && ghCount > 0;
@@ -1176,6 +1248,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
                 ${state.issuesCollapsed ? icons.chevronRight : icons.chevronDown}
                 <span>Minhas tasks & issues (${countLabel})</span>
               </button>
+              ${jiraTaskCount > 0 ? `<button type="button" class="mini" id="btn-open-jira-area">Jira (${jiraTaskCount})</button>` : `<button type="button" class="mini ghost" id="btn-open-jira-area">Área Jira</button>`}
               ${state.jiraStatus?.connected && state.jiraProjects.length > 0 ? `
                 <select id="git-quick-jira-project" title="Projeto Jira vinculado a este repositório" style="font-size:10.5px;padding:2px 6px;max-width:148px;height:22px">
                   <option value="" ${!activeJiraProj ? "selected" : ""}>Auto (pelo repo)</option>
@@ -1214,7 +1287,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
                   : !state.issues.loadedOnce
                     ? `<div class="dim">Aguardando carregamento…</div>`
                     : allIssues.length === 0
-                      ? `<div class="dim">Nenhuma task atribuída a você encontrada.</div>`
+                      ? `<div class="empty-panel"><strong>Nenhuma task por aqui</strong><p>Issues do GitHub atribuídas a você aparecem neste cartão. As tasks do Jira ficam na aba Jira.</p></div>`
                       : filtered.length === 0
                         ? `<div class="dim">Nenhuma task corresponde ao filtro atual.</div>`
                         : filtered.map(({ iss, idx }) => renderIssueCardHtml(iss, idx)).join("")
@@ -1224,16 +1297,18 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
           `;
         })()}
       </div>
+      </div>
     `;
   } else if (activeGitTab === "worktrees" && hasGit) {
     tabContentHtml = renderWorktreesTabHtml();
   } else {
     tabContentHtml = `
-      <div class="git-section" style="padding:10px">
+      <div class="flow-board">
+      <div class="git-section flow-board-top">
         ${renderAutoReviewCardHtml(state.autoReview)}
       </div>
-
-      <div class="git-section" style="padding:10px">
+      <div class="flow-board-cols">
+      <div class="git-section">
         <div class="git-section-head">
           <span>Para revisar (${pendingReviews.length})</span>
           <div style="display:flex;align-items:center;gap:6px">
@@ -1256,7 +1331,8 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         </div>
       </div>
 
-      <div class="git-section" style="padding:10px">
+      <div class="flow-board-side">
+      <div class="git-section">
         <div class="git-section-head">
           <span>Meus PRs (${myPrs.length})</span>
           ${hasGit ? `<button class="mini" id="btn-open-pr" title="Criar PR da branch atual">${icons.pr}<span>Novo PR</span></button>` : ""}
@@ -1271,25 +1347,27 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         </div>
       </div>
 
-      <div class="git-section" style="padding:10px">
+      <div class="git-section">
         <div class="git-section-head">
-          <button type="button" class="scm-collapse-btn" id="btn-toggle-flow-responded" style="padding:0;text-transform:none;letter-spacing:0;font-size:11px">
-            ${state.showFlowResponded ? icons.chevronDown : icons.chevronRight}
+          <button type="button" class="scm-collapse-btn" id="btn-toggle-flow-responded" style="padding:0;text-transform:none;letter-spacing:0;font-size:12px">
             <span>Aguardando / Respondidos (${respondedPrs.length})</span>
           </button>
-          <span class="dim" style="font-size:10px">aguardando revisor · respondidos</span>
+          <span class="dim">aguardando revisor · comentado</span>
         </div>
-        ${state.showFlowResponded ? `
-          <div>
-            ${respondedPrs.length === 0
-              ? `<div class="dim">Nenhum PR aguardando ou respondido ainda.</div>`
-              : respondedPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showResponseBadge: true, showMineBadge: pr.isMine, showWaitingBadge: pr.isMine })).join("")
-            }
-          </div>
-        ` : ""}
+        <div>
+          ${respondedPrs.length === 0
+            ? `<div class="empty-panel">Nenhum PR aguardando ou respondido ainda.</div>`
+            : respondedPrs.map(({ pr, idx }) => renderPrCardHtml(pr, idx, { showResponseBadge: true, showMineBadge: pr.isMine, showWaitingBadge: pr.isMine })).join("")
+          }
+        </div>
+      </div>
+      </div>
+      </div>
       </div>
     `;
   }
+
+  tabContentHtml = `<div id="git-tab-content" class="git-tab-content git-tab-${activeGitTab}">${tabContentHtml}</div>`;
 
   return `
     <div class="sidebar-header scm-header">
@@ -1340,9 +1418,11 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       <div class="git-subtabs scm-tabs-pad">
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
         <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
+        <button type="button" class="git-subtab ${activeGitTab === "jira" ? "active" : ""}" data-git-tab="jira">Jira</button>
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
       </div>
+      <p class="git-center-hint">Esta aba está aberta no centro.</p>
 
       ${tabContentHtml}
     </div>
@@ -1773,10 +1853,49 @@ export function bindGitSidebarEvents() {
           void loadGitHubPRs();
         }
       }
+      if (tab === "jira" && !state.issues.loadedOnce && !state.issues.loading) {
+        void loadProjectIssues();
+      }
       if (tab === "worktrees") {
         void refreshWorktreesPanel(renderLeftSidebar);
       }
     });
+  });
+
+  document.getElementById("btn-open-jira-area")?.addEventListener("click", () => {
+    state.gitTab = "jira";
+    renderLeftSidebar();
+  });
+  document.getElementById("btn-load-jira-tasks")?.addEventListener("click", () => void loadProjectIssues());
+  document.getElementById("jira-area-token")?.addEventListener("click", () => {
+    void api()?.OpenExternalURL("https://id.atlassian.com/manage-profile/security/api-tokens");
+  });
+  document.getElementById("jira-area-profiles")?.addEventListener("click", () => void openJiraModal());
+  document.getElementById("jira-area-import")?.addEventListener("click", async () => {
+    const backend = api();
+    const wsRoot = state.project?.root || "";
+    if (!backend?.ImportJiraFromMCP) return;
+    try {
+      state.jiraStatus = await backend.ImportJiraFromMCP(wsRoot);
+      toast(`Jira importado${state.jiraStatus?.connected ? ` como ${state.jiraStatus.user || state.jiraStatus.email}` : ""}.`, state.jiraStatus?.connected ? "success" : "error");
+      void loadProjectIssues();
+      renderLeftSidebar();
+    } catch (err: any) {
+      toastError("importar o Jira do MCP", err);
+    }
+  });
+  document.getElementById("jira-area-bind")?.addEventListener("change", async (e) => {
+    const backend = api();
+    const wsRoot = state.project?.root || "";
+    const target = (e.target as HTMLSelectElement).value;
+    if (!backend?.BindJiraWorkspace || !wsRoot) return;
+    try {
+      state.jiraStatus = await backend.BindJiraWorkspace(wsRoot, target);
+      void loadProjectIssues();
+      renderLeftSidebar();
+    } catch (err: any) {
+      toastError("vincular Jira ao projeto", err);
+    }
   });
 
   document.getElementById("btn-toggle-flow-responded")?.addEventListener("click", () => {
