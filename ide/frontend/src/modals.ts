@@ -118,7 +118,7 @@ export async function refreshJiraStatusAndProjects() {
       if (state.teamConfigDraft) {
         state.teamConfigDraft.jiraEnabled = true;
       }
-      if (state.sidebarView === "git" && state.gitTab === "prs_issues" && !state.issues.loading) {
+      if (state.sidebarView === "git" && (state.gitTab === "prs_issues" || state.gitTab === "jira") && !state.issues.loading) {
         void loadProjectIssues();
       }
     }

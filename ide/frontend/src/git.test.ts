@@ -232,6 +232,41 @@ describe("PRs & Issues collapsible sections, details drawer and scroll preservat
     expect(formatPrRelativeTime("2026-11-22T10:40:00-03:00", Date.parse("2026-11-22T10:50:00-03:00"))).toBe("10m");
   });
 
+  it("abre PRs, Jira e Fluxo como vistas de centro com conector e filas", () => {
+    state.prs.list = [samplePr];
+    const prs = renderGitSidebarHtml(state.project);
+    expect(prs).toContain('id="git-tab-content"');
+    expect(prs).toContain("git-center-board");
+    expect(prs).toContain("Área Jira");
+
+    state.gitTab = "jira";
+    state.jiraStatus = {
+      configured: true,
+      connected: true,
+      source: "config",
+      baseUrl: "https://acme.atlassian.net",
+      email: "ana@example.com",
+      tokenMasked: "•••",
+      defaultProject: "ACME",
+      user: "ana",
+      detail: "Conectado",
+      activeProfileName: "Acme",
+    };
+    const jira = renderGitSidebarHtml(state.project);
+    expect(jira).toContain("jira-area");
+    expect(jira).toContain("Importar MCP");
+    expect(jira).toContain("Gerar Token");
+    expect(jira).toContain("jira-area-bind");
+
+    state.gitTab = "flow";
+    const flow = renderGitSidebarHtml(state.project);
+    expect(flow).toContain("flow-board");
+    expect(flow).toContain("Revisão Automática");
+    expect(flow).toContain("Para revisar");
+    expect(flow).toContain("Meus PRs");
+    expect(flow).toContain("Aguardando / Respondidos");
+  });
+
   it("explorer.ts preserva scrollTop da .sidebar-body ao re-renderizar a mesma aba", async () => {
     const mod = "node:fs/promises";
     const { readFile } = (await import(/* @vite-ignore */ mod)) as {

@@ -493,10 +493,10 @@ export function renderPipelineBar() {
   const lane = activeLane();
   if (!bar) return;
   const steps: Array<{ id: "chief" | "dev" | "qa" | "closing"; name: string }> = [
-    { id: "chief", name: "Chefe" },
-    { id: "dev", name: "Dev" },
-    { id: "qa", name: "QA" },
-    { id: "closing", name: "Fecho" },
+    { id: "chief", name: "chefe" },
+    { id: "dev", name: "dev" },
+    { id: "qa", name: "qa" },
+    { id: "closing", name: "fecho" },
   ];
   bar.innerHTML = steps
     .map((s, idx) => {
@@ -504,7 +504,7 @@ export function renderPipelineBar() {
       const isDone = lane?.doneStages?.includes(s.id) && !isAct;
       const cls = isAct ? "active" : isDone ? "done" : "";
       const iconHtml = isAct ? icons.spinner : isDone ? icons.check : "";
-      return `${idx > 0 ? `<span class="pipe-sep">${icons.arrowRight}</span>` : ""}<span class="pipe-step ${cls}">${iconHtml}<span>${s.name}</span></span>`;
+      return `${idx > 0 ? `<span class="pipe-sep" aria-hidden="true">›</span>` : ""}<span class="pipe-step ${cls}">${iconHtml}<span>${s.name}</span></span>`;
     })
     .join("");
 }

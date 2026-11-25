@@ -120,18 +120,23 @@ export function renderRightPane() {
             <button type="button" class="chat-scroll-bottom-btn" id="btn-chat-scroll-bottom" title="Ir para a última mensagem" aria-label="Ir para o final" style="display:none">${icons.arrowDown}</button>
           </div>`;
 
+  const laneIsPty = lane?.viewMode === "pty";
   right.innerHTML = `
-    <div class="sidebar-header">
-      <span class="eyebrow">${icons.sparkle}<span>Equipe IA</span></span>
-      <div class="spacer"></div>
-      <button type="button" class="icon-btn" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}" aria-label="${state.chatExpandedPref ? "Recolher Equipe IA" : "Expandir Equipe IA"}">${icons.expand}</button>
-      <button class="mini ghost" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
-      <button class="mini" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
-      <button type="button" class="mini ${splitLanes.length >= 2 ? "primary" : "ghost"}" id="btn-toggle-split-lanes" title="Dividir painel com 2 lanes lado a lado" aria-pressed="${splitLanes.length >= 2 ? "true" : "false"}">${icons.swarm}<span>Dividir</span></button>
+    <div class="chat-top">
+      <div class="lane-bar" id="lane-bar"></div>
+      <div class="chat-actions">
+        <button type="button" class="icon-btn" id="btn-chat-actions" title="Ações da conversa" aria-haspopup="menu" aria-expanded="${state.chatActionsOpen ? "true" : "false"}" aria-label="Ações da conversa">${icons.moreHoriz}</button>
+        <div class="chat-actions-menu" id="chat-actions-menu" role="menu" ${state.chatActionsOpen ? "" : "hidden"}>
+          <button type="button" class="dropdown-item" id="btn-new-session" title="Começar uma nova conversa limpa">Nova conversa</button>
+          <button type="button" class="dropdown-item" id="btn-add-lane" title="Abrir uma segunda equipe trabalhando em paralelo">${icons.plus}<span>Paralela</span></button>
+          <button type="button" class="dropdown-item" id="btn-toggle-split-lanes" title="Dividir painel com 2 lanes lado a lado" aria-pressed="${splitLanes.length >= 2 ? "true" : "false"}">${icons.swarm}<span>Dividir</span></button>
+          <button type="button" class="dropdown-item" id="btn-open-sessions-bar" title="Ver sessões salvas">Histórico</button>
+          <button type="button" class="dropdown-item" id="btn-expand-chat" title="Expandir a Equipe IA no centro quando o editor estiver vazio (Ctrl+Shift+E)" aria-pressed="${state.chatExpandedPref ? "true" : "false"}">${icons.expand}<span>${state.chatExpandedPref ? "Recolher" : "Expandir"}</span></button>
+          <button type="button" class="dropdown-item ${!laneIsPty ? "active" : ""}" id="btn-lane-mode-chat">${icons.sparkle}<span>Chat</span></button>
+          <button type="button" class="dropdown-item ${laneIsPty ? "active" : ""}" id="btn-lane-mode-pty">${icons.terminal}<span>Terminal</span></button>
+        </div>
+      </div>
     </div>
-    <div class="lane-bar" id="lane-bar"></div>
-    <div class="pipeline-bar" id="pipeline-bar"></div>
-    <div class="token-bar" id="token-bar"></div>
     ${bodyHtml}
     <div class="composer-wrap">
       <div id="design-mode-popover-slot">${renderDesignModePopoverHtml()}</div>
@@ -142,11 +147,21 @@ export function renderRightPane() {
         <div class="composer-images" id="composer-images" style="display:none"></div>
         <textarea id="chat-input" rows="1" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
         <div class="composer-footer">
-          <div class="composer-mode-bar" id="composer-mode-bar"></div>
+          <div class="composer-tools ${state.composerToolsOpen ? "open" : ""}">
+            <button type="button" class="composer-tools-trigger" id="btn-composer-tools" aria-expanded="${state.composerToolsOpen ? "true" : "false"}" title="Modo, permissão, Jira e anexos">
+              <span id="composer-tools-label">Auto · Governado</span>
+              <span class="composer-trigger-caret">${icons.chevronDown}</span>
+            </button>
+            <div class="composer-tools-menu" id="composer-tools-menu" ${state.composerToolsOpen ? "" : "hidden"}>
+              <div class="composer-mode-bar" id="composer-mode-bar"></div>
+              <input id="jira-key-input" class="composer-jira-input" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
+              <div class="composer-tools-icons">
+                <button type="button" class="composer-icon-btn ${state.designMode.open ? "active" : ""}" id="btn-design-mode" title="Design Mode — inspecionar elemento no Chrome via CDP" aria-label="Design Mode">${icons.target}<span>Design</span></button>
+                <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto ou print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}<span>Imagem</span></button>
+              </div>
+            </div>
+          </div>
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none" />
-          <button type="button" class="composer-icon-btn ${state.designMode.open ? "active" : ""}" id="btn-design-mode" title="Design Mode — inspecionar elemento no Chrome via CDP" aria-label="Design Mode">${icons.target}</button>
-          <button type="button" class="composer-icon-btn" id="btn-attach-image" title="Anexar foto/print (ou cole com Ctrl+V)" aria-label="Anexar imagem">${icons.image}</button>
-          <input id="jira-key-input" class="composer-jira-input" placeholder="Jira (PROJ-1)" value="${escapeHtml(state.jiraKeyInput)}" title="Vincular chave de issue Jira (opcional)" />
           <span class="dim composer-lane-tag" id="composer-team-label"></span>
           <div class="spacer"></div>
           <button type="button" class="danger mini composer-stop-btn" id="btn-cancel-run" ${lane?.running ? "" : "disabled"} style="${lane?.running ? "" : "display:none"}" title="Interromper execução atual">${icons.stop}<span>Parar</span></button>
@@ -412,14 +427,15 @@ export function renderComposerModeBar() {
   });
 
   bar.querySelector("#btn-composer-memory")?.addEventListener("click", () => openTeamMemoryFile());
+  const toolsLabel = document.getElementById("composer-tools-label");
+  if (toolsLabel) toolsLabel.textContent = `${curMode.shortLabel} · ${curPerm.label}`;
 }
 
 export function renderTokenBar() {
-  const bar = document.getElementById("token-bar");
+  const tokEl = document.getElementById("status-tokens");
   const lane = activeLane();
-  if (!bar || !lane) return;
-  const maxTok = state.project?.teamConfig?.settings?.max_tokens || 0;
-  const warnBudget = maxTok > 0 && lane.turnTotalTokens >= maxTok * 0.8;
+  if (!tokEl || !lane) return;
+  const sessTok = lane.sessionTotalTokens || 0;
   const turnCost = Number(lane.turnCostMicroUsd || 0);
   const sessCost = Number(lane.sessionCostMicroUsd || 0);
   const roleParts = Object.entries(lane.costByRole || {})
@@ -432,48 +448,15 @@ export function renderTokenBar() {
     .join(" · ");
   const costTitle = [roleParts && `Por papel — ${roleParts}`, agentParts && `Por agente — ${agentParts}`]
     .filter(Boolean)
-    .join("\n") || "Custo USD acumulado no turno e na sessão (catálogo Jev)";
-
-  const isPty = lane.viewMode === "pty";
-  bar.innerHTML = `
-    <span class="tok-pill" title="Turno atual — Entrada: ${exactTokens(lane.turnInTokens)} | Saída: ${exactTokens(lane.turnOutTokens)}">
-      ${icons.bolt}
-      <span>Turno: ${formatTokens(lane.turnTotalTokens)}</span>
-      <span class="dim">(↑${formatTokens(lane.turnInTokens)} ↓${formatTokens(lane.turnOutTokens)})</span>
-    </span>
-    <span class="tok-pill" title="Total desta sessão (${escapeHtml(lane.sessionId || "nova")}) — Entrada: ${exactTokens(lane.sessionInTokens)} | Saída: ${exactTokens(lane.sessionOutTokens)}">
-      <span>Sessão: ${formatTokens(lane.sessionTotalTokens)} tok</span>
-    </span>
-    ${
-      turnCost > 0 || sessCost > 0
-        ? `<span class="tok-pill cost-pill" title="${escapeHtml(costTitle)}">USD: ${formatMicroUsd(turnCost)}${sessCost > turnCost ? ` · ses ${formatMicroUsd(sessCost)}` : ""}</span>`
-        : ""
-    }
-    ${maxTok > 0 ? `<span class="tok-pill ${warnBudget ? "warn" : ""}" title="Limite configurado em .hivemind/team.yaml">Limite: ${formatTokens(lane.turnTotalTokens)}/${formatTokens(maxTok)}</span>` : ""}
-    ${isPty ? `<span class="tok-pill dim" title="HIVEMIND_SESSION_ID compartilhado">PTY: ${escapeHtml(lane.sessionId || lane.id)}</span>` : ""}
-    <div class="spacer"></div>
-    <div class="lane-mode-seg" role="group" aria-label="Visão da lane">
-      <button type="button" class="lane-mode-btn ${!isPty ? "active" : ""}" id="btn-lane-mode-chat" title="Conversa dos agentes">${icons.sparkle}<span>Chat</span></button>
-      <button type="button" class="lane-mode-btn ${isPty ? "active" : ""}" id="btn-lane-mode-pty" title="Terminal PTY compartilhado">${icons.terminal}<span>Terminal</span></button>
-    </div>
-    <button class="ghost mini" id="btn-open-sessions-bar" style="padding:1px 6px;font-size:11px" title="Ver todas as sessões salvas e total do projeto">Histórico</button>
-  `;
-  bar.querySelector("#btn-lane-mode-chat")?.addEventListener("click", () => {
-    if (lane.viewMode !== "chat") {
-      lane.viewMode = "chat";
-      renderRightPane();
-    }
-  });
-  bar.querySelector("#btn-lane-mode-pty")?.addEventListener("click", () => {
-    if (lane.viewMode !== "pty") {
-      lane.viewMode = "pty";
-      renderRightPane();
-    }
-  });
-  bar.querySelector("#btn-open-sessions-bar")?.addEventListener("click", () => {
-    openSidebarView("sessions");
-    refreshSessions();
-  });
+    .join("\n");
+  tokEl.innerHTML = `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
+  tokEl.title = [
+    `Turno: ${exactTokens(lane.turnTotalTokens)} (↑${exactTokens(lane.turnInTokens)} ↓${exactTokens(lane.turnOutTokens)})`,
+    `Sessão ${lane.sessionId || "nova"}: ${exactTokens(sessTok)} (↑${exactTokens(lane.sessionInTokens)} ↓${exactTokens(lane.sessionOutTokens)})`,
+    turnCost > 0 || sessCost > 0 ? `USD turno ${formatMicroUsd(turnCost)} · sessão ${formatMicroUsd(sessCost)}` : "",
+    costTitle,
+    "Clique para abrir Sessões",
+  ].filter(Boolean).join("\n");
 }
 
 export function renderComposerImages() {
@@ -1387,6 +1370,39 @@ export function renderMentionPopup() {
 }
 
 export function bindRightStaticEvents() {
+  document.getElementById("btn-chat-actions")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.chatActionsOpen = !state.chatActionsOpen;
+    const menu = document.getElementById("chat-actions-menu");
+    if (menu) menu.hidden = !state.chatActionsOpen;
+    (e.currentTarget as HTMLElement).setAttribute("aria-expanded", state.chatActionsOpen ? "true" : "false");
+  });
+  document.getElementById("btn-composer-tools")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.composerToolsOpen = !state.composerToolsOpen;
+    const menu = document.getElementById("composer-tools-menu");
+    if (menu) menu.hidden = !state.composerToolsOpen;
+    document.querySelector(".composer-tools")?.classList.toggle("open", state.composerToolsOpen);
+    (e.currentTarget as HTMLElement).setAttribute("aria-expanded", state.composerToolsOpen ? "true" : "false");
+  });
+  document.getElementById("btn-lane-mode-chat")?.addEventListener("click", () => {
+    const lane = activeLane();
+    if (lane && lane.viewMode !== "chat") {
+      lane.viewMode = "chat";
+      renderRightPane();
+    }
+  });
+  document.getElementById("btn-lane-mode-pty")?.addEventListener("click", () => {
+    const lane = activeLane();
+    if (lane && lane.viewMode !== "pty") {
+      lane.viewMode = "pty";
+      renderRightPane();
+    }
+  });
+  document.getElementById("btn-open-sessions-bar")?.addEventListener("click", () => {
+    openSidebarView("sessions");
+    refreshSessions();
+  });
   document.getElementById("btn-expand-chat")?.addEventListener("click", () => {
     toggleChatExpanded();
   });
