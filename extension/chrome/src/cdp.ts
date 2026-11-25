@@ -38,7 +38,18 @@ const spawned: number[] = [];
 let currentCall = "";
 let halted = false;
 let watchOpener = 0;
+let pinnedTabId = 0;
 let pickResolve: ((text: string) => void) | null = null;
+
+export function pinSessionTab(tabId: number): void {
+  if (Number.isFinite(tabId) && tabId > 0) {
+    pinnedTabId = tabId;
+  }
+}
+
+export function getPinnedSessionTab(): number {
+  return pinnedTabId;
+}
 
 const batchTools = new Set(["click", "type", "form_input", "key", "scroll", "wait", "find", "read_page"]);
 
@@ -226,6 +237,18 @@ async function attach(tabId: number): Promise<void> {
   await send(tabId, "DOM.enable");
   await send(tabId, "Log.enable");
   try {
+    // Mantém a aba com foco virtual e ciclo ativo mesmo quando o Chrome está em 2º plano,
+    // sem nunca chamar Page.bringToFront nem roubar o mouse/teclado do usuário.
+    await send(tabId, "Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch {
+    /* opcional por versão do Chrome */
+  }
+  try {
+    await send(tabId, "Page.setWebLifecycleState", { state: "active" });
+  } catch {
+    /* opcional por versão do Chrome */
+  }
+  try {
     await send(tabId, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
   } catch {
     /* o Chrome da máquina pode não aceitar flatten */
@@ -249,11 +272,26 @@ export async function detachAll(): Promise<void> {
 
 async function activeTab(preferred?: unknown): Promise<number> {
   const id = typeof preferred === "number" ? preferred : Number(preferred);
-  if (Number.isFinite(id) && id > 0) return id;
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
-  if (!tab?.id) throw new Error("nenhuma aba ativa");
-  return tab.id;
+  if (Number.isFinite(id) && id > 0) {
+    pinnedTabId = id;
+    return id;
+  }
+  if (pinnedTabId > 0) {
+    try {
+      const existing = await chrome.tabs.get(pinnedTabId);
+      if (existing?.id) return existing.id;
+    } catch {
+      pinnedTabId = 0;
+    }
+  }
+  let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tabs[0]?.id) {
+    tabs = await chrome.tabs.query({ active: true });
+  }
+  const httpTab = tabs.find((t) => t.id && /^https?:/i.test(t.url ?? "")) ?? tabs[0];
+  if (!httpTab?.id) throw new Error("nenhuma aba ativa encontrada no Chrome");
+  pinnedTabId = httpTab.id;
+  return httpTab.id;
 }
 
 async function tabInfo(tabId: number): Promise<ChromeTab> {
@@ -684,6 +722,7 @@ async function mainText(args: Record<string, unknown>): Promise<ToolResult> {
 async function followSpawned(): Promise<string> {
   const id = spawned[spawned.length - 1];
   if (!id) return "";
+  pinnedTabId = id;
   try {
     await chrome.tabs.update(id, { active: true });
     await waitComplete(id);
@@ -699,13 +738,13 @@ async function locateByName(tabId: number, targetName: string): Promise<{ left: 
   if (!clean) return null;
   const expr = `((needle) => {
     const q = needle.toLowerCase().trim();
-    let best = null;
+    let bestEl = null;
     let bestScore = 999999;
     function check(el) {
-      const r = el.getBoundingClientRect();
-      if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0) return;
       const cs = getComputedStyle(el);
       if (cs.visibility === "hidden" || cs.display === "none") return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return;
       const aria = String(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || "").replace(/\\s+/g, " ").trim().toLowerCase();
       const txt = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
       const hitAria = aria && (aria === q || aria.includes(q));
@@ -719,7 +758,7 @@ async function locateByName(tabId: number, targetName: string): Promise<{ left: 
       const score = exact + bonus + area + (txt ? txt.length : 40);
       if (score < bestScore) {
         bestScore = score;
-        best = { left: r.left, top: r.top, width: r.width, height: r.height };
+        bestEl = el;
       }
     }
     function walk(root) {
@@ -731,7 +770,10 @@ async function locateByName(tabId: number, targetName: string): Promise<{ left: 
       }
     }
     walk(document);
-    return best;
+    if (!bestEl) return null;
+    try { bestEl.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); } catch (e) {}
+    const rect = bestEl.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
   })(${JSON.stringify(clean)})`;
   try {
     const ev = await send<{ result?: { value?: { left: number; top: number; width: number; height: number } | null } }>(tabId, "Runtime.evaluate", {

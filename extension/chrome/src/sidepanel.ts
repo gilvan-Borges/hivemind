@@ -78,7 +78,10 @@ function scroll(): void {
 
 function closeLive(): void {
   const group = [...items].reverse().find((item) => item.k === "group" && item.live);
-  if (group && group.k === "group") group.live = false;
+  if (group && group.k === "group") {
+    group.steps = group.steps.filter((s) => s.id !== "__live_activity__");
+    group.live = false;
+  }
 }
 
 async function save(): Promise<void> {
@@ -358,6 +361,24 @@ port.onMessage.addListener((message: {
     items.push({ k: "user", text: message.text });
     paint();
     void save();
+    return;
+  }
+  if (message.type === "activity" && message.text) {
+    statusEl.textContent = "executando";
+    statusEl.classList.add("busy");
+    const thinking = agentItem();
+    if (thinking && thinking.pending && !thinking.text) {
+      items.splice(items.indexOf(thinking), 1);
+    }
+    const group = ensureGroup();
+    let actStep = group.steps.find((s) => s.id === "__live_activity__");
+    if (!actStep) {
+      actStep = { id: "__live_activity__", label: message.text, phase: "start" };
+      group.steps.push(actStep);
+    } else {
+      actStep.label = message.text;
+    }
+    paint();
     return;
   }
   if (message.type === "chat_delta" && message.text) {

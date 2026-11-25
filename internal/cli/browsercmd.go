@@ -119,6 +119,17 @@ func newBrowserServe() *cobra.Command {
 					ApproveDetailed: func(_ context.Context, req resident.ApprovalRequest) bool {
 						return req.ToolName == "chrome_tab"
 					},
+					OnEvent: func(ev resident.Event) {
+						switch ev.Kind {
+						case "tool_call":
+							browserx.PushActivity(strings.TrimSpace(ev.ToolName + " " + ev.Detail))
+						case "text":
+							if ev.Thought && strings.TrimSpace(ev.Text) != "" {
+								firstLine := strings.SplitN(strings.TrimSpace(ev.Text), "\n", 2)[0]
+								browserx.PushActivity("Pensando: " + firstLine)
+							}
+						}
+					},
 				}
 				res, err := runner.RunTurn(cmd.Context(), resident.TurnRequest{
 					Message:    msg,

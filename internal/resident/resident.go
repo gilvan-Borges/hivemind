@@ -275,7 +275,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	r.emit(Event{
 		Kind:           "stage",
 		Author:         "hive",
-		Label:          "Hive Residente",
+		Label:          "Agent Hive",
 		Text:           "pensando",
 		ConversationID: req.ConversationID,
 		SessionID:      req.SharedSessionID,
@@ -301,7 +301,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	for ev, err := range adkRunner.Run(ctx, accountID, sessID, userContent, runCfg) {
 		if err != nil {
 			safeErr := RedactSecrets(err.Error())
-			r.emit(Event{Kind: "error", Author: "hive", Label: "Hive Residente", Text: safeErr})
+			r.emit(Event{Kind: "error", Author: "hive", Label: "Agent Hive", Text: safeErr})
 			return TurnResult{}, fmt.Errorf("%s", safeErr)
 		}
 		if ev == nil {
@@ -322,7 +322,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 				r.emit(Event{
 					Kind:         "usage",
 					Author:       "hive",
-					Label:        "Hive Residente",
+					Label:        "Agent Hive",
 					InputTokens:  inTok,
 					OutputTokens: outTok,
 					Tokens:       totTok,
@@ -340,7 +340,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 					r.emit(Event{
 						Kind:    "text",
 						Author:  "hive",
-						Label:   "Hive Residente",
+						Label:   "Agent Hive",
 						Text:    safeText,
 						Partial: ev.Partial,
 						Thought: true,
@@ -352,7 +352,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 					r.emit(Event{
 						Kind:    "text",
 						Author:  "hive",
-						Label:   "Hive Residente",
+						Label:   "Agent Hive",
 						Text:    safeText,
 						Partial: true,
 					})
@@ -362,7 +362,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 						r.emit(Event{
 							Kind:    "text",
 							Author:  "hive",
-							Label:   "Hive Residente",
+							Label:   "Agent Hive",
 							Text:    safeText,
 							Partial: false,
 						})
@@ -385,7 +385,7 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	r.emit(Event{
 		Kind:   "finish",
 		Author: "hive",
-		Label:  "Hive Residente",
+		Label:  "Agent Hive",
 		Text:   finalText,
 	})
 
@@ -543,7 +543,7 @@ func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error)
 		r.emit(Event{
 			Kind:   "subagent",
 			Author: "hive",
-			Label:  "Hive Residente",
+			Label:  "Agent Hive",
 			Detail: fmt.Sprintf("subagente falhou após %.1fs: %v", dur.Seconds(), err),
 		})
 		return "", err
@@ -551,7 +551,7 @@ func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error)
 	r.emit(Event{
 		Kind:   "subagent",
 		Author: "hive",
-		Label:  "Hive Residente",
+		Label:  "Agent Hive",
 		Detail: spawnSummaryHeader(req, res, dur),
 	})
 	// Bound the summary that re-enters the parent's context and archive the

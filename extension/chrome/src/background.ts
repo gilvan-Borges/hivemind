@@ -1,4 +1,4 @@
-import { abortCall, captureThumb, detachAll, executeTool, NeedsApproval, setCurrentCall } from "./cdp.js";
+import { abortCall, captureThumb, detachAll, executeTool, getPinnedSessionTab, NeedsApproval, pinSessionTab, setCurrentCall } from "./cdp.js";
 import { hostOf, isLoopbackWebSocket, redactSecrets } from "./pure.js";
 
 const HOST = "com.gilvan_borges.hivemind";
@@ -54,8 +54,11 @@ async function clearTabGroup(): Promise<void> {
 }
 
 async function syncTabVisualEffect(active: boolean, label?: string): Promise<void> {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tabId = tabs[0]?.id ?? null;
+  let tabId: number | null = getPinnedSessionTab() || null;
+  if (tabId === null) {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tabId = tabs[0]?.id ?? null;
+  }
   if (active && tabId !== null) {
     if (activeOverlayTabId !== null && activeOverlayTabId !== tabId) {
       void chrome.tabs.sendMessage(activeOverlayTabId, { type: "hivemind-overlay", op: "hide" }).catch(() => {});
@@ -108,8 +111,20 @@ async function publish(): Promise<void> {
   let url = "";
   let tabId = 0;
   try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tab = tabs[0];
+    const pinned = getPinnedSessionTab();
+    let tab: ChromeTab | undefined;
+    if (pinned > 0) {
+      try {
+        tab = await chrome.tabs.get(pinned);
+      } catch {
+        /* aba fechada */
+      }
+    }
+    if (!tab?.id) {
+      let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (!tabs[0]?.id) tabs = await chrome.tabs.query({ active: true });
+      tab = tabs[0];
+    }
     title = tab?.title ?? "";
     url = tab?.url ?? "";
     tabId = tab?.id ?? 0;
@@ -205,8 +220,20 @@ async function runCall(id: string, tool: string, args: Record<string, unknown>) 
     return await executeTool(tool, args);
   } catch (err) {
     if (!(err instanceof NeedsApproval) || panels.size === 0) throw err;
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const host = hostOf(tabs[0]?.url ?? "") ?? "";
+    const pinned = getPinnedSessionTab();
+    let tab: ChromeTab | undefined;
+    if (pinned > 0) {
+      try {
+        tab = await chrome.tabs.get(pinned);
+      } catch {
+        /* aba fechada */
+      }
+    }
+    if (!tab?.url) {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      tab = tabs[0];
+    }
+    const host = hostOf(tab?.url ?? "") ?? "";
     const choice = await askPanel(id, err.message, host);
     if (choice !== "once" && choice !== "always") {
       if (choice === "deny") throw new Error("negado no painel");
@@ -244,10 +271,18 @@ function connectNative(): void {
 
 function scheduleReconnect(): void {
   reconnects += 1;
-  const wait = Math.min(8000, 400 * 2 ** Math.min(reconnects, 4));
+  const wait = Math.min(2500, 400 * 2 ** Math.min(reconnects, 3));
   setTimeout(() => {
     if (connected) return;
-    if (nativePort) return;
+    if (nativePort) {
+      try {
+        nativePort.postMessage({ type: "hello", role: "extension" });
+      } catch {
+        nativePort = null;
+      }
+      if (!connected) scheduleReconnect();
+      return;
+    }
     void fallbackSocket().then(() => {
       if (!connected) connectNative();
     });
@@ -315,8 +350,11 @@ async function beginPick(): Promise<void> {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "panel") return;
   panels.add(port);
-  void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-    if (tabs[0]?.id !== undefined) void ensureTabGroup(tabs[0].id);
+  void chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
+    if (tabs[0]?.id !== undefined) {
+      pinSessionTab(tabs[0].id);
+      void ensureTabGroup(tabs[0].id);
+    }
   });
   port.onDisconnect.addListener(() => {
     panels.delete(port);
@@ -327,8 +365,12 @@ chrome.runtime.onConnect.addListener((port) => {
   void publish();
   port.onMessage.addListener((message: { type?: string; text?: string; token?: string; port?: number; id?: string; choice?: string }) => {
     if (message.type === "chat" && message.text) {
-      void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-        if (tabs[0]?.id !== undefined) void ensureTabGroup(tabs[0].id);
+      void chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
+        const tid = getPinnedSessionTab() || tabs[0]?.id;
+        if (tid !== undefined) {
+          pinSessionTab(tid);
+          void ensureTabGroup(tid);
+        }
       });
       if (!send({ type: "chat", text: message.text })) {
         scheduleReconnect();
@@ -374,7 +416,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return undefined;
 });
 
-chrome.tabs.onActivated.addListener(() => {
+chrome.tabs.onActivated.addListener((info) => {
+  if (!controlling && info?.tabId) {
+    pinSessionTab(info.tabId);
+  }
   if (controlling) {
     void syncTabVisualEffect(true, "Agindo na página…");
   }

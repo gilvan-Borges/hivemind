@@ -48,7 +48,7 @@ Métodos no `orb.Hub`:
 - `ApplyResidentEvent(ev idecore.LaneEvent)` (ou via helper em `ide/orb_host.go` para manter `internal/orb` sem dependência cíclica) — aplica streaming parcial `text`, `user_message`, `tool_call`, `tool_result`, `approval_required`, `approval_resolved`, `stage`, `error`, `finish` e dispara `broadcast()`.
 
 ### 1.2 Novas ações em `OrbAction` (`orb.Hub` + `ide/orb_host.go` + `ide/orb_window.go`)
-- `resident_send` (`Text`, `Workstream`): dispara goroutine no processo principal chamando `a.ResidentStartTurn(workspace, workstream, text)` (publica `user_message` antes para feedback imediato tanto no Orb quanto na aba `Hive Residente` da IDE).
+- `resident_send` (`Text`, `Workstream`): dispara goroutine no processo principal chamando `a.ResidentStartTurn(workspace, workstream, text)` (publica `user_message` antes para feedback imediato tanto no Orb quanto na aba `Agent Hive` da IDE).
 - `resident_cancel`: chama `a.ResidentCancel()`.
 - `resident_approve` (`ApprovalID`, `Approved: bool`): chama `a.RespondApproval(approvalID, approved)`.
 - `resident_clear` (`Workstream`): chama `a.ResidentClearSession(workstream)` e atualiza snapshot.

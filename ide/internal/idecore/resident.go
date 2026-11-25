@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/adk/v2/model"
 
+	"github.com/gilvan-Borges/HiveMind/internal/browserx"
 	"github.com/gilvan-Borges/HiveMind/internal/loopx"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/orchestrator"
@@ -205,7 +206,7 @@ func (m *ResidentManager) NoteHostEvent(kind string) {
 		Event: orchestrator.Event{
 			Kind:  "stage",
 			Stage: "chief",
-			Label: "Hive Residente",
+			Label: "Agent Hive",
 			Text:  "evento " + kind,
 		},
 	})
@@ -599,6 +600,23 @@ func (m *ResidentManager) RunBrowserExtensionTurn(
 			if ev.Kind == "usage" && (ev.Tokens > 0 || ev.InputTokens > 0 || ev.OutputTokens > 0) {
 				modelx.RecordAIUsage(prov, mod, int64(ev.InputTokens), int64(ev.OutputTokens), int64(ev.Tokens))
 			}
+			switch ev.Kind {
+			case "stage":
+				if strings.TrimSpace(ev.Text) != "" {
+					browserx.PushActivity("Agent Hive · " + strings.TrimSpace(ev.Text))
+				}
+			case "tool_call":
+				lbl := strings.TrimSpace(ev.ToolName)
+				if strings.TrimSpace(ev.Detail) != "" {
+					lbl += " · " + strings.TrimSpace(ev.Detail)
+				}
+				browserx.PushActivity(lbl)
+			case "text":
+				if ev.Thought && strings.TrimSpace(ev.Text) != "" {
+					firstLine := strings.SplitN(strings.TrimSpace(ev.Text), "\n", 2)[0]
+					browserx.PushActivity("Pensando: " + firstLine)
+				}
+			}
 		},
 	}
 
@@ -685,7 +703,7 @@ func (m *ResidentManager) runTurn(
 		m.mu.Lock()
 		m.state = "aguardando você"
 		m.mu.Unlock()
-		label := fmt.Sprintf("Hive Residente · Risco: %s", req.RiskLabel)
+		label := fmt.Sprintf("Agent Hive · Risco: %s", req.RiskLabel)
 		detail := fmt.Sprintf("risco:%s (%s) | origem:%s", req.RiskLabel, req.Tier, req.Origin)
 		ok := m.sessions.RequestApprovalWithMeta(appCtx, resident.LaneID, "hive-resident", req.Prompt, ApprovalMetadata{
 			Label:    label,
@@ -754,6 +772,9 @@ func (m *ResidentManager) runTurn(
 			}
 			if ev.SessionID == "" {
 				ev.SessionID = shared.Conv.SessionID
+			}
+			if ev.ToolName == "chrome_tab" && ev.Kind == "tool_call" {
+				browserx.PushActivity("IDE → Chrome: " + strings.TrimSpace(ev.Detail))
 			}
 			if m.sessions != nil && m.sessions.Emit != nil {
 				detail := ev.Detail
@@ -1026,6 +1047,6 @@ func (m *ResidentManager) FormatHeadlessStatus() string {
 	if !st.SandboxAvailable {
 		sb = "indisponível (falha fechada)"
 	}
-	return fmt.Sprintf("Hive Residente (sandbox=%s): %s · conta=%s · modelo=%s/%s",
+	return fmt.Sprintf("Agent Hive (sandbox=%s): %s · conta=%s · modelo=%s/%s",
 		sb, st.State, st.AccountID, st.Provider, st.Model)
 }

@@ -10,7 +10,7 @@
 ## 1. Contexto e Problema
 
 Hoje existem duas experiências separadas para o mesmo conceito:
-1. Dentro da HiveMind IDE (`ide/frontend/src/resident.ts`), existe o **Agent Hive** (aba `Hive Residente`), com conversa contínua, workstreams (`geral`, etc.), roteamento de modelo (`cursor/cursor:auto`, `openrouter/...`), leitura auditada do workspace, execução em sandbox com aprovação (`approval_required`), memória pessoal e trilha de auditoria.
+1. Dentro da HiveMind IDE (`ide/frontend/src/resident.ts`), existe o **Agent Hive** (aba `Agent Hive`), com conversa contínua, workstreams (`geral`, etc.), roteamento de modelo (`cursor/cursor:auto`, `openrouter/...`), leitura auditada do workspace, execução em sandbox com aprovação (`approval_required`), memória pessoal e trilha de auditoria.
 2. Fora da IDE, na janela flutuante transparente (`ide/orb_window.go` + `ide/frontend/src/orb/view.ts`), o mascote (**HiveBee** / **HiveStriker**) hoje exibe apenas **avisos passivos** e botões de abrir a IDE/trocar visual. Não dá para mandar um comando ou conversar com o **Agent Hive** direto dali sem abrir a janela completa da IDE.
 
 **Objetivo:** Unificar os dois em uma única entidade chamada **Agent Hive**:

@@ -1145,7 +1145,7 @@ export function bindResidentViewEvents(): void {
       residentState.status = st;
       residentState.workstream = st.workstream || "geral";
       updateResidentStatusChip();
-      toast(`Configuração do Hive Residente salva (${st.provider}/${st.model}).`, "success");
+      toast(`Configuração do Agent Hive salva (${st.provider}/${st.model}).`, "success");
       rerenderResidentIfOpen();
     } catch (err: any) {
       toastError("salvar configuração do residente", err);
@@ -1213,7 +1213,7 @@ export function bindResidentViewEvents(): void {
         residentState.boundLaneId = lane.id;
         showLaneInIDE(lane.id);
       }
-      setStatus("Hive Residente respondeu.");
+      setStatus("Agent Hive respondeu.");
     } catch (err: any) {
       residentState.running = false;
       toastError("executar turno do agente residente", err);

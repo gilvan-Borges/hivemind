@@ -42,6 +42,16 @@ func SetChatHandler(fn ChatHandler) {
 	gate.Unlock()
 }
 
+// PushActivity transmite o progresso ao vivo do Agent Hive para o painel lateral do Chrome.
+func PushActivity(text string) {
+	gate.Lock()
+	b, _ := current.(*Broker)
+	gate.Unlock()
+	if b != nil {
+		b.PushActivity(text)
+	}
+}
+
 // Listen sobe a ponte em 127.0.0.1 ou, se outro HiveMind já é o dono, entra
 // como cliente. Nunca escuta em outra interface.
 func Listen(ctx context.Context) (Bridge, error) {

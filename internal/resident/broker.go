@@ -221,7 +221,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 		if isHostSurfaceTool(toolName) {
 			extra += "\nAVISO: SEM isolamento. A ação ocorre na sessão real e o cofre não é lido."
 		}
-		prompt := fmt.Sprintf("Hive Residente · Risco: %s\nOrigem: %s · Classe: %s\nFerramenta: %s\nAlvo: %s%s\n\nPermitir esta ação?",
+		prompt := fmt.Sprintf("Agent Hive · Risco: %s\nOrigem: %s · Classe: %s\nFerramenta: %s\nAlvo: %s%s\n\nPermitir esta ação?",
 			riskLabel, call.Origin, tier, toolName, safeTarget, extra)
 		req := ApprovalRequest{
 			ApprovalID: callID,
@@ -271,7 +271,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	b.emit(Event{
 		Kind:     "tool_call",
 		Author:   "hive",
-		Label:    "Hive Residente",
+		Label:    "Agent Hive",
 		ToolName: toolName,
 		RiskTier: string(tier),
 		Origin:   string(call.Origin),
@@ -332,7 +332,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 		b.emit(Event{
 			Kind:     "tool_result",
 			Author:   "hive",
-			Label:    "Hive Residente",
+			Label:    "Agent Hive",
 			ToolName: toolName,
 			RiskTier: string(tier),
 			Origin:   string(call.Origin),
@@ -359,7 +359,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 	b.emit(Event{
 		Kind:     "tool_result",
 		Author:   "hive",
-		Label:    "Hive Residente",
+		Label:    "Agent Hive",
 		ToolName: toolName,
 		RiskTier: string(tier),
 		Origin:   string(call.Origin),

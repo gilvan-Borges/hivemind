@@ -96,6 +96,23 @@ func (b *Broker) SetChatHandler(fn ChatHandler) {
 	b.mu.Unlock()
 }
 
+// PushActivity envia um aviso curto de andamento ao vivo para o side panel do Chrome, se conectado.
+func (b *Broker) PushActivity(text string) {
+	clean := strings.TrimSpace(text)
+	if clean == "" {
+		return
+	}
+	b.mu.Lock()
+	link := b.ext
+	b.mu.Unlock()
+	if link == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	_ = link.write(ctx, Message{Type: "activity", Text: truncate(Redact(clean, b.token), 180)})
+}
+
 func (b *Broker) start() error {
 	if strings.TrimSpace(b.token) == "" {
 		return fmt.Errorf("ponte sem token")

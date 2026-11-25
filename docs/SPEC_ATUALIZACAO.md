@@ -11,7 +11,7 @@
 | IDE e bridge | este repositório (`ide/`, `internal/`) |
 | Relay | `cmd/hivemind-relay`, `relaywire/`, `internal/relay/` |
 | App Android | repositório `gilvan-Borges/HiveMind-App` (pacote `dev.hivemind.mobile`) |
-| Nome da casca nova | **Hive Residente (nome provisório)**. O nome final ainda não existe. |
+| Nome da casca nova | **Agent Hive (nome provisório)**. O nome final ainda não existe. |
 
 `docs/SPEC_HIVE_AGENT.md` decisão 1 diz que o residente mora no processo que já existe e que não há segundo daemon. Esta spec **substitui só essa decisão de processo de interface**. Os pacotes `internal/resident`, `internal/sandboxx` e `internal/secretx` continuam sendo o único núcleo. Não se copia a lógica para outro módulo.
 
@@ -34,7 +34,7 @@ A cota do Jev é um caso à parte e **não é um buraco total**. A seção 11 re
 
 1. Parear o app Android com um QR de uso único, válido por 5 minutos, sem colocar o token de sessão no QR nem em claro no disco do PC. O corpo de API e de SSE na LAN sai cifrado com o mesmo `naclbox` que o relay já usa.
 2. Observar sessões de agentes abertas fora do HiveMind, somente leitura por padrão, com ação só quando o adaptador declara que sabe executá-la.
-3. Abrir o Hive Residente (nome provisório) sem abrir a IDE: processo leve, Windows primeiro, orb na borda da tela, paleta global, terminais flutuantes de leitura, ícone de bandeja. O núcleo, o cofre e a auditoria são os que já existem.
+3. Abrir o Agent Hive (nome provisório) sem abrir a IDE: processo leve, Windows primeiro, orb na borda da tela, paleta global, terminais flutuantes de leitura, ícone de bandeja. O núcleo, o cofre e a auditoria são os que já existem.
 4. Comentar uma linha de diff e devolver esse comentário ao agente que produziu a mudança, com um pacote pequeno.
 5. Passar entre papéis um pacote estruturado, e recusar uma aresta que fecharia um ciclo fora do loop Dev→QA que já existe.
 6. Deixar de gravar comando, caminho e payload de permissão em claro na auditoria durável, e deixar o plano dos documentos de privacidade e de ameaças.
@@ -68,7 +68,7 @@ A ordem é a do risco, não a da lista original. Cada fase fecha sozinha. Não s
 | 5 | Review Center | **Implementada** | `LineNote` em `internal/reviewx/review.go` e UI de comentários por hunk/linha. |
 | 6 | Monitor de sessões externas, só leitura | **Implementada** | Descoberta em `internal/extsess/` (Toolhelp / processo). |
 | 7 | Manifesto JSON de detector | **Implementada** | Suporte a `%LOCALAPPDATA%\HiveMind\detectors\*.json` em `internal/extsess/`. |
-| 8 | Hive Residente (nome provisório) fora da IDE | **Pendente (Ondas 1 e 4)** | Kernel Mutex `Local\HiveMind.Residente` e chat unificado no Orb (`.specify/specs/007-hive-floating-resident`). |
+| 8 | Agent Hive (nome provisório) fora da IDE | **Pendente (Ondas 1 e 4)** | Kernel Mutex `Local\HiveMind.Residente` e chat unificado no Orb (`.specify/specs/007-hive-floating-resident`). |
 | 9 | Releases | **Pendente (Onda 5)** | Versão única, checksums SHA-256, assinatura e auto-updater (`docs/specs/10-mobile-companion-supply-chain-and-ci.md`). |
 
 ### Regras fechadas do executor
@@ -133,7 +133,7 @@ flowchart TB
   subgraph pc [PC Windows]
     subgraph shells [Cascas sem núcleo duplicado]
       IDE[IDE Wails gaveta residente]
-      Orb[Hive Residente nome provisório]
+      Orb[Agent Hive nome provisório]
     end
     Pipe[pipe local do usuário]
     Owner[Processo dono do núcleo]
@@ -376,7 +376,7 @@ Sem rebuild. Diretório `%LOCALAPPDATA%\HiveMind\detectors\*.json`, modo `0600`,
 
 ---
 
-## 9. Hive Residente (nome provisório)
+## 9. Agent Hive (nome provisório)
 
 ### 9.1 Processo
 
@@ -704,7 +704,7 @@ Quando o dono mandar executar, a fase terá que, no mínimo: instalador Windows 
 
 ## 17. Perguntas abertas
 
-1. Nome final do Hive Residente (nome provisório).
+1. Nome final do Agent Hive (nome provisório).
 2. A pessoa aceita re-parear o celular na fase 1, ou quer a janela de Bearer antigo mesmo com plano de dados em claro?
 3. Nome real dos executáveis `agy`, Claude Code, Codex e OpenCode na instalação do dono.
 4. Existe API de cota numérica do Cursor e do Claude Code que o Hive possa chamar sem shell livre? Hoje `ProbeCursor` não mede.
