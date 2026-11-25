@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"iter"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/gilvan-Borges/HiveMind/internal/contextx"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
+	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 )
 
@@ -761,7 +765,7 @@ func TestDirectReviewRequiresRevisarETestar(t *testing.T) {
 		reviewRequested: true,
 	}
 	instr := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "direct", 1)
-	for _, want := range []string{"revisar-e-testar", "não chame read_skill", "NÃO TESTADO", "run_shell", "Classifica o diff", "Diff só de documento", "event=APPROVE"} {
+	for _, want := range []string{"revisar-e-testar", "sem chamar read_skill", "run_shell", "Diff só de documento", "event=APPROVE", "PROIBIDO publicar no GitHub cabeçalhos internos"} {
 		if !strings.Contains(instr, want) {
 			t.Fatalf("modo direto em revisão não exige %q", want)
 		}
@@ -770,5 +774,77 @@ func TestDirectReviewRequiresRevisarETestar(t *testing.T) {
 	plain := r.buildTriageInstructions(context.Background(), team.Agent{Name: "Chefe"}, "direct", 1)
 	if strings.Contains(plain, "revisar-e-testar") {
 		t.Fatal("direto sem revisão não pode exigir a skill")
+	}
+}
+
+func TestPrepareEphemeralReviewWorktreeFetchesRemotePRWhenLocalOnDifferentBranch(t *testing.T) {
+	ctx := context.Background()
+	bareDir := filepath.Join(t.TempDir(), "remote.git")
+	srcDir := filepath.Join(t.TempDir(), "author-clone")
+	reviewerDir := filepath.Join(t.TempDir(), "reviewer-clone")
+
+	mustGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v in %s failed: %v\n%s", args, dir, err, string(out))
+		}
+	}
+
+	if err := os.MkdirAll(bareDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(bareDir, "init", "--bare")
+
+	mustGit(filepath.Dir(srcDir), "clone", bareDir, srcDir)
+	mustGit(srcDir, "config", "user.email", "conta1@example.com")
+	mustGit(srcDir, "config", "user.name", "Author Synthetic")
+	mustGit(srcDir, "checkout", "-b", "homolog")
+	if err := os.WriteFile(filepath.Join(srcDir, "README.md"), []byte("# acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(srcDir, "add", "README.md")
+	mustGit(srcDir, "commit", "-m", "chore: initial homolog")
+	mustGit(srcDir, "push", "origin", "homolog")
+
+	// Reviewer clone stays on homolog and never fetches the feature branch manually.
+	mustGit(filepath.Dir(reviewerDir), "clone", "-b", "homolog", bareDir, reviewerDir)
+
+	// Author creates PR #42 on feat/sdd-001-payment-guard and pushes refs/pull/42/head on origin.
+	mustGit(srcDir, "checkout", "-b", "feat/sdd-001-payment-guard")
+	if err := os.WriteFile(filepath.Join(srcDir, "PaymentGuard.java"), []byte("class PaymentGuard {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(srcDir, "add", "PaymentGuard.java")
+	mustGit(srcDir, "commit", "-m", "feat: add payment guard")
+	mustGit(srcDir, "push", "origin", "HEAD:refs/pull/42/head")
+	mustGit(srcDir, "push", "origin", "feat/sdd-001-payment-guard")
+
+	wtPath, cleanup, err := prepareEphemeralReviewWorktree(
+		ctx,
+		gitx.Local{},
+		reviewerDir,
+		"acme/app-backend",
+		42,
+		"feat/sdd-001-payment-guard",
+		"lane-1",
+	)
+	if err != nil {
+		t.Fatalf("prepareEphemeralReviewWorktree failed: %v", err)
+	}
+	defer cleanup()
+
+	if _, statErr := os.Stat(filepath.Join(wtPath, "PaymentGuard.java")); statErr != nil {
+		t.Fatalf("expected PR file PaymentGuard.java materialized in review worktree %s: %v", wtPath, statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(reviewerDir, "PaymentGuard.java")); !os.IsNotExist(statErr) {
+		t.Fatal("reviewer's homolog checkout must remain untouched")
+	}
+
+	cleanup()
+	if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected review worktree %s to be cleaned up", wtPath)
 	}
 }

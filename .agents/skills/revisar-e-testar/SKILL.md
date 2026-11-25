@@ -1,62 +1,53 @@
 ---
 name: revisar-e-testar
 description: >
-  Use when reviewing a change, when the user says revisa, review, testa isso,
-  or before declaring a code change done. Classifies the diff as IDE, CLI,
-  mobile companion, Chrome extension, or orb and runs that surface's tests.
-  Code without that command output is not a review. A consistent docs-only
-  diff is a formal APPROVE.
+  Use when reviewing a Pull Request or code change, when the user asks to review
+  or test a change, or before approving a PR. Detects the project stack touched
+  by the diff, runs the targeted test suite on the PR checkout/worktree, and
+  publishes a clean, senior-level engineering review without internal bot headers.
 ---
 
 # Revisar e testar
 
-Use ao revisar, ao terminar código, ou quando pedirem revisa, review ou testa isso.
-Classifica o diff em IDE, CLI, mobile, extensão ou orb e roda o teste dessa superfície. Sem saída de comando, código não é revisão.
+Use ao revisar um Pull Request, ao concluir uma mudança de código ou quando pedirem `revisa`, `review` ou `testa isso`.
+Revisão séria de código executa os testes reais dos módulos alterados no checkout do PR e publica um parecer técnico limpo e profissional.
 
-Revisão de código sem comando executado e saída lida não conta. "Li o diff" em código é NÃO TESTADO.
+## 1. Identifique a stack real pelo diff (qualquer linguagem/repositório)
 
-## 1. Classifique pelo diff
+Inspecione os arquivos alterados no PR e identifique os módulos/serviços tocados conforme o próprio repositório analisado:
 
-`git diff --name-only` (e os arquivos ainda não commitados). Cada linha que bater entra na rodada. Superfície que não bate, não rode.
+| Arquivos alterados no diff | Comando alvo sugerido (`run_shell`) |
+|---|---|
+| Java / Kotlin (`pom.xml`) | `mvn -B test -Dtest=<TestesAfetados>` ou `mvn -B -pl <modulo> test` |
+| Java / Kotlin / Android (`build.gradle*`) | `./gradlew --no-daemon :modulo:test` (ou `testDebugUnitTest` em Android) |
+| Go (`go.mod`, `*.go`) | `go test -count=1 ./caminho/do/pacote/...` (em `ide/frontend/**`: `npm test` + `node scripts/check-design-tokens.mjs` se tocar CSS) |
+| Node / TypeScript (`package.json`, `*.ts`, `*.tsx`, `*.js`) | `npm test` (ou `pnpm test` / `npx vitest run <arquivo>`) no pacote tocado |
+| Python (`pyproject.toml`, `*.py`) | `pytest <caminho_dos_testes>` |
+| Rust (`Cargo.toml`, `*.rs`) | `cargo test -p <crate>` |
+| .NET (`*.csproj`, `*.sln`, `*.cs`) | `dotnet test <projeto>` |
+| Apenas documentação / specs (`*.md`, diagramas, texto) | Não rode suíte de código; a consistência técnica do documento é a revisão |
 
-| Sinal no diff | Superfície | Comando (cwd) |
-|---|---|---|
-| `ide/frontend/**` | IDE, tela | `ide/frontend`: `npm test`. Se mexeu em `styles.css` ou token: `node scripts/check-design-tokens.mjs`. Se mexeu em tipo exportado: `npx tsc --noEmit` |
-| `ide/**/*.go` | IDE, processo | `ide`: `go test -count=1 ./internal/<pacote>/...` do pacote tocado. Orb (`ide/orb*.go`, `ide/internal/orb`): `go test -count=1 ./internal/orb/...` |
-| `internal/**/*.go` fora de `internal/remote` | CLI | raiz: `go test -count=1 ./internal/<pacote>/...` |
-| `internal/remote/**`, `relaywire/**`, `ide/frontend/src/companion/**` | Mobile, protocolo | raiz: `go test -count=1 ./internal/remote/... ./relaywire/...` |
-| `HiveMind-App/**` ou checkout irmão do app | Mobile, tela Android | no app: `./gradlew --no-daemon testDebugUnitTest lintDebug`. Sem o checkout: **NÃO TESTADO**. Vitest da IDE não cobre o app |
-| `extension/chrome/**` | Extensão Chrome | `extension/chrome`: `npm test` |
+- Rode apenas os testes dos módulos/serviços efetivamente alterados pelo diff.
+- No Windows / PowerShell, execute um comando por chamada (ou encadeie com `;`).
 
-Não rode `./...` no monorepo inteiro para um pacote. Não troque o comando da superfície por um teste de outra.
+## 2. Checkout do PR e execução obrigatória dos testes
 
-Nenhuma linha da tabela (só `.md`, spec, documento): a leitura do diff é a revisão. Não rode suíte. Não marque NÃO TESTADO por falta de teste.
+- Em revisões de PR, o HiveMind já prepara automaticamente uma **worktree efêmera destacada** com o commit exato do PR (`pull/<N>/head`) como diretório de trabalho das ferramentas.
+- **NUNCA** deixe de testar nem escreva no GitHub que *"a branch não consta no clone local"* ou que *"a worktree está em outra branch"*. Se por qualquer motivo estiver fora do commit do PR, busque o commit real com `git fetch --no-tags origin pull/<N>/head`.
+- Se um teste falhar no código do PR, reporte o comando executado e o erro real de forma objetiva e use `event=REQUEST_CHANGES`.
 
-## 2. Rode e leia
+## 3. Formato profissional do parecer no GitHub (`github_review_pr`)
 
-- PowerShell não aceita `&&`. Um comando por chamada, com `working_directory`.
-- O teste tem que afirmar o comportamento pedido (sessão nova não reusa a ativa, aba do projeto aparece). Teste que só importa o módulo não conta.
-- Falhou: a revisão para nesse ponto. Corrija só se a pessoa pediu correção; senão reporte o comando e o trecho da falha.
-- Não deu para rodar (sem Android, sem device, pacote fora deste clone): escreva **NÃO TESTADO** e o motivo. Nunca vire OK.
+O comentário publicado no PR é lido por toda a equipe de engenharia. **NUNCA** publique cabeçalhos robóticos ou checklists internas de ferramenta (`Superfícies: ...`, `Não é: IDE, CLI, mobile, extensão`, ou avisos de `branch não consta no clone local`).
 
-## 3. Relatório
+Estruture o parecer como um **Engenheiro Sênior / Tech Lead humano**:
+1. **Parecer técnico direto:** correção das regras de negócio, contratos, segurança, tratamento de erros e aderência arquitetural.
+2. **Validação executada:** linha objetiva com os testes realmente rodados e o resultado. Em PRs exclusivos de documentação (`.md`/specs), mencione apenas a consistência documental.
+3. **Pontos de ajuste (se houver):** `arquivo:linha`, causa raiz e sugestão objetiva apenas quando existir problema real.
 
-```
-Revisão — <o que mudou>
-Superfícies: IDE tela, CLI residente
-Não é: mobile, extensão
+## 4. Veredito formal no GitHub
 
-✅ IDE tela — npm test src/resident.test.ts — exit 0
-✅ IDE processo — go test ./internal/idecore/ -run TestFreshHive — exit 0
-⚠️ Mobile tela — NÃO TESTADO — HiveMind-App não está neste clone
-
-Achado: <arquivo:linha, o que quebra, só se viu no teste ou no diff>
-```
-
-Uma linha por comando, com exit code. Sem exit code, a linha não entra. Documento sem superfície de código entra como leitura do diff, sem exit code.
-
-## 4. Aprovar formalmente
-
-Se a revisão é de um PR e está certo, publique `github_review_pr` com `event=APPROVE`. Vale para código com teste verde e para documento só de `.md` consistente. Um resumo no chat não aprova.
-
-NÃO TESTADO bloqueia APPROVE só quando o diff tem superfície de código e o comando dessa superfície não rodou. Achado que quebra o pedido: `REQUEST_CHANGES`. Menção ou "só comente": `COMMENT`.
+- Código correto + testes dos módulos alterados passando: `github_review_pr` com `event=APPROVE`.
+- Diff exclusivamente de documentação/spec (`.md`) consistente: `github_review_pr` com `event=APPROVE` direto.
+- Defeito funcional, quebra de contrato, falha de segurança ou teste quebrando: `event=REQUEST_CHANGES`.
+- Pedido explícito de apenas comentar ou modo somente-comentário: `event=COMMENT`.

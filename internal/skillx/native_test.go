@@ -55,8 +55,11 @@ func TestSeedProductSkillsLeavesUntangleOff(t *testing.T) {
 	if !byName["ponytail"].Enabled || !byName["improve-codebase-architecture"].Enabled || !byName["revisar-e-testar"].Enabled {
 		t.Fatalf("skills leves deveriam estar ligadas: %+v", catalog)
 	}
-	if !strings.Contains(byName["revisar-e-testar"].Description, "mobile") {
+	if !strings.Contains(byName["revisar-e-testar"].Description, "Pull Request") {
 		t.Fatalf("descrição de revisar-e-testar: %q", byName["revisar-e-testar"].Description)
+	}
+	if bodyText, ok := ProductSkillBody("revisar-e-testar"); !ok || !strings.Contains(bodyText, "Proibido escrever `Superfícies:") {
+		t.Fatalf("revisar-e-testar deveria proibir cabeçalhos robóticos de superfície")
 	}
 	if byName["untangle-codebase"].Enabled {
 		t.Fatal("untangle-codebase deveria nascer desligada")

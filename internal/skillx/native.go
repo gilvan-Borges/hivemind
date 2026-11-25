@@ -79,7 +79,11 @@ func SeedProductSkills(dir string) (seeded []string, err error) {
 			return seeded, fmt.Errorf("ler skill embutida %s: %w", name, readErr)
 		}
 		dest := filepath.Join(dir, name, "SKILL.md")
-		if _, statErr := os.Stat(dest); statErr == nil {
+		if existing, readExistingErr := os.ReadFile(dest); readExistingErr == nil {
+			// Upgrade legacy repo-specific revisar-e-testar seed automatically while preserving user edits on other skills.
+			if name == "revisar-e-testar" && strings.Contains(string(existing), "Não é: mobile, extensão") {
+				_ = os.WriteFile(dest, body, 0o644)
+			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {

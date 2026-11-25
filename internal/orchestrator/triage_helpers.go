@@ -80,13 +80,14 @@ func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira
 		role = team.RoleArchitect
 		disableGitWrite = false
 	}
+	inEphemeralReviewWT := (r.reviewRequested || isAutoReview) && strings.TrimSpace(toolRoot) != "" && toolRoot != r.Workspace
 	return tools.ForRole(role, tools.Deps{
 		Root:                   toolRoot,
 		Settings:               r.Project.Settings,
 		DisableGitWrite:        disableGitWrite,
 		DisableMerge:           isAutoReview,
 		ReviewCommentOnly:      isAutoReview && r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only",
-		AllowReadOnlyTestShell: isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests(),
+		AllowReadOnlyTestShell: (isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests()) || inEphemeralReviewWT,
 		NoShell:                isAutoReview && !r.Project.Settings.AutoReview.EffectiveRunTests(),
 		DocsOnlyWrite:          false,
 		ReviewRequestedInObj:   r.reviewRequested || isAutoReview,
@@ -420,7 +421,7 @@ REGRAS ABSOLUTAS DESTE MODO:
 	case "direct":
 		reviewRule := "2. Revisão, menção, comentário ou aprovação de PR: leia o PR (github_get_pr e o diff) e PUBLIQUE com github_review_pr. Menção ou \"comente\" → event=COMMENT. \"Aprove\", ou \"comente e aprove\" → event=APPROVE com o parecer no body, num único envio. Um resumo no chat não substitui o envio. Se github_review_pr falhar, use o MCP do GitHub (mcp_list_servers, mcp_enable_server no servidor github, mcp_call) antes de qualquer gh no run_shell."
 		if r.reviewRequested {
-			reviewRule = "2. Revisão de PR: a skill revisar-e-testar está colada neste prompt. Siga o corpo. Não chame read_skill e não procure o arquivo da skill no workspace. Classifique o diff e, se houver superfície de código, rode o teste com run_shell. Código sem a saída do comando é NÃO TESTADO e event não pode ser APPROVE. Diff só de documento (.md, spec), consistente: event=APPROVE, sem suíte e sem marcar NÃO TESTADO. Depois publique com github_review_pr. Menção ou \"comente\" → event=COMMENT. Se github_review_pr falhar, use o MCP do GitHub antes de gh no run_shell."
+			reviewRule = "2. Revisão de PR: a skill revisar-e-testar está colada neste prompt. Siga o protocolo dela sem chamar read_skill e sem procurar o arquivo da skill no workspace. O HiveMind já materializa o commit do PR em worktree efêmera destacada (ou você pode buscar via git fetch --no-tags origin pull/<N>/head): identifique a stack real dos arquivos alterados e execute os testes correspondentes com run_shell antes de aprovar. Diff só de documento (.md, spec), consistente: event=APPROVE direto, sem rodar suíte. PROIBIDO publicar no GitHub cabeçalhos internos/robóticos como 'Superfícies:', 'Não é: IDE, CLI, mobile, extensão' ou avisos de 'branch não consta no clone local'. Publique um parecer de engenharia limpo, direto e profissional com github_review_pr (menção ou 'comente' → event=COMMENT). Se github_review_pr falhar, use o MCP do GitHub antes de gh no run_shell."
 		}
 		triageInstr = fmt.Sprintf(`%s
 

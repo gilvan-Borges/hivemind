@@ -138,15 +138,17 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 
 	var (
 		preloadedPR       int
+		preloadedHeadRef  string
 		preloadedOwnPR    bool
 		preloadedAllDiffs bool
 		preloadedJiraKey  string
 	)
 	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
 		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
-			dossier, isOwn, allComplete := buildPreHydratedPRDossier(ctx, r.GitHub, prNum)
+			dossier, headRef, isOwn, allComplete := buildPreHydratedPRDossierWithHead(ctx, r.GitHub, prNum)
 			if dossier != "" {
 				preloadedPR = prNum
+				preloadedHeadRef = headRef
 				preloadedOwnPR = isOwn
 				preloadedAllDiffs = allComplete
 				msg = appendTextToFirstPart(msg, dossier)
@@ -165,8 +167,25 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	}
 
 	toolRoot := r.Workspace
-	if isAutoReview && strings.TrimSpace(r.ReviewRoot) != "" {
+	if strings.TrimSpace(r.ReviewRoot) != "" && (isAutoReview || r.reviewRequested) {
 		toolRoot = r.ReviewRoot
+	} else if (r.reviewRequested || isAutoReview) && preloadedPR > 0 && !preloadedOwnPR && strings.TrimSpace(r.Workspace) != "" {
+		if wtPath, wtCleanup, wtErr := prepareEphemeralReviewWorktree(
+			ctx,
+			r.Git,
+			r.Workspace,
+			r.jevRepo,
+			preloadedPR,
+			preloadedHeadRef,
+			r.conversationSlot(),
+		); wtErr == nil && wtPath != "" {
+			defer wtCleanup()
+			toolRoot = wtPath
+			msg = appendTextToFirstPart(msg, fmt.Sprintf(
+				"\n- **Worktree Efêmera do PR #%d pronta:** `%s` (checkout destacado do commit exato do PR via `pull/%d/head`; `read_file`, `search_text` e `run_shell` já apontam para esta worktree — rode os testes reais dos módulos alterados aqui e NUNCA diga que a branch do PR não consta no clone local).\n",
+				preloadedPR, wtPath, preloadedPR,
+			))
+		}
 	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
 		if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
 			toolRoot = slotWT

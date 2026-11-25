@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -16,8 +18,10 @@ import (
 	"google.golang.org/adk/v2/tool"
 
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
+	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
+	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
 const (
@@ -93,8 +97,13 @@ func isGeneratedOrLockfile(filename string) bool {
 // currently authenticated GitHub user (isOwnPR) and whether every non-generated file's
 // patch fit completely inside the dossier (allPatchesComplete).
 func buildPreHydratedPRDossier(parentCtx context.Context, gh githubx.Client, prNum int) (dossier string, isOwnPR bool, allPatchesComplete bool) {
+	d, _, own, all := buildPreHydratedPRDossierWithHead(parentCtx, gh, prNum)
+	return d, own, all
+}
+
+func buildPreHydratedPRDossierWithHead(parentCtx context.Context, gh githubx.Client, prNum int) (dossier string, headRef string, isOwnPR bool, allPatchesComplete bool) {
 	if gh == nil || !gh.Enabled() || prNum <= 0 {
-		return "", false, false
+		return "", "", false, false
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
 	defer cancel()
@@ -129,7 +138,7 @@ func buildPreHydratedPRDossier(parentCtx context.Context, gh githubx.Client, prN
 	wg.Wait()
 
 	if prErr != nil || prDetail.Number == 0 {
-		return "", false, false
+		return "", "", false, false
 	}
 
 	meTrim := strings.TrimSpace(me)
@@ -206,7 +215,7 @@ func buildPreHydratedPRDossier(parentCtx context.Context, gh githubx.Client, prN
 	}
 
 	if filesErr != nil || len(files) == 0 {
-		return b.String(), isOwnPR, false
+		return b.String(), strings.TrimSpace(prDetail.HeadRef), isOwnPR, false
 	}
 
 	totalAdd, totalDel := 0, 0
@@ -280,7 +289,107 @@ func buildPreHydratedPRDossier(parentCtx context.Context, gh githubx.Client, prN
 		}
 	}
 
-	return b.String(), isOwnPR, allPatchesComplete
+	return b.String(), strings.TrimSpace(prDetail.HeadRef), isOwnPR, allPatchesComplete
+}
+
+func runReviewGitCmd(ctx context.Context, dir string, args ...string) error {
+	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// prepareEphemeralReviewWorktree fetches pull/<prNum>/head (or headRef) into a disposable
+// detached git worktree so manual/direct/auto PR reviews always test the exact PR commit
+// without touching or depending on the user's active local branch.
+func prepareEphemeralReviewWorktree(
+	ctx context.Context,
+	g gitx.Git,
+	workspaceDir string,
+	githubRepo string,
+	prNum int,
+	headRef string,
+	slot string,
+) (string, func(), error) {
+	ws := strings.TrimSpace(workspaceDir)
+	if ws == "" || prNum <= 0 {
+		return "", func() {}, fmt.Errorf("workspace ou número de PR inválido")
+	}
+
+	candidates := make([]string, 0, 4)
+	if g != nil && g.IsRepo(ctx, ws) {
+		candidates = append(candidates, ws)
+	} else if err := runReviewGitCmd(ctx, ws, "rev-parse", "--is-inside-work-tree"); err == nil {
+		candidates = append(candidates, ws)
+	}
+	for _, nr := range gitx.DiscoverNestedRepos(ctx, g, ws) {
+		cand := filepath.Join(ws, filepath.FromSlash(nr.RelPath))
+		if githubRepo != "" && strings.EqualFold(strings.TrimSpace(nr.RelPath), filepath.Base(strings.TrimSpace(githubRepo))) {
+			candidates = append([]string{cand}, candidates...)
+		} else {
+			candidates = append(candidates, cand)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", func() {}, fmt.Errorf("nenhum repositório git encontrado em %s", ws)
+	}
+
+	wtRoot := workspace.WorktreesDir(ws)
+	if err := os.MkdirAll(wtRoot, 0o755); err != nil {
+		return "", func() {}, err
+	}
+	safeSlot := regexp.MustCompile(`[^a-zA-Z0-9_-]+`).ReplaceAllString(strings.TrimSpace(slot), "_")
+	if safeSlot == "" {
+		safeSlot = "main"
+	}
+	wtPath := filepath.Join(wtRoot, fmt.Sprintf("_review_pr_%d_%s", prNum, safeSlot))
+
+	var lastErr error
+	for _, repoDir := range candidates {
+		cleanup := func() {
+			cleanCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = runReviewGitCmd(cleanCtx, repoDir, "worktree", "remove", "--force", wtPath)
+			_ = os.RemoveAll(wtPath)
+			_ = runReviewGitCmd(cleanCtx, repoDir, "worktree", "prune")
+		}
+		cleanup()
+
+		ref := ""
+		if err := runReviewGitCmd(ctx, repoDir, "fetch", "--no-tags", "origin", fmt.Sprintf("pull/%d/head", prNum)); err == nil {
+			ref = "FETCH_HEAD"
+		}
+		head := strings.TrimSpace(headRef)
+		if ref == "" && head != "" {
+			if err := runReviewGitCmd(ctx, repoDir, "fetch", "--no-tags", "origin", head); err == nil {
+				ref = "FETCH_HEAD"
+			} else if err := runReviewGitCmd(ctx, repoDir, "rev-parse", "--verify", "origin/"+head); err == nil {
+				ref = "origin/" + head
+			} else if err := runReviewGitCmd(ctx, repoDir, "rev-parse", "--verify", head); err == nil {
+				ref = head
+			}
+		}
+		if ref == "" {
+			lastErr = fmt.Errorf("commit do PR #%d (%s) não encontrado em %s", prNum, head, repoDir)
+			continue
+		}
+		if err := runReviewGitCmd(ctx, repoDir, "worktree", "add", "--detach", wtPath, ref); err != nil {
+			cleanup()
+			lastErr = err
+			continue
+		}
+		return wtPath, cleanup, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("não foi possível materializar worktree do PR #%d", prNum)
+	}
+	return "", func() {}, lastErr
 }
 
 // newPRReviewGuardCallbacks returns BeforeTool and AfterTool callbacks that enforce
