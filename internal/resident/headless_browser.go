@@ -213,5 +213,13 @@ func (b *Broker) handleChromeTab(ctx context.Context, args map[string]any) (stri
 	if err != nil {
 		return "", err
 	}
-	return strx.TruncateBytes(text, 8*1024, "\n…"), nil
+	if action == "read" {
+		if bodyTxt, tErr := browserx.CallTool(ctx, "get_page_text", map[string]any{"limit": 2400}); tErr == nil {
+			cleanBody := strings.TrimSpace(bodyTxt)
+			if cleanBody != "" && cleanBody != "vazio" {
+				text = strings.TrimSpace(text) + "\n\n--- Texto visível da página ---\n" + cleanBody
+			}
+		}
+	}
+	return strx.TruncateBytes(text, 10*1024, "\n…"), nil
 }

@@ -46,24 +46,34 @@ const visibleScript = `(() => {
   const out = [];
   const seen = new Set();
   const vh = innerHeight, vw = innerWidth;
-  const sel = "a,button,input,textarea,select,summary,label,[role],[contenteditable=true]";
+  const sel = "a,button,input,textarea,select,summary,label,[role],[tabindex]:not([tabindex='-1']),[contenteditable=true]";
   function add(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2 || r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return;
     const cs = getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none") return;
-    const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || el.textContent || "")
-      .replace(/\\s+/g, " ").trim().slice(0, 80).toLowerCase();
-    if (!name || seen.has(name)) return;
-    seen.add(name);
-    out.push(name);
+    const candidates = [
+      el.getAttribute("aria-label"),
+      el.getAttribute("placeholder"),
+      el.getAttribute("title"),
+      el.innerText,
+      el.textContent,
+    ];
+    for (const raw of candidates) {
+      const name = String(raw || "").replace(/\\s+/g, " ").trim().slice(0, 96).toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
   }
   function walk(root) {
     let all;
     try { all = root.querySelectorAll("*"); } catch (e) { return; }
     for (const el of all) {
       if (el.shadowRoot) walk(el.shadowRoot);
-      try { if (el.matches(sel)) add(el); } catch (e) { /* nó sem matches */ }
+      try {
+        if (el.matches(sel) || getComputedStyle(el).cursor === "pointer") add(el);
+      } catch (e) { /* nó sem matches */ }
     }
     let frames;
     try { frames = root.querySelectorAll("iframe"); } catch (e) { return; }
@@ -72,15 +82,36 @@ const visibleScript = `(() => {
     }
   }
   walk(document);
-  return out.slice(0, 350);
+  return out.slice(0, 600);
 })()`;
 
 const mainTextScript = `(() => {
   const root = document.querySelector("article, main, [role=main]") || document.body;
   if (!root) return "";
   const clone = root.cloneNode(true);
-  clone.querySelectorAll("nav,aside,footer,header,script,style,noscript,svg,form").forEach((n) => n.remove());
-  return (clone.innerText || "").replace(/\\n{3,}/g, "\\n\\n").trim();
+  clone.querySelectorAll("nav,aside,footer,header,script,style,noscript,svg").forEach((n) => n.remove());
+  const direct = (clone.innerText || "").replace(/\\n{3,}/g, "\\n\\n").trim();
+  if (direct.length >= 60) return direct;
+  const chunks = [];
+  const seen = new Set();
+  function walkText(node) {
+    let all;
+    try { all = node.querySelectorAll("*"); } catch (e) { return; }
+    for (const el of all) {
+      if (el.shadowRoot) walkText(el.shadowRoot);
+      const tag = (el.tagName || "").toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "noscript" || tag === "svg") continue;
+      if (el.children && el.children.length > 0) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      const txt = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+      if (txt.length < 2 || seen.has(txt)) continue;
+      seen.add(txt);
+      chunks.push(txt);
+    }
+  }
+  walkText(document);
+  return chunks.join("\\n").trim() || direct;
 })()`;
 
 export function setCurrentCall(id: string): void {
@@ -559,17 +590,32 @@ async function snapshot(tabId: number, args: Record<string, unknown>): Promise<{
   const page = readPage(nodes, {
     scope,
     visible,
-    depth: Number(args.depth ?? 16) || 16,
+    depth: Number(args.depth ?? 96) || 96,
     rootBackend,
     offset: Number(args.offset ?? 0) || 0,
-    limit: Number(args.limit ?? 72) || 72,
+    limit: Number(args.limit ?? 90) || 90,
     keep: refsByTab.get(tabId),
   });
+  let outTree = page.text;
+  if (visible.length > 0) {
+    const lowTree = outTree.toLowerCase();
+    const extras: string[] = [];
+    for (const rawVis of visible) {
+      const cleanVis = rawVis.trim();
+      if (cleanVis.length < 2 || cleanVis.length > 64) continue;
+      if (lowTree.includes(cleanVis)) continue;
+      extras.push(`clickable "${cleanVis}"`);
+      if (extras.length >= 25) break;
+    }
+    if (extras.length > 0) {
+      outTree = [outTree, ...extras].filter(Boolean).join("\n");
+    }
+  }
   refsByTab.set(tabId, page.refs);
-  treeByTab.set(tabId, page.text);
+  treeByTab.set(tabId, outTree);
   const tab = await tabInfo(tabId);
   const url = safeURL(tab.url ?? "");
-  const hash = fnv32(url + "\n" + page.text);
+  const hash = fnv32(url + "\n" + outTree);
   const prev = snapByTab.get(tabId);
   snapByTab.set(tabId, { url, hash });
   const same = !args.fresh && prev && prev.url === url && prev.hash === hash;
@@ -578,7 +624,7 @@ async function snapshot(tabId: number, args: Record<string, unknown>): Promise<{
     return { text: `igual ${(tab.title ?? "").slice(0, 60)} ${host}`.trim(), url, title: tab.title ?? "" };
   }
   const header = `${(tab.title ?? "").slice(0, 80)} ${hostOf(tab.url ?? "") ?? ""}`.trim();
-  return { text: [header, page.text || "vazio", noteOf(tabId)].filter(Boolean).join("\n"), url, title: tab.title ?? "" };
+  return { text: [header, outTree || "vazio", noteOf(tabId)].filter(Boolean).join("\n"), url, title: tab.title ?? "" };
 }
 
 async function read(args: Record<string, unknown>): Promise<ToolResult> {
@@ -648,6 +694,56 @@ async function followSpawned(): Promise<string> {
   return `aba ${id}`;
 }
 
+async function locateByName(tabId: number, targetName: string): Promise<{ left: number; top: number; width: number; height: number } | null> {
+  const clean = targetName.trim();
+  if (!clean) return null;
+  const expr = `((needle) => {
+    const q = needle.toLowerCase().trim();
+    let best = null;
+    let bestScore = 999999;
+    function check(el) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0) return;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none") return;
+      const aria = String(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const txt = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const hitAria = aria && (aria === q || aria.includes(q));
+      const hitTxt = txt && txt.length <= 160 && (txt === q || txt.includes(q));
+      if (!hitAria && !hitTxt) return;
+      const tag = (el.tagName || "").toLowerCase();
+      const interactive = tag === "button" || tag === "a" || tag === "input" || tag === "textarea" || el.hasAttribute("role") || cs.cursor === "pointer";
+      const exact = aria === q || txt === q ? 0 : 50;
+      const bonus = interactive ? 0 : 200;
+      const area = Math.min(80000, r.width * r.height) / 1000;
+      const score = exact + bonus + area + (txt ? txt.length : 40);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { left: r.left, top: r.top, width: r.width, height: r.height };
+      }
+    }
+    function walk(root) {
+      let all;
+      try { all = root.querySelectorAll("*"); } catch (e) { return; }
+      for (const el of all) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+        check(el);
+      }
+    }
+    walk(document);
+    return best;
+  })(${JSON.stringify(clean)})`;
+  try {
+    const ev = await send<{ result?: { value?: { left: number; top: number; width: number; height: number } | null } }>(tabId, "Runtime.evaluate", {
+      expression: expr,
+      returnByValue: true,
+    });
+    return ev.result?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function click(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
@@ -676,6 +772,17 @@ async function click(args: Record<string, unknown>): Promise<ToolResult> {
     x = box.left + Math.min(48, Math.max(8, box.width / 3));
     y = box.top + Math.min(16, Math.max(6, box.height / 2));
     await tell(tabId, "highlight", { x: box.left, y: box.top, w: box.width, h: box.height, label: "Clicando" });
+  } else if (name && (!Number.isFinite(x) || !Number.isFinite(y))) {
+    if ((args.submit === true || isSensitiveLabel(name)) && !approved(args)) {
+      throw new NeedsApproval(`o elemento "${name}" parece enviar, comprar ou confirmar`);
+    }
+    const found = await locateByName(tabId, name);
+    if (!found) {
+      throw new Error(`elemento "${name}" não encontrado visível na aba`);
+    }
+    x = found.left + Math.min(48, Math.max(8, found.width / 2));
+    y = found.top + Math.min(20, Math.max(6, found.height / 2));
+    await tell(tabId, "highlight", { x: found.left, y: found.top, w: found.width, h: found.height, label: "Clicando" });
   } else if (args.submit === true && !approved(args)) {
     throw new NeedsApproval("clique de envio precisa de aprovação");
   }
@@ -724,8 +831,18 @@ async function typeText(args: Record<string, unknown>): Promise<ToolResult> {
       const box = await boxOf(tabId, info.backendNodeId);
       await tell(tabId, "highlight", { x: box.left, y: box.top, w: box.width, h: box.height, label: "Digitando" });
       await tell(tabId, "cursor", { x: box.x, y: box.y, label: "Digitando" });
+      await clickAt(tabId, box.x, box.y);
     } catch {
       /* o campo pode não ter caixa ainda */
+    }
+  } else if (args.name) {
+    const found = await locateByName(tabId, String(args.name));
+    if (found) {
+      const cx = found.left + found.width / 2;
+      const cy = found.top + found.height / 2;
+      await tell(tabId, "highlight", { x: found.left, y: found.top, w: found.width, h: found.height, label: "Digitando" });
+      await tell(tabId, "cursor", { x: cx, y: cy, label: "Digitando" });
+      await clickAt(tabId, cx, cy);
     }
   }
   const animated = text.slice(0, 24);

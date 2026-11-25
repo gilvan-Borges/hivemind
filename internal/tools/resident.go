@@ -359,16 +359,28 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 
 	if err := add(functiontool.New(functiontool.Config{
 		Name:        "chrome_tab",
-		Description: "Age na aba do Chrome da pessoa pela extensão Agent Hive. Para buscar no Google: action navigate com a URL de busca, depois action read. action: read, navigate, click, type ou key. ref vem do read (e1, e2). Não lê o cofre.",
+		Description: "Age na aba ativa do Chrome pela extensão Agent Hive. Ações suportadas: read (lê elementos interativos e1/e2 + texto visível da página), text (só texto visível), find (busca elemento por query/role), navigate (abre URL), click (clica por ref e1 OU por name visível, ex: 'Novo projeto'), type (digita text em ref ou name), key (pressiona tecla como Enter), scroll (direction: down/up), wait. Não lê o cofre.",
 	}, func(ctx agent.Context, args struct {
-		Action string `json:"action,omitempty" jsonschema:"read, navigate, click, type ou key. Vazio lê a aba atual."`
-		URL    string `json:"url,omitempty" jsonschema:"URL http(s) para navigate."`
-		Ref    string `json:"ref,omitempty" jsonschema:"Ref e1 do read, para click ou type."`
-		Text   string `json:"text,omitempty" jsonschema:"Texto para type, ou a tecla para key."`
-		Key    string `json:"key,omitempty" jsonschema:"Tecla para key, como Enter."`
+		Action    string `json:"action,omitempty" jsonschema:"read, text, find, navigate, click, type, key, scroll ou wait. Vazio lê a aba atual."`
+		URL       string `json:"url,omitempty" jsonschema:"URL http(s) para navigate."`
+		Ref       string `json:"ref,omitempty" jsonschema:"Ref e1 retornado pelo read/find, para click ou type."`
+		Name      string `json:"name,omitempty" jsonschema:"Rótulo/texto visível do botão ou campo para click ou type quando não tiver ref (ex: 'Novo projeto')."`
+		Text      string `json:"text,omitempty" jsonschema:"Texto para type, termo para find/wait, ou tecla para key."`
+		Query     string `json:"query,omitempty" jsonschema:"Texto de busca para action=find."`
+		Role      string `json:"role,omitempty" jsonschema:"Filtro opcional de role para action=find (button, link, textbox)."`
+		Key       string `json:"key,omitempty" jsonschema:"Tecla para key, como Enter, Tab, Escape, PageDown."`
+		Direction string `json:"direction,omitempty" jsonschema:"Direção para scroll: down ou up."`
 	}) (textResult, error) {
 		res, err := broker.Execute(ctx, "chrome_tab", map[string]any{
-			"action": args.Action, "url": args.URL, "ref": args.Ref, "text": args.Text, "key": args.Key,
+			"action":    args.Action,
+			"url":       args.URL,
+			"ref":       args.Ref,
+			"name":      args.Name,
+			"text":      args.Text,
+			"query":     args.Query,
+			"role":      args.Role,
+			"key":       args.Key,
+			"direction": args.Direction,
 		})
 		if err != nil {
 			return textResult{}, err

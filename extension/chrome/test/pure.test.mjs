@@ -68,3 +68,26 @@ test("benchmark de tokens cabe na metade", () => {
 test("query string secreta é filtrada", () => {
   assert.equal(safeURL("https://example.com/cb?token=abc&ok=1").includes("abc"), false);
 });
+
+test("botões profundos (depth > 20) e com prefixo de ícone continuam visíveis", () => {
+  const nodes = [{ nodeId: "n0", role: { value: "generic" } }];
+  for (let i = 1; i <= 32; i++) {
+    nodes.push({ nodeId: "n" + i, parentId: "n" + (i - 1), role: { value: "generic" } });
+  }
+  nodes.push({
+    nodeId: "btn",
+    parentId: "n32",
+    role: { value: "button" },
+    name: { value: "Novo projeto" },
+    backendDOMNodeId: 901,
+  });
+  nodes.push({
+    nodeId: "p1",
+    parentId: "n32",
+    role: { value: "paragraph" },
+    name: { value: "Estúdio criativo para vídeos com IA." },
+  });
+  const got = readPage(nodes, { scope: "interactive", visible: ["add novo projeto"] });
+  assert.match(got.text, /e1 button "Novo projeto"/);
+  assert.match(pageText(nodes), /Estúdio criativo/);
+});

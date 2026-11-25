@@ -143,7 +143,7 @@ function depthsOf(nodes: AxNode[]): Map<string, number> {
     const cached = memo.get(id);
     if (cached !== undefined) return cached;
     const node = byId.get(id);
-    if (!node?.parentId || guard > 40 || !byId.has(node.parentId)) {
+    if (!node?.parentId || guard > 140 || !byId.has(node.parentId)) {
       memo.set(id, 0);
       return 0;
     }
@@ -191,17 +191,17 @@ function visibleHit(name: string, role: string, visible: Set<string> | null): bo
   if (visible.has(n)) return true;
   const head = n.slice(0, 40);
   for (const item of visible) {
-    if (item.startsWith(head) || head.startsWith(item)) return true;
+    if (item.includes(head) || head.includes(item)) return true;
   }
   return false;
 }
 
 export function readPage(nodes: AxNode[], opts: ReadOpts = {}): { text: string; refs: Record<string, PageRef> } {
   const scope = opts.scope ?? "interactive";
-  const limit = Math.min(120, Math.max(1, opts.limit ?? 72));
+  const limit = Math.min(140, Math.max(1, opts.limit ?? 90));
   const offset = Math.max(0, opts.offset ?? 0);
-  const depthMax = opts.depth ?? 16;
-  const nameLimit = opts.nameLimit ?? 80;
+  const depthMax = opts.depth ?? 96;
+  const nameLimit = opts.nameLimit ?? 96;
   const visible = opts.visible && opts.visible.length ? new Set(opts.visible.map((item) => item.toLowerCase())) : null;
   const depths = depthsOf(nodes);
   const allowed = opts.rootBackend ? descendantIds(nodes, opts.rootBackend) : null;
@@ -211,7 +211,7 @@ export function readPage(nodes: AxNode[], opts: ReadOpts = {}): { text: string; 
   const inChrome = (node: AxNode): boolean => {
     let id = node.parentId;
     let guard = 0;
-    while (id && guard < 40) {
+    while (id && guard < 120) {
       const parent = byId.get(id);
       if (!parent) return false;
       if (chromeRoles.has(parent.role?.value ?? "")) return true;
@@ -220,19 +220,26 @@ export function readPage(nodes: AxNode[], opts: ReadOpts = {}): { text: string; 
     }
     return false;
   };
-  const items: { role: string; name: string; backend?: number; chrome: boolean }[] = [];
-  for (const node of nodes) {
-    if (node.ignored) continue;
-    const role = node.role?.value ?? "";
-    if (!role || skipRoles.has(role)) continue;
-    if (scope === "interactive" && !interactiveRoles.has(role)) continue;
-    if (allowed && node.nodeId && !allowed.has(node.nodeId)) continue;
-    const depth = node.nodeId ? depths.get(node.nodeId) ?? 0 : 0;
-    if (depth > depthMax) continue;
-    const name = (node.name?.value ?? "").replace(/\s+/g, " ").trim().slice(0, nameLimit);
-    if (!name && !unnamedOk.has(role)) continue;
-    if (scope === "interactive" && !visibleHit(name, role, visible)) continue;
-    items.push({ role, name, backend: node.backendDOMNodeId, chrome: inChrome(node) });
+  const collect = (visSet: Set<string> | null) => {
+    const out: { role: string; name: string; backend?: number; chrome: boolean }[] = [];
+    for (const node of nodes) {
+      if (node.ignored) continue;
+      const role = node.role?.value ?? "";
+      if (!role || skipRoles.has(role)) continue;
+      if (scope === "interactive" && !interactiveRoles.has(role)) continue;
+      if (allowed && node.nodeId && !allowed.has(node.nodeId)) continue;
+      const depth = node.nodeId ? depths.get(node.nodeId) ?? 0 : 0;
+      if (depth > depthMax) continue;
+      const name = (node.name?.value ?? "").replace(/\s+/g, " ").trim().slice(0, nameLimit);
+      if (!name && !unnamedOk.has(role)) continue;
+      if (scope === "interactive" && !visibleHit(name, role, visSet)) continue;
+      out.push({ role, name, backend: node.backendDOMNodeId, chrome: inChrome(node) });
+    }
+    return out;
+  };
+  let items = collect(visible);
+  if (items.length === 0 && visible) {
+    items = collect(null);
   }
   items.sort((a, b) => Number(a.chrome) - Number(b.chrome));
   const folded: { role: string; name: string; backend?: number; n: number }[] = [];
@@ -335,7 +342,7 @@ export function pageText(nodes: AxNode[], limit = 1500): string {
   const skipNode = (node: AxNode): boolean => {
     let id = node.parentId;
     let guard = 0;
-    while (id && guard < 40) {
+    while (id && guard < 120) {
       if (blocked.has(id)) return true;
       id = byId.get(id)?.parentId;
       guard += 1;
@@ -349,7 +356,7 @@ export function pageText(nodes: AxNode[], limit = 1500): string {
     const role = node.role?.value ?? "";
     if (!textRoles.has(role) || skipNode(node)) continue;
     const depth = node.nodeId ? depths.get(node.nodeId) ?? 0 : 0;
-    if (depth > 18) continue;
+    if (depth > 96) continue;
     const name = (node.name?.value ?? "").replace(/\s+/g, " ").trim();
     if (name.length < 2 || name === last) continue;
     last = name;
