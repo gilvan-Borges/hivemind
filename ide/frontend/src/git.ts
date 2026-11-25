@@ -778,7 +778,7 @@ export function renderPrCardHtml(pr: ProjectPullRequest, idx: number, opts?: { s
       ${pr.headRef || pr.baseRef ? `<div class="pr-branch-flow">${escapeHtml(pr.headRef || "?")} → ${escapeHtml(pr.baseRef || "?")}</div>` : ""}
       ${!detailOpen && pr.lastActivitySnippet ? `<div class="pr-activity-snippet" title="${escapeHtml(pr.lastActivitySnippet)}">${pr.lastActivityAuthor ? `<strong>@${escapeHtml(pr.lastActivityAuthor)}:</strong> ` : ""}${escapeHtml(pr.lastActivitySnippet)}</div>` : ""}
       <div class="pr-card-actions">
-        <button class="mini primary" style="flex:1" data-review-pr="${idx}">${icons.send}<span>${actionLabel}</span></button>
+        <button class="mini primary" data-review-pr="${idx}">${icons.send}<span>${actionLabel}</span></button>
         <button type="button" class="mini pr-details-btn ${detailOpen ? "active" : ""}" data-toggle-pr-details="${pr.number}" aria-expanded="${detailOpen ? "true" : "false"}" title="Ver últimos comentários, revisões e arquivos do PR">
           ${detailOpen ? icons.chevronDown : icons.chevronRight}
           <span>Detalhes</span>
@@ -855,7 +855,7 @@ export function renderIssueCardHtml(iss: ProjectIssue, idx: number): string {
         </div>
       ` : ""}
       <div class="pr-card-actions">
-        <button class="mini primary" style="flex:1" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
+        <button class="mini primary" data-solve-issue="${idx}">${icons.send}<span>Resolver c/ Equipe</span></button>
         ${iss.url ? `<button class="mini" data-open-pr-url="${escapeHtml(iss.url)}" title="Abrir no navegador">${icons.openInNew}</button>` : ""}
         ${iss.isMine && isGH && num > 0 ? `<button class="mini danger" data-close-issue="${num}" title="Fechar minha issue no GitHub">${icons.trash}</button>` : ""}
       </div>
@@ -1105,9 +1105,12 @@ export function placeGitTabContent(sidebar: HTMLElement) {
   const area = document.getElementById("center-area");
   const useCenter = state.sidebarView === "git" && state.showLeftSidebar && CENTER_GIT_TABS.has(state.gitTab);
   const content = sidebar.querySelector("#git-tab-content");
+  const tabs = sidebar.querySelector(".git-subtabs-scroll");
   if (useCenter && stage && content) {
     stage.hidden = false;
-    stage.replaceChildren(content);
+    stage.replaceChildren();
+    if (tabs) stage.appendChild(tabs);
+    stage.appendChild(content);
     area?.classList.add("has-stage");
     return;
   }
@@ -1415,6 +1418,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
       ${gitOpPanelHtml()}
       ${!hasGit ? `<div style="padding:0 10px 8px"><button class="primary mini" id="btn-init-git" style="width:100%">Inicializar Git (git init)</button></div>` : ""}
 
+      <div class="git-subtabs-scroll">
       <div class="git-subtabs scm-tabs-pad">
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "changes" ? "active" : ""}" data-git-tab="changes">Alterações (${totalDiffs})</button>` : ""}
         <button type="button" class="git-subtab ${activeGitTab === "prs_issues" ? "active" : ""}" data-git-tab="prs_issues">PRs & Issues${prsIssuesTotal}</button>
@@ -1422,7 +1426,7 @@ export function renderGitSidebarHtml(proj: ProjectInfo | null): string {
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "flow" ? "active" : ""}" data-git-tab="flow">Fluxo${flowBadge}</button>` : ""}
         ${hasGit ? `<button type="button" class="git-subtab ${activeGitTab === "worktrees" ? "active" : ""}" data-git-tab="worktrees">Worktrees</button>` : ""}
       </div>
-      <p class="git-center-hint">Esta aba está aberta no centro.</p>
+      </div>
 
       ${tabContentHtml}
     </div>
