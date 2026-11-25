@@ -303,10 +303,15 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 	)
 	leaseErr := WithAgyVaultLease(a.ProfileID, func() error {
 		stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
-		if (code != 0 || err != nil) && strings.Contains(strings.ToLower(stderr+errString(err)), "empty conversation id") {
+		for emptyAttempt := 0; emptyAttempt < 2; emptyAttempt++ {
+			combined := strings.ToLower(stdout + "\n" + stderr + "\n" + errString(err))
+			if (code == 0 && err == nil) || !strings.Contains(combined, "empty conversation id") {
+				break
+			}
 			select {
 			case <-runCtx.Done():
-			case <-time.After(2 * time.Second):
+				return nil
+			case <-time.After(time.Duration(emptyAttempt+1) * 1500 * time.Millisecond):
 				stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
 			}
 		}

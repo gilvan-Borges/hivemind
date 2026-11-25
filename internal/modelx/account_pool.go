@@ -354,10 +354,13 @@ func RecordAccountModelFailure(provider, accountID, accountName, modelName strin
 		}
 	}
 
-	// 3b. Pure rate limit (without quota/exhaustion markers) -> 2m cooldown on the exact bucket.
+	// 3b. Pure rate limit or AGY backend session rejection ("empty conversation id") -> 2m cooldown and instant failover to next account in pool.
 	if reason == "" {
-		for _, pat := range []string{"429", "too many requests", "rate limit", "rate_limit"} {
+		for _, pat := range []string{"429", "too many requests", "rate limit", "rate_limit", "empty conversation id", "failed to start conversation"} {
 			if strings.Contains(msg, pat) {
+				if strings.Contains(msg, "conversation") {
+					bucket = "__all__"
+				}
 				reason = "rate_limit"
 				cooldown = defaultAccountModelRateCooldown
 				break

@@ -697,6 +697,9 @@ func (m *ResidentManager) runTurn(
 	}()
 
 	approveDetailed := func(appCtx context.Context, req resident.ApprovalRequest) bool {
+		if req.ToolName == "chrome_tab" && (origin == resident.OriginLocal || string(origin) == "orb") {
+			return true
+		}
 		if m.sessions == nil || m.sessions.Emit == nil {
 			return false
 		}
