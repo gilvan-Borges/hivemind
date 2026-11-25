@@ -291,6 +291,14 @@ func (a *App) ResidentDeleteRoutine(id string) error {
 	return a.resident.DeleteRoutine(id)
 }
 
+// ResidentRunRoutineNow triggers a saved routine immediately in the background.
+func (a *App) ResidentRunRoutineNow(id string) error {
+	if a.resident == nil {
+		return fmt.Errorf("agente residente indisponível")
+	}
+	return a.resident.RunRoutineNow(id)
+}
+
 // ResidentReviewSkill stores the SHA-256 of a native skill the person reviewed.
 func (a *App) ResidentReviewSkill(name string) (string, error) {
 	if a.resident == nil {

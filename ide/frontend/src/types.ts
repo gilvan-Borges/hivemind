@@ -1376,6 +1376,7 @@ export interface WailsBackendApp {
   ResidentSaveRoutine?(expr: string, timezone: string, text: string, workstream: string, classes: string[]): Promise<ResidentRoutine>;
   ResidentSetRoutineEnabled?(id: string, enabled: boolean): Promise<void>;
   ResidentDeleteRoutine?(id: string): Promise<void>;
+  ResidentRunRoutineNow?(id: string): Promise<void>;
   ResidentReviewSkill?(name: string): Promise<string>;
   OrbShow?(): Promise<void>;
   OrbHide?(): Promise<void>;

@@ -333,7 +333,7 @@ func (m *ResidentManager) fireRoutine(rt resident.Routine) {
 		_ = m.WakeLoop(rt.Workspace, rt.LoopID)
 		return
 	}
-	_, _ = m.runTurn(context.Background(), "", rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes, turnOpts{})
+	_, _ = m.runTurn(context.Background(), rt.Workspace, rt.Workstream, rt.Text, "", resident.OriginRoutine, rt.Classes, turnOpts{})
 }
 
 func (m *ResidentManager) currentAccount() (accountID, deviceID string) {
@@ -702,7 +702,7 @@ func (m *ResidentManager) runTurn(
 	}()
 
 	approveDetailed := func(appCtx context.Context, req resident.ApprovalRequest) bool {
-		if req.ToolName == "chrome_tab" && (origin == resident.OriginLocal || string(origin) == "orb") {
+		if req.ToolName == "chrome_tab" && (origin == resident.OriginLocal || origin == resident.OriginRoutine || string(origin) == "orb") {
 			return true
 		}
 		if m.sessions == nil || m.sessions.Emit == nil {
@@ -1042,6 +1042,22 @@ func (m *ResidentManager) DeleteRoutine(id string) error {
 		m.sched.Arm()
 	}
 	return nil
+}
+
+// RunRoutineNow triggers an existing routine immediately in the background.
+func (m *ResidentManager) RunRoutineNow(id string) error {
+	list, err := resident.LoadRoutines(m.baseDir)
+	if err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	for _, rt := range list {
+		if rt.ID == id {
+			go m.fireRoutine(rt)
+			return nil
+		}
+	}
+	return fmt.Errorf("rotina %q não encontrada", id)
 }
 
 // ReviewSkill stores the hash of a native skill. Project skills are refused.

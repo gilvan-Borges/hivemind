@@ -116,7 +116,15 @@ func SkillBlock(nativeDir, baseDir string) string {
 		body := strx.TruncateBytes(strings.TrimSpace(string(raw)), skillx.DefaultBodyBytes, "\n…")
 		need := len(line) + len(body)
 		if total+need > skillx.DefaultTotalBytes {
-			break
+			// Still include the compact 1-line catalog entry so Agent Hive knows the skill is installed.
+			if total+len(line) <= skillx.DefaultTotalBytes+2048 {
+				if b.Len() == 0 {
+					b.WriteString("Skills nativas revisadas:\n")
+				}
+				b.WriteString(line)
+				total += len(line)
+			}
+			continue
 		}
 		b.WriteString(line)
 		b.WriteString(WrapUntrustedData("skill", sk.Name, body))

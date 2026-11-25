@@ -979,6 +979,7 @@ function renderResidentSecurityHtml(): string {
                 <code>${escapeHtml(rt.expr)}</code>
                 <span class="dim">${escapeHtml(rt.text)}</span>
                 <span class="spacer"></span>
+                <button type="button" class="mini ghost" data-res-routine-run="${escapeHtml(rt.id)}">Testar agora</button>
                 <button type="button" class="mini ghost" data-res-routine-toggle="${escapeHtml(rt.id)}" data-enabled="${rt.enabled ? "1" : "0"}">${rt.enabled ? "Pausar" : "Retomar"}</button>
                 <button type="button" class="mini ghost" data-res-routine-del="${escapeHtml(rt.id)}">Apagar</button>
               </div>
@@ -1396,6 +1397,18 @@ export function bindResidentViewEvents(): void {
     } catch (err: any) {
       toastError("gravar rotina", err);
     }
+  });
+  document.querySelectorAll<HTMLElement>("[data-res-routine-run]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.resRoutineRun || "";
+      if (!id || !api()?.ResidentRunRoutineNow) return;
+      try {
+        await api()!.ResidentRunRoutineNow!(id);
+        toast("Rotina iniciada agora — acompanhe na aba Conversa.", "success");
+      } catch (err: any) {
+        toastError("executar rotina", err);
+      }
+    });
   });
   document.querySelectorAll<HTMLElement>("[data-res-routine-del]").forEach((btn) => {
     btn.addEventListener("click", async () => {
