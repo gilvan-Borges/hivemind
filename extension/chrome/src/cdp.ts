@@ -523,7 +523,7 @@ async function navigate(args: Record<string, unknown>): Promise<ToolResult> {
   await waitComplete(tabId);
   await attach(tabId);
   await showOverlay(tabId, "Abrindo a página");
-  await waitIdle(tabId, 4000);
+  await waitIdle(tabId, 900);
   const tab = await tabInfo(tabId);
   snapByTab.delete(tabId);
   return { text: shortOk(tab, noteOf(tabId)) };
@@ -531,12 +531,12 @@ async function navigate(args: Record<string, unknown>): Promise<ToolResult> {
 
 async function waitComplete(tabId: number): Promise<void> {
   const start = Date.now();
-  while (Date.now() - start < 12_000) {
+  while (Date.now() - start < 10_000) {
     ensureLive();
     if (pendingDialog.has(tabId)) return;
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete") return;
-    await sleep(120);
+    await sleep(60);
   }
 }
 
@@ -547,7 +547,8 @@ async function waitIdle(tabId: number, budget: number): Promise<void> {
   while (Date.now() - start < budget) {
     ensureLive();
     if (pendingDialog.has(tabId)) return;
-    const quiet = inflightCount(tabId) === 0;
+    const elapsed = Date.now() - start;
+    const quiet = inflightCount(tabId) === 0 || elapsed >= 250;
     let mark = prev;
     try {
       const ev = await send<{ result?: { value?: number } }>(tabId, "Runtime.evaluate", {
@@ -558,14 +559,14 @@ async function waitIdle(tabId: number, budget: number): Promise<void> {
     } catch {
       mark = prev;
     }
-    if (quiet && mark === prev && prev !== "") {
+    if (quiet && mark === prev && prev !== "" && prev !== "0") {
       stable += 1;
       if (stable >= 2) return;
     } else {
       stable = 0;
     }
     prev = mark;
-    await sleep(140);
+    await sleep(70);
   }
 }
 
@@ -613,8 +614,11 @@ async function visibleNames(tabId: number): Promise<string[]> {
 async function snapshot(tabId: number, args: Record<string, unknown>): Promise<{ text: string; url: string; title: string }> {
   await attach(tabId);
   const scope = args.scope === "all" ? "all" : "interactive";
-  const visible = scope === "interactive" ? await visibleNames(tabId) : [];
-  let nodes = await axNodes(tabId);
+  const [visible, baseNodes] = await Promise.all([
+    scope === "interactive" ? visibleNames(tabId) : Promise.resolve<string[]>([]),
+    axNodes(tabId),
+  ]);
+  let nodes = baseNodes;
   for (const sessionId of frames.get(tabId) ?? []) {
     try {
       const extra = await axNodes(tabId, sessionId);
@@ -830,7 +834,7 @@ async function click(args: Record<string, unknown>): Promise<ToolResult> {
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("informe ref ou x e y");
   await tell(tabId, "cursor", { x, y, label: "Clicando" });
-  await sleep(220);
+  await sleep(40);
   await tell(tabId, "ripple", { x, y });
   await clickAt(tabId, x, y);
   if (args.ref && args.submit === true) {
@@ -845,7 +849,7 @@ async function click(args: Record<string, unknown>): Promise<ToolResult> {
       /* o clique do mouse já pode ter navegado */
     }
   }
-  await waitIdle(tabId, 2500);
+  await waitIdle(tabId, 500);
   const opened = await followSpawned();
   watchOpener = 0;
   const landed = await tabInfo(spawned.length ? spawned[spawned.length - 1] : tabId);
@@ -887,14 +891,8 @@ async function typeText(args: Record<string, unknown>): Promise<ToolResult> {
       await clickAt(tabId, cx, cy);
     }
   }
-  const animated = text.slice(0, 24);
-  const rest = text.slice(animated.length);
-  for (const ch of animated) {
-    ensureLive();
-    await send(tabId, "Input.insertText", { text: ch });
-    await sleep(12);
-  }
-  if (rest) await send(tabId, "Input.insertText", { text: rest });
+  ensureLive();
+  await send(tabId, "Input.insertText", { text });
   const tab = await tabInfo(tabId);
   const delta = await changedLine(tabId, before).catch(() => "");
   return { text: shortOk(tab, delta) };
@@ -988,7 +986,7 @@ async function pressKey(args: Record<string, unknown>): Promise<ToolResult> {
     windowsVirtualKeyCode: vk,
   });
   await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk });
-  if (key === "Enter") await waitIdle(tabId, 2500);
+  if (key === "Enter") await waitIdle(tabId, 500);
   const tab = await tabInfo(tabId);
   const delta = await changedLine(tabId, before).catch(() => "");
   return { text: shortOk(tab, delta) };

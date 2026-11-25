@@ -155,13 +155,63 @@ func (b *Broker) handleChromeTab(ctx context.Context, args map[string]any) (stri
 		return "", fmt.Errorf("action deve ser read, text, find, navigate, click, type, key, scroll ou wait")
 	}
 	ctx = browserx.WithApprover(ctx, func(string) bool { return true })
+	if action == "read" {
+		type resPair struct {
+			txt string
+			err error
+		}
+		treeCh := make(chan resPair, 1)
+		bodyCh := make(chan resPair, 1)
+		go func() {
+			t, e := browserx.CallTool(ctx, "read_page", callArgs)
+			treeCh <- resPair{t, e}
+		}()
+		go func() {
+			t, e := browserx.CallTool(ctx, "get_page_text", map[string]any{"limit": 2400})
+			bodyCh <- resPair{t, e}
+		}()
+		tr := <-treeCh
+		br := <-bodyCh
+		if tr.err != nil {
+			return "", tr.err
+		}
+		out := strings.TrimSpace(tr.txt)
+		if br.err == nil {
+			cleanBody := strings.TrimSpace(br.txt)
+			if cleanBody != "" && cleanBody != "vazio" {
+				out += "\n\n--- Texto visível da página ---\n" + cleanBody
+			}
+		}
+		return strx.TruncateBytes(out, 10*1024, "\n…"), nil
+	}
 	text, err := browserx.CallTool(ctx, tool, callArgs)
 	if err != nil {
 		return "", err
 	}
-	if action == "read" {
-		if bodyTxt, tErr := browserx.CallTool(ctx, "get_page_text", map[string]any{"limit": 2400}); tErr == nil {
-			cleanBody := strings.TrimSpace(bodyTxt)
+	if action == "navigate" {
+		// Return interactive snapshot + visible text immediately on navigate so
+		// the model does not waste a second full LLM turn calling action="read".
+		type resPair struct {
+			txt string
+			err error
+		}
+		treeCh := make(chan resPair, 1)
+		bodyCh := make(chan resPair, 1)
+		go func() {
+			t, e := browserx.CallTool(ctx, "read_page", map[string]any{"fresh": true})
+			treeCh <- resPair{t, e}
+		}()
+		go func() {
+			t, e := browserx.CallTool(ctx, "get_page_text", map[string]any{"limit": 2400})
+			bodyCh <- resPair{t, e}
+		}()
+		tr := <-treeCh
+		br := <-bodyCh
+		if tr.err == nil && strings.TrimSpace(tr.txt) != "" {
+			text = strings.TrimSpace(tr.txt)
+		}
+		if br.err == nil {
+			cleanBody := strings.TrimSpace(br.txt)
 			if cleanBody != "" && cleanBody != "vazio" {
 				text = strings.TrimSpace(text) + "\n\n--- Texto visível da página ---\n" + cleanBody
 			}

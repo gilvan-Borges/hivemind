@@ -256,6 +256,10 @@ func (s *standaloneCDP) ensureConnectedLocked(ctx context.Context) error {
 		})
 	}
 	_, _ = s.cdpCallLocked(ctx, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true})
+	// Block heavy font/media downloads in headless mode so pages load much faster.
+	_, _ = s.cdpCallLocked(ctx, "Network.setBlockedURLs", map[string]any{
+		"urls": []string{"*.woff2", "*.woff", "*.ttf", "*.otf", "*.mp4", "*.webm", "*.mp3", "*.avi"},
+	})
 	return nil
 }
 
@@ -321,7 +325,7 @@ func waitForPageTarget(ctx context.Context, port int, timeout time.Duration) (st
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(150 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	return "", fmt.Errorf("navegador em segundo plano não expôs aba CDP na porta %d", port)
@@ -416,7 +420,7 @@ func (s *standaloneCDP) evalStringLocked(ctx context.Context, expr string) (stri
 	return string(b), nil
 }
 
-func (s *standaloneCDP) waitReadyLocked(ctx context.Context, maxWait time.Duration) {
+func (s *standaloneCDP) waitReadyLocked(ctx context.Context, maxWait time.Duration, settle time.Duration) {
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
@@ -429,13 +433,14 @@ func (s *standaloneCDP) waitReadyLocked(ctx context.Context, maxWait time.Durati
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(150 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	// Short settle for dynamic SPAs.
-	select {
-	case <-ctx.Done():
-	case <-time.After(450 * time.Millisecond):
+	if settle > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(settle):
+		}
 	}
 }
 
@@ -467,7 +472,7 @@ func (s *standaloneCDP) dispatchLocked(ctx context.Context, action string, args 
 		if _, err := s.cdpCallLocked(ctx, "Page.navigate", map[string]any{"url": u.String()}); err != nil {
 			return "", err
 		}
-		s.waitReadyLocked(ctx, 8*time.Second)
+		s.waitReadyLocked(ctx, 6*time.Second, 150*time.Millisecond)
 		return s.readSnapshotLocked(ctx, "", "")
 
 	case "read":
@@ -504,7 +509,7 @@ func (s *standaloneCDP) dispatchLocked(ctx context.Context, action string, args 
 		if err := s.clickPointLocked(ctx, x, y); err != nil {
 			return "", err
 		}
-		s.waitReadyLocked(ctx, 2500*time.Millisecond)
+		s.waitReadyLocked(ctx, 1500*time.Millisecond, 100*time.Millisecond)
 		return s.pageHeaderLocked(ctx), nil
 
 	case "type":
@@ -536,7 +541,7 @@ func (s *standaloneCDP) dispatchLocked(ctx context.Context, action string, args 
 			return "", err
 		}
 		if key == "Enter" {
-			s.waitReadyLocked(ctx, 2500*time.Millisecond)
+			s.waitReadyLocked(ctx, 1500*time.Millisecond, 100*time.Millisecond)
 		}
 		return s.pageHeaderLocked(ctx), nil
 
@@ -563,7 +568,7 @@ func (s *standaloneCDP) dispatchLocked(ctx context.Context, action string, args 
 		if err != nil {
 			return "", err
 		}
-		time.Sleep(120 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 		return s.pageHeaderLocked(ctx), nil
 
 	case "wait":
@@ -579,12 +584,12 @@ func (s *standaloneCDP) dispatchLocked(ctx context.Context, action string, args 
 				select {
 				case <-ctx.Done():
 					return "", ctx.Err()
-				case <-time.After(350 * time.Millisecond):
+				case <-time.After(150 * time.Millisecond):
 				}
 			}
 			return "não apareceu", nil
 		}
-		s.waitReadyLocked(ctx, 2500*time.Millisecond)
+		s.waitReadyLocked(ctx, 1500*time.Millisecond, 100*time.Millisecond)
 		return s.pageHeaderLocked(ctx), nil
 
 	default:
@@ -694,17 +699,18 @@ func (s *standaloneCDP) readSnapshotLocked(ctx context.Context, query, roleFilte
 		}
 		visit(document);
 		const head = ((document.title || "").trim() + " · " + (location.hostname || location.href)).trim();
-		return head + (lines.length ? "\n" + lines.join("\n") : "\n(nenhum elemento interativo encontrado)");
+		let out = head + (lines.length ? "\n" + lines.join("\n") : "\n(nenhum elemento interativo encontrado)");
+		if (!query && !roleFilter) {
+			const raw = (document.body && document.body.innerText) ? document.body.innerText : "";
+			const bodyTxt = raw.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, 2600);
+			if (bodyTxt) out += "\n\n--- Texto visível da página ---\n" + bodyTxt;
+		}
+		return out;
 	})(%s, %s)`, string(qJSON), string(rJSON))
 
 	snap, err := s.evalStringLocked(ctx, expr)
 	if err != nil {
 		return "", err
-	}
-	if query == "" && roleFilter == "" {
-		if bodyTxt, tErr := s.pageTextLocked(ctx, 2600); tErr == nil && strings.TrimSpace(bodyTxt) != "" {
-			snap = strings.TrimSpace(snap) + "\n\n--- Texto visível da página ---\n" + strings.TrimSpace(bodyTxt)
-		}
 	}
 	return strx.TruncateBytes(snap, 10*1024, "\n…"), nil
 }
