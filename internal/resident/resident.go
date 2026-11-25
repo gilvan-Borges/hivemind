@@ -24,10 +24,8 @@ import (
 )
 
 const (
-	// Turn budgets from docs/SPEC_HIVE_AGENT.md §5.
-	MaxModelCallsPerTurn  = 40
-	MaxConsecutiveReads   = 8
-	MaxInputTokensPerTurn = 80000
+	// ResidentContextWindow guides in-turn tool-output compaction only (no hard turn abort).
+	ResidentContextWindow = 200_000
 )
 
 // Runner executes Phase 2 resident turns with fail-closed OS sandboxing,
@@ -284,18 +282,15 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 	})
 
 	var (
-		finalParts       []string
-		streamedText     strings.Builder
-		totalIn          int64
-		totalOut         int64
-		totalTok         int64
-		modelCalls       int
-		consecutiveReads int
+		finalParts   []string
+		streamedText strings.Builder
+		totalIn      int64
+		totalOut     int64
+		totalTok     int64
 	)
 
 	runCfg := agent.RunConfig{
 		StreamingMode: streamMode,
-		MaxLLMCalls:   MaxModelCallsPerTurn,
 	}
 
 	userContent := &genai.Content{
@@ -332,45 +327,6 @@ func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, erro
 					OutputTokens: outTok,
 					Tokens:       totTok,
 				})
-				if totalIn > MaxInputTokensPerTurn {
-					abortErr := fmt.Errorf("orçamento do turno excedido: %d tokens de entrada (teto %d)", totalIn, MaxInputTokensPerTurn)
-					r.emit(Event{Kind: "error", Author: "hive", Label: "Hive Residente", Text: abortErr.Error()})
-					return TurnResult{}, abortErr
-				}
-			}
-
-			if ev.Content != nil {
-				hasCall := false
-				hasText := false
-				for _, p := range ev.Content.Parts {
-					if p == nil {
-						continue
-					}
-					if p.FunctionCall != nil {
-						hasCall = true
-					}
-					if p.Text != "" && !p.Thought {
-						hasText = true
-					}
-				}
-				if hasCall || hasText {
-					modelCalls++
-					if modelCalls > MaxModelCallsPerTurn {
-						abortErr := fmt.Errorf("orçamento do turno excedido: mais de %d chamadas de modelo", MaxModelCallsPerTurn)
-						r.emit(Event{Kind: "error", Author: "hive", Label: "Hive Residente", Text: abortErr.Error()})
-						return TurnResult{}, abortErr
-					}
-				}
-				if hasCall {
-					consecutiveReads++
-					if consecutiveReads > MaxConsecutiveReads {
-						abortErr := fmt.Errorf("orçamento do turno excedido: %d leituras seguidas sem resposta final (teto %d)", consecutiveReads, MaxConsecutiveReads)
-						r.emit(Event{Kind: "error", Author: "hive", Label: "Hive Residente", Text: abortErr.Error()})
-						return TurnResult{}, abortErr
-					}
-				} else if hasText {
-					consecutiveReads = 0
-				}
 			}
 		}
 
@@ -625,15 +581,6 @@ func intersectTiers(list []Tier, ceiling Tier) []Tier {
 // keeps a useful report alive even under pressure.
 func (r *Runner) childSummaryCap() int {
 	cap := r.Config.EffectiveMaxSubagentSummaryChars()
-	if last := LoadRouteTokens(r.BaseDir); last > 0 {
-		headroom := MaxInputTokensPerTurn - last
-		if headroom < 500 {
-			headroom = 500
-		}
-		if dyn := headroom * 2; dyn < cap {
-			cap = dyn
-		}
-	}
 	if cap < 2_000 {
 		cap = 2_000
 	}

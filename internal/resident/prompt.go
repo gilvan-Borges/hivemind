@@ -141,7 +141,7 @@ func loadFencedTeamMemory(workspaceRoot string) string {
 // MaxInputTokensPerTurn, so the 55%/75% tiers scale against the real window.
 func newInTurnCompactionCallback(keepRecent int) llmagent.BeforeModelCallback {
 	return contextx.NewCompactionCallback(contextx.Budget{
-		ContextWindow: MaxInputTokensPerTurn,
+		ContextWindow: ResidentContextWindow,
 		KeepRecent:    keepRecent,
 	})
 }
