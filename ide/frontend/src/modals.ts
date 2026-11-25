@@ -1,14 +1,14 @@
 import { icons } from "./icons";
 import type { AgyAccountQuota, AIProviderUsage, AIUsageReport, GitHubStatus, JevPolicy, JiraProfileSummary, ProviderHealthView, ProviderProfileSummary, ProvidersScanReport } from "./types";
-import { escapeHtml, formatMicroUsd, formatTokens, safeImageSrc } from "./utils";
+import { escapeHtml, formatMicroUsd, formatTokens, renderSkeletonCardsHtml, safeImageSrc } from "./utils";
 import { openFileInEditor, renderEditorBody, renderEditorBodyAsync, renderEditorTabs } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { loadGitHubPRs, loadProjectIssues, refreshDiffs } from "./git";
 import { trapFocusIn, type FocusTrapHandle } from "./focus-trap";
 import { notifyRegionRendered, renderGuard } from "./render-guard";
 import { refreshSkills } from "./models";
-import { updateStatusBar } from "./shell";
-import { AI_USAGE_TAB_KEY, IDE_SETTINGS_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, setStatus, state, toast, toastError } from "./state";
+import { syncChatExpandLayout, updateStatusBar } from "./shell";
+import { AI_USAGE_TAB_KEY, IDE_SETTINGS_TAB_KEY, TEAM_CONFIG_TAB_KEY, api, beginBusyOp, endBusyOp, setStatus, state, toast, toastError } from "./state";
 import { updateMissionBoardIfOpen } from "./teamconfig";
 
 function rerenderProvidersSurface(): void {
@@ -2195,45 +2195,63 @@ export function renderJevPolicyEditorHtml(pol: JevPolicy | null): string {
   const daily = p.dailyUsd || {};
   const allow = new Set(p.allowDataClass || []);
   const check = (id: string, on: boolean, label: string) =>
-    `<label class="dim"><input type="checkbox" id="${id}" ${on ? "checked" : ""}/> ${label}</label>`;
+    `<label class="aiu-check-item"><input type="checkbox" id="${id}" ${on ? "checked" : ""}/><span>${label}</span></label>`;
   return `
-    <div class="aiu-card">
-      <div class="aiu-card-head">
-        <div class="aiu-card-title">
+    <details class="aiu-card aiu-jev-details">
+      <summary class="aiu-jev-summary">
+        <span class="aiu-jev-summary-left">
+          <span class="aiu-jev-chev">${icons.chevronRight}</span>
           <strong>Política do Jev</strong>
-          <span class="dim" style="font-size:11px">só neste PC · o bridge não grava</span>
+          <span class="flow-pill ${p.enabled ? "approved" : "commented"}">${p.enabled ? "ativo" : "desligado"}</span>
+          <span class="aiu-muted-meta">Configuração avançada · só neste PC</span>
+        </span>
+        <span class="aiu-jev-summary-hint">Expandir ajustes</span>
+      </summary>
+      <div class="aiu-jev-body">
+        <div class="aiu-check-row">
+          ${check("jev-enabled", p.enabled, "Jev ligado")}
+          ${check("jev-classify", p.classifyEnabled !== false, "Classificador ligado")}
         </div>
-        <button type="button" class="primary mini" id="aiu-save-jev-policy">Salvar</button>
+        <div class="aiu-field-group">
+          <div class="aiu-field-group-title">Pesos de roteamento e escalonamento</div>
+          <div class="aiu-field-grid">
+            <label class="aiu-field"><span>Qualidade</span><input id="jev-w-quality" type="number" step="0.01" min="0" value="${p.weights.quality}" /></label>
+            <label class="aiu-field"><span>Custo</span><input id="jev-w-cost" type="number" step="0.01" min="0" value="${p.weights.cost}" /></label>
+            <label class="aiu-field"><span>Latência</span><input id="jev-w-latency" type="number" step="0.01" min="0" value="${p.weights.latency}" /></label>
+            <label class="aiu-field"><span>Teto US$</span><input id="jev-escalate" type="number" step="0.01" min="0" value="${p.autoEscalateUsd}" /></label>
+          </div>
+        </div>
+        <div class="aiu-field-group">
+          <div class="aiu-field-group-title">Teto diário por provedor (US$)</div>
+          <div class="aiu-field-grid is-five">
+            ${["openrouter", "opencode", "gemini", "openai", "anthropic"].map((name) =>
+              `<label class="aiu-field"><span>${name}</span><input id="jev-daily-${name}" type="number" step="0.1" min="0" value="${daily[name] ?? 1}" /></label>`
+            ).join("")}
+          </div>
+        </div>
+        <div class="aiu-field-group">
+          <div class="aiu-field-group-title">Classes de dados permitidas</div>
+          <div class="aiu-check-row">
+            ${check("jev-dc-cli", allow.has("cli_account"), "Conta CLI")}
+            ${check("jev-dc-http", allow.has("http_api"), "API HTTP")}
+            ${check("jev-dc-ws", allow.has("workspace_agent"), "Agente no workspace")}
+          </div>
+        </div>
+        <div class="aiu-jev-actions">
+          <button type="button" class="primary mini" id="aiu-save-jev-policy">Salvar Política</button>
+        </div>
       </div>
-      <div class="aiu-card-body" style="display:grid;gap:6px;font-size:12px">
-        ${check("jev-enabled", p.enabled, "Jev ligado")}
-        ${check("jev-classify", p.classifyEnabled !== false, "Classificador ligado (desligue para gravar false)")}
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <label class="dim">qualidade <input id="jev-w-quality" type="number" step="0.01" min="0" value="${p.weights.quality}" style="width:70px"/></label>
-          <label class="dim">custo <input id="jev-w-cost" type="number" step="0.01" min="0" value="${p.weights.cost}" style="width:70px"/></label>
-          <label class="dim">latência <input id="jev-w-latency" type="number" step="0.01" min="0" value="${p.weights.latency}" style="width:70px"/></label>
-          <label class="dim">teto US$ <input id="jev-escalate" type="number" step="0.01" min="0" value="${p.autoEscalateUsd}" style="width:70px"/></label>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${["openrouter", "opencode", "gemini", "openai", "anthropic"].map((name) =>
-            `<label class="dim">${name} <input id="jev-daily-${name}" type="number" step="0.1" min="0" value="${daily[name] ?? 1}" style="width:64px"/></label>`
-          ).join("")}
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          ${check("jev-dc-cli", allow.has("cli_account"), "conta CLI")}
-          ${check("jev-dc-http", allow.has("http_api"), "API HTTP")}
-          ${check("jev-dc-ws", allow.has("workspace_agent"), "agente no workspace")}
-        </div>
-      </div>
-    </div>
+    </details>
   `;
 }
 
 export async function refreshAIUsageData(): Promise<void> {
   state.aiUsagePage.loading = true;
+  beginBusyOp("ai-usage", "Consultando cotas das IAs…");
   const backend = api();
   if (!backend || !backend.GetAIUsage) {
     state.aiUsagePage.loading = false;
+    endBusyOp("ai-usage");
     return;
   }
   try {
@@ -2246,12 +2264,13 @@ export async function refreshAIUsageData(): Promise<void> {
     state.aiUsagePage.report = rep;
     if (Array.isArray(health)) {
       state.providerHealth = health;
-      updateStatusBar();
     }
+    updateStatusBar();
   } catch (err: any) {
     toastError("carregar uso e limites das IAs", err);
   } finally {
     state.aiUsagePage.loading = false;
+    endBusyOp("ai-usage");
   }
 }
 
@@ -2269,6 +2288,7 @@ export async function openAIUsagePage() {
   state.activeEditorPath = AI_USAGE_TAB_KEY;
   state.aiUsagePage.editingProvider = "";
   state.aiUsagePage.loading = true;
+  syncChatExpandLayout();
   renderEditorTabs();
   renderEditorBody();
 
@@ -2288,45 +2308,48 @@ function formatHealthUsdMicro(micro?: number): string {
 
 export function renderJevProviderHealthPanelHtml(list: ProviderHealthView[], probing: boolean): string {
   const rows = list.length === 0
-    ? `<div class="dim" style="font-size:11.5px;padding:6px 0">Nenhum dado de circuito registrado ainda.</div>`
-    : list.map((p) => {
+    ? `<div class="aiu-empty-note">Nenhum dado de circuito registrado ainda. Clique em "Sondar agora" para verificar a saúde em tempo real.</div>`
+    : `<div class="aiu-health-list">${list.map((p) => {
         const st = String(p.state || "closed");
         const pillCls = st === "open" ? "changes_requested" : st === "half_open" ? "commented" : "approved";
         const pillText = st === "open" ? "aberto (pausa)" : st === "half_open" ? "sondando" : "ativo";
-        const credText = p.hasCredential ? "" : " · sem credencial";
-        const cooldown = p.until ? ` · ${formatResetCountdown(p.until)}` : "";
-        const reason = p.reason ? ` · ${escapeHtml(p.reason)}` : "";
-        const spend = p.dailyCapMicroUsd && p.dailyCapMicroUsd > 0
-          ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}/${formatHealthUsdMicro(p.dailyCapMicroUsd)}`
-          : (p.dailySpentMicroUsd && p.dailySpentMicroUsd > 0 ? ` · hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}` : "");
+        const details: string[] = [];
+        if (p.reason) details.push(escapeHtml(p.reason));
+        if (p.until) details.push(escapeHtml(formatResetCountdown(p.until)));
+        if (p.dailyCapMicroUsd && p.dailyCapMicroUsd > 0) {
+          details.push(`hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}/${formatHealthUsdMicro(p.dailyCapMicroUsd)}`);
+        } else if (p.dailySpentMicroUsd && p.dailySpentMicroUsd > 0) {
+          details.push(`hoje ${formatHealthUsdMicro(p.dailySpentMicroUsd)}`);
+        }
         const note = quotaChipNote([p], state.aiUsagePage.report);
-        const quota = note
-          ? ` · ${note}${p.quotaStale ? " (desatual.)" : ""}`
-          : (typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0
-            ? ` · cota ${Math.round(p.quotaRemainingPct)}%${p.quotaStale ? " (desatual.)" : ""}`
-            : "");
+        if (note) {
+          details.push(`${escapeHtml(note)}${p.quotaStale ? " (desatual.)" : ""}`);
+        } else if (typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0) {
+          details.push(`cota ${Math.round(p.quotaRemainingPct)}%${p.quotaStale ? " (desatual.)" : ""}`);
+        }
+        if (!p.hasCredential) details.push("sem credencial");
         return `
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border-subtle)">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11.5px">
-              <strong>${escapeHtml(p.provider)}</strong>
+          <div class="aiu-health-row">
+            <div class="aiu-health-main">
+              <strong class="aiu-health-name">${escapeHtml(p.provider)}</strong>
               <span class="flow-pill ${pillCls}">${pillText}</span>
-              <span class="dim">${reason.replace(/^ · /, "")}${cooldown}${spend}${quota}${credText}</span>
             </div>
+            ${details.length > 0 ? `<div class="aiu-health-meta">${details.join(" · ")}</div>` : ""}
           </div>
         `;
-      }).join("");
+      }).join("")}</div>`;
 
   const allExhausted = list.length > 0 && list.every((p) => !p.hasCredential || p.state === "open");
   const warnBanner = allExhausted
-    ? `<div style="margin:6px 0;padding:6px 8px;border-radius:6px;background:rgba(248,81,73,0.12);border:1px solid rgba(248,81,73,0.35);font-size:11.5px;color:#ff8a80">Todos os provedores configurados estão esgotados ou em pausa. Clique em "Sondar agora" ou aguarde o fim do cooldown.</div>`
+    ? `<div class="aiu-alert-danger" role="alert">Todos os provedores configurados estão esgotados ou em pausa. Clique em "Sondar agora" ou aguarde o fim do cooldown.</div>`
     : "";
 
   return `
-    <div class="aiu-card">
+    <section class="aiu-card" aria-label="Saúde dos Provedores">
       <div class="aiu-card-head">
         <div class="aiu-card-title">
           <strong>Saúde dos Provedores (Jev)</strong>
-          <span class="dim" style="font-size:11px">circuit breaker · cooldown · teto diário</span>
+          <span class="aiu-muted-meta">circuit breaker · cooldown · teto diário</span>
         </div>
         <button type="button" class="mini" id="aiu-probe-providers" ${probing ? "disabled" : ""}>
           ${probing ? icons.spinner : icons.refresh}
@@ -2337,7 +2360,7 @@ export function renderJevProviderHealthPanelHtml(list: ProviderHealthView[], pro
         ${warnBanner}
         ${rows}
       </div>
-    </div>
+    </section>
   `;
 }
 
@@ -2407,6 +2430,53 @@ export function quotaChipNote(health: ProviderHealthView[], report: AIUsageRepor
   return parts.join(" · ");
 }
 
+export function lowestRemainingQuotaPct(
+  health: ProviderHealthView[],
+  report: AIUsageReport | null,
+): { remainingPct: number; source: string } | null {
+  let best: { remainingPct: number; source: string } | null = null;
+  const consider = (pct: number, source: string) => {
+    if (!Number.isFinite(pct) || pct < 0) return;
+    const clamped = Math.max(0, Math.min(100, pct));
+    if (!best || clamped < best.remainingPct) {
+      best = { remainingPct: clamped, source };
+    }
+  };
+  if (report) {
+    for (const acc of report.agyAccounts || []) {
+      if (!acc.quota?.available) continue;
+      for (const g of acc.quota.groups || []) {
+        for (const b of g.buckets || []) {
+          consider(b.remainingPercent, `${acc.name} · ${g.name}`);
+        }
+      }
+    }
+    if (report.agyQuota?.available) {
+      for (const g of report.agyQuota.groups || []) {
+        for (const b of g.buckets || []) {
+          consider(b.remainingPercent, `Antigravity · ${g.name}`);
+        }
+      }
+    }
+    const oc = report.openCodeQuota;
+    if (oc?.available) {
+      if (oc.rolling5h?.hasData) consider(100 - oc.rolling5h.percent, "OpenCode Go (5h)");
+      if (oc.weekly?.hasData) consider(100 - oc.weekly.percent, "OpenCode Go (7d)");
+      if (oc.monthly?.hasData) consider(100 - oc.monthly.percent, "OpenCode Go (30d)");
+    }
+    for (const p of report.providers || []) {
+      const manual = manualRemainingPct(report, p.provider);
+      if (manual != null) consider(manual, p.label || p.provider);
+    }
+  }
+  for (const p of health || []) {
+    if (typeof p.quotaRemainingPct === "number" && p.quotaRemainingPct >= 0) {
+      consider(p.quotaRemainingPct, p.provider);
+    }
+  }
+  return best;
+}
+
 export function usageBarTone(pct: number): string {
   if (pct >= 85) return "danger";
   if (pct >= 65) return "warn";
@@ -2415,14 +2485,18 @@ export function usageBarTone(pct: number): string {
 
 export function renderQuotaBarRowHtml(label: string, pct: number, rightText: string, subText: string): string {
   const clamped = Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
+  const remaining = Math.max(0, Math.round((100 - clamped) * 10) / 10);
   const tone = usageBarTone(clamped);
   return `
     <div class="aiu-window-row">
       <div class="aiu-window-top">
         <span class="aiu-window-label">${escapeHtml(label)}</span>
-        <span class="aiu-window-val">${escapeHtml(rightText)}</span>
+        <span class="aiu-window-right">
+          <span class="aiu-remaining-pill ${tone}">${remaining}% livre</span>
+          <span class="aiu-window-val">${escapeHtml(rightText)}</span>
+        </span>
       </div>
-      <div class="aiu-bar-track">
+      <div class="aiu-bar-track" role="progressbar" aria-valuenow="${Math.round(remaining)}" aria-valuemin="0" aria-valuemax="100" aria-label="${escapeHtml(label)}: ${remaining}% livre">
         <div class="aiu-bar-fill ${tone}" style="width:${clamped}%"></div>
       </div>
       ${subText ? `<div class="aiu-window-sub">${escapeHtml(subText)}</div>` : ""}
@@ -2688,12 +2762,62 @@ export function renderProviderUsageCardHtml(p: AIProviderUsage, rep: AIUsageRepo
   `;
 }
 
+function renderAIUsageKpiStripHtml(rep: AIUsageReport | null, health: ProviderHealthView[], loading: boolean): string {
+  const lowest = lowestRemainingQuotaPct(health, rep);
+  const lowestTone = lowest ? usageBarTone(100 - lowest.remainingPct) : "neutral";
+  const lowestVal = lowest ? `${Math.round(lowest.remainingPct)}% livre` : (loading ? "…" : "Local");
+  const lowestSub = lowest ? lowest.source : "Sem cota oficial medida";
+
+  const configuredHealth = (health || []).filter((p) => p.hasCredential);
+  const readyCount = configuredHealth.filter((p) => p.state !== "open").length;
+  const openCount = configuredHealth.filter((p) => p.state === "open").length;
+  const provVal = configuredHealth.length > 0
+    ? `${readyCount}/${configuredHealth.length} prontos`
+    : `${(rep?.providers || []).length} monitorados`;
+  const provSub = openCount > 0
+    ? `${openCount} em pausa/cooldown`
+    : (configuredHealth.length > 0 ? "Todos os circuitos fechados" : "Conecte contas no Pool");
+  const provTone = configuredHealth.length > 0 && openCount === configuredHealth.length
+    ? "danger"
+    : openCount > 0 ? "warn" : "ok";
+
+  const total5h = (rep?.providers || []).reduce((sum, p) => sum + Number(p.window5h?.totalTokens || 0), 0);
+  const total7d = (rep?.providers || []).reduce((sum, p) => sum + Number(p.windowWeekly?.totalTokens || 0), 0);
+  const cost30d = formatMicroUsd(rep?.costSummaryMonthlyMicroUsd || 0);
+  const cost5h = formatMicroUsd(rep?.costSummary5hMicroUsd || 0);
+
+  return `
+    <div class="aiu-kpi-strip" role="region" aria-label="Resumo de cotas e consumo">
+      <div class="aiu-kpi-card is-${lowestTone}">
+        <div class="aiu-kpi-label">Menor cota livre</div>
+        <div class="aiu-kpi-val">${escapeHtml(lowestVal)}</div>
+        <div class="aiu-kpi-sub" title="${escapeHtml(lowestSub)}">${escapeHtml(lowestSub)}</div>
+      </div>
+      <div class="aiu-kpi-card is-${provTone}">
+        <div class="aiu-kpi-label">Provedores ativos</div>
+        <div class="aiu-kpi-val">${escapeHtml(provVal)}</div>
+        <div class="aiu-kpi-sub">${escapeHtml(provSub)}</div>
+      </div>
+      <div class="aiu-kpi-card">
+        <div class="aiu-kpi-label">Tokens (janela 5h)</div>
+        <div class="aiu-kpi-val">${formatTokens(total5h)}</div>
+        <div class="aiu-kpi-sub">7 dias: ${formatTokens(total7d)} tok</div>
+      </div>
+      <div class="aiu-kpi-card">
+        <div class="aiu-kpi-label">Custo USD (30d)</div>
+        <div class="aiu-kpi-val">${cost30d}</div>
+        <div class="aiu-kpi-sub">Janela 5h: ${cost5h}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderAIUsageCardsHtml(rep: AIUsageReport | null, loading: boolean): string {
   if (loading && !rep) {
-    return `<div class="dim" style="padding:26px;text-align:center">${icons.spinner} Consultando uso e cotas das IAs…</div>`;
+    return `<div class="aiu-providers-grid">${renderSkeletonCardsHtml(2, "Consultando uso e cotas das IAs…")}</div>`;
   }
   if (!rep) {
-    return `<div class="dim" style="padding:20px;text-align:center">Não foi possível carregar os dados de uso.</div>`;
+    return `<div class="aiu-empty-note">Não foi possível carregar os dados de uso. Clique em "Atualizar" para tentar novamente.</div>`;
   }
   const accounts = Array.isArray(rep.agyAccounts) ? rep.agyAccounts : [];
   const localAgy = rep.providers.find((p) => p.provider === "agy");
@@ -2707,7 +2831,7 @@ function renderAIUsageCardsHtml(rep: AIUsageReport | null, loading: boolean): st
     if (p.provider === "agy" && accounts.length > 0) continue;
     cards.push(renderProviderUsageCardHtml(p, rep));
   }
-  return cards.join("");
+  return `<div class="aiu-providers-grid">${cards.join("")}</div>`;
 }
 
 function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
@@ -2722,12 +2846,12 @@ function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
     agents.length > 0;
   if (!hasAny) {
     return `
-      <div class="aiu-card">
+      <section class="aiu-card" aria-label="Custo USD Acumulado">
         <div class="aiu-card-head">
           <div class="aiu-card-title">${icons.tokens} <strong>Custo USD Acumulado</strong></div>
         </div>
-        <div class="dim" style="font-size:11.5px">Nenhum gasto pago registrado ainda nos últimos 30 dias (modelos gratuitos/assinatura contam apenas tokens).</div>
-      </div>
+        <div class="aiu-empty-note">Nenhum gasto pago registrado ainda nos últimos 30 dias (modelos gratuitos e de assinatura contabilizam apenas tokens).</div>
+      </section>
     `;
   }
   const roleChips = roles
@@ -2749,10 +2873,10 @@ function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
     )
     .join("");
   return `
-    <div class="aiu-card">
+    <section class="aiu-card" aria-label="Custo USD Acumulado">
       <div class="aiu-card-head">
         <div class="aiu-card-title">${icons.tokens} <strong>Custo USD Acumulado</strong></div>
-        <span class="dim" style="font-size:11px">Catálogo Jev com cache-read (10%)</span>
+        <span class="aiu-muted-meta">Catálogo Jev com cache-read (10%)</span>
       </div>
       <div class="aiu-cost-grid">
         <div class="aiu-cost-stat">
@@ -2771,13 +2895,13 @@ function renderCostBreakdownCardHtml(rep: AIUsageReport | null): string {
       ${roleChips ? `<div class="aiu-cost-chips">${roleChips}</div>` : ""}
       ${
         agentRows
-          ? `<table class="aiu-cost-table">
+          ? `<div class="aiu-table-wrap"><table class="aiu-cost-table">
               <thead><tr><th>Agente</th><th>Papel</th><th>Modelo</th><th>Chamadas</th><th>Tokens</th><th>Custo USD</th></tr></thead>
               <tbody>${agentRows}</tbody>
-            </table>`
+            </table></div>`
           : ""
       }
-    </div>
+    </section>
   `;
 }
 
@@ -2785,10 +2909,17 @@ export function renderAIUsageSectionsHtml(): string {
   const m = state.aiUsagePage;
   const rep = m.report;
   return `
-    ${renderJevPolicyEditorHtml(jevPolicyDraft)}
+    ${renderAIUsageKpiStripHtml(rep, state.providerHealth, m.loading)}
+    <section class="aiu-section-block" aria-label="Cotas e tokens restantes por provedor">
+      <div class="aiu-section-heading">
+        <h3>Cotas & Tokens Restantes</h3>
+        <span class="aiu-muted-meta">Cada conta do Pool aparece em cartão próprio com % livre e janela de reset</span>
+      </div>
+      ${renderAIUsageCardsHtml(rep, m.loading)}
+    </section>
     ${renderJevProviderHealthPanelHtml(state.providerHealth, state.providerHealthProbing)}
     ${renderCostBreakdownCardHtml(rep)}
-    ${renderAIUsageCardsHtml(rep, m.loading)}
+    ${renderJevPolicyEditorHtml(jevPolicyDraft)}
   `;
 }
 
@@ -2796,27 +2927,29 @@ export function renderAIUsagePageHtml(): string {
   const m = state.aiUsagePage;
   return `
     <div class="ai-usage-page">
-      <div class="tc-header">
-        <div>
-          <div class="tc-title-row">
-            <span class="aiu-head-icon">${icons.aiUsage}</span>
-            <h2>Uso & Limites das IAs</h2>
+      <div class="aiu-page-inner">
+        <header class="tc-header aiu-page-header">
+          <div>
+            <div class="tc-title-row">
+              <span class="aiu-head-icon">${icons.aiUsage}</span>
+              <h2>Cotas & Uso das IAs</h2>
+            </div>
+            <p class="aiu-page-subtitle">Acompanhe tokens restantes por provedor e conta, saúde do failover e custos acumulados.</p>
           </div>
-          <div class="dim" style="font-size:11.5px">Cada conta do Pool aparece em cartão próprio (ex.: várias Antigravity). Cotas oficiais + telemetria local.</div>
-        </div>
-        <div class="tc-header-actions">
-          <button type="button" class="mini" id="aiu-refresh" ${m.loading ? "disabled" : ""}>
-            ${m.loading ? icons.spinner : icons.refresh}
-            <span>Atualizar</span>
-          </button>
-        </div>
-      </div>
+          <div class="tc-header-actions">
+            <button type="button" class="mini" id="aiu-refresh" ${m.loading ? "disabled" : ""} aria-label="Atualizar cotas e uso das IAs">
+              ${m.loading ? icons.spinner : icons.refresh}
+              <span>${m.loading ? "Atualizando…" : "Atualizar"}</span>
+            </button>
+          </div>
+        </header>
 
-      <div class="aiu-cards-wrap">
-        ${renderAIUsageSectionsHtml()}
-      </div>
+        <div class="aiu-cards-wrap">
+          ${renderAIUsageSectionsHtml()}
+        </div>
 
-      <div class="dim" style="font-size:11px;padding:4px 2px">Dados locais em %AppData%\\HiveMind\\ai-usage.json</div>
+        <footer class="aiu-page-footer">Dados locais armazenados em <code>%AppData%\HiveMind\ai-usage.json</code></footer>
+      </div>
     </div>
   `;
 }

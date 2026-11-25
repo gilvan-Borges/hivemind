@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getModelsForProvider, getProviderList, inferModelProvider } from "./models";
-import { renderJevProviderHealthPanelHtml, renderProvidersScanTabHtml } from "./modals";
+import { lowestRemainingQuotaPct, renderAIUsagePageHtml, renderJevProviderHealthPanelHtml, renderProvidersScanTabHtml } from "./modals";
 import { computeUnifiedProviderChip } from "./shell";
 import { state } from "./state";
 
@@ -167,5 +167,57 @@ describe("seletor de provedor Jev", () => {
     expect(models[0]?.label).toContain("Conta 1 → 5 por modelo");
     expect(models[0]?.label).not.toContain("1 → 6");
     state.profilesOverview = prevOverview;
+  });
+
+  it("prioriza KPIs e cotas restantes antes da Política do Jev com barra acessível e menor cota livre", () => {
+    const prevReport = state.aiUsagePage.report;
+    const prevHealth = state.providerHealth;
+    const prevLoading = state.aiUsagePage.loading;
+    try {
+      state.aiUsagePage.loading = false;
+      state.providerHealth = [
+        { provider: "openrouter", state: "closed", hasCredential: true, quotaRemainingPct: 82 },
+      ];
+      state.aiUsagePage.report = {
+        providers: [
+          {
+            provider: "opencode-go",
+            label: "OpenCode Go",
+            window5h: { inputTokens: 1000, outputTokens: 500, totalTokens: 1500, calls: 3 },
+            windowWeekly: { inputTokens: 5000, outputTokens: 2000, totalTokens: 7000, calls: 12 },
+            limits: {},
+          },
+        ],
+        agyQuota: { available: false, groups: [] },
+        openCodeQuota: {
+          available: true,
+          rolling5h: { hasData: true, percent: 72, resetsAt: "" },
+          weekly: { hasData: true, percent: 25, resetsAt: "" },
+          monthly: { hasData: false, percent: 0, resetsAt: "" },
+        },
+        costSummary5hMicroUsd: 120000,
+        costSummaryWeeklyMicroUsd: 450000,
+        costSummaryMonthlyMicroUsd: 1250000,
+      } as any;
+
+      const lowest = lowestRemainingQuotaPct(state.providerHealth, state.aiUsagePage.report);
+      expect(lowest?.remainingPct).toBe(28);
+      expect(lowest?.source).toContain("OpenCode Go");
+
+      const html = renderAIUsagePageHtml();
+      const kpiIdx = html.indexOf("aiu-kpi-strip");
+      const quotasIdx = html.indexOf("Cotas & Tokens Restantes");
+      const policyIdx = html.indexOf("Política do Jev");
+      expect(kpiIdx).toBeGreaterThan(-1);
+      expect(quotasIdx).toBeGreaterThan(kpiIdx);
+      expect(policyIdx).toBeGreaterThan(quotasIdx);
+      expect(html).toContain("28% livre");
+      expect(html).toContain('role="progressbar"');
+      expect(html).toContain("<details class=\"aiu-card aiu-jev-details\">");
+    } finally {
+      state.aiUsagePage.report = prevReport;
+      state.providerHealth = prevHealth;
+      state.aiUsagePage.loading = prevLoading;
+    }
   });
 });

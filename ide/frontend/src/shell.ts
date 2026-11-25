@@ -9,7 +9,7 @@ import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
 import { clearCenterStage, clearGitHubUnread, isCenterGitStageActive, loadGitGraph, loadProjectIssues, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
-import { openAIUsagePage, openMobileModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
+import { lowestRemainingQuotaPct, openAIUsagePage, openMobileModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
 import { openIdeSettingsTab } from "./ide-settings";
 import { refreshSkills } from "./models";
 import { closeQuickOpen, openCommandPalette, openQuickOpen } from "./quickopen";
@@ -186,6 +186,7 @@ export function mountShell() {
         <div class="pipeline-bar" id="pipeline-bar" aria-label="Trilha da equipe"></div>
         <button type="button" class="team-strip-tok" id="status-tokens" title="Sessões e consumo de tokens">${icons.tokens}<span>0 tok</span></button>
         <div class="spacer"></div>
+        <button type="button" class="team-strip-action" id="btn-header-ai-usage" title="Cotas, tokens restantes e saúde dos provedores de IA" aria-label="Cotas e uso das IAs">${icons.aiUsage}<span>Cotas IA</span><span class="team-strip-quota-badge" id="header-quota-badge" hidden></span></button>
         <button type="button" class="team-strip-action" id="btn-header-swarm" title="Abrir Quadro Multiagente (Ctrl+Shift+A)">${icons.swarm}<span>Quadro</span></button>
         <button type="button" class="team-strip-action" id="act-ide-settings" title="Configurações da IDE (Ctrl+,)">${icons.settings}<span>Configurar</span></button>
       </div>
@@ -545,6 +546,10 @@ export function bindStaticShellEvents() {
 
   document.getElementById("act-ai-usage")?.addEventListener("click", () => {
     closeRailMoreMenu();
+    dismissCenterGitStageForEditorTab();
+    void openAIUsagePage();
+  });
+  document.getElementById("btn-header-ai-usage")?.addEventListener("click", () => {
     dismissCenterGitStageForEditorTab();
     void openAIUsagePage();
   });
@@ -1303,6 +1308,28 @@ export function updateStatusBar() {
     provEl.textContent = summary.text;
     provEl.style.color = summary.color;
     provEl.title = summary.title;
+  }
+  const quotaBadgeEl = document.getElementById("header-quota-badge");
+  const quotaBtnEl = document.getElementById("btn-header-ai-usage");
+  if (quotaBadgeEl) {
+    const lowest = lowestRemainingQuotaPct(state.providerHealth || [], state.aiUsagePage.report);
+    if (lowest) {
+      const pct = Math.max(0, Math.min(100, Math.round(lowest.remainingPct)));
+      quotaBadgeEl.hidden = false;
+      quotaBadgeEl.textContent = `${pct}%`;
+      quotaBadgeEl.classList.toggle("is-danger", pct <= 20);
+      quotaBadgeEl.classList.toggle("is-warn", pct > 20 && pct <= 35);
+      if (quotaBtnEl) {
+        quotaBtnEl.title = `Cotas IA — menor cota livre: ${pct}% (${lowest.source}). Clique para ver detalhes.`;
+      }
+    } else {
+      quotaBadgeEl.hidden = true;
+      quotaBadgeEl.textContent = "";
+      quotaBadgeEl.classList.remove("is-danger", "is-warn");
+      if (quotaBtnEl) {
+        quotaBtnEl.title = "Cotas, tokens restantes e saúde dos provedores de IA";
+      }
+    }
   }
   const probEl = document.getElementById("status-problems");
   if (probEl) {
