@@ -119,6 +119,9 @@ func (b *Broker) netFull(ctx context.Context, args map[string]any) (string, erro
 	if req.URL == nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
 		return "", fmt.Errorf("url recusada: só http e https")
 	}
+	if bearer, ok := args["_resolved_bearer"].(string); ok && bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	client := b.cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}

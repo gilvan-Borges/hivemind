@@ -43,6 +43,7 @@ type ResidentManager struct {
 	lastError      string
 	eventTriggers  bool
 	cancel         context.CancelFunc
+	turnSeq        uint64
 	detectorSeen   map[string]struct{}
 	turns          sync.WaitGroup
 
@@ -683,6 +684,8 @@ func (m *ResidentManager) runTurn(
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.turnSeq++
+	mySeq := m.turnSeq
 	m.cancel = cancel
 	m.state = "pensando"
 	m.lastError = ""
@@ -691,8 +694,10 @@ func (m *ResidentManager) runTurn(
 	defer func() {
 		cancel()
 		m.mu.Lock()
-		m.cancel = nil
-		m.state = "ocioso"
+		if m.turnSeq == mySeq {
+			m.cancel = nil
+			m.state = "ocioso"
+		}
 		m.mu.Unlock()
 	}()
 
@@ -795,6 +800,7 @@ func (m *ResidentManager) runTurn(
 						Text:           ev.Text,
 						ToolName:       ev.ToolName,
 						Detail:         detail,
+						Gate:           ev.RiskTier,
 						ApprovalID:     ev.ApprovalID,
 						Partial:        ev.Partial,
 						Thought:        ev.Thought,

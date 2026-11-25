@@ -252,8 +252,12 @@ func (s *Server) acceptFrame(w http.ResponseWriter, r *http.Request) ([]byte, [3
 		return nil, zero, false
 	}
 	plain, err := kp.Open(appPub, fr.Payload)
-	if err != nil || len(plain) > maxPlainBytes {
+	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, relaywire.CodeUnauthorized, "não autorizado")
+		return nil, zero, false
+	}
+	if len(plain) > maxPlainBytes {
+		writeAPIError(w, http.StatusRequestEntityTooLarge, relaywire.CodeInvalid, "payload excede o limite permitido")
 		return nil, zero, false
 	}
 	var meta plainMeta

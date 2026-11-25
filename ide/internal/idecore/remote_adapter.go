@@ -41,10 +41,13 @@ func (a *Adapter) RunStart(
 ) error {
 	if strings.EqualFold(strings.TrimSpace(runMode), resident.RunMode) {
 		if a.Resident == nil {
-			return fmt.Errorf("agente residente indisponÃ­vel neste host")
+			return fmt.Errorf("agente residente indisponível neste host")
 		}
 		laneID = resident.LaneID
 		teamName = "hive-resident"
+		if strings.TrimSpace(sessionID) == "" && a.Hub != nil {
+			sessionID = a.Hub.LaneSessionID(laneID)
+		}
 		a.Hub.RegisterRun(laneID, workspace, teamName, objective, sessionID, resident.RunMode)
 		if a.Sessions != nil && a.Sessions.Emit != nil {
 			text := strings.TrimSpace(objective)
@@ -57,7 +60,10 @@ func (a *Adapter) RunStart(
 			}
 		}
 		go func() {
-			_, err := a.Resident.RunTurnIn(context.Background(), workspace, "", objective, sessionID, resident.OriginRemote)
+			res, err := a.Resident.RunTurnIn(context.Background(), workspace, "", objective, sessionID, resident.OriginRemote)
+			if res.SharedSessionID != "" && a.Hub != nil {
+				a.Hub.SetSessionID(laneID, res.SharedSessionID)
+			}
 			if err != nil {
 				a.Hub.HandleRunError(laneID, workspace, err)
 			}

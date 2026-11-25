@@ -38,6 +38,11 @@ func TestTypeSafeProbeAndSystemOneClassify(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("TYPESAFE_API_KEY", "ts_test_token_123456")
 	t.Setenv("TYPESAFE_BASE_URL", srv.URL)
 

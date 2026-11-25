@@ -87,6 +87,9 @@ func (a *App) orbMirrorResidentEvent(ev idecore.LaneEvent) {
 		return
 	}
 	e := ev.Event
+	if e.Kind == "text" && e.Thought {
+		return
+	}
 	orbEv := orb.OrbResidentEvent{
 		Kind:       e.Kind,
 		Text:       e.Text,

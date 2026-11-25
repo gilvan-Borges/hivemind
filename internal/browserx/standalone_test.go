@@ -13,6 +13,9 @@ func TestStandaloneCDPNavigateReadTypeClick(t *testing.T) {
 	if lookStandaloneBrowser() == "" {
 		t.Skip("Chrome/Edge não encontrado neste ambiente")
 	}
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
 	defer CloseStandalone()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

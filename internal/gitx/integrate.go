@@ -405,12 +405,21 @@ func CleanupMergedWorktrees(ctx context.Context, g Git, repo, baseBranch string)
 		baseRef = b
 	}
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			return
+		}
 		if !e.IsDir() {
 			continue
 		}
 		wtPath := filepath.Join(wtRoot, e.Name())
 		if !g.IsRepo(ctx, wtPath) {
-			_ = os.RemoveAll(wtPath)
+			if ctx.Err() != nil {
+				return
+			}
+			if _, statErr := os.Stat(filepath.Join(wtPath, ".git")); os.IsNotExist(statErr) {
+				_ = unlinkWorktreeSymlinks(wtPath)
+				_ = os.RemoveAll(wtPath)
+			}
 			continue
 		}
 		// Never delete a worktree that still has uncommitted changes or active nested repo work.

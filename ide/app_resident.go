@@ -205,7 +205,11 @@ func (a *App) ResidentCancel() bool {
 	if a.resident == nil {
 		return false
 	}
-	return a.resident.Cancel()
+	ok := a.resident.Cancel()
+	if a.mobile != nil && a.mobile.hub != nil {
+		a.mobile.hub.MarkCancel(resident.LaneID)
+	}
+	return ok
 }
 
 // ResidentSessionMessages loads short-term conversation messages for the active account/workstream.

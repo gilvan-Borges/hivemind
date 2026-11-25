@@ -299,7 +299,7 @@ func runReviewGitCmd(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(cctx, "git", args...)
 	procx.ConfigureContext(cmd)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = gitx.NonInteractiveEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

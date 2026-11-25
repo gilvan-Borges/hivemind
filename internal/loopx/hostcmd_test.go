@@ -23,11 +23,11 @@ func TestHostRunnerFullRunsAndGovernedFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	h := HostRunner{Sandbox: closedSandbox{}}
 	ctx := WithHostFull(context.Background(), true)
-	exit, _, err := h.Run(ctx, dir, "true", 5*time.Second)
+	exit, _, err := h.Run(ctx, dir, "echo ok", 5*time.Second)
 	if err != nil || exit != 0 {
-		t.Fatalf("full true: exit=%d err=%v", exit, err)
+		t.Fatalf("full echo ok: exit=%d err=%v", exit, err)
 	}
-	exit, _, err = h.Run(context.Background(), dir, "true", 5*time.Second)
+	exit, _, err = h.Run(context.Background(), dir, "echo ok", 5*time.Second)
 	if err == nil {
 		t.Fatalf("governado sem sandbox deveria recusar, exit=%d", exit)
 	}

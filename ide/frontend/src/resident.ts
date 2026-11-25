@@ -418,6 +418,9 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
         m.active = false;
         if (m.startedAt && !m.durationMs) m.durationMs = Math.max(1000, now - m.startedAt);
       }
+      if (m.kind === "approval" && !m.resolved) {
+        m.resolved = "denied";
+      }
     }
     target.running = false;
     if (target.status) target.status.state = "ocioso";
@@ -433,6 +436,9 @@ export function applyResidentLaneEvent(target: ResidentEventTarget, payload: any
       if (m.kind === "thinking" && m.active) {
         m.active = false;
         if (m.startedAt && !m.durationMs) m.durationMs = Math.max(1000, now - m.startedAt);
+      }
+      if (m.kind === "approval" && !m.resolved) {
+        m.resolved = "denied";
       }
     }
     target.running = false;
@@ -1213,6 +1219,19 @@ export function bindResidentViewEvents(): void {
         residentState.boundLaneId = lane.id;
         showLaneInIDE(lane.id);
       }
+      if (started?.finalText) {
+        const replyId = started.replyMessageId || `res-reply-${Date.now()}`;
+        const hasReply = residentState.messages.some((m) => m.id === replyId || (m.kind === "chief" && m.text === started.finalText));
+        if (!hasReply) {
+          residentState.messages.push({
+            id: replyId,
+            kind: "chief",
+            label: "Agent Hive",
+            text: started.finalText,
+          });
+          rerenderResidentIfOpen();
+        }
+      }
       setStatus("Agent Hive respondeu.");
     } catch (err: any) {
       residentState.running = false;
@@ -1266,6 +1285,9 @@ export function bindResidentViewEvents(): void {
   document.getElementById("btn-res-cancel")?.addEventListener("click", async () => {
     await api()?.ResidentCancel?.();
     residentState.running = false;
+    for (const m of residentState.messages) {
+      if (m.kind === "approval" && !m.resolved) m.resolved = "denied";
+    }
     updateResidentStatusChip();
     rerenderResidentIfOpen();
   });

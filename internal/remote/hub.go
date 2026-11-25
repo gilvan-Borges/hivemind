@@ -232,6 +232,9 @@ func (h *Hub) HandleLaneEvent(ev LaneEvent) {
 	ws := h.laneWks[ev.LaneID]
 	st := h.stateForLocked(ws, ev.LaneID)
 	s := &st.snapshot
+	if sid := strings.TrimSpace(e.SessionID); sid != "" {
+		s.SessionID = sid
+	}
 	switch e.Kind {
 	case "session":
 		if id := strings.TrimSpace(e.Text); id != "" {
@@ -356,15 +359,36 @@ func (h *Hub) HandleRunError(laneID, workspace string, err error) {
 	h.broadcast(StreamEvent{Type: "lane_event", Data: raw})
 }
 
-// MarkCancel records an explicit cancel of a lane.
+// MarkCancel records an explicit cancel of a lane and notifies connected mobile clients.
 func (h *Hub) MarkCancel(laneID string) {
 	h.mu.Lock()
 	ws := h.laneWks[laneID]
 	st := h.stateForLocked(ws, laneID)
+	wasRunning := st.snapshot.Running
+	var cleared []ApprovalInfo
+	for _, ai := range st.approvals {
+		cleared = append(cleared, ai)
+	}
 	st.snapshot.Running = false
 	st.approvals = make(map[string]ApprovalInfo)
 	st.snapshot.PendingApprovals = nil
 	h.mu.Unlock()
+	for _, ai := range cleared {
+		raw, _ := json.Marshal(map[string]any{
+			"approvalId": ai.ApprovalID,
+			"laneId":     laneID,
+			"workspace":  ws,
+			"approved":   false,
+		})
+		h.broadcast(StreamEvent{Type: "approval_resolved", Data: raw})
+	}
+	if wasRunning {
+		raw, _ := json.Marshal(LaneEvent{
+			LaneID: laneID,
+			Event:  newErrorEvent("Execução cancelada."),
+		})
+		h.broadcast(StreamEvent{Type: "lane_event", Data: raw})
+	}
 }
 
 // MarkApprovalResolved removes a resolved approval from every lane and
@@ -542,7 +566,7 @@ func (h *Hub) Projects() []ProjectSummary {
 		cp.RunningLanes = 0
 		cp.PendingApprovals = 0
 		for _, st := range h.lanes {
-			if st.snapshot.Workspace != ws {
+			if !sameWorkspace(st.snapshot.Workspace, ws) {
 				continue
 			}
 			if st.snapshot.Running {
@@ -660,7 +684,7 @@ func (h *Hub) PruneDeletedSessions(workspace string, activeSessionIDs map[string
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for k, st := range h.lanes {
-		if st.snapshot.Workspace != workspace || st.snapshot.Running {
+		if !sameWorkspace(st.snapshot.Workspace, workspace) || st.snapshot.Running {
 			continue
 		}
 		if len(activeSessionIDs) == 0 {
@@ -687,7 +711,7 @@ func (h *Hub) Snapshots(workspace string) []LaneSnapshot {
 		if s.PendingApprovals == nil {
 			s.PendingApprovals = []ApprovalInfo{}
 		}
-		if workspace != "" && s.Workspace != workspace {
+		if workspace != "" && !sameWorkspace(s.Workspace, workspace) {
 			continue
 		}
 		out = append(out, s)

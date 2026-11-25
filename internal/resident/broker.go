@@ -296,6 +296,7 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 			ErrorClass: "unregistered_tool",
 			Reason:     err.Error(),
 		})
+		b.emit(Event{Kind: "tool_result", Author: "hive", Label: "Agent Hive", ToolName: toolName, RiskTier: string(tier), Origin: string(call.Origin), Detail: "erro: " + err.Error()})
 		return "", err
 	}
 
@@ -307,11 +308,13 @@ func (b *Broker) Execute(ctx context.Context, name string, rawArgs map[string]an
 			if b.cfg.Vault == nil {
 				err := fmt.Errorf("%w: cofre ausente", secretx.ErrVaultUnavailable)
 				b.recordOutcomeError(callID, call, tier, target, sandboxState, "vault_unavailable", err.Error())
+				b.emit(Event{Kind: "tool_result", Author: "hive", Label: "Agent Hive", ToolName: toolName, RiskTier: string(tier), Origin: string(call.Origin), Detail: "erro: " + err.Error()})
 				return "", err
 			}
 			secVal, err := b.cfg.Vault.Get(credName)
 			if err != nil {
 				b.recordOutcomeError(callID, call, tier, target, sandboxState, "vault_error", err.Error())
+				b.emit(Event{Kind: "tool_result", Author: "hive", Label: "Agent Hive", ToolName: toolName, RiskTier: string(tier), Origin: string(call.Origin), Detail: "erro: " + err.Error()})
 				return "", err
 			}
 			resolvedSecrets = append(resolvedSecrets, secVal)

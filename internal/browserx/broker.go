@@ -179,19 +179,22 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "")
 		return
 	}
+	var extLinkRef *extLink
 	if hello.Role == "extension" {
-		link := &extLink{c: conn}
-		b.mu.Lock()
-		old := b.ext
-		b.ext = link
-		b.mu.Unlock()
-		if old != nil {
-			_ = old.c.Close(websocket.StatusGoingAway, "")
-		}
+		extLinkRef = &extLink{c: conn}
 	}
 	if err := writeMsg(r.Context(), conn, Message{Type: "hello", OK: true, Role: hello.Role}); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "")
 		return
+	}
+	if extLinkRef != nil {
+		b.mu.Lock()
+		old := b.ext
+		b.ext = extLinkRef
+		b.mu.Unlock()
+		if old != nil {
+			_ = old.c.Close(websocket.StatusGoingAway, "")
+		}
 	}
 	switch hello.Role {
 	case "extension":
@@ -224,7 +227,19 @@ func (b *Broker) readExtension(ctx context.Context, conn *websocket.Conn) {
 		if b.ext != nil && b.ext.c == conn {
 			b.ext = nil
 		}
+		pending := b.pending
+		b.pending = make(map[string]chan Message)
+		cancel := b.cancelCall
 		b.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		for id, ch := range pending {
+			select {
+			case ch <- Message{Type: "result", ID: id, OK: false, Text: "extensão do Chrome desconectou"}:
+			default:
+			}
+		}
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}()
 	for {
@@ -298,14 +313,15 @@ func (b *Broker) handleChat(link *extLink, text string) {
 	if err != nil {
 		code = "error"
 	}
-	if len(reply) > 80 {
+	runes := []rune(reply)
+	if len(runes) > 80 {
 		const step = 48
-		for i := 0; i < len(reply); i += step {
+		for i := 0; i < len(runes); i += step {
 			end := i + step
-			if end > len(reply) {
-				end = len(reply)
+			if end > len(runes) {
+				end = len(runes)
 			}
-			_ = link.write(ctx, Message{Type: "chat_delta", Text: reply[i:end]})
+			_ = link.write(ctx, Message{Type: "chat_delta", Text: string(runes[i:end])})
 		}
 	}
 	_ = link.write(ctx, Message{Type: "chat_reply", Text: reply, Code: code})
@@ -474,17 +490,29 @@ func truncate(s string, n int) string {
 
 // probe diz se quem está na porta é a nossa ponte, sem revelar o token.
 func probe(port int) bool {
+	ok, _ := probeHealth(port)
+	return ok
+}
+
+func probeHealth(port int) (ok bool, extensionOn bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", port), nil)
 	if err != nil {
-		return false
+		return false, false
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
-	return res.StatusCode == http.StatusOK && strings.Contains(string(body), serviceName)
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), serviceName) {
+		return false, false
+	}
+	var payload struct {
+		Extension bool `json:"extension"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	return true, payload.Extension
 }

@@ -39,14 +39,20 @@ type GitHubSyncEvent struct {
 // newly surfaced events that require the user's attention (mentions, comments on own PR,
 // review requests, approvals/changes, or new replies/commits in active review flow).
 func DiffGitHubPullRequests(prev, curr []ProjectPullRequest) []GitHubNotificationEvent {
-	prevByNum := make(map[int]ProjectPullRequest, len(prev))
+	prKey := func(p ProjectPullRequest) string {
+		if u := strings.TrimSpace(p.URL); u != "" {
+			return u
+		}
+		return fmt.Sprintf("%s#%d", strings.ToLower(strings.TrimSpace(p.Repo)), p.Number)
+	}
+	prevByKey := make(map[string]ProjectPullRequest, len(prev))
 	for _, p := range prev {
-		prevByNum[p.Number] = p
+		prevByKey[prKey(p)] = p
 	}
 
 	var events []GitHubNotificationEvent
 	for _, cur := range curr {
-		old, existed := prevByNum[cur.Number]
+		old, existed := prevByKey[prKey(cur)]
 		actAdvanced := cur.LastActivityAt != "" && cur.LastActivityAt != old.LastActivityAt
 		reasonChanged := cur.AttentionReason != "" && cur.AttentionReason != old.AttentionReason
 		becameAttention := cur.NeedsAttention && (!existed || !old.NeedsAttention)
@@ -198,15 +204,20 @@ func NewGitHubMonitor(emit func(GitHubSyncEvent)) *GitHubMonitor {
 
 func isGitHubWorkspace(ctx context.Context, workspace string) bool {
 	g := gitx.Local{}
-	if !g.IsRepo(ctx, workspace) {
-		return false
-	}
-	remoteURL, err := g.RemoteURL(ctx, workspace)
+	repos, err := discoverGitRepoPaths(ctx, workspace)
 	if err != nil {
 		return false
 	}
-	_, _, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL)
-	return ok
+	for _, repo := range repos {
+		remoteURL, err := g.RemoteURL(ctx, repo.root)
+		if err != nil {
+			continue
+		}
+		if _, _, ok := githubx.ParseRemoteForConfiguredHosts(remoteURL); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func githubWorkspaceKey(workspace string) string {

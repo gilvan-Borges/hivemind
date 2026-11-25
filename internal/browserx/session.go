@@ -84,8 +84,9 @@ func Listen(ctx context.Context) (Bridge, error) {
 	return b, nil
 }
 
-// Close encerra a ponte deste processo.
+// Close encerra a ponte deste processo e o navegador CDP integrado.
 func Close() error {
+	CloseStandalone()
 	gate.Lock()
 	cur := current
 	current = nil
@@ -108,8 +109,8 @@ func Status() (port int, listening, extension bool, hosts []string, err error) {
 	if cur != nil && cur.Healthy() {
 		return cur.Port(), true, cur.ExtensionOn(), cfg.AllowedHosts, nil
 	}
-	if probe(cfg.Port) {
-		return cfg.Port, true, false, cfg.AllowedHosts, nil
+	if ok, extOn := probeHealth(cfg.Port); ok {
+		return cfg.Port, true, extOn, cfg.AllowedHosts, nil
 	}
 	return cfg.Port, false, false, cfg.AllowedHosts, nil
 }

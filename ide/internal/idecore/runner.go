@@ -266,6 +266,8 @@ type SessionManager struct {
 	mu          sync.Mutex
 	cancels     map[string]context.CancelFunc
 	runners     map[string]*orchestrator.Runner
+	runIDs      map[string]uint64
+	runSeq      uint64
 	approvals   map[string]pendingApproval
 	approvalSeq uint64
 	mcpPool     *runtime.MCPPool
@@ -288,6 +290,7 @@ func NewSessionManager(emit func(LaneEvent)) *SessionManager {
 	return &SessionManager{
 		cancels:   make(map[string]context.CancelFunc),
 		runners:   make(map[string]*orchestrator.Runner),
+		runIDs:    make(map[string]uint64),
 		approvals: make(map[string]pendingApproval),
 		mcpPool:   runtime.NewMCPPool(),
 		Emit:      emit,
@@ -386,12 +389,33 @@ func (m *SessionManager) RequestApprovalWithMeta(ctx context.Context, laneID, te
 			ApprovalID: approvalID,
 		},
 	})
+	var ok bool
 	select {
-	case ok := <-reply:
-		return ok
+	case ok = <-reply:
 	case <-ctx.Done():
-		return false
+		ok = false
 	}
+	resolvedText := "Recusado pelo usuário"
+	if ok {
+		resolvedText = "Aprovado pelo usuário"
+	} else if ctx.Err() != nil {
+		resolvedText = "Recusado (cancelado ou expirado)"
+	}
+	m.Emit(LaneEvent{
+		LaneID: laneID,
+		Team:   teamName,
+		Event: orchestrator.Event{
+			Kind:       "approval_resolved",
+			Stage:      "chief",
+			Author:     "chefe",
+			Label:      label,
+			ToolName:   meta.ToolName,
+			Gate:       meta.Gate,
+			Text:       resolvedText,
+			ApprovalID: approvalID,
+		},
+	})
+	return ok
 }
 
 // ResolveApproval delivers the user's yes/no decision to a pending approval gate.
@@ -818,15 +842,25 @@ func (m *SessionManager) RunTurnWithOptions(
 	if prev, ok := m.cancels[laneID]; ok {
 		prev()
 	}
+	m.runSeq++
+	myRunID := m.runSeq
+	if m.runIDs == nil {
+		m.runIDs = make(map[string]uint64)
+	}
+	m.runIDs[laneID] = myRunID
 	m.cancels[laneID] = cancel
 	m.mu.Unlock()
 
 	defer func() {
 		cancel()
 		m.mu.Lock()
-		delete(m.cancels, laneID)
-		delete(m.runners, laneID)
-		pending := m.denyLaneApprovalsLocked(laneID)
+		var pending []chan bool
+		if m.runIDs[laneID] == myRunID {
+			delete(m.runIDs, laneID)
+			delete(m.cancels, laneID)
+			delete(m.runners, laneID)
+			pending = m.denyLaneApprovalsLocked(laneID)
+		}
 		m.mu.Unlock()
 		for _, ch := range pending {
 			select {
@@ -1082,15 +1116,25 @@ func (m *SessionManager) RunAutoReviewTurn(
 	if prev, ok := m.cancels[laneID]; ok {
 		prev()
 	}
+	m.runSeq++
+	myRunID := m.runSeq
+	if m.runIDs == nil {
+		m.runIDs = make(map[string]uint64)
+	}
+	m.runIDs[laneID] = myRunID
 	m.cancels[laneID] = cancel
 	m.mu.Unlock()
 
 	defer func() {
 		cancel()
 		m.mu.Lock()
-		delete(m.cancels, laneID)
-		delete(m.runners, laneID)
-		pending := m.denyLaneApprovalsLocked(laneID)
+		var pending []chan bool
+		if m.runIDs[laneID] == myRunID {
+			delete(m.runIDs, laneID)
+			delete(m.cancels, laneID)
+			delete(m.runners, laneID)
+			pending = m.denyLaneApprovalsLocked(laneID)
+		}
 		m.mu.Unlock()
 		for _, ch := range pending {
 			select {

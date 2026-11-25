@@ -241,7 +241,9 @@ func (a *Agy) GenerateContent(ctx context.Context, req *model.LLMRequest, stream
 			yield(nil, err)
 			return
 		}
-		yield(resp, nil)
+		if resp != nil {
+			yield(resp, nil)
+		}
 	}
 }
 
@@ -301,39 +303,45 @@ func (a *Agy) generate(ctx context.Context, req *model.LLMRequest) (*model.LLMRe
 		stderr string
 		code   int
 	)
-	leaseErr := WithAgyVaultLease(a.ProfileID, func() error {
-		stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
-		for emptyAttempt := 0; emptyAttempt < 2; emptyAttempt++ {
-			combined := strings.ToLower(stdout + "\n" + stderr + "\n" + errString(err))
-			if (code == 0 && err == nil) || !strings.Contains(combined, "empty conversation id") {
-				break
-			}
-			select {
-			case <-runCtx.Done():
-				return nil
-			case <-time.After(time.Duration(emptyAttempt+1) * 1500 * time.Millisecond):
-				stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+	invokeOnce := func() error {
+		return WithAgyVaultLease(a.ProfileID, func() error {
+			stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+			return nil
+		})
+	}
+	leaseErr := invokeOnce()
+	for emptyAttempt := 0; emptyAttempt < 2; emptyAttempt++ {
+		combined := strings.ToLower(stdout + "\n" + stderr + "\n" + errString(err))
+		if (code == 0 && err == nil) || !strings.Contains(combined, "empty conversation id") {
+			break
+		}
+		select {
+		case <-runCtx.Done():
+			emptyAttempt = 2
+		case <-time.After(time.Duration(emptyAttempt+1) * 1500 * time.Millisecond):
+			if lErr := invokeOnce(); lErr != nil && leaseErr == nil {
+				leaseErr = lErr
 			}
 		}
-		// Transient provider failures (429/quota, 5xx, network blips): the AGY_ERROR
-		// envelope printed by agy carries "retryable":true (dogfooding achado #12) —
-		// back off and retry instead of killing the whole multi-agent run.
-		for attempt := 0; attempt < len(agyRetryDelays); attempt++ {
-			if runCtx.Err() != nil {
-				break
-			}
-			transient := parseAgyError(stderr)
-			if transient == nil || !transient.Retryable {
-				break
-			}
-			select {
-			case <-runCtx.Done():
-			case <-time.After(agyRetryDelays[attempt]):
-				stdout, stderr, code, err = invokeAgyWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv)
+	}
+	// Transient provider failures (429/quota, 5xx, network blips): release the
+	// vault lease before sleeping so concurrent agents aren't starved.
+	for attempt := 0; attempt < len(agyRetryDelays); attempt++ {
+		if runCtx.Err() != nil {
+			break
+		}
+		transient := parseAgyError(stderr)
+		if transient == nil || !transient.Retryable {
+			break
+		}
+		select {
+		case <-runCtx.Done():
+		case <-time.After(agyRetryDelays[attempt]):
+			if lErr := invokeOnce(); lErr != nil && leaseErr == nil {
+				leaseErr = lErr
 			}
 		}
-		return nil
-	})
+	}
 	if leaseErr != nil && err == nil {
 		err = leaseErr
 	}

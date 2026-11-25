@@ -233,6 +233,12 @@ func (s *Server) onFrame(c *clientConn, data []byte) {
 			return
 		}
 		s.forwardResult(c, env)
+	case relaywire.TypeError:
+		if c.role == relaywire.RoleIDE && strings.TrimSpace(env.ID) != "" {
+			s.forwardResult(c, env)
+			return
+		}
+		return
 	case relaywire.TypeEvent:
 		if c.role != relaywire.RoleIDE {
 			s.sendErr(c, env.ID, relaywire.CodeForbidden, "somente a IDE emite eventos")

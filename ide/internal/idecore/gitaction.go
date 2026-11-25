@@ -109,19 +109,21 @@ func doPull(ctx context.Context, dir string, on func(GitProgress)) (GitActionRes
 }
 
 func doPush(ctx context.Context, dir string, on func(GitProgress)) (GitActionResult, error) {
-	remote, branch, full := upstreamRef(ctx, dir)
-	if branch == "" {
-		branch = gitRev(ctx, dir, "--abbrev-ref", "HEAD")
-	}
-	if branch == "" || branch == "HEAD" {
+	remote, remoteBranch, full := upstreamRef(ctx, dir)
+	localBranch := gitRev(ctx, dir, "--abbrev-ref", "HEAD")
+	if localBranch == "" || localBranch == "HEAD" {
 		return GitActionResult{}, fmt.Errorf("branch atual não identificada")
 	}
 	if remote == "" {
 		remote = "origin"
 	}
+	pushRef := localBranch
+	if remoteBranch != "" && remoteBranch != localBranch {
+		pushRef = localBranch + ":" + remoteBranch
+	}
 	target := full
 	if target == "" {
-		target = remote + "/" + branch
+		target = remote + "/" + localBranch
 	}
 	label := "Enviando para " + target + "…"
 	emitGit(on, "push", label, "")
@@ -129,7 +131,7 @@ func doPush(ctx context.Context, dir string, on func(GitProgress)) (GitActionRes
 	if full != "" {
 		ahead = gitCount(ctx, dir, full, "HEAD")
 	}
-	out, err := runGitStream(ctx, dir, func(line string) { emitGit(on, "push", label, line) }, pushArgs(remote, branch)...)
+	out, err := runGitStream(ctx, dir, func(line string) { emitGit(on, "push", label, line) }, pushArgs(remote, pushRef)...)
 	if err != nil {
 		return GitActionResult{}, explainGitFailure("push", out, err)
 	}

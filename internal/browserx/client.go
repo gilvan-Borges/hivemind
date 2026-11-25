@@ -63,7 +63,13 @@ func (c *Client) Healthy() bool {
 	return c.conn != nil && !c.closed
 }
 
-func (c *Client) ExtensionOn() bool { return c.Healthy() }
+func (c *Client) ExtensionOn() bool {
+	if !c.Healthy() {
+		return false
+	}
+	ok, extOn := probeHealth(c.port)
+	return ok && extOn
+}
 
 func (c *Client) write(ctx context.Context, m Message) error {
 	data, err := json.Marshal(m)
@@ -130,13 +136,23 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (Me
 
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
-	if c.conn != nil {
-		_ = c.conn.Close(websocket.StatusNormalClosure, "")
+	conn := c.conn
+	pending := c.pending
+	c.pending = make(map[string]chan Message)
+	c.mu.Unlock()
+	for id, ch := range pending {
+		select {
+		case ch <- Message{Type: "result", ID: id, OK: false, Text: "ponte local do Chrome fechada"}:
+		default:
+		}
+	}
+	if conn != nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}
 	return nil
 }

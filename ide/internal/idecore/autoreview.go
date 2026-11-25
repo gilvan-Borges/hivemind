@@ -199,11 +199,15 @@ func BuildAutoReviewObjective(pr ProjectPullRequest, runTests bool, commentOnly 
 // under the external workspace worktrees dir so tests can run without touching the
 // user's checkout or branch.
 func PrepareEphemeralPRWorktree(ctx context.Context, workspaceDir string, pr ProjectPullRequest) (string, func(), error) {
+	repoDir := strings.TrimSpace(workspaceDir)
+	if strings.TrimSpace(pr.RepoRoot) != "" {
+		repoDir = strings.TrimSpace(pr.RepoRoot)
+	}
 	g := gitx.Local{}
-	if !g.IsRepo(ctx, workspaceDir) {
+	if !g.IsRepo(ctx, repoDir) {
 		return "", func() {}, fmt.Errorf("workspace não é um repositório git")
 	}
-	wtRoot := workspace.WorktreesDir(workspaceDir)
+	wtRoot := workspace.WorktreesDir(repoDir)
 	if err := os.MkdirAll(wtRoot, 0o755); err != nil {
 		return "", func() {}, err
 	}
@@ -212,9 +216,9 @@ func PrepareEphemeralPRWorktree(ctx context.Context, workspaceDir string, pr Pro
 	cleanup := func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_, _ = runGit(cleanCtx, workspaceDir, "worktree", "remove", "--force", wtPath)
+		_, _ = runGit(cleanCtx, repoDir, "worktree", "remove", "--force", wtPath)
 		_ = os.RemoveAll(wtPath)
-		_, _ = runGit(cleanCtx, workspaceDir, "worktree", "prune")
+		_, _ = runGit(cleanCtx, repoDir, "worktree", "prune")
 	}
 
 	// Clean any stale worktree left from a previous interrupted run.
@@ -222,17 +226,17 @@ func PrepareEphemeralPRWorktree(ctx context.Context, workspaceDir string, pr Pro
 
 	ref := ""
 	if pr.Number > 0 {
-		if _, err := runGit(ctx, workspaceDir, "fetch", "--no-tags", "origin", fmt.Sprintf("pull/%d/head", pr.Number)); err == nil {
+		if _, err := runGit(ctx, repoDir, "fetch", "--no-tags", "origin", fmt.Sprintf("pull/%d/head", pr.Number)); err == nil {
 			ref = "FETCH_HEAD"
 		}
 	}
 	if ref == "" && strings.TrimSpace(pr.HeadRef) != "" {
 		head := strings.TrimSpace(pr.HeadRef)
-		if _, err := runGit(ctx, workspaceDir, "fetch", "--no-tags", "origin", head); err == nil {
+		if _, err := runGit(ctx, repoDir, "fetch", "--no-tags", "origin", head); err == nil {
 			ref = "FETCH_HEAD"
-		} else if _, err := runGit(ctx, workspaceDir, "rev-parse", "--verify", "origin/"+head); err == nil {
+		} else if _, err := runGit(ctx, repoDir, "rev-parse", "--verify", "origin/"+head); err == nil {
 			ref = "origin/" + head
-		} else if _, err := runGit(ctx, workspaceDir, "rev-parse", "--verify", head); err == nil {
+		} else if _, err := runGit(ctx, repoDir, "rev-parse", "--verify", head); err == nil {
 			ref = head
 		}
 	}
@@ -240,7 +244,7 @@ func PrepareEphemeralPRWorktree(ctx context.Context, workspaceDir string, pr Pro
 		return "", func() {}, fmt.Errorf("não foi possível obter o commit do PR #%d (%s)", pr.Number, pr.HeadRef)
 	}
 
-	if _, err := runGit(ctx, workspaceDir, "worktree", "add", "--detach", wtPath, ref); err != nil {
+	if _, err := runGit(ctx, repoDir, "worktree", "add", "--detach", wtPath, ref); err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("falha ao criar worktree efêmera do PR #%d: %w", pr.Number, err)
 	}

@@ -507,6 +507,16 @@ func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error)
 		message = "[CONTEXTO DO AGENTE PAI — fatos já apurados, não re-leia o que está aqui]\n" + brief + "\n\n[OBJETIVO]" + message
 	}
 
+	var childOnEvent func(Event)
+	if r.OnEvent != nil {
+		parentOnEvent := r.OnEvent
+		childOnEvent = func(ev Event) {
+			if ev.Kind == "usage" {
+				parentOnEvent(ev)
+			}
+		}
+	}
+
 	child := &Runner{
 		BaseDir:         r.BaseDir,
 		Config:          r.Config,
@@ -520,7 +530,7 @@ func (r *Runner) runSpawn(ctx context.Context, req SpawnRequest) (string, error)
 		ListProjects:    r.ListProjects,
 		Approve:         r.Approve,
 		ApproveDetailed: r.ApproveDetailed,
-		OnEvent:         r.OnEvent,
+		OnEvent:         childOnEvent,
 		Model:           r.Model,
 		Streaming:       agent.StreamingModeNone,
 		Child:           true,

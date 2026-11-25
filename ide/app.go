@@ -286,7 +286,7 @@ func (a *App) shutdown(_ context.Context) {
 		a.sessions.CancelAll()
 	}
 	if a.resident != nil {
-		a.resident.Cancel()
+		a.resident.Close()
 	}
 	if a.designMode != nil {
 		a.designMode.Close()

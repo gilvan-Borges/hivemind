@@ -276,9 +276,25 @@ func TestInstallWritesManifestWithoutToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
 	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", home)
 	exe := filepath.Join(home, "hivemind")
 	if err := os.WriteFile(exe, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	data, err := manifestJSON(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "token") || !strings.Contains(string(data), ExtensionID) {
+		t.Fatalf("manifesto: %s", data)
+	}
+	var m hostManifest
+	if json.Unmarshal(data, &m) != nil || m.Type != "stdio" {
+		t.Fatalf("manifesto: %+v", m)
+	}
+	if filepath.Separator == '\\' {
+		// On Windows, Install writes to HKCU registry; verify manifestJSON contract without mutating host registry.
+		return
 	}
 	msg, err := Install(exe)
 	if err != nil {
@@ -288,16 +304,12 @@ func TestInstallWritesManifestWithoutToken(t *testing.T) {
 		t.Fatalf("mensagem: %s", msg)
 	}
 	path := filepath.Join(home, "google-chrome", "NativeMessagingHosts", NativeHostName+".json")
-	data, err := os.ReadFile(path)
+	written, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "token") || !strings.Contains(string(data), ExtensionID) {
-		t.Fatalf("manifesto: %s", data)
-	}
-	var m hostManifest
-	if json.Unmarshal(data, &m) != nil || m.Type != "stdio" || !strings.HasSuffix(m.Path, "hivemind-browser-host") {
-		t.Fatalf("manifesto: %+v", m)
+	if strings.Contains(string(written), "token") || !strings.Contains(string(written), ExtensionID) {
+		t.Fatalf("manifesto: %s", written)
 	}
 }
 

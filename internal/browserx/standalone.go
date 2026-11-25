@@ -1,6 +1,7 @@
 package browserx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,49 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
+
+// FindStandaloneBrowser resolves Chrome or Edge on the local machine.
+func FindStandaloneBrowser() string {
+	return findStandaloneBrowser()
+}
+
+// DumpHeadlessDOM runs a one-shot headless Chrome/Edge --dump-dom call.
+func DumpHeadlessDOM(ctx context.Context, bin, pageURL string) (string, error) {
+	if strings.TrimSpace(bin) == "" {
+		return "", fmt.Errorf("navegador headless não encontrado (Chrome ou Edge)")
+	}
+	userData, err := os.MkdirTemp("", "hivemind-headless-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(userData)
+
+	runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	args := []string{
+		"--headless=new",
+		"--disable-gpu",
+		"--no-first-run",
+		"--disable-sync",
+		"--disable-extensions",
+		"--user-data-dir=" + userData,
+		"--dump-dom",
+		pageURL,
+	}
+	cmd := exec.CommandContext(runCtx, bin, args...)
+	procx.ConfigureContext(cmd)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return "", fmt.Errorf("browser headless: %w", err)
+		}
+		return "", fmt.Errorf("browser headless: %w: %s", err, msg)
+	}
+	return stdout.String(), nil
+}
 
 // lookStandaloneBrowser resolves Chrome or Edge for the built-in standalone
 // CDP session. Tests may override it.
@@ -69,6 +113,7 @@ type standaloneCDP struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	port    int
+	tempDir string
 	conn    *websocket.Conn
 	nextID  atomic.Int64
 	closing bool
@@ -134,6 +179,10 @@ func (s *standaloneCDP) resetLocked() {
 	}
 	s.cmd = nil
 	s.port = 0
+	if s.tempDir != "" {
+		_ = os.RemoveAll(s.tempDir)
+		s.tempDir = ""
+	}
 }
 
 func pickFreePort() (int, error) {
@@ -167,39 +216,21 @@ func (s *standaloneCDP) ensureConnectedLocked(ctx context.Context) error {
 	if strings.TrimSpace(bin) == "" {
 		return fmt.Errorf("nenhum navegador compatível (Chrome ou Edge) encontrado neste computador")
 	}
-	port, err := pickFreePort()
-	if err != nil {
-		return fmt.Errorf("não foi possível reservar porta local para o navegador: %w", err)
-	}
 	profileDir := standaloneProfileDir()
-	cmdArgs := []string{
-		"--headless=new",
-		fmt.Sprintf("--remote-debugging-port=%d", port),
-		"--remote-allow-origins=*",
-		"--user-data-dir=" + profileDir,
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--disable-sync",
-		"--disable-gpu",
-		"--disable-background-networking",
-		"--disable-blink-features=AutomationControlled",
-		"--window-size=1366,900",
-		"about:blank",
-	}
-	cmd := exec.Command(bin, cmdArgs...)
-	procx.HideWindow(cmd)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("falha ao iniciar navegador em segundo plano: %w", err)
-	}
-	s.cmd = cmd
-	s.port = port
-
-	wsURL, err := waitForPageTarget(ctx, port, 10*time.Second)
+	wsURL, err := s.launchAndWaitLocked(ctx, bin, profileDir, 6*time.Second)
 	if err != nil {
+		// Primary profile may be locked by another Chrome process; retry with a clean ephemeral profile.
 		s.resetLocked()
-		return err
+		tmpDir, tErr := os.MkdirTemp("", "hivemind-cdp-profile-")
+		if tErr != nil {
+			return err
+		}
+		s.tempDir = tmpDir
+		wsURL, err = s.launchAndWaitLocked(ctx, bin, tmpDir, 10*time.Second)
+		if err != nil {
+			s.resetLocked()
+			return err
+		}
 	}
 	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	conn, _, err := websocket.Dial(dctx, wsURL, &websocket.DialOptions{
@@ -226,6 +257,37 @@ func (s *standaloneCDP) ensureConnectedLocked(ctx context.Context) error {
 	}
 	_, _ = s.cdpCallLocked(ctx, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true})
 	return nil
+}
+
+func (s *standaloneCDP) launchAndWaitLocked(ctx context.Context, bin, profileDir string, waitTimeout time.Duration) (string, error) {
+	port, err := pickFreePort()
+	if err != nil {
+		return "", fmt.Errorf("não foi possível reservar porta local para o navegador: %w", err)
+	}
+	cmdArgs := []string{
+		"--headless=new",
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--remote-allow-origins=*",
+		"--user-data-dir=" + profileDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-sync",
+		"--disable-gpu",
+		"--disable-background-networking",
+		"--disable-blink-features=AutomationControlled",
+		"--window-size=1366,900",
+		"about:blank",
+	}
+	cmd := exec.Command(bin, cmdArgs...)
+	procx.HideWindow(cmd)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("falha ao iniciar navegador em segundo plano: %w", err)
+	}
+	s.cmd = cmd
+	s.port = port
+	return waitForPageTarget(ctx, port, waitTimeout)
 }
 
 type cdpTarget struct {
@@ -753,7 +815,12 @@ func (s *standaloneCDP) pressKeyLocked(ctx context.Context, key string) error {
 		vk = int(strings.ToUpper(key)[0])
 	}
 	text := ""
-	if !named {
+	switch {
+	case key == "Enter":
+		text = "\r"
+	case key == " ":
+		text = " "
+	case !named:
 		text = key
 	}
 	if _, err := s.cdpCallLocked(ctx, "Input.dispatchKeyEvent", map[string]any{

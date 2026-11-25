@@ -530,8 +530,12 @@ func (c *Client) loop(ctx context.Context) {
 			}
 			continue
 		}
+		started := time.Now()
 		err := c.session(ctx)
 		c.setOnline(false)
+		if time.Since(started) > 10*time.Second {
+			backoff = time.Second
+		}
 		if err != nil && ctx.Err() == nil {
 			c.setErr(err)
 		}
@@ -616,6 +620,7 @@ func (c *Client) session(ctx context.Context) error {
 		}
 	}()
 
+	rpcSem := make(chan struct{}, 12)
 	for {
 		env, err := readConn(sessionCtx, conn)
 		if err != nil {
@@ -631,7 +636,16 @@ func (c *Client) session(ctx context.Context) error {
 				c.flush(sessionCtx, send)
 			}
 		case relaywire.TypeRPC:
-			c.handleRPC(sessionCtx, send, env)
+			envCopy := env
+			select {
+			case rpcSem <- struct{}{}:
+				go func() {
+					defer func() { <-rpcSem }()
+					c.handleRPC(sessionCtx, send, envCopy)
+				}()
+			case <-sessionCtx.Done():
+				return sessionCtx.Err()
+			}
 		case relaywire.TypeError:
 			c.setErr(errors.New(errorMessage(env)))
 		}

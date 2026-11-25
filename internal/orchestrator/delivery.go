@@ -20,7 +20,7 @@ func (r *Runner) detectGitHub(ctx context.Context) githubx.Client {
 	if err != nil {
 		return githubx.Disabled{Reason: "repositório sem remote origin"}
 	}
-	owner, repo, ok := githubx.ParseRemote(url)
+	owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(url)
 	if !ok {
 		return githubx.Disabled{Reason: "remote origin não é um repositório GitHub"}
 	}
@@ -556,7 +556,7 @@ func (r *Runner) githubClientForNestedRepo(rootRemoteURL, subRemoteURL string) g
 	if subRemoteURL != "" && strings.EqualFold(rootRemoteURL, subRemoteURL) {
 		return r.GitHub
 	}
-	if owner, repo, ok := githubx.ParseRemote(subRemoteURL); ok {
+	if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(subRemoteURL); ok {
 		return githubx.Detect(owner, repo)
 	}
 	return nil

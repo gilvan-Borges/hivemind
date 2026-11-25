@@ -339,8 +339,13 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		finalEnv    agyEnvelope
 		sawResult   bool
 		deltaFilter agyDecisionDeltaFilter
+		stopped     bool
+		yieldedAny  bool
 	)
 	handleLine := func(line string) bool {
+		if stopped {
+			return false
+		}
 		ev, ok := parseStreamLine([]byte(line))
 		if !ok {
 			return true
@@ -348,18 +353,26 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		switch ev.Type {
 		case "delta":
 			if text := deltaFilter.Push(ev.Text); text != "" {
-				yield(&model.LLMResponse{
+				yieldedAny = true
+				if !yield(&model.LLMResponse{
 					Partial: true,
 					Content: genai.NewContentFromText(text, genai.RoleModel),
-				}, nil)
+				}, nil) {
+					stopped = true
+					return false
+				}
 			}
 		case "tool":
 			if ev.ToolName != "" {
+				yieldedAny = true
 				marker := formatCursorToolMarker(ev.ToolName, ev.ToolOut)
-				yield(&model.LLMResponse{
+				if !yield(&model.LLMResponse{
 					Partial: true,
 					Content: genai.NewContentFromText(marker, genai.RoleModel),
-				}, nil)
+				}, nil) {
+					stopped = true
+					return false
+				}
 			}
 		case "result":
 			sawResult = true
@@ -377,12 +390,37 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 	var stderrText string
 	var code int
 	var runErr error
-	leaseErr := WithAgyVaultLease(a.ProfileID, func() error {
-		stderrText, code, runErr = invokeAgyStreamWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv, handleLine)
-		return nil
-	})
-	if leaseErr != nil && runErr == nil {
-		runErr = leaseErr
+	for emptyAttempt := 0; emptyAttempt < 3; emptyAttempt++ {
+		if emptyAttempt > 0 {
+			select {
+			case <-runCtx.Done():
+				break
+			case <-time.After(time.Duration(emptyAttempt) * 1500 * time.Millisecond):
+			}
+			finalEnv = agyEnvelope{}
+			sawResult = false
+			deltaFilter = agyDecisionDeltaFilter{}
+		}
+		leaseErr := WithAgyVaultLease(a.ProfileID, func() error {
+			stderrText, code, runErr = invokeAgyStreamWithEnv(runCtx, a.Bin, dir, args, prompt, a.Env, a.IsolateEnv, handleLine)
+			return nil
+		})
+		if leaseErr != nil && runErr == nil {
+			runErr = leaseErr
+		}
+		if stopped {
+			return nil, nil
+		}
+		if code == 0 && runErr == nil {
+			break
+		}
+		combined := strings.ToLower(stderrText + "\n" + finalEnv.Error + "\n" + errString(runErr))
+		if yieldedAny || !strings.Contains(combined, "empty conversation id") {
+			break
+		}
+	}
+	if stopped {
+		return nil, nil
 	}
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return nil, fmt.Errorf("agy excedeu o tempo (%s). Confira o login com `agy` ou aumente o contexto", formatAgyTimeout(timeout))
@@ -403,10 +441,12 @@ func (a *Agy) generateStreaming(ctx context.Context, req *model.LLMRequest, yiel
 		return nil, fmt.Errorf("agy encerrou com código %d: %s", code, truncateText(firstNonEmpty(detail, errString(runErr)), 500))
 	}
 	if tail := deltaFilter.Flush(); tail != "" {
-		yield(&model.LLMResponse{
+		if !yield(&model.LLMResponse{
 			Partial: true,
 			Content: genai.NewContentFromText(tail, genai.RoleModel),
-		}, nil)
+		}, nil) {
+			return nil, nil
+		}
 	}
 	if !sawResult || finalEnv.Status == "" {
 		// Sem evento result parseável: cai no texto acumulado dos deltas.

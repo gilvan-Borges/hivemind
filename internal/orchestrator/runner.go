@@ -554,6 +554,8 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.qaStallCount = 0
 	r.qaStallFired = false
 	r.qaLoopIter = 0
+	r.qaLastDiffHash = ""
+	r.pauseForApproval = false
 	r.handoffMu.Lock()
 	r.handoffTo = ""
 	r.handoffHash = ""

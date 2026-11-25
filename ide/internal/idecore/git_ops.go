@@ -105,7 +105,7 @@ func DiscardWorkspaceChanges(ctx context.Context, workspaceDir string) error {
 		return nil
 	}
 	if g.HasCommit(ctx, workspaceDir) {
-		if _, err := runGit(ctx, workspaceDir, "checkout", "--", "."); err != nil {
+		if _, err := runGit(ctx, workspaceDir, "reset", "--hard", "HEAD"); err != nil {
 			return err
 		}
 	}
@@ -113,7 +113,7 @@ func DiscardWorkspaceChanges(ctx context.Context, workspaceDir string) error {
 	return err
 }
 
-// DiscardFileChanges restores a single tracked file to HEAD or deletes an untracked file inside workspaceDir.
+// DiscardFileChanges restores a single tracked file to HEAD or deletes an untracked/newly-staged file inside workspaceDir.
 func DiscardFileChanges(ctx context.Context, workspaceDir, relPath string) error {
 	relClean := filepath.ToSlash(strings.TrimSpace(relPath))
 	if relClean == "" || relClean == ".hivemind" || strings.HasPrefix(relClean, ".hivemind/") {
@@ -127,15 +127,15 @@ func DiscardFileChanges(ctx context.Context, workspaceDir, relPath string) error
 	if !g.IsRepo(ctx, workspaceDir) {
 		return fmt.Errorf("o diretório não é um repositório Git")
 	}
-	// Check if file is tracked in HEAD (literal pathspec so file names with
-	// metacharacters ("-", ":", ":(top)", globs) are never reinterpreted by git).
+	lit := gitx.LiteralPathspec(relClean)
 	if g.HasCommit(ctx, workspaceDir) {
-		lit := gitx.LiteralPathspec(relClean)
-		if _, err := runGit(ctx, workspaceDir, "ls-files", "--error-unmatch", "--", lit); err == nil {
+		if _, err := runGit(ctx, workspaceDir, "cat-file", "-e", "HEAD:"+relClean); err == nil {
 			_, _ = runGit(ctx, workspaceDir, "reset", "HEAD", "--", lit)
 			_, err := runGit(ctx, workspaceDir, "checkout", "--", lit)
 			return err
 		}
+		// Newly staged file not present in HEAD: unstage first, then remove from disk.
+		_, _ = runGit(ctx, workspaceDir, "reset", "HEAD", "--", lit)
 	}
 	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
 		return err
@@ -317,6 +317,7 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	procx.ConfigureContext(cmd)
 	cmd.Dir = dir
+	cmd.Env = gitx.NonInteractiveEnv()
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
