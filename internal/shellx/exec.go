@@ -165,6 +165,7 @@ func RunDirect(ctx context.Context, dir string, argv []string) (stdout, stderr s
 		return "", "", -1, fmt.Errorf("comando vazio")
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	procx.ConfigureContext(cmd)
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir
 	}

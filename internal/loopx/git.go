@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 // ErrNotRepo means the workspace is not a git checkout. The loop still runs; it just does not commit.
@@ -108,6 +110,7 @@ func gitCmd(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("workspace inválido")
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
+	procx.ConfigureContext(cmd)
 	cmd.Dir = filepath.Clean(dir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

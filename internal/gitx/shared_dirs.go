@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 // SharedDirReport records shared directory links, skipped/blocked entries, and warnings.
@@ -109,7 +110,9 @@ func LinkSharedDirectories(mainRepo, wtDir string, dirs []string) (SharedDirRepo
 
 func createDirLink(srcAbs, dstAbs string) error {
 	if runtime.GOOS == "windows" {
-		out, err := exec.Command("cmd", "/d", "/c", "mklink", "/J", dstAbs, srcAbs).CombinedOutput()
+		cmd := exec.Command("cmd", "/d", "/c", "mklink", "/J", dstAbs, srcAbs)
+		procx.HideWindow(cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 		}

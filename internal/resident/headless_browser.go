@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/browserx"
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 	"github.com/gilvan-Borges/HiveMind/internal/strx"
 )
 
@@ -83,6 +84,7 @@ func dumpHeadlessDOM(ctx context.Context, bin, pageURL string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, headlessArgs(userData, pageURL)...)
+	procx.ConfigureContext(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
