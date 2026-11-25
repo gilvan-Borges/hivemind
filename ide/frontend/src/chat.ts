@@ -124,6 +124,7 @@ export function renderRightPane() {
   right.innerHTML = `
     <div class="chat-top">
       <div class="lane-bar" id="lane-bar"></div>
+      <button type="button" class="icon-btn chat-add-lane-btn" id="btn-add-lane-inline" title="Abrir conversa paralela" aria-label="Abrir conversa paralela">${icons.plus}</button>
       <div class="chat-actions">
         <button type="button" class="icon-btn" id="btn-chat-actions" title="Ações da conversa" aria-haspopup="menu" aria-expanded="${state.chatActionsOpen ? "true" : "false"}" aria-label="Ações da conversa">${icons.moreHoriz}</button>
         <div class="chat-actions-menu" id="chat-actions-menu" role="menu" ${state.chatActionsOpen ? "" : "hidden"}>
@@ -1407,7 +1408,7 @@ export function bindRightStaticEvents() {
     toggleChatExpanded();
   });
 
-  document.getElementById("btn-add-lane")?.addEventListener("click", () => {
+  const openParallelLane = () => {
     const lane = activeLane();
     const teams = state.project?.teamConfig?.teams || [];
     const used = new Set(state.lanes.map((l) => l.teamName));
@@ -1415,6 +1416,9 @@ export function bindRightStaticEvents() {
     const created = createLane(next);
     state.lanes.push(created);
     state.activeLaneId = created.id;
+    state.chatActionsOpen = false;
+    const actionsMenu = document.getElementById("chat-actions-menu");
+    if (actionsMenu) actionsMenu.hidden = true;
     renderLaneBarOnly();
     renderPipelineBar();
     renderTokenBar();
@@ -1423,7 +1427,9 @@ export function bindRightStaticEvents() {
     updateStatusBar();
     updateMissionBoardIfOpen();
     if (state.sidebarView === "team" && state.showLeftSidebar) renderLeftSidebar();
-  });
+  };
+  document.getElementById("btn-add-lane")?.addEventListener("click", openParallelLane);
+  document.getElementById("btn-add-lane-inline")?.addEventListener("click", openParallelLane);
 
   document.getElementById("btn-toggle-split-lanes")?.addEventListener("click", () => {
     const lane = activeLane();

@@ -9173,11 +9173,18 @@ button.brand-logo {
   display: none;
 }
 
-/* Vista de centro ou lateral recolhida: o trilho vira uma linha e o centro ocupa a largura. */
-.workbench:has(.center-area.has-stage),
+/* Vista de centro (GitHub/Jira/Fluxo) ou lateral recolhida: o trilho vira uma linha. */
 .workbench:has(.left-dock.is-rail-only) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8px clamp(240px, var(--right-pane-w, 380px), 46vw);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "rail rail rail"
+    "center gap chat";
+}
+.workbench:has(.center-area.has-stage) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8px var(--stage-right-w, minmax(0, 1fr));
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "rail rail rail"
@@ -9537,6 +9544,22 @@ button.primary {
   border: none;
   background: transparent;
 }
+.chat-add-lane-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--surface-card);
+  color: var(--text-secondary);
+}
+.chat-add-lane-btn:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
 .chat-actions {
   position: relative;
 }
@@ -9791,9 +9814,11 @@ button.primary {
   }
 }
 @media (max-width: 900px) {
-  .workbench:has(.center-area.has-stage),
   .workbench:has(.left-dock.is-rail-only) {
     grid-template-columns: minmax(0, 1fr) 6px clamp(210px, 34vw, 280px);
+  }
+  .workbench:has(.center-area.has-stage) {
+    grid-template-columns: minmax(0, 1fr) 6px var(--stage-right-w, minmax(0, 1fr));
   }
   .git-subtab {
     padding: 6px 8px;

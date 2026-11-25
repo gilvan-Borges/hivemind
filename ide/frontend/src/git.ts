@@ -6,7 +6,7 @@ import { autoResizeTextarea } from "./chat-timeline";
 import { openDiffInEditor, openFileInEditor, promptDiscardChanges, reloadCleanOpenTabs, renderEditorBody, renderEditorTabs } from "./editor";
 import { bindConflictResolutionEvents, refreshConflictedFiles, renderConflictsSectionHtml } from "./git-history";
 import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./explorer";
-import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
+import { activeLane, applyLaneLabel, createLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
 import { renderGuard } from "./render-guard";
 import { syncChatExpandLayout, syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
@@ -1127,6 +1127,50 @@ export function clearCenterStage() {
     stage.replaceChildren();
   }
   area?.classList.remove("has-stage");
+}
+
+export function formatWorkItemLaneLabel(kind: "pr" | "issue", keyOrNumber: string | number, source = ""): string {
+  const raw = String(keyOrNumber ?? "").trim();
+  if (!raw) return "";
+  if (kind === "pr") {
+    return raw.startsWith("#") ? `PR ${raw}` : `PR #${raw}`;
+  }
+  if (source === "github") {
+    return raw.startsWith("#") ? `Issue ${raw}` : `Issue #${raw}`;
+  }
+  return raw;
+}
+
+// prepareLaneForWorkItem selects or creates a conversation lane already named
+// with the PR / Jira / GitHub issue key so every review or task starts labeled
+// cleanly without overwriting an active or populated conversation.
+export function prepareLaneForWorkItem(label: string): TeamLane {
+  const cleanLabel = label.trim();
+  if (cleanLabel) {
+    const existing = state.lanes.find(
+      (l) => l.id !== "lane-autoreview" && (l.label || "").trim().toLowerCase() === cleanLabel.toLowerCase()
+    );
+    if (existing) {
+      state.activeLaneId = existing.id;
+      return existing;
+    }
+  }
+  const cur = activeLane();
+  if (cur && cur.id !== "lane-autoreview" && !cur.running && !cur.sessionId && cur.messages.length === 0) {
+    if (cleanLabel) applyLaneLabel(cur, cleanLabel);
+    return cur;
+  }
+  const teams = state.project?.teamConfig?.teams || [];
+  const baseTeam =
+    (cur && cur.id !== "lane-autoreview" ? cur.teamName : "") ||
+    state.project?.teamConfig?.active ||
+    teams[0]?.name ||
+    "principal";
+  const created = createLane(baseTeam);
+  if (cleanLabel) applyLaneLabel(created, cleanLabel);
+  state.lanes.push(created);
+  state.activeLaneId = created.id;
+  return created;
 }
 
 export function placeGitTabContent(sidebar: HTMLElement) {
@@ -2390,28 +2434,8 @@ export function bindGitSidebarEvents() {
         renderComposerModeBar();
         updateStatusBar();
       }
-      if (activeLane()?.id === "lane-autoreview") {
-        const manualLane = state.lanes.find((lane) => lane.id !== "lane-autoreview");
-        if (manualLane) {
-          state.activeLaneId = manualLane.id;
-        }
-      }
-      const targetLane = activeLane();
-      if (targetLane && !targetLane.running && targetLane.sessionId) {
-        // Start a clean session when loading a new PR for review so old session history
-        // and token counters from previous tasks/PRs never pollute this review.
-        targetLane.sessionId = "";
-        targetLane.turnInTokens = 0;
-        targetLane.turnOutTokens = 0;
-        targetLane.turnTotalTokens = 0;
-        targetLane.sessionInTokens = 0;
-        targetLane.sessionOutTokens = 0;
-        targetLane.sessionTotalTokens = 0;
-        targetLane.turnCostMicroUsd = 0;
-        targetLane.sessionCostMicroUsd = 0;
-        targetLane.costByRole = {};
-        targetLane.messages = [];
-      }
+      const prLabel = formatWorkItemLaneLabel("pr", pr.number);
+      prepareLaneForWorkItem(prLabel);
       renderLaneBarOnly();
       renderPipelineBar();
       renderTokenBar();
@@ -2425,7 +2449,7 @@ export function bindGitSidebarEvents() {
         autoResizeTextarea(chatInput);
         chatInput.focus();
       }
-      setStatus(`PR #${pr.number} carregado no chat do Chefe.`);
+      setStatus(`${prLabel} carregado no chat do Chefe.`);
     });
   });
 
@@ -2460,26 +2484,13 @@ export function bindGitSidebarEvents() {
       if (jk) jk.value = issueKey;
     }
     state.draftObjective = objectiveText;
-    const targetLane = activeLane();
-    if (targetLane && !targetLane.running && targetLane.sessionId) {
-      // Start a clean session when loading a new Jira/GitHub issue from the sidebar.
-      targetLane.sessionId = "";
-      targetLane.turnInTokens = 0;
-      targetLane.turnOutTokens = 0;
-      targetLane.turnTotalTokens = 0;
-      targetLane.sessionInTokens = 0;
-      targetLane.sessionOutTokens = 0;
-      targetLane.sessionTotalTokens = 0;
-      targetLane.turnCostMicroUsd = 0;
-      targetLane.sessionCostMicroUsd = 0;
-      targetLane.costByRole = {};
-      targetLane.messages = [];
-      renderLaneBarOnly();
-      renderPipelineBar();
-      renderTokenBar();
-      rebuildChatMessagesFull();
-      syncComposerButtons();
-    }
+    const itemLabel = formatWorkItemLaneLabel("issue", issueKey, source);
+    prepareLaneForWorkItem(itemLabel);
+    renderLaneBarOnly();
+    renderPipelineBar();
+    renderTokenBar();
+    rebuildChatMessagesFull();
+    syncComposerButtons();
     state.showRightAI = true;
     syncLayoutVisibility();
     const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement | null;

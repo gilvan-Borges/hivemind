@@ -319,4 +319,36 @@ describe("PRs & Issues collapsible sections, details drawer and scroll preservat
     expect(isCenterGitStageActive()).toBe(false);
     expect(chatLayoutExpanded()).toBe(true);
   });
+
+  it("prepareLaneForWorkItem nomeia a conversa com PR/Jira/Issue e abre paralela se a atual já estiver ocupada", async () => {
+    const { formatWorkItemLaneLabel, prepareLaneForWorkItem } = await import("./git");
+    const { createLane } = await import("./lanes");
+    expect(formatWorkItemLaneLabel("pr", 852)).toBe("PR #852");
+    expect(formatWorkItemLaneLabel("issue", "PROJ-123", "jira")).toBe("PROJ-123");
+    expect(formatWorkItemLaneLabel("issue", "#42", "github")).toBe("Issue #42");
+
+    const base = createLane("principal");
+    state.lanes = [base];
+    state.activeLaneId = base.id;
+
+    // Lane vazia é reutilizada e já nasce nomeada com o PR.
+    const l1 = prepareLaneForWorkItem("PR #852");
+    expect(l1.id).toBe(base.id);
+    expect(l1.label).toBe("PR #852");
+    expect(state.lanes.length).toBe(1);
+
+    // Quando já tem conversa/execução na lane atual, abre uma paralela nomeada com o novo item.
+    l1.messages.push({ id: "m1", kind: "user", label: "Você", text: "Revisar PR #852" });
+    const l2 = prepareLaneForWorkItem("PROJ-123");
+    expect(l2.id).not.toBe(l1.id);
+    expect(l2.label).toBe("PROJ-123");
+    expect(state.lanes.length).toBe(2);
+    expect(state.activeLaneId).toBe(l2.id);
+
+    // Clicar novamente no mesmo PR foca a lane existente em vez de duplicar.
+    const l1Again = prepareLaneForWorkItem("PR #852");
+    expect(l1Again.id).toBe(l1.id);
+    expect(state.activeLaneId).toBe(l1.id);
+    expect(state.lanes.length).toBe(2);
+  });
 });

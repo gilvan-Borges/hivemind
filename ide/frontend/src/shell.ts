@@ -584,10 +584,18 @@ export function bindStaticShellEvents() {
     wb?.style.setProperty("--left-pane-w", `${state.leftWidth}px`);
   });
   setupResizer("resizer-right", (dx) => {
+    const wb = document.querySelector<HTMLElement>(".workbench");
+    if (isCenterGitStageActive()) {
+      const rightEl = document.getElementById("right-pane");
+      const curW = rightEl ? rightEl.getBoundingClientRect().width : state.rightWidth;
+      const maxW = Math.max(320, Math.round((window.innerWidth || 1280) * 0.72));
+      const nextW = Math.max(260, Math.min(maxW, Math.round(curW - dx)));
+      wb?.style.setProperty("--stage-right-w", `${nextW}px`);
+      return;
+    }
     state.rightWidth = Math.max(260, Math.min(680, state.rightWidth - dx));
     const el = document.getElementById("right-pane");
     if (el) el.style.width = `${state.rightWidth}px`;
-    const wb = document.querySelector<HTMLElement>(".workbench");
     wb?.style.setProperty("--right-pane-w", `${state.rightWidth}px`);
   });
 
