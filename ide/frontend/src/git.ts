@@ -9,7 +9,7 @@ import { bindTreeRowClicks, renderExplorerTreeHtml, renderLeftSidebar } from "./
 import { activeLane, renderLaneBarOnly, renderPipelineBar } from "./lanes";
 import { openGitHubModal, openJiraModal } from "./modals";
 import { renderGuard } from "./render-guard";
-import { syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
+import { syncChatExpandLayout, syncLayoutVisibility, toggleBranchPopover, updateHeaderAndStatusBar, updateStatusBar } from "./shell";
 import { api, askConfirm, normalizePathKey, setRunMode, setStatus, state, toast, toastError } from "./state";
 import { bindWorktreesTabEvents, refreshWorktreesPanel, renderWorktreesTabHtml } from "./worktrees";
 
@@ -1100,10 +1100,24 @@ function renderJiraAreaHtml(proj: ProjectInfo | null): string {
 
 const CENTER_GIT_TABS = new Set<GitSubTab>(["prs_issues", "flow", "jira"]);
 
+export function isCenterGitStageActive(): boolean {
+  return state.sidebarView === "git" && state.showLeftSidebar && CENTER_GIT_TABS.has(state.gitTab);
+}
+
+export function clearCenterStage() {
+  const stage = document.getElementById("center-stage");
+  const area = document.getElementById("center-area");
+  if (stage) {
+    stage.hidden = true;
+    stage.replaceChildren();
+  }
+  area?.classList.remove("has-stage");
+}
+
 export function placeGitTabContent(sidebar: HTMLElement) {
   const stage = document.getElementById("center-stage");
   const area = document.getElementById("center-area");
-  const useCenter = state.sidebarView === "git" && state.showLeftSidebar && CENTER_GIT_TABS.has(state.gitTab);
+  const useCenter = isCenterGitStageActive();
   const content = sidebar.querySelector("#git-tab-content");
   const tabs = sidebar.querySelector(".git-subtabs-scroll");
   if (useCenter && stage && content) {
@@ -1112,13 +1126,11 @@ export function placeGitTabContent(sidebar: HTMLElement) {
     if (tabs) stage.appendChild(tabs);
     stage.appendChild(content);
     area?.classList.add("has-stage");
+    syncChatExpandLayout();
     return;
   }
-  if (stage) {
-    stage.hidden = true;
-    stage.replaceChildren();
-  }
-  area?.classList.remove("has-stage");
+  clearCenterStage();
+  syncChatExpandLayout();
 }
 
 export function renderGitSidebarHtml(proj: ProjectInfo | null): string {

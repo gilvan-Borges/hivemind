@@ -277,4 +277,38 @@ describe("PRs & Issues collapsible sections, details drawer and scroll preservat
     expect(explorerSrc).toContain("sidebar.dataset.renderedGitTab");
     expect(explorerSrc).toContain("nextBody.scrollTop = prevScrollTop");
   });
+
+  it("chatLayoutExpanded nunca oculta o centro quando PRs/Jira/Fluxo estão abertos", async () => {
+    const { chatLayoutExpanded } = await import("./shell");
+    const { isCenterGitStageActive } = await import("./git");
+    state.chatExpandedPref = true;
+    state.editorTabs = [];
+    state.showLeftSidebar = true;
+
+    state.sidebarView = "explorer";
+    expect(isCenterGitStageActive()).toBe(false);
+    expect(chatLayoutExpanded()).toBe(true);
+
+    state.sidebarView = "git";
+    state.gitTab = "prs_issues";
+    expect(isCenterGitStageActive()).toBe(true);
+    expect(chatLayoutExpanded()).toBe(false);
+
+    state.gitTab = "jira";
+    expect(isCenterGitStageActive()).toBe(true);
+    expect(chatLayoutExpanded()).toBe(false);
+
+    state.gitTab = "flow";
+    expect(isCenterGitStageActive()).toBe(true);
+    expect(chatLayoutExpanded()).toBe(false);
+
+    state.gitTab = "changes";
+    expect(isCenterGitStageActive()).toBe(false);
+    expect(chatLayoutExpanded()).toBe(true);
+
+    state.gitTab = "prs_issues";
+    state.showLeftSidebar = false;
+    expect(isCenterGitStageActive()).toBe(false);
+    expect(chatLayoutExpanded()).toBe(true);
+  });
 });

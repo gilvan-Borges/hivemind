@@ -4,7 +4,7 @@ import { chipForAgent, escapeHtml, exactTokens, formatTokens, matchAgentRuntime,
 import { refreshSessions } from "./boot";
 import { rebuildChatMessagesFull, renderComposerModeBar, renderTokenBar } from "./chat";
 import { openFileInEditor, renderEditorBody, renderEditorTabs } from "./editor";
-import { bindGitSidebarEvents, getGitStatusMap, placeGitTabContent, renderGitSidebarHtml } from "./git";
+import { bindGitSidebarEvents, clearCenterStage, getGitStatusMap, placeGitTabContent, renderGitSidebarHtml } from "./git";
 import { activeLane, buildAgentRuntimes, confirmDeleteSavedTeam, renderLaneBarOnly } from "./lanes";
 import { syncHiveBinding } from "./resident";
 import { renderModalLayer } from "./modals";
@@ -338,9 +338,13 @@ export function renderLeftSidebar() {
   const prevScrollTop = preserveScroll
     ? (sidebar.querySelector<HTMLElement>(".sidebar-body")?.scrollTop ?? 0)
     : 0;
+  const stageEl = document.getElementById("center-stage");
+  const prevStageScrollTop = preserveScroll ? (stageEl?.scrollTop ?? 0) : 0;
   sidebar.dataset.renderedView = state.sidebarView;
   sidebar.dataset.renderedGitTab = state.sidebarView === "git" ? state.gitTab : "";
 
+  // Evita IDs duplicados entre #left-sidebar e #center-stage durante bindGitSidebarEvents.
+  clearCenterStage();
   try {
     renderLeftSidebarInner(sidebar);
   } finally {
@@ -348,6 +352,9 @@ export function renderLeftSidebar() {
     if (preserveScroll && prevScrollTop > 0) {
       const nextBody = sidebar.querySelector<HTMLElement>(".sidebar-body");
       if (nextBody) nextBody.scrollTop = prevScrollTop;
+    }
+    if (preserveScroll && prevStageScrollTop > 0 && stageEl && !stageEl.hidden) {
+      stageEl.scrollTop = prevStageScrollTop;
     }
   }
 }

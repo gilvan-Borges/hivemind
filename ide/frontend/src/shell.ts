@@ -6,7 +6,7 @@ import { openFolderDialog, openProjectPath, refreshSessions } from "./boot";
 import { renderComposerModeBar, renderMentionPopup, renderRightPane } from "./chat";
 import { openEditorFind, reloadCleanOpenTabs, renderEditorBody, renderEditorFindBar, renderEditorTabs, saveActiveEditor, sendEditorSelectionToChief } from "./editor";
 import { refreshExplorerTree, renderLeftSidebar } from "./explorer";
-import { clearGitHubUnread, loadGitGraph, loadProjectIssues, refreshDiffs, updateGitActivityBadge } from "./git";
+import { clearCenterStage, clearGitHubUnread, isCenterGitStageActive, loadGitGraph, loadProjectIssues, refreshDiffs, updateGitActivityBadge } from "./git";
 import { closeInlineEdit, ghostButtonTitle, isCodeEditorActive, openInlineEdit, toggleGhostText } from "./inline-ai";
 import { activeLane, laneDisplayName } from "./lanes";
 import { openAIUsagePage, openMobileModal, openUpdatesModal, quotaChipNote, refreshJiraStatusAndProjects, refreshProviderProfiles, renderModalLayer } from "./modals";
@@ -302,6 +302,48 @@ export async function toggleBranchPopover(anchorTop: boolean, targetRepoRoot?: s
   }
 }
 
+function positionFloatingPopover(anchor: HTMLElement, pop: HTMLElement, preferAbove: boolean) {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 8;
+  pop.style.position = "fixed";
+  pop.style.right = "auto";
+  pop.style.bottom = "auto";
+  pop.style.left = `${Math.max(margin, rect.left)}px`;
+  pop.style.top = `${Math.max(margin, rect.bottom + 6)}px`;
+  const popRect = pop.getBoundingClientRect();
+  const vw = window.innerWidth || 1280;
+  const vh = window.innerHeight || 720;
+  let left = rect.right - popRect.width;
+  if (left < margin) left = rect.left;
+  if (left + popRect.width > vw - margin) left = Math.max(margin, vw - popRect.width - margin);
+  let top = preferAbove ? rect.top - popRect.height - 8 : rect.bottom + 6;
+  if (top < margin) top = rect.bottom + 6;
+  if (top + popRect.height > vh - margin) top = Math.max(margin, rect.top - popRect.height - 8);
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function dismissCenterGitStageForEditorTab() {
+  if (!isCenterGitStageActive()) return;
+  state.gitTab = "changes";
+  clearCenterStage();
+  renderLeftSidebar();
+}
+
+function closeSistemaPopover() {
+  state.sistemaOpen = false;
+  const pop = document.getElementById("sistema-popover");
+  if (pop) pop.hidden = true;
+  document.getElementById("btn-sistema")?.setAttribute("aria-expanded", "false");
+}
+
+function closeRailMoreMenu() {
+  state.railMoreOpen = false;
+  const menu = document.getElementById("rail-more-menu");
+  if (menu) menu.hidden = true;
+  document.getElementById("btn-rail-more")?.setAttribute("aria-expanded", "false");
+}
+
 export function runStackTest() {
   const cmd = state.project?.stack?.testHint || "git status";
   if (!state.terminal.open) {
@@ -342,52 +384,93 @@ export function bindStaticShellEvents() {
   document.getElementById("team-strip-label")?.addEventListener("click", () => openSidebarView("team"));
   document.getElementById("btn-rail-more")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    const btn = e.currentTarget as HTMLElement;
     state.railMoreOpen = !state.railMoreOpen;
     const menu = document.getElementById("rail-more-menu");
-    if (menu) menu.hidden = !state.railMoreOpen;
-    (e.currentTarget as HTMLElement).setAttribute("aria-expanded", state.railMoreOpen ? "true" : "false");
+    if (menu) {
+      menu.hidden = !state.railMoreOpen;
+      if (state.railMoreOpen) positionFloatingPopover(btn, menu, false);
+    }
+    btn.setAttribute("aria-expanded", state.railMoreOpen ? "true" : "false");
   });
   document.getElementById("btn-sistema")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    const btn = e.currentTarget as HTMLElement;
     state.sistemaOpen = !state.sistemaOpen;
     const pop = document.getElementById("sistema-popover");
-    if (pop) pop.hidden = !state.sistemaOpen;
-    (e.currentTarget as HTMLElement).setAttribute("aria-expanded", state.sistemaOpen ? "true" : "false");
+    if (pop) {
+      pop.hidden = !state.sistemaOpen;
+      if (state.sistemaOpen) positionFloatingPopover(btn, pop, true);
+    }
+    btn.setAttribute("aria-expanded", state.sistemaOpen ? "true" : "false");
   });
   document.getElementById("btn-toggle-left")?.addEventListener("click", () => {
+    closeRailMoreMenu();
     state.showLeftSidebar = !state.showLeftSidebar;
     syncLayoutVisibility();
+    if (state.showLeftSidebar) renderLeftSidebar();
   });
   document.getElementById("btn-toggle-right")?.addEventListener("click", () => {
+    closeRailMoreMenu();
     state.showRightAI = !state.showRightAI;
     syncLayoutVisibility();
   });
 
-  document.getElementById("btn-header-swarm")?.addEventListener("click", () => openMissionControlTab());
-  document.getElementById("act-mission")?.addEventListener("click", () => openMissionControlTab());
+  document.getElementById("btn-header-swarm")?.addEventListener("click", () => {
+    dismissCenterGitStageForEditorTab();
+    openMissionControlTab();
+  });
+  document.getElementById("act-mission")?.addEventListener("click", () => {
+    dismissCenterGitStageForEditorTab();
+    openMissionControlTab();
+  });
 
-  document.getElementById("btn-header-run")?.addEventListener("click", () => runStackTest());
+  document.getElementById("btn-header-run")?.addEventListener("click", () => {
+    closeRailMoreMenu();
+    runStackTest();
+  });
 
   document.getElementById("btn-cmd-palette")?.addEventListener("click", () => openCommandPalette());
-  document.getElementById("status-providers")?.addEventListener("click", () => void openIdeSettingsTab("providers"));
+  document.getElementById("status-providers")?.addEventListener("click", () => {
+    closeSistemaPopover();
+    dismissCenterGitStageForEditorTab();
+    void openIdeSettingsTab("providers");
+  });
   document.getElementById("status-jira")?.addEventListener("click", () => {
+    closeSistemaPopover();
     state.gitTab = "jira";
     openSidebarView("git");
     if (!state.issues.loadedOnce && !state.issues.loading) void loadProjectIssues();
   });
-  document.getElementById("status-ghost")?.addEventListener("click", () => toggleGhostText());
+  document.getElementById("status-ghost")?.addEventListener("click", () => {
+    closeSistemaPopover();
+    toggleGhostText();
+  });
   document.getElementById("status-autoreview")?.addEventListener("click", () => {
+    closeSistemaPopover();
     state.gitTab = "flow";
     openSidebarView("git");
   });
   document.getElementById("status-problems")?.addEventListener("click", () => openProblemsPanel());
   document.getElementById("status-lsp")?.addEventListener("click", () => {
+    closeSistemaPopover();
     void refreshLSPStatus();
     openProblemsPanel();
   });
-  document.getElementById("status-mobile")?.addEventListener("click", () => void openMobileModal());
-  document.getElementById("status-resident")?.addEventListener("click", () => openResidentTab());
-  document.getElementById("act-resident")?.addEventListener("click", () => openResidentTab());
+  document.getElementById("status-mobile")?.addEventListener("click", () => {
+    closeSistemaPopover();
+    void openMobileModal();
+  });
+  document.getElementById("status-resident")?.addEventListener("click", () => {
+    closeSistemaPopover();
+    dismissCenterGitStageForEditorTab();
+    openResidentTab();
+  });
+  document.getElementById("act-resident")?.addEventListener("click", () => {
+    closeRailMoreMenu();
+    dismissCenterGitStageForEditorTab();
+    openResidentTab();
+  });
 
   document.getElementById("status-tokens")?.addEventListener("click", () => {
     openSidebarView("sessions");
@@ -453,9 +536,12 @@ export function bindStaticShellEvents() {
   });
 
   document.getElementById("act-ai-usage")?.addEventListener("click", () => {
+    closeRailMoreMenu();
+    dismissCenterGitStageForEditorTab();
     void openAIUsagePage();
   });
   document.getElementById("act-ide-settings")?.addEventListener("click", () => {
+    dismissCenterGitStageForEditorTab();
     void openIdeSettingsTab();
   });
 
@@ -494,11 +580,15 @@ export function bindStaticShellEvents() {
     state.leftWidth = Math.max(240, Math.min(560, state.leftWidth + dx));
     const el = document.getElementById("left-dock");
     if (el) el.style.width = `${state.leftWidth}px`;
+    const wb = document.querySelector<HTMLElement>(".workbench");
+    wb?.style.setProperty("--left-pane-w", `${state.leftWidth}px`);
   });
   setupResizer("resizer-right", (dx) => {
-    state.rightWidth = Math.max(310, Math.min(680, state.rightWidth - dx));
+    state.rightWidth = Math.max(260, Math.min(680, state.rightWidth - dx));
     const el = document.getElementById("right-pane");
     if (el) el.style.width = `${state.rightWidth}px`;
+    const wb = document.querySelector<HTMLElement>(".workbench");
+    wb?.style.setProperty("--right-pane-w", `${state.rightWidth}px`);
   });
 
   document.addEventListener("keydown", (e) => {
@@ -784,12 +874,16 @@ export function setupResizer(id: string, onMove: (dx: number) => void) {
 }
 
 export function chatLayoutExpanded(): boolean {
+  if (isCenterGitStageActive()) return false;
   return shouldExpandChat(state.chatExpandedPref, state.editorTabs.length);
 }
 
 export function syncChatExpandLayout() {
   const on = chatLayoutExpanded();
-  document.querySelector(".workbench")?.classList.toggle("chat-expanded", on);
+  const wb = document.querySelector<HTMLElement>(".workbench");
+  wb?.classList.toggle("chat-expanded", on);
+  wb?.style.setProperty("--right-pane-w", `${state.rightWidth}px`);
+  wb?.style.setProperty("--left-pane-w", `${state.leftWidth}px`);
   const right = document.getElementById("right-pane");
   right?.classList.toggle("chat-reading", on);
   if (right && !right.classList.contains("hidden")) {
@@ -803,8 +897,8 @@ export function syncChatExpandLayout() {
     btn.setAttribute("aria-pressed", state.chatExpandedPref ? "true" : "false");
     btn.setAttribute("aria-label", label);
     btn.classList.toggle("is-on", state.chatExpandedPref);
-    btn.title = state.editorTabs.length > 0
-      ? "A preferência fica salva. O chat ocupa o centro quando não houver abas (Ctrl+Shift+E)."
+    btn.title = state.editorTabs.length > 0 || isCenterGitStageActive()
+      ? "A preferência fica salva. O chat ocupa o centro quando não houver abas abertas (Ctrl+Shift+E)."
       : `${label} (Ctrl+Shift+E)`;
   }
 }
@@ -817,7 +911,7 @@ export function toggleChatExpanded() {
     // preview sem storage
   }
   syncChatExpandLayout();
-  if (state.chatExpandedPref && state.editorTabs.length > 0) {
+  if (state.chatExpandedPref && (state.editorTabs.length > 0 || isCenterGitStageActive())) {
     setStatus("Equipe IA ocupa o centro quando o editor estiver sem abas.");
   }
 }
@@ -828,6 +922,9 @@ export function syncLayoutVisibility() {
   const resL = document.getElementById("resizer-left");
   const right = document.getElementById("right-pane");
   const resR = document.getElementById("resizer-right");
+  if (!isCenterGitStageActive()) {
+    clearCenterStage();
+  }
   dock?.classList.toggle("is-rail-only", !state.showLeftSidebar);
   left?.classList.toggle("hidden", !state.showLeftSidebar);
   if (resL) resL.style.display = state.showLeftSidebar ? "" : "none";

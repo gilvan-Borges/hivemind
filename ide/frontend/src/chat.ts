@@ -145,7 +145,7 @@ export function renderRightPane() {
       <div class="composer-box">
         <div id="composer-design-chip">${renderDesignModeChipHtml()}</div>
         <div class="composer-images" id="composer-images" style="display:none"></div>
-        <textarea id="chat-input" rows="1" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · Ctrl+L seleção · /ajuda)"></textarea>
+        <textarea id="chat-input" rows="2" placeholder="Descreva o que construir ou resolver… (@arquivo · Ctrl+V print · /ajuda)"></textarea>
         <div class="composer-footer">
           <div class="composer-tools ${state.composerToolsOpen ? "open" : ""}">
             <button type="button" class="composer-tools-trigger" id="btn-composer-tools" aria-expanded="${state.composerToolsOpen ? "true" : "false"}" title="Modo, permissão, Jira e anexos">

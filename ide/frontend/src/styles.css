@@ -7036,7 +7036,7 @@ button.status-chip:hover,
 .workbench .right-ai-pane {
   transition: flex-basis 220ms ease, flex-grow 220ms ease, width 220ms ease, min-width 220ms ease, max-width 220ms ease, opacity 180ms ease;
 }
-.workbench.chat-expanded .center-area {
+.workbench.chat-expanded:not(:has(.center-area.has-stage)) .center-area {
   flex: 0 0 0px;
   width: 0;
   min-width: 0;
@@ -7045,7 +7045,7 @@ button.status-chip:hover,
   border-width: 0;
   pointer-events: none;
 }
-.workbench.chat-expanded .right-ai-pane {
+.workbench.chat-expanded:not(:has(.center-area.has-stage)) .right-ai-pane {
   flex: 1 1 auto;
   max-width: none;
   width: auto;
@@ -9157,11 +9157,11 @@ button.brand-logo {
   padding: var(--space-2);
 }
 .side-more-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 40;
+  position: fixed;
+  z-index: 220;
   min-width: 220px;
+  max-height: min(440px, 75vh);
+  overflow-y: auto;
 }
 .side-more-menu[hidden],
 .chat-actions-menu[hidden],
@@ -9172,17 +9172,12 @@ button.brand-logo {
 .left-dock.is-rail-only .side-tab > span:not(.ms):not(.act-badge) {
   display: none;
 }
-.left-dock.is-rail-only .side-more-menu {
-  left: 0;
-  right: auto;
-  top: calc(100% + 6px);
-}
 
 /* Vista de centro ou lateral recolhida: o trilho vira uma linha e o centro ocupa a largura. */
 .workbench:has(.center-area.has-stage),
 .workbench:has(.left-dock.is-rail-only) {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 8px minmax(220px, 380px);
+  grid-template-columns: minmax(0, 1fr) 8px clamp(240px, var(--right-pane-w, 380px), 46vw);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "rail rail rail"
@@ -9208,6 +9203,9 @@ button.brand-logo {
   grid-area: center;
   min-width: 0;
   min-height: 0;
+  width: auto;
+  opacity: 1;
+  pointer-events: auto;
 }
 .workbench:has(.center-area.has-stage) #resizer-right,
 .workbench:has(.left-dock.is-rail-only) #resizer-right {
@@ -9220,11 +9218,15 @@ button.brand-logo {
   max-width: none;
   min-width: 0;
 }
-.workbench:has(.right-ai-pane.hidden) {
+.workbench.chat-expanded:has(.left-dock.is-rail-only):not(:has(.center-area.has-stage)) {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "rail"
-    "center";
+    "chat";
+}
+.workbench.chat-expanded:has(.left-dock.is-rail-only):not(:has(.center-area.has-stage)) .center-area,
+.workbench.chat-expanded:has(.left-dock.is-rail-only):not(:has(.center-area.has-stage)) #resizer-right {
+  display: none !important;
 }
 
 .sidebar-header {
@@ -9274,13 +9276,19 @@ button.brand-logo {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: none;
+}
+.git-subtabs-scroll::-webkit-scrollbar {
+  display: none;
 }
 .git-subtabs {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+  box-sizing: border-box;
+  margin: 0;
   width: max-content;
-  min-width: 100%;
+  min-width: 0;
   max-width: none;
   overflow: visible;
 }
@@ -9521,6 +9529,8 @@ button.primary {
   background: transparent;
   padding: var(--space-2);
   box-shadow: none;
+  min-height: 46px;
+  overflow-y: auto;
 }
 .composer-tools {
   position: relative;
@@ -9570,6 +9580,14 @@ button.primary {
   border-top: none;
   background: var(--surface-page);
   font-size: var(--font-meta);
+  overflow: visible;
+}
+.status-bar #status-text,
+.status-bar #status-stack {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .status-bar .spacer {
   display: block;
@@ -9581,16 +9599,18 @@ button.primary {
   border-radius: 999px;
   background: var(--surface-card);
   padding: 4px 10px;
+  flex-shrink: 0;
 }
 .sistema-wrap {
   position: relative;
+  flex-shrink: 0;
 }
 .sistema-popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 40;
+  position: fixed;
+  z-index: 220;
   min-width: 230px;
+  max-height: min(400px, 70vh);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -9676,21 +9696,21 @@ button.primary {
   .center-stage {
     padding: var(--space-3);
   }
-  .left-dock {
-    width: 220px !important;
+  .workbench:not(.chat-expanded) .left-dock {
+    max-width: 240px;
   }
-  .right-ai-pane {
-    width: 260px !important;
+  .workbench:not(.chat-expanded) .right-ai-pane {
+    max-width: 300px;
     min-width: 0;
   }
-  .status-bar {
-    overflow-x: auto;
+  .status-bar #status-stack {
+    max-width: 160px;
   }
 }
 @media (max-width: 900px) {
   .workbench:has(.center-area.has-stage),
   .workbench:has(.left-dock.is-rail-only) {
-    grid-template-columns: minmax(0, 1fr) 6px 200px;
+    grid-template-columns: minmax(0, 1fr) 6px clamp(210px, 34vw, 280px);
   }
   .git-subtab {
     padding: 6px 8px;
@@ -9699,19 +9719,20 @@ button.primary {
 }
 @media (max-width: 860px) {
   .brand-suffix,
-  .project-tab-add span,
-  .team-strip-action span,
-  .status-bar #status-env {
+  .project-tab-add > span:not(.ms),
+  .team-strip-action > span:not(.ms),
+  .status-bar #status-env,
+  .status-bar #status-stack {
     display: none;
   }
-  .left-dock {
-    width: 200px !important;
+  .workbench:not(.chat-expanded) .left-dock {
+    max-width: 200px;
   }
   .side-tab {
     padding: 0 8px;
   }
-  .right-ai-pane {
-    width: min(220px, 38vw) !important;
+  .workbench:not(.chat-expanded) .right-ai-pane {
+    max-width: min(260px, 42vw);
   }
   .composer-footer {
     flex-wrap: wrap;
@@ -9725,4 +9746,13 @@ button.primary {
   .project-tabs-bar {
     min-width: 0;
   }
+}
+.workbench:has(.right-ai-pane.hidden) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "rail"
+    "center";
+}
+.workbench:has(.right-ai-pane.hidden) #resizer-right {
+  display: none !important;
 }
