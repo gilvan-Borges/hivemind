@@ -567,25 +567,31 @@ export function renderResidentViewHtml(): string {
       <header class="resident-header">
         <div class="resident-title-block">
           <div class="resident-title-row">
-            ${icons.sparkle}
+            <span class="resident-brand-mark" aria-hidden="true">${icons.sparkle}</span>
             <h2>Agent Hive</h2>
+            <span class="resident-badge state-${stateLabel === "pensando" ? "running" : stateLabel === "aguardando você" ? "ask" : "idle"}">${escapeHtml(stateLabel)}</span>
             <span class="resident-badge ${st?.experimentalUnisolated ? "risk-destructive" : "readonly"}">${st?.experimentalUnisolated ? "Sem isolamento (teste)" : "Sandbox obrigatória"}</span>
             <span class="resident-badge ${sbOk ? "risk-read" : "risk-destructive"}" title="${escapeHtml(st?.sandboxReason || sbText)}">${escapeHtml(sbText)}</span>
             <span class="resident-badge ${vaultOk ? "risk-read" : "risk-write"}" title="${escapeHtml(st?.vaultReason || "Cofre do SO")}">${vaultOk ? "Cofre SO: ativo" : "Cofre SO: indisponível"}</span>
-            <span class="resident-badge state-${stateLabel === "pensando" ? "running" : stateLabel === "aguardando você" ? "ask" : "idle"}">${escapeHtml(stateLabel)}</span>
           </div>
-          <div class="dim">Conta local: <code>${escapeHtml(acct)}</code> · Workspace: <code>${escapeHtml(activeWsName)}</code> · Rota: <code>${escapeHtml(prov)}/${escapeHtml(mod)}</code></div>
+          <div class="resident-meta-line dim">
+            <span title="Conta local isolada">Conta: <code>${escapeHtml(acct)}</code></span>
+            <span class="resident-meta-dot">·</span>
+            <span>Workspace: <code>${escapeHtml(activeWsName)}</code></span>
+            <span class="resident-meta-dot">·</span>
+            <span>Rota ativa: <code>${escapeHtml(prov)}/${escapeHtml(mod)}</code></span>
+          </div>
         </div>
         <div class="resident-header-controls">
-          <input id="res-workstream-input" class="res-compact-input" style="width:115px" value="${escapeHtml(residentState.workstream)}" placeholder="workstream" title="Workstream ativo para memória e sessão" />
+          <input id="res-workstream-input" class="res-compact-input res-ws-input" value="${escapeHtml(residentState.workstream)}" placeholder="workstream" title="Workstream ativo para memória e sessão" />
           ${renderModelPickerPairHtml({
             pairKey: "res-hive",
             selectId: "res-model-select",
             currentModel: residentModelSpec(prov, mod),
             compact: true,
           })}
-          <label class="dim" title="Acordar no arquivo salvo, no fim da lane ou numa aprovação. Não executa ferramenta."><input type="checkbox" id="res-event-triggers" ${st?.eventTriggers ? "checked" : ""}/> eventos</label>
-          <button type="button" class="mini" id="btn-res-save-cfg">Salvar</button>
+          <label class="resident-events-toggle" title="Acordar no arquivo salvo, no fim da lane ou numa aprovação. Não executa ferramenta."><input type="checkbox" id="res-event-triggers" ${st?.eventTriggers ? "checked" : ""}/><span>eventos</span></label>
+          <button type="button" class="mini primary" id="btn-res-save-cfg">Salvar</button>
         </div>
       </header>
 
@@ -618,20 +624,21 @@ export function renderResidentViewHtml(): string {
 
 function renderLoopPanelHtml(): string {
   const loops = residentState.loops;
-  const rows = loops.length === 0
-    ? `<p class="dim">Nenhum loop neste projeto.</p>`
-    : loops.map((loop) => {
-      const verdict = loop.lastVerdict || loop.outcome || "sem veredito";
-      const running = loop.status === "running" || loop.status === "waiting";
-      return `<div class="dim" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-        <strong>${escapeHtml(loop.name || loop.id)}</strong>
-        <span>${escapeHtml(loop.status)}</span>
-        <span>iteração ${Number(loop.iteration) || 0}</span>
-        <span>${escapeHtml(verdict)}</span>
-        ${running ? `<button type="button" class="mini" data-loop-stop="${escapeHtml(loop.id)}">Parar</button>` : ""}
-      </div>`;
-    }).join("");
-  return `<section id="res-loops" aria-label="Loops">${rows}</section>`;
+  if (loops.length === 0) {
+    return `<section id="res-loops" class="resident-loops-bar" hidden aria-label="Loops"><p class="dim">Nenhum loop neste projeto.</p></section>`;
+  }
+  const rows = loops.map((loop) => {
+    const verdict = loop.lastVerdict || loop.outcome || "sem veredito";
+    const running = loop.status === "running" || loop.status === "waiting";
+    return `<div class="resident-loop-chip">
+      <strong>${escapeHtml(loop.name || loop.id)}</strong>
+      <span class="resident-badge ${running ? "state-running" : "readonly"}">${escapeHtml(loop.status)}</span>
+      <span class="dim">iteração ${Number(loop.iteration) || 0}</span>
+      <span class="dim">· ${escapeHtml(verdict)}</span>
+      ${running ? `<button type="button" class="mini danger" data-loop-stop="${escapeHtml(loop.id)}">Parar</button>` : ""}
+    </div>`;
+  }).join("");
+  return `<section id="res-loops" class="resident-loops-bar" aria-label="Loops">${rows}</section>`;
 }
 
 function renderResidentActivityRowHtml(m: ChatMessage): string {
@@ -684,11 +691,14 @@ function renderHiveTabStrip(): string {
     : "";
   return `
     <div class="resident-sync-tabs">
-      <div class="resident-project-row" role="tablist">${projectTabs}</div>
-      <div class="lane-bar" role="tablist">
-        ${empty}
-        ${laneTabs}
-        <button type="button" class="lane-pill" id="btn-res-new-lane">Nova conversa</button>
+      <div class="resident-sync-tabs-inner">
+        <div class="resident-project-row" role="tablist">${projectTabs}</div>
+        <span class="resident-bar-sep" aria-hidden="true"></span>
+        <div class="lane-bar resident-lane-bar" role="tablist">
+          ${empty}
+          ${laneTabs}
+          <button type="button" class="lane-pill resident-new-lane-btn" id="btn-res-new-lane">+ Nova conversa</button>
+        </div>
       </div>
     </div>
   `;
@@ -841,12 +851,12 @@ function renderResidentChatHtml(enabled = true): string {
     <div class="resident-chat-body" id="res-chat-scroll">${msgsHtml}</div>
     <div class="resident-composer">
       ${approvalDockHtml}
-      <div class="composer-box">
-        <textarea id="res-chat-input" rows="1" placeholder="Peça ao Agent Hive para inspecionar, editar arquivos ou rodar um binário autorizado na sandbox… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
+      <div class="composer-box resident-composer-box">
+        <textarea id="res-chat-input" rows="2" placeholder="Peça ao Agent Hive para inspecionar, editar arquivos, navegar no Chrome ou rodar um binário autorizado… (Enter envia)">${escapeHtml(residentState.draftInput)}</textarea>
         <div class="resident-composer-actions">
-          <span class="dim">Sandbox + auditoria fsync · escrita/execução pedem aprovação</span>
+          <span class="dim resident-composer-hint">Sandbox + auditoria fsync · escrita e execução pedem aprovação</span>
           <div class="spacer"></div>
-          <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "disabled"}>${icons.stop}<span>Parar</span></button>
+          <button type="button" class="danger mini" id="btn-res-cancel" ${residentState.running ? "" : "hidden disabled"}>${icons.stop}<span>Parar</span></button>
           <button type="button" class="primary composer-send" id="btn-res-send" ${residentState.running || !enabled ? "disabled" : ""}>${icons.send}<span>Enviar</span></button>
         </div>
       </div>
