@@ -426,9 +426,20 @@ chrome.tabs.onActivated.addListener((info) => {
   void publish();
 });
 
-chrome.alarms.create("hivemind-reconnect", { periodInMinutes: 1 });
+chrome.alarms.create("hivemind-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "hivemind-reconnect" && !connected) connectNative();
+  if (alarm.name === "hivemind-reconnect" && !connected) {
+    void fallbackSocket().then(() => {
+      if (!connected) connectNative();
+    });
+  }
+});
+
+chrome.runtime.onStartup?.addListener(() => {
+  if (!connected) connectNative();
+});
+chrome.runtime.onInstalled?.addListener(() => {
+  if (!connected) connectNative();
 });
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });

@@ -359,7 +359,7 @@ func ForResidentPhase2(broker ResidentBroker) ([]tool.Tool, error) {
 
 	if err := add(functiontool.New(functiontool.Config{
 		Name:        "chrome_tab",
-		Description: "Age na aba ativa do Chrome pela extensão Agent Hive. Ações suportadas: read (lê elementos interativos e1/e2 + texto visível da página), text (só texto visível), find (busca elemento por query/role), navigate (abre URL), click (clica por ref e1 OU por name visível, ex: 'Novo projeto'), type (digita text em ref ou name), key (pressiona tecla como Enter), scroll (direction: down/up), wait. Não lê o cofre.",
+		Description: "Controla um navegador Chrome/Edge em segundo plano (usa a extensão Agent Hive se conectada, ou abre automaticamente o navegador integrado do Agent Hive de forma independente — funciona mesmo sem a extensão aberta). Ações: read (elementos interativos e1/e2 + texto visível), text (só texto visível), find (busca por query/role), navigate (abre URL), click (por ref e1 OU name visível), type (digita text em ref ou name), key (Enter, Tab, Escape, PageDown...), scroll (direction: down/up), wait. Não lê o cofre.",
 	}, func(ctx agent.Context, args struct {
 		Action    string `json:"action,omitempty" jsonschema:"read, text, find, navigate, click, type, key, scroll ou wait. Vazio lê a aba atual."`
 		URL       string `json:"url,omitempty" jsonschema:"URL http(s) para navigate."`

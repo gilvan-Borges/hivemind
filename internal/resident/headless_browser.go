@@ -150,13 +150,20 @@ func (b *Broker) handleBrowserHeadless(ctx context.Context, args map[string]any)
 }
 
 func (b *Broker) handleChromeTab(ctx context.Context, args map[string]any) (string, error) {
-	_, listening, on, _, err := browserx.Status()
-	if err != nil || !listening || !on {
-		return "", fmt.Errorf("a extensão Agent Hive não está conectada no Chrome")
-	}
 	action := strings.ToLower(strArg(args, "action"))
 	if action == "" {
 		action = "read"
+	}
+	_, listening, on, _, statusErr := browserx.Status()
+	if statusErr != nil || !listening || !on {
+		// Extension is not connected (Chrome closed, sidepanel idle, or extension
+		// not installed). Automatically run against HiveMind's built-in background
+		// Chrome/Edge CDP session so Agent Hive works 100% independently.
+		res, err := browserx.CallStandalone(ctx, action, args)
+		if err != nil {
+			return "", err
+		}
+		return strx.TruncateBytes(res, 10*1024, "\n…"), nil
 	}
 	tool := ""
 	callArgs := map[string]any{}

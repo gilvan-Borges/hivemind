@@ -833,7 +833,7 @@ async function click(args: Record<string, unknown>): Promise<ToolResult> {
   await sleep(220);
   await tell(tabId, "ripple", { x, y });
   await clickAt(tabId, x, y);
-  if (args.ref) {
+  if (args.ref && args.submit === true) {
     try {
       const info = refsByTab.get(tabId)?.[String(args.ref)];
       if (info) {
@@ -923,8 +923,22 @@ async function scroll(args: Record<string, unknown>): Promise<ToolResult> {
     x = center.x;
     y = center.y;
   }
-  const dx = clamp(Number(args.dx ?? 0), -2000, 2000);
-  const dy = clamp(Number(args.dy ?? 400), -2000, 2000);
+  const dir = String(args.direction ?? "").toLowerCase();
+  let defaultDx = 0;
+  let defaultDy = 400;
+  if (dir === "up") {
+    defaultDy = -500;
+  } else if (dir === "down") {
+    defaultDy = 500;
+  } else if (dir === "left") {
+    defaultDx = -400;
+    defaultDy = 0;
+  } else if (dir === "right") {
+    defaultDx = 400;
+    defaultDy = 0;
+  }
+  const dx = clamp(Number(args.dx ?? defaultDx), -2000, 2000);
+  const dy = clamp(Number(args.dy ?? defaultDy), -2000, 2000);
   await send(tabId, "Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy });
   await sleep(80);
   const tab = await tabInfo(tabId);
@@ -937,22 +951,43 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
+const NAMED_KEY_CODES: Record<string, number> = {
+  Enter: 13,
+  Tab: 9,
+  Escape: 27,
+  Backspace: 8,
+  Delete: 46,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  PageUp: 33,
+  PageDown: 34,
+  Home: 36,
+  End: 35,
+  Space: 32,
+  " ": 32,
+};
+
 async function pressKey(args: Record<string, unknown>): Promise<ToolResult> {
-  const key = String(args.key ?? "");
-  if (!key) throw new Error("tecla vazia");
+  const rawKey = String(args.key ?? "");
+  if (!rawKey) throw new Error("tecla vazia");
+  const key = rawKey === "Space" ? " " : rawKey;
   const tabId = await activeTab(args.tabId);
   await attach(tabId);
   const before = treeByTab.get(tabId) ?? "";
-  await tell(tabId, "status", { label: key === "Enter" ? "Enviando" : "Tecla " + key });
-  const named = key.length > 1;
+  await tell(tabId, "status", { label: key === "Enter" ? "Enviando" : "Tecla " + rawKey });
+  const named = rawKey.length > 1;
+  const code = rawKey === "Space" ? "Space" : named ? rawKey : "Key" + key.toUpperCase();
+  const vk = NAMED_KEY_CODES[rawKey] ?? NAMED_KEY_CODES[key] ?? key.toUpperCase().charCodeAt(0);
   await send(tabId, "Input.dispatchKeyEvent", {
     type: "keyDown",
     key,
-    code: named ? key : "Key" + key.toUpperCase(),
-    text: named ? "" : key,
-    windowsVirtualKeyCode: named ? 13 : key.charCodeAt(0),
+    code,
+    text: named && rawKey !== "Space" ? "" : key,
+    windowsVirtualKeyCode: vk,
   });
-  await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, code: named ? key : "Key" + key.toUpperCase() });
+  await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk });
   if (key === "Enter") await waitIdle(tabId, 2500);
   const tab = await tabInfo(tabId);
   const delta = await changedLine(tabId, before).catch(() => "");
@@ -1047,6 +1082,7 @@ async function tabsCreate(args: Record<string, unknown>): Promise<ToolResult> {
   const url = args.url ? String(args.url) : undefined;
   if (url) assertHttp(url);
   const tab = await chrome.tabs.create({ url, active: true });
+  if (tab.id) pinnedTabId = tab.id;
   if (url && tab.id) {
     await waitComplete(tab.id);
     await attach(tab.id);
@@ -1060,6 +1096,7 @@ async function tabsClose(args: Record<string, unknown>): Promise<ToolResult> {
   if (!Number.isFinite(tabId)) throw new Error("tabId obrigatório");
   await chrome.tabs.remove(tabId);
   attached.delete(tabId);
+  if (pinnedTabId === tabId) pinnedTabId = 0;
   return { text: `ok ${tabId}` };
 }
 
@@ -1067,6 +1104,7 @@ async function tabsSwitch(args: Record<string, unknown>): Promise<ToolResult> {
   const tabId = Number(args.tabId);
   if (!Number.isFinite(tabId)) throw new Error("tabId obrigatório");
   await chrome.tabs.update(tabId, { active: true });
+  pinnedTabId = tabId;
   const tab = await tabInfo(tabId);
   return { text: shortOk(tab) };
 }

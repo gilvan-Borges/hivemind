@@ -29,6 +29,8 @@ declare const chrome: {
     connectNative(name: string): ChromePort;
     sendMessage(message: unknown): Promise<unknown>;
     onConnect: { addListener(cb: (port: ChromePort) => void): void };
+    onStartup?: { addListener(cb: () => void): void };
+    onInstalled?: { addListener(cb: () => void): void };
     onMessage: {
       addListener(cb: (message: any, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void): void;
     };

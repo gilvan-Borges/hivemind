@@ -39,7 +39,17 @@ func serveNative(ctx context.Context, in io.Reader, out io.Writer) error {
 		return err
 	}
 	if !probe(cfg.Port) {
-		return fmt.Errorf("HiveMind não está escutando em 127.0.0.1:%d. Abra a IDE ou rode hivemind browser serve", cfg.Port)
+		deadline := time.Now().Add(8 * time.Second)
+		for !probe(cfg.Port) && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(400 * time.Millisecond):
+			}
+		}
+		if !probe(cfg.Port) {
+			return fmt.Errorf("HiveMind não está escutando em 127.0.0.1:%d. Abra a IDE ou rode hivemind browser serve", cfg.Port)
+		}
 	}
 	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	conn, _, err := websocket.Dial(dctx, fmt.Sprintf("ws://127.0.0.1:%d/browser", cfg.Port), &websocket.DialOptions{
