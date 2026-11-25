@@ -311,7 +311,15 @@ async function beginPick(): Promise<void> {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "panel") return;
   panels.add(port);
-  port.onDisconnect.addListener(() => panels.delete(port));
+  void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+    if (tabs[0]?.id !== undefined) void ensureTabGroup(tabs[0].id);
+  });
+  port.onDisconnect.addListener(() => {
+    panels.delete(port);
+    if (panels.size === 0 && !controlling) {
+      void clearTabGroup();
+    }
+  });
   void publish();
   port.onMessage.addListener((message: { type?: string; text?: string; token?: string; port?: number; id?: string; choice?: string }) => {
     if (message.type === "chat" && message.text) {

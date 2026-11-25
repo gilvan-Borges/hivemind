@@ -26,24 +26,28 @@
     </div>
     <main id="log" role="log" aria-live="polite" aria-relevant="additions"></main>
     <div class="dock">
-      <div class="tools">
-        <button id="stop" type="button">Parar</button>
-        <button id="pick" type="button">Apontar</button>
-      </div>
-      <form id="composer">
+      <form id="composer" class="composer-box">
         <label class="sr" for="text">Mensagem para o Agent Hive</label>
-        <textarea id="text" rows="2" placeholder="Pedir ao Agent Hive"></textarea>
-        <button type="submit" aria-label="Enviar">↑</button>
+        <textarea id="text" rows="2" placeholder="Peça ao Agent Hive para ler, clicar ou resumir esta aba…"></textarea>
+        <div class="composer-bar">
+          <div class="composer-tools">
+            <button id="pick" type="button" class="tool-chip" title="Apontar um elemento na página">Apontar</button>
+            <button id="stop" type="button" class="tool-chip stop-chip" title="Parar execução (Esc)">Parar</button>
+          </div>
+          <button type="submit" id="send" class="send-btn" aria-label="Enviar">↑</button>
+        </div>
       </form>
-      <p class="hint">Enter envia · Shift+Enter quebra · Esc para</p>
-      <details class="pair">
-        <summary>Parear</summary>
-        <form id="pair">
-          <label class="sr" for="token">Código de pareamento</label>
-          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="código local" />
-          <button type="submit">Conectar</button>
-        </form>
-      </details>
+      <div class="dock-foot">
+        <span class="hint">Enter envia · Shift+Enter quebra · Esc para</span>
+        <details class="pair">
+          <summary>Parear</summary>
+          <form id="pair">
+            <label class="sr" for="token">Código de pareamento</label>
+            <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="código local (64 hex)" />
+            <button type="submit">Conectar</button>
+          </form>
+        </details>
+      </div>
     </div>
     <script src="sidepanel.js" type="module"></script>
   </body>

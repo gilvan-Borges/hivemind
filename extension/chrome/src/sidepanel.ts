@@ -108,9 +108,18 @@ function paint(): void {
   if (items.length === 0) {
     const empty = document.createElement("section");
     empty.className = "empty";
-    const title = document.createElement("p");
-    title.textContent = "O que você quer fazer nesta página?";
-    empty.append(title);
+    empty.innerHTML = `
+      <div class="empty-hero">
+        <div class="empty-badge" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="20" height="20">
+            <path fill="#C6A15B" d="M16 2 28 9v14L16 30 4 23V9L16 2zm0 4.2L8 11v10l8 4.8 8-4.8V11L16 6.2z" />
+            <circle cx="16" cy="16" r="3" fill="#E8C881" />
+          </svg>
+        </div>
+        <h2>Como posso ajudar nesta aba?</h2>
+        <p>O Agent Hive lê a página e executa ações sob sua aprovação.</p>
+      </div>
+    `;
     for (const prompt of suggestions) {
       const button = document.createElement("button");
       button.type = "button";
