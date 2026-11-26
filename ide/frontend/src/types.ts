@@ -218,9 +218,14 @@ export interface DiffSummaryItem {
 
 export type RunMode = "auto" | "direct" | "plan" | "plan:sdd" | "plan:sdd-jira" | "squad" | "race";
 
+export interface TaskChecklistItem {
+  title: string;
+  status: "pending" | "in_progress" | "done" | "failed" | "skipped";
+}
+
 export interface ChatMessage {
   id: string;
-  kind: "user" | "chief" | "system" | "tool" | "thinking" | "error" | "handoff" | "diff" | "plan" | "approval";
+  kind: "user" | "chief" | "system" | "tool" | "thinking" | "error" | "handoff" | "diff" | "plan" | "approval" | "tasks";
   label: string;
   text: string;
   active?: boolean;
@@ -232,6 +237,8 @@ export interface ChatMessage {
   riskTier?: string;
   images?: string[];
   diffItems?: DiffSummaryItem[];
+  tasks?: TaskChecklistItem[];
+  updatedAtText?: string;
   tokens?: number;
   modelLabel?: string;
   modelProvider?: string;

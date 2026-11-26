@@ -28,6 +28,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
+	"github.com/gilvan-Borges/HiveMind/internal/tools"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
 	"github.com/gilvan-Borges/HiveMind/internal/vaultx"
 	"github.com/gilvan-Borges/HiveMind/internal/workerx"
@@ -72,6 +73,7 @@ type Event struct {
 	SessionID         string                   `json:"sessionId,omitempty"`
 	LoopID            string                   `json:"loopId,omitempty"`
 	Iteration         int                      `json:"iteration,omitempty"`
+	Tasks             []tools.TaskItem         `json:"tasks,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.

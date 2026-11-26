@@ -9033,6 +9033,122 @@ body.is-orb-mode #app {
   flex-shrink: 0;
   transition: transform 0.15s ease;
 }
+.msg-card.role-tasks {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.task-checklist {
+  border: 1px solid var(--border-divider);
+  border-radius: 9px;
+  background: var(--surface-panel);
+  overflow: hidden;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.task-checklist.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
+}
+.task-checklist-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.task-checklist-summary::-webkit-details-marker {
+  display: none;
+}
+.task-checklist-lead {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-strong);
+  flex-shrink: 0;
+}
+.task-checklist-title {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-checklist-count {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.task-checklist-time {
+  font-size: 11px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.task-checklist-chev {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.task-checklist[open] .task-checklist-chev {
+  transform: rotate(180deg);
+}
+.task-checklist-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 10px 8px;
+  border-top: 1px solid var(--border-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.task-checklist-item.is-in_progress {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.task-checklist-item.is-done {
+  color: var(--text-tertiary);
+}
+.task-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.task-ic.is-done {
+  color: var(--status-ok);
+}
+.task-ic.is-in_progress {
+  color: var(--accent-strong);
+}
+.task-ic.is-failed {
+  color: var(--status-err);
+}
+.task-ic.is-skipped,
+.task-ic.is-pending {
+  color: var(--text-tertiary);
+}
+.task-ring {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  display: inline-block;
+}
 .activity-fold[open] .activity-fold-chev {
   transform: rotate(180deg);
 }

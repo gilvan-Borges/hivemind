@@ -109,6 +109,11 @@ func (r *Runner) buildTriageBaseToolsWithGitHub(toolRoot, jiraKey string, sddDoc
 		BaseBranch:             r.Project.Settings.BaseBranch,
 		MCP:                    r.MCP,
 		SkillLookup:            r.reviewSkillLookup(isAutoReview),
+		OnTasks: func(tasks []tools.TaskItem) {
+			if r.OnEvent != nil {
+				r.OnEvent(Event{Kind: "tasks_updated", Tasks: tasks})
+			}
+		},
 	})
 }
 
@@ -441,7 +446,8 @@ REGRAS DE EXECUÇÃO CONFIÁVEL:
 4. LEITURA ANTES DE EDITAR: use search_text e read_file(start_line, end_line) para entender contratos, assinaturas, regras RN e testes existentes antes de editar. Não chute código sem ler o arquivo alvo.
 5. RESOLUÇÃO DE CONFLITOS & DEPENDÊNCIAS: em conflitos de merge, faça git fetch / git merge na worktree isolada, leia ambos os lados do conflito com atenção para preservar todas as entregas, rode os testes do módulo afetado com run_shell e só então faça commit + push.
 6. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado e testado.
-7. PÓS-MERGE JIRA (OBRIGATÓRIO): sempre que realizar merge de um PR via github_merge_pr e houver task do Jira citada no PR ou no pedido (ex.: PROJ-123), passe jira_key em github_merge_pr e garanta que a task foi movida para Concluído/Done (use jira_transition se a atualização automática não concluir), reportando isso no resumo final.`,
+7. PÓS-MERGE JIRA (OBRIGATÓRIO): sempre que realizar merge de um PR via github_merge_pr e houver task do Jira citada no PR ou no pedido (ex.: PROJ-123), passe jira_key em github_merge_pr e garanta que a task foi movida para Concluído/Done (use jira_transition se a atualização automática não concluir), reportando isso no resumo final.
+8. LISTA DE TAREFAS (update_tasks): em tarefas com 3+ etapas (revisão complexa, implementação ou investigação), chame update_tasks logo ao definir os passos (com o 1º em "in_progress") e atualize conforme concluir cada etapa até todas ficarem "done".`,
 			chief.Instructions, chief.Name, reviewRule)
 	case "plan":
 		triageInstr = fmt.Sprintf(`%s

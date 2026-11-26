@@ -67,7 +67,9 @@ type Deps struct {
 	// SkillLookup resolve o corpo completo de uma skill pelo nome para a tool
 	// read_skill (progressive disclosure). Quando nil, read_skill não é exposta.
 	SkillLookup func(name string) (skillx.Skill, string, bool)
-	tracker     *fileReadTracker
+	// OnTasks recebe atualizações da lista de tarefas ao vivo (update_tasks).
+	OnTasks func(tasks []TaskItem)
+	tracker *fileReadTracker
 }
 
 type fileReadTracker struct {
@@ -331,6 +333,11 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 	}
 	if deps.SkillLookup != nil {
 		if err := add(deps.canReadSkill()); err != nil {
+			return nil, err
+		}
+	}
+	if deps.OnTasks != nil {
+		if err := add(deps.updateTasks()); err != nil {
 			return nil, err
 		}
 	}

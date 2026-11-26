@@ -518,7 +518,8 @@ export function attachImageFiles(files: FileList | File[]) {
 }
 
 export function messageDigest(m: ChatMessage): string {
-  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.modelLabel || ""}|${m.modelFullId || ""}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${m.text.length}|${m.text.slice(-16)}`;
+  const tasksSig = m.tasks ? m.tasks.map((t) => `${t.status}:${t.title}`).join(",") : "";
+  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.modelLabel || ""}|${m.modelFullId || ""}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${tasksSig}|${m.updatedAtText || ""}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function chiefBadgeHtml(m: ChatMessage): string {
@@ -863,6 +864,45 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     el.className = "msg-card role-tool tool-minimal";
     const wasOpen = el.querySelector("details")?.hasAttribute("open") ?? false;
     el.innerHTML = renderMinimalToolHtml(m, wasOpen);
+    return;
+  }
+
+  if (m.kind === "tasks") {
+    el.className = "msg-card role-tasks";
+    const tasks = Array.isArray(m.tasks) ? m.tasks : [];
+    const doneCount = tasks.filter((t) => t.status === "done").length;
+    const current = tasks.find((t) => t.status === "in_progress") || tasks.find((t) => t.status === "pending");
+    const existingDet = el.querySelector("details.task-checklist");
+    const isOpen = existingDet ? existingDet.hasAttribute("open") : true;
+    const headerSuffix = current ? ` · ${current.title}` : doneCount === tasks.length && tasks.length > 0 ? " · Concluído" : "";
+    const timeHtml = m.updatedAtText ? `<span class="task-checklist-time">${escapeHtml(m.updatedAtText)}</span>` : "";
+    const statusIcon = (st: string) => {
+      switch (st) {
+        case "done": return `<span class="task-ic is-done">${icons.check}</span>`;
+        case "in_progress": return `<span class="task-ic is-in_progress">${icons.target}</span>`;
+        case "failed": return `<span class="task-ic is-failed">${icons.closeSmall}</span>`;
+        case "skipped": return `<span class="task-ic is-skipped">${icons.minus}</span>`;
+        default: return `<span class="task-ic is-pending"><span class="task-ring"></span></span>`;
+      }
+    };
+    const itemsHtml = tasks.map((t) => `
+      <li class="task-checklist-item is-${escapeHtml(t.status)}">
+        ${statusIcon(t.status)}
+        <span class="task-checklist-item-text">${escapeHtml(t.title)}</span>
+      </li>
+    `).join("");
+    el.innerHTML = `
+      <details class="task-checklist ${m.active ? "is-active" : ""}" ${isOpen ? "open" : ""}>
+        <summary class="task-checklist-summary">
+          <span class="task-checklist-lead">${icons.plan}</span>
+          <span class="task-checklist-title">Tarefas <span class="task-checklist-count">${doneCount}/${tasks.length}</span>${escapeHtml(headerSuffix)}</span>
+          <span class="spacer"></span>
+          ${timeHtml}
+          <span class="task-checklist-chev">${icons.chevronDown}</span>
+        </summary>
+        <ul class="task-checklist-list">${itemsHtml}</ul>
+      </details>
+    `;
     return;
   }
 

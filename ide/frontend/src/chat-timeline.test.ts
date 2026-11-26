@@ -139,4 +139,15 @@ describe("autoResizeTextarea", () => {
     expect(fakeEl.style.height).toBe("180px");
     expect(fakeEl.style.overflowY).toBe("auto");
   });
+
+  it("mantém cartão de tarefas (kind=tasks) visível fora do bloco recolhido de atividade", () => {
+    const items = groupConversationItems([
+      msg({ id: "u1", kind: "user", label: "Você", text: "implementar feature" }),
+      msg({ id: "t1", kind: "thinking", label: "Pensando", text: "lendo arquivos" }),
+      msg({ id: "tk1", kind: "tasks", label: "Tarefas", text: "" }),
+      msg({ id: "tl1", kind: "tool", label: "Chefe", toolName: "read_file", text: "read_file" }),
+    ], true);
+    expect(items.map((i) => i.kind)).toEqual(["message", "activity", "message", "activity"]);
+    expect(items[2].kind === "message" && items[2].message.kind).toBe("tasks");
+  });
 });

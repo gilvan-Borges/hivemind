@@ -271,6 +271,41 @@ export async function boot() {
       noteActivity({ laneId: lane.id, kind: "tool_call", toolName: ev.toolName, stage: lane.stage, author: ev.author });
     } else if (ev.kind === "tool_result") {
       markToolsDone(lane, ev.detail || "", ev.toolName);
+    } else if (ev.kind === "tasks_updated" && Array.isArray(ev.tasks)) {
+      const tasks = ev.tasks
+        .map((t: { title?: string; status?: string }) => ({
+          title: String(t?.title || "").trim(),
+          status: (String(t?.status || "pending").trim() || "pending") as "pending" | "in_progress" | "done" | "failed" | "skipped",
+        }))
+        .filter((t: { title: string }) => t.title.length > 0);
+      if (tasks.length > 0) {
+        const hhmm = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+        const hasActive = tasks.some((t: { status: string }) => t.status === "in_progress");
+        let existing: ChatMessage | undefined;
+        for (let i = lane.messages.length - 1; i >= 0; i--) {
+          if (lane.messages[i].kind === "user") break;
+          if (lane.messages[i].kind === "tasks") {
+            existing = lane.messages[i];
+            break;
+          }
+        }
+        if (existing) {
+          existing.tasks = tasks;
+          existing.active = hasActive;
+          existing.updatedAtText = hhmm;
+        } else {
+          lane.messages.push({
+            id: `tasks-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            kind: "tasks",
+            label: "Tarefas",
+            text: "",
+            tasks,
+            active: hasActive,
+            updatedAtText: hhmm,
+            startedAt: Date.now(),
+          });
+        }
+      }
     } else if (ev.kind === "text" && !ev.thought && ev.text) {
       const sanitized = sanitizeAssistantText(String(ev.text));
       if (!sanitized) {
@@ -356,6 +391,9 @@ export async function boot() {
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      for (const m of lane.messages) {
+        if (m.kind === "tasks") m.active = false;
+      }
       const stageNow = lane.stage || "";
       const wasSolo = isCurrentTurnSolo(lane);
       if (lane.stage && !lane.doneStages.includes(lane.stage)) {
