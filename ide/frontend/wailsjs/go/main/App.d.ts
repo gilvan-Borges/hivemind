@@ -208,6 +208,8 @@ export function MobilePairing():Promise<remote.PairingInfo>;
 
 export function OpenExternalURL(arg1:string):Promise<void>;
 
+export function OpenLocalFile(arg1:string,arg2:string):Promise<void>;
+
 export function OpenPR(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function OpenProject(arg1:string):Promise<main.ProjectInfo>;
@@ -235,6 +237,8 @@ export function PruneWorktrees(arg1:string):Promise<gitx.PruneResult>;
 export function QuitAll():Promise<void>;
 
 export function ReadFile(arg1:string,arg2:string):Promise<string>;
+
+export function ReadLocalMedia(arg1:string,arg2:string):Promise<string>;
 
 export function ReadNativeSkill(arg1:string):Promise<string>;
 

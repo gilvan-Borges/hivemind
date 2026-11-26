@@ -386,6 +386,10 @@ export function OpenExternalURL(arg1) {
   return window['go']['main']['App']['OpenExternalURL'](arg1);
 }
 
+export function OpenLocalFile(arg1, arg2) {
+  return window['go']['main']['App']['OpenLocalFile'](arg1, arg2);
+}
+
 export function OpenPR(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['OpenPR'](arg1, arg2, arg3, arg4);
 }
@@ -440,6 +444,10 @@ export function QuitAll() {
 
 export function ReadFile(arg1, arg2) {
   return window['go']['main']['App']['ReadFile'](arg1, arg2);
+}
+
+export function ReadLocalMedia(arg1, arg2) {
+  return window['go']['main']['App']['ReadLocalMedia'](arg1, arg2);
 }
 
 export function ReadNativeSkill(arg1) {

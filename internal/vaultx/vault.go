@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gilvan-Borges/HiveMind/internal/atomicx"
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 const (
@@ -122,6 +123,7 @@ func EnsureGitExclude(root string) error {
 		return nil
 	}
 	cmd := exec.Command("git", "-C", root, "rev-parse", "--git-common-dir")
+	procx.HideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

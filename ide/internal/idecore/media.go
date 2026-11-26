@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gilvan-Borges/HiveMind/internal/pathsec"
+	"github.com/gilvan-Borges/HiveMind/internal/procx"
 )
 
 const maxLocalMediaBytes = 12 << 20 // 12 MB
@@ -143,5 +144,6 @@ func OpenLocalFile(workspace, rawPath string) error {
 	default:
 		cmd = exec.Command("xdg-open", abs)
 	}
+	procx.HideWindow(cmd)
 	return cmd.Start()
 }

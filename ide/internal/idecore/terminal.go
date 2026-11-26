@@ -46,7 +46,7 @@ func RunWorkspaceCommandStream(ctx context.Context, workspace, command string, o
 	start := time.Now()
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", trimmed)
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", trimmed)
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", trimmed)
 	}

@@ -59,7 +59,7 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 	if dec.UseShell {
 		if runtime.GOOS == "windows" {
 			psCmd := sanitizeWindowsPowerShellCommand(command)
-			cmd = exec.CommandContext(runCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+			cmd = exec.CommandContext(runCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", psCmd)
 		} else {
 			cmd = exec.CommandContext(runCtx, "sh", "-c", command)
 		}
