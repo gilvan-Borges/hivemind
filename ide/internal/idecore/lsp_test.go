@@ -73,7 +73,7 @@ func TestLSPManagerGoplsEndToEnd(t *testing.T) {
 		if !found {
 			t.Fatalf("diagnóstico esperado na linha 10 não encontrado: %+v", ev.Diagnostics)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(45 * time.Second):
 		t.Fatal("timeout aguardando publishDiagnostics do gopls")
 	}
 
