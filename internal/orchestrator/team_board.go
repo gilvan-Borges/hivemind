@@ -13,6 +13,8 @@ import (
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
+
+	"github.com/gilvan-Borges/HiveMind/internal/vaultx"
 )
 
 // TeamNote is a structured contract or coordination signal published between developers,
@@ -47,6 +49,10 @@ type TeamBoard struct {
 	trail      map[string][]string
 	notes      []TeamNote
 	directives []TeamDirective
+	qaFailures []string
+	vaultRoot  string
+	vaultBr    string
+	vaultObj   string
 }
 
 func newTeamBoard() *TeamBoard {
@@ -94,6 +100,72 @@ func (b *TeamBoard) RecentActivity(agentName string) []string {
 	return out
 }
 
+func (b *TeamBoard) SetVaultPersistence(root, branch, objective string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.vaultRoot = strings.TrimSpace(root)
+	b.vaultBr = strings.TrimSpace(branch)
+	b.vaultObj = strings.TrimSpace(objective)
+	snap, vRoot := b.snapshotLocked()
+	b.mu.Unlock()
+	if vRoot != "" {
+		_ = vaultx.SyncSquadBoard(vRoot, snap)
+	}
+}
+
+func (b *TeamBoard) AddQAFailure(note string) {
+	if b == nil {
+		return
+	}
+	clean := strings.TrimSpace(note)
+	if clean == "" {
+		return
+	}
+	b.mu.Lock()
+	b.qaFailures = append(b.qaFailures, clean)
+	if len(b.qaFailures) > 10 {
+		b.qaFailures = append([]string(nil), b.qaFailures[len(b.qaFailures)-10:]...)
+	}
+	snap, vRoot := b.snapshotLocked()
+	b.mu.Unlock()
+	if vRoot != "" {
+		_ = vaultx.SyncSquadBoard(vRoot, snap)
+	}
+}
+
+func (b *TeamBoard) snapshotLocked() (vaultx.SquadBoardSnapshot, string) {
+	if b.vaultRoot == "" {
+		return vaultx.SquadBoardSnapshot{}, ""
+	}
+	owners := make(map[string][]string, len(b.owners))
+	for k, v := range b.owners {
+		owners[k] = append([]string(nil), v...)
+	}
+	touched := make(map[string][]string, len(b.touched))
+	for k, v := range b.touched {
+		touched[k] = append([]string(nil), v...)
+	}
+	notes := make([]vaultx.SquadNote, 0, len(b.notes))
+	for _, n := range b.notes {
+		notes = append(notes, vaultx.SquadNote{Author: n.Author, To: n.To, Topic: n.Topic, Content: n.Content})
+	}
+	dirs := make([]vaultx.SquadDirective, 0, len(b.directives))
+	for _, d := range b.directives {
+		dirs = append(dirs, vaultx.SquadDirective{From: d.From, To: d.To, Content: d.Content})
+	}
+	return vaultx.SquadBoardSnapshot{
+		Objective:  b.vaultObj,
+		Branch:     b.vaultBr,
+		Owners:     owners,
+		Touched:    touched,
+		Notes:      notes,
+		Directives: dirs,
+		QAFailures: append([]string(nil), b.qaFailures...),
+	}, b.vaultRoot
+}
+
 func (b *TeamBoard) PublishDirective(from, to, content string) {
 	if b == nil {
 		return
@@ -111,13 +183,17 @@ func (b *TeamBoard) PublishDirective(from, to, content string) {
 		to = "todos"
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.directives = append(b.directives, TeamDirective{
 		From:      from,
 		To:        to,
 		Content:   content,
 		delivered: make(map[string]bool),
 	})
+	snap, vRoot := b.snapshotLocked()
+	b.mu.Unlock()
+	if vRoot != "" {
+		_ = vaultx.SyncSquadBoard(vRoot, snap)
+	}
 }
 
 func directiveMatchesAgent(target, agentName string) bool {
@@ -202,13 +278,18 @@ func (b *TeamBoard) RecordTouch(agentName, relSlash string) {
 		return
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, existing := range b.touched[agentName] {
 		if existing == rel {
+			b.mu.Unlock()
 			return
 		}
 	}
 	b.touched[agentName] = append(b.touched[agentName], rel)
+	snap, vRoot := b.snapshotLocked()
+	b.mu.Unlock()
+	if vRoot != "" {
+		_ = vaultx.SyncSquadBoard(vRoot, snap)
+	}
 }
 
 func (b *TeamBoard) PublishNote(author, topic, content string, toOpt ...string) {
@@ -229,21 +310,29 @@ func (b *TeamBoard) PublishNote(author, topic, content string, toOpt ...string) 
 		to = strings.TrimSpace(toOpt[0])
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	updated := false
 	// Update existing note with same author+topic so repeated publishes stay compact.
 	for i := range b.notes {
 		if b.notes[i].Author == author && strings.EqualFold(b.notes[i].Topic, topic) {
 			b.notes[i].To = to
 			b.notes[i].Content = content
-			return
+			updated = true
+			break
 		}
 	}
-	b.notes = append(b.notes, TeamNote{
-		Author:  author,
-		To:      to,
-		Topic:   topic,
-		Content: content,
-	})
+	if !updated {
+		b.notes = append(b.notes, TeamNote{
+			Author:  author,
+			To:      to,
+			Topic:   topic,
+			Content: content,
+		})
+	}
+	snap, vRoot := b.snapshotLocked()
+	b.mu.Unlock()
+	if vRoot != "" {
+		_ = vaultx.SyncSquadBoard(vRoot, snap)
+	}
 }
 
 // SummaryFor renders a compact shared-awareness block injected into sibling devs

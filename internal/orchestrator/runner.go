@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/skillx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
+	"github.com/gilvan-Borges/HiveMind/internal/vaultx"
 	"github.com/gilvan-Borges/HiveMind/internal/workerx"
 )
 
@@ -487,6 +489,24 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	}
 	if err := sessionx.CompactOldToolOutputs(sess, 12); err != nil && r.Err != nil {
 		fmt.Fprintf(r.Err, "aviso: falha ao compactar outputs da sessão: %v\n", err)
+	}
+	vaultTarget := r.deliveryRoot
+	if strings.TrimSpace(vaultTarget) == "" {
+		vaultTarget = r.Workspace
+	}
+	if strings.TrimSpace(vaultTarget) != "" && r.Git != nil && r.Git.IsRepo(ctx, vaultTarget) {
+		status := "concluído"
+		if result.PendingQA {
+			status = "pendente QA"
+		}
+		_ = vaultx.AppendLaneNote(vaultTarget, vaultx.LaneEntry{
+			Slot:      r.conversationSlot(),
+			Branch:    r.deliveryBranch,
+			JiraKey:   key,
+			Summary:   result.Summary,
+			Status:    status,
+			Timestamp: time.Now(),
+		})
 	}
 	finishText := fmt.Sprintf("Sessão %s concluída.", result.SessionID)
 	if result.PendingQA {

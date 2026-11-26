@@ -22,6 +22,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
+	"github.com/gilvan-Borges/HiveMind/internal/vaultx"
 	"github.com/gilvan-Borges/HiveMind/internal/workspace"
 )
 
@@ -214,6 +215,18 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
 		if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
 			toolRoot = slotWT
+		}
+	}
+	if !sddDocs && !sddJira && !isAutoReview && strings.TrimSpace(toolRoot) != "" {
+		if vSum, vErr := vaultx.GenerateWorktreeVault(vaultx.Options{
+			Root:      toolRoot,
+			Branch:    r.deliveryBranch,
+			LaneSlot:  r.conversationSlot(),
+			Objective: r.objectiveText,
+			JiraKey:   jiraKey,
+			PRNumber:  preloadedPR,
+		}); vErr == nil && vSum.PromptBanner != "" {
+			msg = appendTextToFirstPart(msg, vSum.PromptBanner)
 		}
 	}
 	triageStep := "triage_chief"

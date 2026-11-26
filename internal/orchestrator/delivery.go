@@ -168,6 +168,11 @@ func (r *Runner) prepareDevs(ctx context.Context, key, objective string) ([]devE
 	if r.sharedBoard == nil {
 		r.sharedBoard = newTeamBoard()
 	}
+	boardRoot := r.deliveryRoot
+	if strings.TrimSpace(boardRoot) == "" {
+		boardRoot = r.Workspace
+	}
+	r.sharedBoard.SetVaultPersistence(boardRoot, r.deliveryBranch, objective)
 
 	devNames := make([]string, 0, len(agents))
 	for idx, a := range agents {
