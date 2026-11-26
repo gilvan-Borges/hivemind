@@ -165,7 +165,7 @@ export function mountShell() {
           <button type="button" class="brand-logo titlebar-interactive" id="btn-file-menu" title="Arquivo">${icons.brand}<span>HiveMind</span><span class="brand-suffix">IDE</span></button>
           <div class="dropdown-menu" id="file-menu-dropdown" style="display:none"></div>
         </div>
-        <div class="project-tabs-bar titlebar-interactive" id="project-tabs-bar"></div>
+        <div class="project-tabs-bar" id="project-tabs-bar"></div>
         <button class="title-center-cmd titlebar-interactive" id="btn-quick-open" title="Buscar arquivos (Ctrl+P) ou Comandos (Ctrl+K)">
           ${icons.search}
           <span class="cmd-proj" id="title-cmd-proj">Buscar</span>
@@ -366,7 +366,7 @@ export function bindStaticShellEvents() {
   const titlebar = document.getElementById("titlebar");
   titlebar?.addEventListener("dblclick", (e) => {
     const target = e.target as HTMLElement;
-    if (target.closest(".titlebar-interactive") || target.closest(".win-controls") || target.closest("button")) {
+    if (target.closest(".titlebar-interactive") || target.closest(".win-controls") || target.closest(".project-tab, .project-tab-add") || target.closest("button")) {
       return;
     }
     api()?.WindowToggleMaximize();
