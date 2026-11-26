@@ -34,6 +34,10 @@ func appendTextToFirstPart(msg *genai.Content, extra string) *genai.Content {
 }
 
 func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira, isAutoReview bool, isDirectOpt ...bool) ([]tool.Tool, error) {
+	return r.buildTriageBaseToolsWithGitHub(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, r.GitHub, isDirectOpt...)
+}
+
+func (r *Runner) buildTriageBaseToolsWithGitHub(toolRoot, jiraKey string, sddDocs, sddJira, isAutoReview bool, reviewGH githubx.Client, isDirectOpt ...bool) ([]tool.Tool, error) {
 	isDirect := len(isDirectOpt) > 0 && isDirectOpt[0]
 	if sddDocs {
 		return tools.ForRole(team.RoleProjectManager, tools.Deps{
@@ -80,6 +84,9 @@ func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira
 		role = team.RoleArchitect
 		disableGitWrite = false
 	}
+	if reviewGH == nil {
+		reviewGH = r.GitHub
+	}
 	inEphemeralReviewWT := (r.reviewRequested || isAutoReview) && strings.TrimSpace(toolRoot) != "" && toolRoot != r.Workspace
 	return tools.ForRole(role, tools.Deps{
 		Root:                   toolRoot,
@@ -95,7 +102,7 @@ func (r *Runner) buildTriageBaseTools(toolRoot, jiraKey string, sddDocs, sddJira
 		Confirm:                r.Confirm,
 		Approve:                r.Approve,
 		Git:                    r.Git,
-		GitHub:                 r.GitHub,
+		GitHub:                 reviewGH,
 		Jira:                   r.Jira,
 		JiraKey:                jiraKey,
 		JiraProject:            r.Project.Settings.JiraProject,

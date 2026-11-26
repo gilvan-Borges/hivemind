@@ -145,9 +145,10 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		preloadedAllDiffs bool
 		preloadedJiraKey  string
 	)
-	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && r.GitHub != nil && r.GitHub.Enabled() {
+	reviewGH, reviewRepoSlug := r.resolveReviewGitHubAndRepo(ctx, r.objectiveText)
+	if (r.reviewRequested || isAutoReview) && !sddDocs && !sddJira && reviewGH != nil && reviewGH.Enabled() {
 		if prNum := extractReviewPRNumber(r.objectiveText); prNum > 0 {
-			dossier, headRef, isOwn, allComplete := buildPreHydratedPRDossierWithHead(ctx, r.GitHub, prNum)
+			dossier, headRef, isOwn, allComplete := buildPreHydratedPRDossierWithHead(ctx, reviewGH, prNum)
 			if dossier != "" {
 				preloadedPR = prNum
 				preloadedHeadRef = headRef
@@ -176,7 +177,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			ctx,
 			r.Git,
 			r.Workspace,
-			r.jevRepo,
+			reviewRepoSlug,
 			preloadedPR,
 			preloadedHeadRef,
 			r.conversationSlot(),
@@ -261,7 +262,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 
 	isDirect := runMode == "direct"
 	isAuto := runMode == "" || runMode == "auto"
-	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, isDirect || isAuto)
+	allTools, err := r.buildTriageBaseToolsWithGitHub(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, reviewGH, isDirect || isAuto)
 	if err != nil {
 		return false, "", err
 	}

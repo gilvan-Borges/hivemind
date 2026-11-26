@@ -67,6 +67,60 @@ func extractReviewPRNumber(objective string) int {
 	return n
 }
 
+var rePRBracketTag = regexp.MustCompile(`(?i)\bPR\s*#\d+\s*\[([^\]]+)\]`)
+
+// resolveReviewGitHubAndRepo detects when a PR review targets a nested git
+// repository (e.g. "Revisar PR #220 [ipg-mobile]" inside an umbrella workspace)
+// and returns the dedicated githubx.Client and "owner/repo" slug for that nested
+// repository so preloaded dossiers, ephemeral worktrees, and github_* tools all
+// target the right GitHub repo instead of the root repository.
+func (r *Runner) resolveReviewGitHubAndRepo(ctx context.Context, objective string) (githubx.Client, string) {
+	gh := r.GitHub
+	repoSlug := r.jevRepo
+	if r.Git == nil || strings.TrimSpace(r.Workspace) == "" {
+		return gh, repoSlug
+	}
+	nested := gitx.DiscoverNestedRepos(ctx, r.Git, r.Workspace)
+	if len(nested) == 0 {
+		return gh, repoSlug
+	}
+
+	tag := ""
+	if m := rePRBracketTag.FindStringSubmatch(objective); len(m) >= 2 {
+		tag = strings.TrimSpace(m[1])
+	}
+	lowObj := strings.ToLower(objective)
+
+	var matchedDir string
+	for _, nr := range nested {
+		rel := strings.TrimSpace(nr.RelPath)
+		base := filepath.Base(rel)
+		if tag != "" && (strings.EqualFold(tag, rel) || strings.EqualFold(tag, base)) {
+			matchedDir = filepath.Join(r.Workspace, filepath.FromSlash(rel))
+			break
+		}
+		if matchedDir == "" && (strings.Contains(lowObj, "["+strings.ToLower(rel)+"]") || strings.Contains(lowObj, "["+strings.ToLower(base)+"]")) {
+			matchedDir = filepath.Join(r.Workspace, filepath.FromSlash(rel))
+		}
+	}
+	if matchedDir == "" {
+		return gh, repoSlug
+	}
+
+	rootRemoteURL, _ := r.Git.RemoteURL(ctx, r.Workspace)
+	subRemoteURL, err := r.Git.RemoteURL(ctx, matchedDir)
+	if err != nil || strings.TrimSpace(subRemoteURL) == "" {
+		return gh, repoSlug
+	}
+	if owner, repo, ok := githubx.ParseRemoteForConfiguredHosts(strings.TrimSpace(subRemoteURL)); ok {
+		repoSlug = owner + "/" + repo
+	}
+	if subGH := r.githubClientForNestedRepo(strings.TrimSpace(rootRemoteURL), strings.TrimSpace(subRemoteURL)); subGH != nil && subGH.Enabled() {
+		gh = subGH
+	}
+	return gh, repoSlug
+}
+
 // isGeneratedOrLockfile reports whether a file path is a lockfile, minified bundle,
 // snapshot, or generated artifact whose diff should not consume Turn-1 prompt tokens.
 func isGeneratedOrLockfile(filename string) bool {

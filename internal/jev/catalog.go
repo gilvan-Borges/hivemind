@@ -903,7 +903,7 @@ func sanitizeEntries(source string, entries []ModelEntry, now time.Time) []Model
 			if e.DisplayName == "" {
 				e.DisplayName = disp
 			}
-			if curTier != "" {
+			if e.Tier == "" && curTier != "" {
 				e.Tier = curTier
 			}
 			if curQual > e.Quality {

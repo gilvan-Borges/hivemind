@@ -150,3 +150,35 @@ func TestCompositeWorktreeMountsNestedRepoForDevAndCommitsSeparately(t *testing.
 		t.Fatalf("original app-mobile checkout should stay clean, got %q (%v)", string(origBytes), err)
 	}
 }
+
+
+func TestResolveReviewGitHubAndRepoSelectsNestedRepo(t *testing.T) {
+	root := t.TempDir()
+	initNestedOrchestratorRepo(t, root, map[string]string{
+		".gitignore": "app-mobile/\n",
+		"README.md":  "root\n",
+	})
+	mobileDir := filepath.Join(root, "app-mobile")
+	initNestedOrchestratorRepo(t, mobileDir, map[string]string{
+		"pubspec.yaml": "name: app_mobile\n",
+	})
+	g := gitx.Local{}
+	ctx := context.Background()
+	_, _ = g.Run(ctx, root, "remote", "add", "origin", "https://github.com/acme/portal.git")
+	_, _ = g.Run(ctx, mobileDir, "remote", "add", "origin", "https://github.com/acme/app-mobile.git")
+
+	r := &Runner{
+		Workspace: root,
+		Git:       g,
+		GitHub:    githubx.Disabled{Reason: "off"},
+		jevRepo:   "acme/portal",
+	}
+	_, slug := r.resolveReviewGitHubAndRepo(ctx, "Revisar PR #220 [app-mobile] de @reviewer")
+	if slug != "acme/app-mobile" {
+		t.Fatalf("expected acme/app-mobile, got %q", slug)
+	}
+	_, rootSlug := r.resolveReviewGitHubAndRepo(ctx, "Revisar PR #220 [portal] de @reviewer")
+	if rootSlug != "acme/portal" {
+		t.Fatalf("expected acme/portal for root tag, got %q", rootSlug)
+	}
+}
