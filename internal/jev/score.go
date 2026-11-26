@@ -547,7 +547,7 @@ func selectBestInTierWithOpts(
 	// modelo pago/assinatura elegível está disponível com quota.
 	hasPaid := false
 	for i := range buf {
-		if !buf[i].entry.Free {
+		if !isEntryFree(*buf[i].entry) {
 			hasPaid = true
 			break
 		}
@@ -560,7 +560,7 @@ func selectBestInTierWithOpts(
 	for i := range buf {
 		c := &buf[i]
 		e := c.entry
-		if hasPaid && e.Free {
+		if hasPaid && isEntryFree(*e) {
 			continue
 		}
 		costNorm := 0.0
@@ -701,9 +701,19 @@ func isCredentialed(provider string, free bool, health HealthSnapshot) bool {
 	return free && health.Credentials["opencode_free"]
 }
 
+func isEntryFree(e ModelEntry) bool {
+	if e.Free {
+		return true
+	}
+	low := strings.ToLower(strings.TrimSpace(e.Model))
+	return strings.HasSuffix(low, "-free") ||
+		strings.HasSuffix(low, ":free") ||
+		strings.Contains(low, "big-pickle")
+}
+
 func modelIsFree(cat Catalog, provider, model string) bool {
 	e, ok := cat.Lookup(provider, model)
-	return ok && e.Free
+	return ok && isEntryFree(e)
 }
 
 func isEntryCircuitEligible(e ModelEntry, health HealthSnapshot) bool {

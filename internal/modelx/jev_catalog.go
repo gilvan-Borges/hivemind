@@ -110,14 +110,20 @@ func fetchJevOpenCode(ctx context.Context) ([]jev.ModelEntry, error) {
 		if strings.TrimSpace(m.Slug) == "" || !isSupportedOpenCodeGoSlug(m.Slug) {
 			continue
 		}
+		free := isOpenCodeFreeModel(m.Slug)
+		tier := inferOpenCodeTier(m.Slug)
+		if free {
+			tier = jev.TierCheap
+		}
 		out = append(out, jev.ModelEntry{
 			Provider:      "opencode",
 			Model:         "opencode-go:" + m.Slug,
 			ContextLength: 128_000,
 			Capabilities:  jev.Capabilities{Tools: true, Stream: true},
 			DataClass:     jev.DataClassHTTPAPI,
-			Tier:          inferOpenCodeTier(m.Slug),
+			Tier:          tier,
 			Source:        "opencode",
+			Free:          free,
 		})
 	}
 	for _, m := range zenModels {
