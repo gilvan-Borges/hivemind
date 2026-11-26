@@ -171,7 +171,7 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
     }
     case "opencode-go":
       items = [
-        { value: "opencode:auto", label: "auto (Jev escolhe no OpenCode)" },
+        { value: "opencode-go:auto", label: "auto (Jev escolhe no OpenCode Go)" },
         ...(state.openCodeGoModels.length > 0
           ? state.openCodeGoModels.map((m) => ({ value: `opencode-go:${m.slug}`, label: m.slug }))
           : [{ value: "opencode-go:glm-5.3", label: "glm-5.3" }]),
