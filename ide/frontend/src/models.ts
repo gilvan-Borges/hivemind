@@ -85,7 +85,6 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   }
   const agyCount = state.models.length > 0 ? ` (${state.models.length})` : "";
   const goCount = state.openCodeGoModels.length > 0 ? ` (${state.openCodeGoModels.length})` : "";
-  const zenCount = state.openCodeModels.length > 0 ? ` (${state.openCodeModels.length})` : "";
   const allProfiles = state.profilesOverview?.profiles || [];
   const agyProfiles = allProfiles.filter((p) => p.provider === "agy");
   const orProfiles = allProfiles.filter((p) => p.provider === "openrouter");
@@ -101,10 +100,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
   } else {
     out.push({ id: "agy", label: `Antigravity (agy)${agyCount}` });
   }
-  out.push(
-    { id: "opencode-go", label: `OpenCode Go${goCount}` },
-    { id: "opencode", label: `OpenCode Zen${zenCount}` },
-  );
+  out.push({ id: "opencode-go", label: `OpenCode Go${goCount}` });
   ocProfiles.forEach((p, idx) => {
     out.push({ id: `opencode@${p.id}`, label: `OpenCode · Conta ${idx + 1} (${p.name})` });
   });
