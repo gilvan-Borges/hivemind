@@ -1,6 +1,7 @@
 import { icons } from "./icons";
 import { autoResizeTextarea, groupConversationItems, sanitizeAssistantText, summarizeActivityGroup } from "./chat-timeline";
 import { renderMarkdownLite, renderMarkdownStreamed } from "./markdown";
+import { formatPlanAnnotationsFeedback, splitPlanBlocks, type PlanAnnotation } from "./plan-annotator";
 import type { ChatMessage, PermissionMode, RunMode, TeamLane } from "./types";
 import { chipForAgent, cursorToolPhrase, escapeHtml, exactTokens, formatMicroUsd, formatTokens, modelChipHtml, permissionModeLabel, roleHeading, roleLabelPt, runModeLabel, safeImageSrc, splitAssistantBlocks } from "./utils";
 import { refreshSessions } from "./boot";
@@ -24,6 +25,9 @@ const laneIdleWaiters = new Map<string, Array<() => void>>();
 const laneRedirecting = new Set<string>();
 const expandedActivityGroups = new Set<string>();
 const localMediaCache = new Map<string, string>();
+const planAnnotateMode = new Set<string>();
+const planAnnotations = new Map<string, PlanAnnotation[]>();
+const planActiveLineDraft = new Map<string, number>();
 
 function parseLocalHref(rawHref: string): { path: string; line?: number } {
   const lineMatch = rawHref.match(/#L(\d+)/i);
@@ -555,7 +559,10 @@ export function attachImageFiles(files: FileList | File[]) {
 
 export function messageDigest(m: ChatMessage): string {
   const tasksSig = m.tasks ? m.tasks.map((t) => `${t.status}:${t.title}`).join(",") : "";
-  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.modelLabel || ""}|${m.modelFullId || ""}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${tasksSig}|${m.updatedAtText || ""}|${m.text.length}|${m.text.slice(-16)}`;
+  const annSig = m.kind === "plan"
+    ? `${planAnnotateMode.has(m.id) ? 1 : 0}:${planActiveLineDraft.get(m.id) || 0}:${(planAnnotations.get(m.id) || []).map((a) => `${a.id}:${a.line}`).join(",")}`
+    : "";
+  return `${m.kind}|${m.active ? 1 : 0}|${m.solo ? 1 : 0}|${m.approved ? 1 : 0}|${m.resolved || ""}|${m.label}|${m.modelLabel || ""}|${m.modelFullId || ""}|${m.tokens || 0}|${m.durationMs || 0}|${m.stepCount || 0}|${m.toolDetail?.length || 0}|${m.toolOutput?.length || 0}|${m.images?.length || 0}|${m.diffItems?.length || 0}|${tasksSig}|${annSig}|${m.updatedAtText || ""}|${m.text.length}|${m.text.slice(-16)}`;
 }
 
 function chiefBadgeHtml(m: ChatMessage): string {
@@ -1008,14 +1015,123 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
         executeApprovedPlan();
       };
     }
+    const isAnnotating = !m.approved && planAnnotateMode.has(m.id);
+    const anns = planAnnotations.get(m.id) || [];
+    const activeLine = planActiveLineDraft.get(m.id) || 0;
+    const annotateBtnHtml = !m.approved
+      ? `<button type="button" class="mini ${isAnnotating ? "active" : ""}" data-toggle-annotate-plan="${escapeHtml(m.id)}" title="Anotar trechos do plano e devolver feedback estruturado">${icons.editPen}<span>${isAnnotating ? "Fechar anotações" : `Anotar${anns.length > 0 ? ` (${anns.length})` : ""}`}</span></button>`
+      : "";
+
+    let bodyHtml = `<div class="msg-body">${renderMarkdownLite(m.text)}</div>`;
+    if (isAnnotating) {
+      const blocks = splitPlanBlocks(m.text);
+      const rowsHtml = blocks.map((b) => {
+        const lineAnns = anns.filter((a) => a.line === b.line);
+        const chipsHtml = lineAnns.map((a) => `
+          <div class="plan-ann-chip">
+            <span class="plan-ann-chip-text">${escapeHtml(a.comment)}</span>
+            <button type="button" class="plan-ann-del" data-del-plan-ann="${escapeHtml(a.id)}" title="Remover anotação">${icons.closeSmall}</button>
+          </div>
+        `).join("");
+        const editorHtml = activeLine === b.line ? `
+          <div class="plan-ann-editor">
+            <input type="text" class="plan-ann-input" data-plan-ann-input="${b.line}" placeholder="Escreva o ajuste para L${b.line}..." />
+            <button type="button" class="mini primary" data-save-plan-ann="${b.line}">Salvar</button>
+          </div>
+        ` : "";
+        return `
+          <div class="plan-ann-block">
+            <div class="plan-ann-row ${b.isHeading ? "is-heading" : ""}">
+              <span class="plan-ann-num">L${b.line}</span>
+              <span class="plan-ann-text">${escapeHtml(b.text)}</span>
+              <button type="button" class="plan-ann-add" data-add-plan-ann="${b.line}" title="Anotar linha L${b.line}">${icons.plus}</button>
+            </div>
+            ${chipsHtml}
+            ${editorHtml}
+          </div>
+        `;
+      }).join("");
+      const footerHtml = anns.length > 0 ? `
+        <div class="plan-ann-footer">
+          <span class="plan-ann-count">${anns.length} anotação${anns.length === 1 ? "" : "ões"} pronta${anns.length === 1 ? "" : "s"}</span>
+          <button type="button" class="mini primary" data-send-plan-feedback="1">${icons.send}<span>Enviar feedback ao Chefe</span></button>
+        </div>
+      ` : `<div class="plan-ann-footer"><span class="plan-ann-count">Clique em + em qualquer linha para anotar</span></div>`;
+      bodyHtml = `<div class="plan-ann-lines">${rowsHtml}</div>${footerHtml}`;
+    }
+
     el.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <span class="msg-badge badge-chief" style="margin-bottom:0">${icons.plan}<span>${escapeHtml(m.label)}</span></span>
-        ${actionHtml}
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${annotateBtnHtml}
+          ${actionHtml}
+        </div>
       </div>
-      <div class="msg-body">${renderMarkdownLite(m.text)}</div>
+      ${bodyHtml}
     `;
     el.querySelector("[data-approve-plan]")?.addEventListener("click", () => actionHandler?.());
+    el.querySelector("[data-toggle-annotate-plan]")?.addEventListener("click", () => {
+      if (planAnnotateMode.has(m.id)) {
+        planAnnotateMode.delete(m.id);
+        planActiveLineDraft.delete(m.id);
+      } else {
+        planAnnotateMode.add(m.id);
+      }
+      updateMessageElement(el, m);
+    });
+    el.querySelectorAll<HTMLElement>("[data-add-plan-ann]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const line = Number(btn.dataset.addPlanAnn || 0);
+        if (!line) return;
+        planActiveLineDraft.set(m.id, activeLine === line ? 0 : line);
+        updateMessageElement(el, m);
+        el.querySelector<HTMLInputElement>(`[data-plan-ann-input="${line}"]`)?.focus();
+      });
+    });
+    el.querySelectorAll<HTMLElement>("[data-save-plan-ann]").forEach((btn) => {
+      const saveLine = () => {
+        const line = Number(btn.dataset.savePlanAnn || 0);
+        const inp = el.querySelector<HTMLInputElement>(`[data-plan-ann-input="${line}"]`);
+        const comment = (inp?.value || "").trim();
+        if (!line || !comment) return;
+        const blk = splitPlanBlocks(m.text).find((x) => x.line === line);
+        const list = [...(planAnnotations.get(m.id) || [])];
+        list.push({ id: `pa-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, line, quote: blk?.text || "", comment });
+        planAnnotations.set(m.id, list);
+        planActiveLineDraft.delete(m.id);
+        updateMessageElement(el, m);
+      };
+      btn.addEventListener("click", saveLine);
+      const line = Number(btn.dataset.savePlanAnn || 0);
+      el.querySelector<HTMLInputElement>(`[data-plan-ann-input="${line}"]`)?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          saveLine();
+        } else if (ev.key === "Escape") {
+          planActiveLineDraft.delete(m.id);
+          updateMessageElement(el, m);
+        }
+      });
+    });
+    el.querySelectorAll<HTMLElement>("[data-del-plan-ann]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.delPlanAnn || "";
+        const next = (planAnnotations.get(m.id) || []).filter((a) => a.id !== id);
+        if (next.length > 0) planAnnotations.set(m.id, next);
+        else planAnnotations.delete(m.id);
+        updateMessageElement(el, m);
+      });
+    });
+    el.querySelector("[data-send-plan-feedback]")?.addEventListener("click", () => {
+      const feedback = formatPlanAnnotationsFeedback(planAnnotations.get(m.id) || []);
+      if (!feedback) return;
+      planAnnotations.delete(m.id);
+      planAnnotateMode.delete(m.id);
+      planActiveLineDraft.delete(m.id);
+      updateMessageElement(el, m);
+      void sendToChief(feedback, state.runMode === "plan:sdd" ? "plan:sdd" : "plan");
+    });
     return;
   }
 

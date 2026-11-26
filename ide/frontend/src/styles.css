@@ -9254,6 +9254,127 @@ body.is-orb-mode #app {
 .tool-minimal-dur.is-live {
   color: var(--accent-strong);
 }
+.plan-ann-lines {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.plan-ann-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plan-ann-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.plan-ann-row:hover {
+  background: var(--surface-elevated);
+  border-color: var(--border-divider);
+}
+.plan-ann-row.is-heading .plan-ann-text {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.plan-ann-num {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  min-width: 24px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.plan-ann-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.plan-ann-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--border-divider);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.plan-ann-add:hover {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+.plan-ann-chip {
+  margin-left: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  font-size: 11.5px;
+}
+.plan-ann-chip-text {
+  flex: 1;
+  min-width: 0;
+}
+.plan-ann-del {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+}
+.plan-ann-del:hover {
+  color: var(--status-err);
+}
+.plan-ann-editor {
+  margin-left: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.plan-ann-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-control);
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.plan-ann-footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-divider);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plan-ann-count {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 .activity-fold[open] .activity-fold-chev {
   transform: rotate(180deg);
 }
