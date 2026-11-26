@@ -126,13 +126,16 @@ export async function boot() {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);
       const totTok = Number(ev.tokens || inTok + outTok);
+      const cachedTok = Number(ev.cachedReadTokens || 0);
       const costMicro = Number(ev.costMicroUsd || 0);
       lane.turnInTokens += inTok;
       lane.turnOutTokens += outTok;
       lane.turnTotalTokens += totTok;
+      lane.turnCachedTokens = (lane.turnCachedTokens || 0) + cachedTok;
       lane.sessionInTokens += inTok;
       lane.sessionOutTokens += outTok;
       lane.sessionTotalTokens += totTok;
+      lane.sessionCachedTokens = (lane.sessionCachedTokens || 0) + cachedTok;
       lane.turnCostMicroUsd = (lane.turnCostMicroUsd || 0) + costMicro;
       lane.sessionCostMicroUsd = (lane.sessionCostMicroUsd || 0) + costMicro;
       if (costMicro > 0) {
@@ -149,12 +152,21 @@ export async function boot() {
         ag.inTokens += inTok;
         ag.outTokens += outTok;
         ag.tokens += totTok;
+        ag.cachedReadTokens = (ag.cachedReadTokens || 0) + cachedTok;
         ag.calls += 1;
         ag.costMicroUsd = (ag.costMicroUsd || 0) + costMicro;
       }
       if (isActiveProject) {
         updateStatusBar();
         renderTokenBar();
+      }
+    } else if (ev.kind === "compact") {
+      const saved = Number(ev.tokens || 0);
+      if (saved > 0) {
+        lane.turnSavedTokens = (lane.turnSavedTokens || 0) + saved;
+        lane.sessionSavedTokens = (lane.sessionSavedTokens || 0) + saved;
+        const ag = matchAgentRuntime(lane.agents, ev.author, ev.label);
+        if (ag) ag.savedTokens = (ag.savedTokens || 0) + saved;
       }
     } else if (ev.kind === "plan_ready") {
       markToolsDone(lane);

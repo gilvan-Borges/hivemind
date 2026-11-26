@@ -266,6 +266,8 @@ export interface AgentRuntime {
   inTokens: number;
   outTokens: number;
   tokens: number;
+  cachedReadTokens?: number;
+  savedTokens?: number;
   calls: number;
   costMicroUsd?: number;
 }
@@ -286,9 +288,13 @@ export interface TeamLane {
   turnInTokens: number;
   turnOutTokens: number;
   turnTotalTokens: number;
+  turnCachedTokens?: number;
+  turnSavedTokens?: number;
   sessionInTokens: number;
   sessionOutTokens: number;
   sessionTotalTokens: number;
+  sessionCachedTokens?: number;
+  sessionSavedTokens?: number;
   turnCostMicroUsd: number;
   sessionCostMicroUsd: number;
   costByRole: Record<string, number>;

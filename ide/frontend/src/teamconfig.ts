@@ -1,5 +1,5 @@
 import { icons } from "./icons";
-import type { AgentRuntime, PermissionMode, SkillTargetRole } from "./types";
+import type { AgentRuntime, PermissionMode, SkillTargetRole, TeamLane } from "./types";
 import { escapeHtml, exactTokens, formatElapsedDuration, roleLabelPt, runModeLabel } from "./utils";
 import { refreshSessions } from "./boot";
 import { renderTokenBar } from "./chat";
@@ -143,6 +143,23 @@ function renderMissionAgentStatusContent(agent: AgentRuntime, laneRunning = Bool
   return "pronto";
 }
 
+function formatMissionHeaderSummaryHtml(lane: TeamLane | undefined, projTotal: number): string {
+  const sessBruto = lane?.sessionTotalTokens || 0;
+  const sessCache = lane?.sessionCachedTokens || 0;
+  const sessSaved = lane?.sessionSavedTokens || 0;
+  const sessReal = Math.max(0, sessBruto - sessCache);
+  const avoided = sessCache + sessSaved;
+  return `Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(sessBruto)} tok</strong> (Real: <strong>${exactTokens(sessReal)}</strong> · Cache: <strong>${exactTokens(sessCache)}</strong> · Evitados: <strong>~${exactTokens(avoided)}</strong>) · Projeto: <strong>${exactTokens(projTotal)} tok</strong>`;
+}
+
+function formatAgentInOutText(a: { inTokens: number; outTokens: number; cachedReadTokens?: number; savedTokens?: number }): string {
+  const cache = a.cachedReadTokens || 0;
+  const saved = a.savedTokens || 0;
+  const realIn = Math.max(0, a.inTokens - cache);
+  const avoided = cache + saved;
+  return `Real (sem cache): ${exactTokens(realIn)} · Cache: ${exactTokens(cache)} · Saída: ${exactTokens(a.outTokens)}${avoided > 0 ? ` · Evitados: ~${exactTokens(avoided)}` : ""}`;
+}
+
 export function renderMissionBoardHtml(): string {
   const lane = activeLane();
   const agents = lane?.agents || [];
@@ -158,7 +175,7 @@ export function renderMissionBoardHtml(): string {
             <span>Quadro de Controle Multiagente — ${escapeHtml(lane?.teamName || "principal")}</span>
           </div>
           <div class="dim" style="margin-top:4px" id="mc-header-summary">
-            Modo ativo: <strong>${escapeHtml(runModeLabel(state.runMode))}</strong> · Sessão: <strong>${exactTokens(lane?.sessionTotalTokens)} tok</strong> · Projeto: <strong>${exactTokens(projTotal)} tok</strong>
+            ${formatMissionHeaderSummaryHtml(lane, projTotal)}
           </div>
         </div>
         <div style="display:flex;gap:7px;flex-wrap:wrap">
@@ -206,7 +223,7 @@ export function renderMissionBoardHtml(): string {
                 <div class="mc-tok-fill" data-mc-fill="${escapeHtml(a.name)}" style="width:${pct}%"></div>
               </div>
               <div class="dim" style="font-size:10.5px;font-family:var(--mono)" data-mc-inout="${escapeHtml(a.name)}">
-                Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}
+                ${formatAgentInOutText(a)}
               </div>
             </div>
           `;
@@ -271,7 +288,12 @@ export function updateMissionBoardIfOpen() {
     const fill = root.querySelector<HTMLElement>(`[data-mc-fill="${esc}"]`);
     if (fill) fill.style.width = `${pct}%`;
     const inout = root.querySelector<HTMLElement>(`[data-mc-inout="${esc}"]`);
-    if (inout) inout.textContent = `Entrada: ${exactTokens(a.inTokens)} · Saída: ${exactTokens(a.outTokens)}`;
+    if (inout) inout.textContent = formatAgentInOutText(a);
+  }
+  const hdr = document.getElementById("mc-header-summary");
+  if (hdr) {
+    const projTotal = Math.max(state.sessionsSummary.projectTotalTokens, lane?.sessionTotalTokens || 0);
+    hdr.innerHTML = formatMissionHeaderSummaryHtml(lane, projTotal);
   }
   if (root.querySelector("[data-agent-running-since]")) ensureThinkingTicker();
 }

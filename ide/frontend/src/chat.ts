@@ -464,6 +464,13 @@ export function renderTokenBar() {
   const lane = activeLane();
   if (!tokEl || !lane) return;
   const sessTok = lane.sessionTotalTokens || 0;
+  const sessCache = lane.sessionCachedTokens || 0;
+  const sessSaved = lane.sessionSavedTokens || 0;
+  const sessReal = Math.max(0, sessTok - sessCache);
+  const turnCache = lane.turnCachedTokens || 0;
+  const turnSaved = lane.turnSavedTokens || 0;
+  const turnReal = Math.max(0, (lane.turnTotalTokens || 0) - turnCache);
+  const avoidedSess = sessCache + sessSaved;
   const turnCost = Number(lane.turnCostMicroUsd || 0);
   const sessCost = Number(lane.sessionCostMicroUsd || 0);
   const roleParts = Object.entries(lane.costByRole || {})
@@ -477,10 +484,12 @@ export function renderTokenBar() {
   const costTitle = [roleParts && `Por papel — ${roleParts}`, agentParts && `Por agente — ${agentParts}`]
     .filter(Boolean)
     .join("\n");
-  tokEl.innerHTML = `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
+  tokEl.innerHTML = sessCache > 0
+    ? `${icons.tokens} <span>${formatTokens(sessReal)} real · ${formatTokens(sessTok)} bruto</span>`
+    : `${icons.tokens} <span>${formatTokens(sessTok)} tok</span>`;
   tokEl.title = [
-    `Turno: ${exactTokens(lane.turnTotalTokens)} (↑${exactTokens(lane.turnInTokens)} ↓${exactTokens(lane.turnOutTokens)})`,
-    `Sessão ${lane.sessionId || "nova"}: ${exactTokens(sessTok)} (↑${exactTokens(lane.sessionInTokens)} ↓${exactTokens(lane.sessionOutTokens)})`,
+    `Turno: ${exactTokens(lane.turnTotalTokens)} bruto (Real: ${exactTokens(turnReal)} · Cache: ${exactTokens(turnCache)} · Evitados: ~${exactTokens(turnCache + turnSaved)})`,
+    `Sessão ${lane.sessionId || "nova"}: ${exactTokens(sessTok)} bruto (Real: ${exactTokens(sessReal)} · Cache: ${exactTokens(sessCache)} · Compactação: ${exactTokens(sessSaved)} · Evitados: ~${exactTokens(avoidedSess)})`,
     turnCost > 0 || sessCost > 0 ? `USD turno ${formatMicroUsd(turnCost)} · sessão ${formatMicroUsd(sessCost)}` : "",
     costTitle,
     "Clique para abrir Sessões",
@@ -1913,6 +1922,8 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   lane.turnInTokens = 0;
   lane.turnOutTokens = 0;
   lane.turnTotalTokens = 0;
+  lane.turnCachedTokens = 0;
+  lane.turnSavedTokens = 0;
   lane.turnCostMicroUsd = 0;
   lane.costByRole = {};
   lane.agents.forEach((a) => {
