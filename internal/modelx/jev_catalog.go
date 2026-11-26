@@ -107,7 +107,7 @@ func fetchJevOpenCode(ctx context.Context) ([]jev.ModelEntry, error) {
 	_, goModels, zenModels := ProbeAndListOpenCode(ctx)
 	out := make([]jev.ModelEntry, 0, len(goModels)+len(zenModels))
 	for _, m := range goModels {
-		if strings.TrimSpace(m.Slug) == "" {
+		if strings.TrimSpace(m.Slug) == "" || !isSupportedOpenCodeGoSlug(m.Slug) {
 			continue
 		}
 		out = append(out, jev.ModelEntry{
@@ -141,6 +141,11 @@ func fetchJevOpenCode(ctx context.Context) ([]jev.ModelEntry, error) {
 		})
 	}
 	return out, nil
+}
+
+func isSupportedOpenCodeGoSlug(slug string) bool {
+	low := strings.ToLower(strings.TrimSpace(slug))
+	return low != "" && !strings.Contains(low, "embedding")
 }
 
 func inferOpenCodeTier(slug string) jev.Tier {

@@ -996,22 +996,27 @@ func (m *SessionManager) RunTurnWithOptions(
 		Attachments: attachments,
 	})
 	if runErr == nil && (res.IntegrationBranch != "" || res.DeliveryBranch != "") && !res.PendingQA {
-		// Never copy integration output over uncommitted user work. A dirty
-		// workspace makes SyncWorktreeToWorkspace return ErrWorkspaceDirty
-		// without touching a single file; the user is told what happened.
-		syncBranch := res.DeliveryBranch
-		if syncBranch == "" {
-			syncBranch = res.IntegrationBranch
-		}
-		n, syncErr := SyncWorktreeToWorkspace(ctx, workspaceDir, res.WorktreeDir, syncBranch)
-		for _, nd := range res.NestedDeliveries {
-			if syncErr != nil {
-				break
+		// Never copy integration output over uncommitted user work, and never
+		// dirty the local base branch when a PR was already committed and pushed.
+		var (
+			n       int
+			syncErr error
+		)
+		if len(res.PullRequests) == 0 {
+			syncBranch := res.DeliveryBranch
+			if syncBranch == "" {
+				syncBranch = res.IntegrationBranch
 			}
-			sn, sErr := SyncWorktreeToWorkspace(ctx, nd.RepoDir, nd.WorktreeDir, nd.Branch)
-			n += sn
-			if sErr != nil {
-				syncErr = sErr
+			n, syncErr = SyncWorktreeToWorkspace(ctx, workspaceDir, res.WorktreeDir, syncBranch)
+			for _, nd := range res.NestedDeliveries {
+				if syncErr != nil {
+					break
+				}
+				sn, sErr := SyncWorktreeToWorkspace(ctx, nd.RepoDir, nd.WorktreeDir, nd.Branch)
+				n += sn
+				if sErr != nil {
+					syncErr = sErr
+				}
 			}
 		}
 		if syncErr == nil {

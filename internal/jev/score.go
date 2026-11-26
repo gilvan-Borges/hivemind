@@ -543,7 +543,16 @@ func selectBestInTierWithOpts(
 		return nil, 0, Refusal{Code: "none_fit", Reason: "nenhum modelo elegível com credencial ativa"}
 	}
 
-	// Pontuação: percorre apenas os elegíveis coletados acima.
+	// Pontuação: modelos gratuitos (Free) só entram como fallback quando nenhum
+	// modelo pago/assinatura elegível está disponível com quota.
+	hasPaid := false
+	for i := range buf {
+		if !buf[i].entry.Free {
+			hasPaid = true
+			break
+		}
+	}
+
 	w := weightsForTask(policy, task)
 	var best *tierCandidate
 	bestScore := math.Inf(-1)
@@ -551,6 +560,9 @@ func selectBestInTierWithOpts(
 	for i := range buf {
 		c := &buf[i]
 		e := c.entry
+		if hasPaid && e.Free {
+			continue
+		}
 		costNorm := 0.0
 		if maxCost > 0 {
 			costNorm = c.estExact / maxCost
