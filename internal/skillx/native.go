@@ -86,7 +86,8 @@ func SeedProductSkills(dir string) (seeded []string, err error) {
 				if strings.Contains(cur, "Não é: mobile, extensão") ||
 					(strings.Contains(cur, "Proibido escrever `Superfícies:") &&
 						(!strings.Contains(cur, "Pós-merge: atualizar a task no Jira") ||
-							!strings.Contains(cur, "Mudanças de Frontend / Visual"))) {
+							!strings.Contains(cur, "Mudanças de Frontend / Visual") ||
+							!strings.Contains(cur, "uv run pytest"))) {
 					_ = os.WriteFile(dest, body, 0o644)
 				}
 			}

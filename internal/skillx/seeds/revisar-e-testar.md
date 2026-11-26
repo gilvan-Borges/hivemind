@@ -22,13 +22,14 @@ Inspecione os arquivos alterados no PR e identifique os módulos/serviços tocad
 | Java / Kotlin / Android (`build.gradle*`) | `./gradlew --no-daemon :modulo:test` (ou `testDebugUnitTest` em Android) |
 | Go (`go.mod`, `*.go`) | `go test -count=1 ./caminho/do/pacote/...` |
 | Node / TypeScript (`package.json`, `*.ts`, `*.tsx`, `*.js`) | `npm test` (ou `pnpm test` / `npx vitest run <arquivo>`) no pacote tocado |
-| Python (`pyproject.toml`, `*.py`) | `pytest <caminho_dos_testes>` |
+| Python (`pyproject.toml`, `*.py`) | `uv run pytest <caminho_dos_testes>` (ou `.venv/Scripts/pytest` / `pytest <caminho_dos_testes>`) |
 | Rust (`Cargo.toml`, `*.rs`) | `cargo test -p <crate>` |
 | .NET (`*.csproj`, `*.sln`, `*.cs`) | `dotnet test <projeto>` |
 | Apenas documentação / specs (`*.md`, diagramas, texto) | Não rode suíte de código; a consistência técnica do documento é a revisão |
 
 - Rode apenas os testes dos módulos/serviços efetivamente alterados pelo diff (não rode o monorepo inteiro sem necessidade).
 - No Windows / PowerShell, execute um comando por chamada (ou encadeie com `;`).
+- **Runtime/ferramenta ausente (ex.: Python):** em projetos Python, tente `uv run pytest` ou `.venv` local primeiro; **nunca** faça varredura recursiva no disco (`dir /s`, `find /`) procurando `python`. Se o runtime/ferramenta não existir no ambiente, pare e **peça permissão ao usuário antes de instalar**.
 
 ### Mudanças de Frontend / Visual (proporcional ao impacto)
 
