@@ -210,6 +210,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
 			if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
 				toolRoot = slotWT
+				r.deliveryRoot = slotWT
 			}
 		}
 	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
@@ -300,7 +301,6 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	var afterToolCBs []llmagent.AfterToolCallback
 	if runMode == "direct" {
 		// Modo Direto: sem tetos artificiais de chamadas, tokens ou exploração.
-		// Mantemos apenas um guarda leve que reseta a cada edição ou run_shell.
 	} else if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
 		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback())
 		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
@@ -308,13 +308,11 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		afterToolCBs = append(afterToolCBs, revAfter)
 	} else if !sddDocs && !sddJira {
 		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback())
-		maxAutoExplore := defaultMaxTriageExploreCalls
-		if isAuto {
-			maxAutoExplore = 24
+		if !isAuto {
+			triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, defaultMaxTriageExploreCalls)
+			beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
+			afterToolCBs = append(afterToolCBs, triAfter)
 		}
-		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, maxAutoExplore)
-		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
-		afterToolCBs = append(afterToolCBs, triAfter)
 	}
 	keepInTurn := r.Project.Settings.EffectiveInTurnKeepToolResults()
 	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {

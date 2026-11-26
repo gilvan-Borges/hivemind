@@ -412,7 +412,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 			}
 			return result, err
 		}
-		if handled, outRes := r.handlePostTriageReturn(runMode, delegated, summary, sess, result); handled {
+		if handled, outRes := r.handlePostTriageReturn(ctx, key, runMode, delegated, summary, sess, result); handled {
 			return outRes, nil
 		}
 		msg = genai.NewContentFromText("Prossigam com a implementação e validação conforme o plano e divisão de tarefas do Chefe.", genai.RoleUser)
@@ -490,24 +490,7 @@ func (r *Runner) Run(parentCtx context.Context, req Request) (Result, error) {
 	if err := sessionx.CompactOldToolOutputs(sess, 12); err != nil && r.Err != nil {
 		fmt.Fprintf(r.Err, "aviso: falha ao compactar outputs da sessão: %v\n", err)
 	}
-	vaultTarget := r.deliveryRoot
-	if strings.TrimSpace(vaultTarget) == "" {
-		vaultTarget = r.Workspace
-	}
-	if strings.TrimSpace(vaultTarget) != "" && r.Git != nil && r.Git.IsRepo(ctx, vaultTarget) {
-		status := "concluído"
-		if result.PendingQA {
-			status = "pendente QA"
-		}
-		_ = vaultx.AppendLaneNote(vaultTarget, vaultx.LaneEntry{
-			Slot:      r.conversationSlot(),
-			Branch:    r.deliveryBranch,
-			JiraKey:   key,
-			Summary:   result.Summary,
-			Status:    status,
-			Timestamp: time.Now(),
-		})
-	}
+	r.appendVaultLaneOutcome(ctx, key, result)
 	finishText := fmt.Sprintf("Sessão %s concluída.", result.SessionID)
 	if result.PendingQA {
 		finishText = fmt.Sprintf("Sessão %s concluída, mas a entrega ficou PENDENTE de aprovação do QA: nenhum commit, push ou PR foi feito.", result.SessionID)
@@ -586,7 +569,29 @@ func (r *Runner) resetTurnState(key, objective string, atts []Attachment, ctx co
 	r.resetDevBudgets()
 }
 
-func (r *Runner) handlePostTriageReturn(runMode string, delegated bool, summary string, sess session.Session, result Result) (bool, Result) {
+func (r *Runner) appendVaultLaneOutcome(ctx context.Context, key string, result Result) {
+	vaultTarget := r.deliveryRoot
+	if strings.TrimSpace(vaultTarget) == "" {
+		vaultTarget = r.Workspace
+	}
+	if strings.TrimSpace(vaultTarget) == "" || r.Git == nil || !r.Git.IsRepo(ctx, vaultTarget) {
+		return
+	}
+	status := "concluído"
+	if result.PendingQA {
+		status = "pendente QA"
+	}
+	_ = vaultx.AppendLaneNote(vaultTarget, vaultx.LaneEntry{
+		Slot:      r.conversationSlot(),
+		Branch:    r.deliveryBranch,
+		JiraKey:   key,
+		Summary:   result.Summary,
+		Status:    status,
+		Timestamp: time.Now(),
+	})
+}
+
+func (r *Runner) handlePostTriageReturn(ctx context.Context, key, runMode string, delegated bool, summary string, sess session.Session, result Result) (bool, Result) {
 	if runMode == "plan" || (r.pauseForApproval && (runMode == "" || runMode == "auto") && delegated) {
 		result.Summary = summary
 		planBody := strings.TrimSpace(r.chiefPlan)
@@ -644,6 +649,7 @@ func (r *Runner) handlePostTriageReturn(runMode string, delegated bool, summary 
 	}
 	if (!delegated && runMode != "squad") || runMode == "direct" {
 		result.Summary = summary
+		r.appendVaultLaneOutcome(ctx, key, result)
 		fmt.Fprintf(r.Out, "\nSessão %s concluída (resposta direta do Chefe).\n", result.SessionID)
 		r.printUsageSummary(result, r.Out, "")
 		if r.OnEvent != nil {

@@ -58,7 +58,8 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 	var cmd *exec.Cmd
 	if dec.UseShell {
 		if runtime.GOOS == "windows" {
-			cmd = exec.CommandContext(runCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+			psCmd := sanitizeWindowsPowerShellCommand(command)
+			cmd = exec.CommandContext(runCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psCmd)
 		} else {
 			cmd = exec.CommandContext(runCtx, "sh", "-c", command)
 		}
@@ -83,6 +84,20 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 		return text, fmt.Errorf("%s: %w", strings.TrimSpace(text), err)
 	}
 	return text, nil
+}
+
+// sanitizeWindowsPowerShellCommand strips redundant `2>&1` redirections (which
+// cause PowerShell 5.1 to wrap native stderr lines like `git push` progress in
+// NativeCommandError/RemoteException) since Stdout and Stderr are already merged
+// into cappedBuffer, and preserves the native $LASTEXITCODE.
+func sanitizeWindowsPowerShellCommand(command string) string {
+	cleaned := strings.ReplaceAll(command, " 2>&1", "")
+	cleaned = strings.ReplaceAll(cleaned, "2>&1", "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return command
+	}
+	return "$ErrorActionPreference = 'Continue'; " + cleaned + "; if ($LASTEXITCODE -is [int]) { exit $LASTEXITCODE }"
 }
 
 // cappedBuffer is an io.Writer safe for the concurrent stdout/stderr writers
