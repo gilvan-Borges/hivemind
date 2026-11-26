@@ -295,12 +295,22 @@ func newDevExploreBudgetCallbacks(maxExplore int, roundFn func() int, maxCallsOp
 		curWrites := writes
 		mu.Unlock()
 
+		// Ferramentas de fechamento/publicação (commit, push, merge de PR, revisão e transição Jira)
+		// nunca podem ser bloqueadas pelo teto de wrap-up logo na linha de chegada — só recebem
+		// uma trava ampla de segurança contra loop infinito (maxCalls + 10).
+		isClosingAction := isClosingPublishTool(name) || name == "jira_transition" || name == "jira_comment"
+		if isClosingAction {
+			if curTotal <= maxCalls+10 {
+				return nil, nil
+			}
+		}
+
 		// Se o orçamento total da rodada chegou ao teto de wrap-up (e o dev já escreveu arquivos
 		// ou está tentando mais uma leitura/busca), bloqueia novas ferramentas para forçar o
 		// encerramento limpo do turno e passagem imediata para o QA.
 		if curTotal > softWrapCallsAt && (curWrites > 0 || !devWriteTools[name]) {
 			return map[string]any{
-				"text": fmt.Sprintf("ORÇAMENTO DE FERRAMENTAS DA RODADA CONCLUÍDO (%d/%d chamadas utilizadas, %d escrita(s) aplicadas na worktree): PARE de chamar ferramentas agora. NÃO execute novas leituras, buscas ou comandos — responda IMEDIATAMENTE apenas com o resumo final do que você implementou para que o orquestrador entregue a worktree ao QA.", curTotal-1, maxCalls, curWrites),
+				"text": fmt.Sprintf("ORÇAMENTO DE FERRAMENTAS DA RODADA CONCLUÍDO (%d/%d chamadas utilizadas, %d escrita(s) aplicadas na worktree): PARE de chamar ferramentas de exploração/leitura agora. Se já terminou, conclua apenas com fechamento (commit/push/merge/Jira se aplicável) ou responda IMEDIATAMENTE com o resumo final.", curTotal-1, maxCalls, curWrites),
 			}, nil
 		}
 

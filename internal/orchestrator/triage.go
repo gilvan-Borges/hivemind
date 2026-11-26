@@ -290,7 +290,7 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, revAfter)
 	} else if runMode == "direct" {
-		dirBefore, dirAfter := newDevExploreBudgetCallbacks(20, nil, 30)
+		dirBefore, dirAfter := newDevExploreBudgetCallbacks(25, nil, 80)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{dirBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, dirAfter)
 	} else if !sddDocs && !sddJira {

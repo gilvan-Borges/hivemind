@@ -146,3 +146,34 @@ func TestEveryConversationGetsIsolatedWorktreeRegardlessOfPRAuthorOrDirectMode(t
 		t.Fatalf("wt2 deveria espelhar o conteúdo da branch feat/pr-102 (pr102.txt): %v", err)
 	}
 }
+
+type namedFakeTool struct{ name string }
+
+func (n namedFakeTool) Name() string        { return n.name }
+func (n namedFakeTool) Description() string { return n.name }
+func (n namedFakeTool) IsLongRunning() bool { return false }
+
+func TestWrapUpBudgetNeverBlocksMergeOrJiraClosingTools(t *testing.T) {
+	before, _ := newDevExploreBudgetCallbacks(20, nil, 20)
+	// Simulate 16 calls including a write so totalCalls crosses softWrapCallsAt (16).
+	for i := 0; i < 15; i++ {
+		if _, err := before(nil, namedFakeTool{"write_file"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := before(nil, namedFakeTool{"read_file"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Extra exploration is blocked once wrap-up cap is reached.
+	blocked, err := before(nil, namedFakeTool{"read_file"}, nil)
+	if err != nil || blocked == nil {
+		t.Fatalf("expected read_file to be blocked at wrap-up cap, got blocked=%v err=%v", blocked, err)
+	}
+	// Closing tools (git_commit, git_push, github_merge_pr, jira_transition) MUST still succeed!
+	for _, closing := range []string{"git_commit", "git_push", "github_merge_pr", "jira_transition", "jira_comment"} {
+		res, err := before(nil, namedFakeTool{closing}, nil)
+		if err != nil || res != nil {
+			t.Fatalf("closing tool %s should NOT be blocked by wrap-up cap, got res=%v err=%v", closing, res, err)
+		}
+	}
+}
