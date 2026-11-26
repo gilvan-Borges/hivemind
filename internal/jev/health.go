@@ -46,14 +46,14 @@ func ClassifyError(err error) ErrorClass {
 		return ErrClassOutage
 	}
 
-	// 1. Pedido inválido para qualquer modelo (jail, tool_call órfão) não faz failover.
-	// 400 de modelo incompatível (id de outro provedor no Cursor, parâmetro recusado)
-	// abre só o circuito daquele modelo e deixa o Jev tentar o próximo candidato.
-	if isRequestShapePolicy(msg) {
-		return ErrClassPolicy
-	}
+	// 1. 400 de modelo/provedor incompatível (incl. thought_signature ausente em proxy Gemini)
+	// abre só o circuito do modelo e deixa o Jev tentar o próximo candidato.
+	// Pedido inválido universal (jail, tool_call órfão, INVALID_ARGUMENT genérico) não faz failover.
 	if isIncompatibleModel400(msg) {
 		return ErrClassModel
+	}
+	if isRequestShapePolicy(msg) {
+		return ErrClassPolicy
 	}
 	for _, pat := range []string{"http 400", "status 400", "400 bad request"} {
 		if strings.Contains(msg, pat) {
@@ -133,6 +133,8 @@ func isIncompatibleModel400(msg string) bool {
 		"hosted outside",
 		"select global at",
 		"not available in your region",
+		"thought_signature",
+		"thought signature",
 	} {
 		if strings.Contains(msg, pat) {
 			return true

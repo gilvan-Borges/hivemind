@@ -312,3 +312,14 @@ func TestHealthStoreModelQuotaAndAgyFamilyIsolation(t *testing.T) {
 		t.Fatalf("RecordSuccess must close family circuits too: %+v", snap.ModelCircuits)
 	}
 }
+
+func TestClassifyErrorThoughtSignatureTriggersModelFailover(t *testing.T) {
+	err := errors.New("opencode/opencode-go:gemini-4-argon: Error 400, Message: Upstream request failed: [400] Function call is missing a thought_signature in functionCall parts., Status: INVALID_ARGUMENT")
+	if got := ClassifyError(err); got != ErrClassModel {
+		t.Fatalf("thought_signature missing must classify as ErrClassModel for failover, got %q", got)
+	}
+	generic := errors.New("Error 400: invalid_argument in tool_call_id")
+	if got := ClassifyError(generic); got != ErrClassPolicy {
+		t.Fatalf("generic invalid_argument must remain ErrClassPolicy, got %q", got)
+	}
+}
