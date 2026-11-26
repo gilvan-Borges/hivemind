@@ -197,7 +197,7 @@ export function renderMissionBoardHtml(): string {
                 })}
               </div>
 
-              <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-family:var(--mono)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;font-family:var(--mono)">
                 <span class="dim" data-mc-activity="${escapeHtml(a.name)}">${a.tool ? `Ativo: ${escapeHtml(a.tool)}` : `${a.calls} chamada(s)`}</span>
                 <span style="color:var(--accent)" data-mc-tok="${escapeHtml(a.name)}">${exactTokens(a.tokens)} tok (${pct}%)</span>
               </div>
