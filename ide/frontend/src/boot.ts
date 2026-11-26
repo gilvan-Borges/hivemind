@@ -122,6 +122,12 @@ export async function boot() {
           text: routeText,
         });
       }
+    } else if (ev.kind === "session" && ev.text) {
+      const sid = String(ev.text).trim();
+      if (sid) {
+        lane.sessionId = sid;
+        if (!lane.conversationKind) lane.conversationKind = "team";
+      }
     } else if (ev.kind === "usage") {
       const inTok = Number(ev.inputTokens || 0);
       const outTok = Number(ev.outputTokens || 0);
