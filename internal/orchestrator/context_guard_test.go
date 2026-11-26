@@ -869,3 +869,41 @@ func TestRepeatRunShellGuardResetsOnEdit(t *testing.T) {
 		t.Fatalf("run_shell after edit_file must reset and pass, got res=%v err=%v", res, err)
 	}
 }
+
+func TestDirectExploreGuardBlocksAt51AndResetsOnEdit(t *testing.T) {
+	guard := newDirectExploreGuardCallback(50)
+	readTool := stubNamedTool{name: "read_file"}
+	findTool := stubNamedTool{name: "find_files"}
+	searchTool := stubNamedTool{name: "search_text"}
+	editTool := stubNamedTool{name: "edit_file"}
+
+	// Primeiras 50 chamadas de exploração passam normalmente.
+	for i := 1; i <= 50; i++ {
+		var tool stubNamedTool
+		switch i % 3 {
+		case 0:
+			tool = searchTool
+		case 1:
+			tool = readTool
+		default:
+			tool = findTool
+		}
+		if res, err := guard(nil, tool, map[string]any{"path": fmt.Sprintf("pkg/file_%d.go", i)}); err != nil || res != nil {
+			t.Fatalf("read #%d should pass, got res=%v err=%v", i, res, err)
+		}
+	}
+
+	// 51ª leitura consecutiva sem ação dispara soft-block.
+	res, err := guard(nil, readTool, map[string]any{"path": "pkg/file_51.go"})
+	if err != nil || res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO DE EXPLORAÇÃO (50 leituras atingidas)") {
+		t.Fatalf("51st consecutive read should soft-block, got res=%v err=%v", res, err)
+	}
+
+	// Executar uma ação (edit_file) zera o contador e libera novas leituras.
+	if res, err := guard(nil, editTool, map[string]any{"path": "pkg/file_1.go"}); err != nil || res != nil {
+		t.Fatalf("edit_file should pass and reset counter, got res=%v err=%v", res, err)
+	}
+	if res, err := guard(nil, readTool, map[string]any{"path": "pkg/file_52.go"}); err != nil || res != nil {
+		t.Fatalf("read after edit_file should pass again, got res=%v err=%v", res, err)
+	}
+}

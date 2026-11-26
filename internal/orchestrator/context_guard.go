@@ -229,6 +229,46 @@ func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeTool
 	}
 }
 
+// newDirectExploreGuardCallback protege o Modo Direto contra espirais infinitas
+// de leitura/busca sem ação (ex.: >50 read_file/find_files/search_text seguidos
+// sem editar, rodar comando ou concluir). Não aborta o turno: faz soft-block na
+// chamada (maxReads+1) e zera o contador sempre que qualquer ferramenta de ação
+// é executada, permitindo sessões longas legítimas.
+func newDirectExploreGuardCallback(maxReads int) llmagent.BeforeToolCallback {
+	if maxReads <= 0 {
+		maxReads = 50
+	}
+	var mu sync.Mutex
+	consecutiveReads := 0
+
+	return func(_ agent.Context, t tool.Tool, _ map[string]any) (map[string]any, error) {
+		if t == nil {
+			return nil, nil
+		}
+		switch t.Name() {
+		case "edit_file", "write_file", "write_doc", "run_shell",
+			"git_commit", "git_push",
+			"github_review_pr", "github_merge_pr", "github_comment_pr", "github_create_pr":
+			mu.Lock()
+			consecutiveReads = 0
+			mu.Unlock()
+			return nil, nil
+
+		case "read_file", "find_files", "search_text", "list_dir", "list_tree":
+			mu.Lock()
+			consecutiveReads++
+			n := consecutiveReads
+			mu.Unlock()
+			if n > maxReads {
+				return map[string]any{
+					"text": fmt.Sprintf("AVISO DE EXPLORAÇÃO (%d leituras atingidas): você já fez %d chamadas consecutivas de leitura/busca sem aplicar nenhuma edição ou ação. Pare de explorar e avance agora com edit_file/write_file, run_shell ou entregue a resposta/parecer final.", maxReads, maxReads),
+				}, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
 // newDevExploreBudgetCallbacks cria uma dupla BeforeTool/AfterTool em 2 camadas para o Dev:
 // 1. Controla a exploração inicial (avisa ao aproximar-se de softBlockAt antes da 1ª edição e faz
 //    soft-block redirecionando para write_file/edit_file antes do hard-abort de maxExplore).

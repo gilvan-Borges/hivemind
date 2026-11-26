@@ -301,7 +301,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	var beforeToolCBs []llmagent.BeforeToolCallback
 	var afterToolCBs []llmagent.AfterToolCallback
 	if runMode == "direct" {
-		// Modo Direto: sem tetos artificiais de chamadas, tokens ou exploração.
+		// Modo Direto: sem teto global de chamadas/tokens, mas com proteção anti-loop
+		// e soft-block após 50 leituras/buscas consecutivas sem ação (zera ao editar/agir).
+		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback(), newDirectExploreGuardCallback(50))
 	} else if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
 		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback())
 		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
