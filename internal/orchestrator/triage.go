@@ -15,6 +15,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/gilvan-Borges/HiveMind/internal/contextx"
+	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jev"
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
@@ -185,6 +186,30 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 				"\n- **Worktree Efêmera do PR #%d pronta:** `%s` (checkout destacado do commit exato do PR via `pull/%d/head`; `read_file`, `search_text` e `run_shell` já apontam para esta worktree — rode os testes reais dos módulos alterados aqui e NUNCA diga que a branch do PR não consta no clone local).\n",
 				preloadedPR, wtPath, preloadedPR,
 			))
+		}
+	} else if !sddDocs && !sddJira && !isAutoReview {
+		if wtPath, effBranch, remoteBranch, wtErr := r.ensureConversationWorktree(ctx, jiraKey, preloadedPR, preloadedHeadRef, preloadedOwnPR, runMode); wtErr == nil && wtPath != "" {
+			toolRoot = wtPath
+			r.deliveryRoot = wtPath
+			if effBranch != "" {
+				r.deliveryBranch = effBranch
+			}
+			pushHint := ""
+			if remoteBranch != "" && effBranch != remoteBranch {
+				pushHint = fmt.Sprintf(" Para enviar commits ao PR, use `git push origin HEAD:%s`.", remoteBranch)
+			}
+			prHint := ""
+			if preloadedPR > 0 {
+				prHint = fmt.Sprintf(" (espelhando o PR #%d)", preloadedPR)
+			}
+			msg = appendTextToFirstPart(msg, fmt.Sprintf(
+				"\n- **Worktree Isolada desta Conversa pronta:** `%s` (branch `%s`%s). Todas as ferramentas (`read_file`, `write_file`, `edit_file`, `run_shell`, `git_*`) já operam exclusivamente dentro desta worktree isolada. **NUNCA** faça `cd`, `git checkout` ou `git merge` na pasta principal do workspace (`%s`) — resolva edições, conflitos e testes aqui dentro sem interferir em conversas paralelas.%s\n",
+				wtPath, effBranch, prHint, r.Workspace, pushHint,
+			))
+		} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
+			if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
+				toolRoot = slotWT
+			}
 		}
 	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
 		if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
@@ -542,4 +567,82 @@ func (r *Runner) tryRestorePlanAfterTriageAbort(sess session.Session) bool {
 		r.devSlices = []string{r.chiefPlan}
 	}
 	return true
+}
+
+// ensureConversationWorktree guarantees that EVERY conversation (regardless of
+// whether it's an own PR, third-party PR, Direto, Auto, Squad, or parallel lane)
+// receives its own isolated git worktree keyed by conversationSlot() so parallel
+// conversations NEVER share or collide on the main workspace checkout.
+func (r *Runner) ensureConversationWorktree(
+	ctx context.Context,
+	jiraKey string,
+	preloadedPR int,
+	preloadedHeadRef string,
+	preloadedOwnPR bool,
+	runMode string,
+) (wtPath string, effBranch string, remoteBranch string, err error) {
+	allowWorktrees := r.Project.Settings.Worktrees == nil || *r.Project.Settings.Worktrees
+	if !allowWorktrees || r.Git == nil || strings.TrimSpace(r.Workspace) == "" {
+		return "", "", "", nil
+	}
+	if !r.Git.IsRepo(ctx, r.Workspace) || !r.Git.HasCommit(ctx, r.Workspace) {
+		return "", "", "", nil
+	}
+
+	targetBranch := strings.TrimSpace(preloadedHeadRef)
+	if targetBranch == "" {
+		targetBranch = strings.TrimSpace(r.prBranch)
+	}
+	prNum := preloadedPR
+	if prNum <= 0 {
+		prNum = extractReviewPRNumber(r.objectiveText)
+	}
+	// Resolve the PR branch automatically even when reviewRequested was false
+	// (e.g. own-PR feedback/merge turns in Direto mode).
+	if targetBranch == "" && prNum > 0 && r.GitHub != nil && r.GitHub.Enabled() {
+		if pr, gErr := r.GitHub.GetPullRequest(ctx, prNum); gErr == nil && strings.TrimSpace(pr.HeadRef) != "" {
+			targetBranch = strings.TrimSpace(pr.HeadRef)
+		}
+	}
+
+	// Isolate every named conversation lane, every Direct run, and every PR turn
+	// (own PR or third-party PR alike).
+	if runMode != "direct" && strings.TrimSpace(r.LaneID) == "" && prNum <= 0 {
+		return "", "", "", nil
+	}
+
+	_ = gitx.EnsureHiveIgnore(r.Workspace)
+	slot := r.conversationSlot()
+	preserveExisting := targetBranch != "" && (preloadedOwnPR || prNum > 0 || strings.TrimSpace(r.prBranch) != "")
+
+	// When continuing the same conversation without switching to a specific PR branch,
+	// reuse its existing isolated worktree so uncommitted edits stay intact.
+	slotWT := workspace.WorktreePath(r.Workspace, slot)
+	if !preserveExisting && r.Git.IsRepo(ctx, slotWT) {
+		curBr, _ := r.Git.CurrentBranch(ctx, slotWT)
+		return slotWT, strings.TrimSpace(curBr), "", nil
+	}
+
+	if targetBranch == "" {
+		targetBranch = names.DeliveryBranch(jiraKey, r.objectiveText)
+		if targetBranch == "" {
+			targetBranch = "hivemind/" + slot
+		}
+	}
+	wt, eff, prepErr := gitx.PrepareDeliveryWorktreeForSlot(ctx, r.Git, r.Workspace, slot, targetBranch, preserveExisting)
+	if prepErr != nil {
+		if r.Err != nil {
+			fmt.Fprintf(r.Err, "aviso: worktree isolada da conversa (%s): %v\n", slot, prepErr)
+		}
+		return "", "", "", prepErr
+	}
+	if nested, nErr := gitx.PrepareNestedWorktrees(ctx, r.Git, r.Workspace, wt, eff, preserveExisting); nErr == nil {
+		r.nestedWorktrees = nested
+	}
+	_, _ = gitx.HydrateWorktree(r.Workspace, wt, r.Project.Settings.SharedDirectories)
+	remote := ""
+	if preserveExisting {
+		remote = targetBranch
+	}
+	return wt, eff, remote, nil
 }

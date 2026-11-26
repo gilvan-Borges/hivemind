@@ -107,7 +107,8 @@ func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targ
 	if slot == "" {
 		slot = "_integracao"
 	}
-	branch := strings.TrimSpace(targetBranch)
+	remoteBranch := strings.TrimSpace(targetBranch)
+	branch := remoteBranch
 	if branch == "" {
 		if slot == "_integracao" {
 			branch = IntegrationBranch
@@ -122,7 +123,7 @@ func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targ
 	if cur, err := g.CurrentBranch(ctx, repo); err == nil && cur != "" && cur == branch {
 		branch = branch + "-wt"
 	}
-	if !preserveExisting && slot != "_integracao" && isBranchCheckedOutElsewhere(ctx, g, repo, branch, workspace.WorktreePath(repo, slot)) {
+	if slot != "_integracao" && isBranchCheckedOutElsewhere(ctx, g, repo, branch, workspace.WorktreePath(repo, slot)) {
 		branch = branch + "-" + slot
 	}
 
@@ -139,15 +140,48 @@ func PrepareDeliveryWorktreeForSlot(ctx context.Context, g Git, repo, slot, targ
 	if err != nil {
 		return "", "", err
 	}
-	if preserveExisting && !g.BranchExists(ctx, repo, branch) {
-		// Best-effort fetch from origin if working on an existing remote PR branch.
-		_, _ = g.Run(ctx, repo, "fetch", "origin", branch+":"+branch)
+	fetchedRemote := false
+	if preserveExisting && remoteBranch != "" {
+		// Best-effort fetch from origin so the worktree mirrors the latest remote PR branch,
+		// even when the local branch is checked out in the main repo and received a -wt/-slot suffix.
+		if _, fErr := g.Run(ctx, repo, "fetch", "--no-tags", "origin", remoteBranch); fErr == nil {
+			fetchedRemote = true
+		}
+		if branch == remoteBranch && !g.BranchExists(ctx, repo, branch) {
+			_, _ = g.Run(ctx, repo, "fetch", "--no-tags", "origin", remoteBranch+":"+branch)
+		}
 	}
 	curWtBranch, _ := g.CurrentBranch(ctx, wt)
 	alreadyOnBranch := strings.TrimSpace(curWtBranch) == branch
 	if !alreadyOnBranch {
-		if g.BranchExists(ctx, repo, branch) {
+		if preserveExisting && fetchedRemote && branch != remoteBranch {
+			if _, err := g.Run(ctx, wt, "checkout", "-B", branch, "FETCH_HEAD"); err != nil {
+				return "", "", err
+			}
+		} else if preserveExisting && remoteBranch != "" && branch != remoteBranch {
+			if ref, rErr := g.Run(ctx, repo, "rev-parse", "--verify", "origin/"+remoteBranch); rErr == nil && strings.TrimSpace(ref) != "" {
+				if _, err := g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(ref)); err != nil {
+					return "", "", err
+				}
+			} else if ref, rErr := g.Run(ctx, repo, "rev-parse", "--verify", remoteBranch); rErr == nil && strings.TrimSpace(ref) != "" {
+				if _, err := g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(ref)); err != nil {
+					return "", "", err
+				}
+			} else {
+				baseSHA, err := g.Run(ctx, repo, "rev-parse", "HEAD")
+				if err != nil {
+					return "", "", err
+				}
+				if _, err := g.Run(ctx, wt, "checkout", "-B", branch, strings.TrimSpace(baseSHA)); err != nil {
+					return "", "", err
+				}
+			}
+		} else if g.BranchExists(ctx, repo, branch) {
 			if _, err := g.Run(ctx, wt, "checkout", "-f", branch); err != nil {
+				return "", "", err
+			}
+		} else if preserveExisting && fetchedRemote {
+			if _, err := g.Run(ctx, wt, "checkout", "-B", branch, "FETCH_HEAD"); err != nil {
 				return "", "", err
 			}
 		} else {

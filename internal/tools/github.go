@@ -488,7 +488,16 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 					return textResult{}, fmt.Errorf("governança PR: o PR #%d aponta para %q e exige permissão explícita do usuário antes de mesclar (revisor já aprovou, aguardando sua autorização)", pr.Number, pr.BaseRef)
 				}
 			}
+			unlockMerge := lockPRMergeTarget(d.Root, pr.BaseRef)
+			defer unlockMerge()
 			if err := d.GitHub.MergePullRequest(ctx, args.Number, args.Method, args.CommitTitle); err != nil {
+				low := strings.ToLower(err.Error())
+				if strings.Contains(low, "405") || strings.Contains(low, "conflict") || strings.Contains(low, "not mergeable") || strings.Contains(low, "base branch was modified") {
+					return textResult{}, fmt.Errorf(
+						"conflito ao mesclar PR #%d (%s -> %s): %w. Resolva o conflito EXCLUSIVAMENTE dentro da sua worktree isolada (`git fetch origin %s && git merge origin/%s`), valide os testes afetados, faça commit + `git push origin HEAD:%s` e chame `github_merge_pr` novamente",
+						pr.Number, pr.HeadRef, pr.BaseRef, err, pr.BaseRef, pr.BaseRef, pr.HeadRef,
+					)
+				}
 				return textResult{}, err
 			}
 			// Automatically clean up worktrees whose branch was just merged.
@@ -507,6 +516,27 @@ func (d Deps) addGitHubGovernance(out *[]tool.Tool, includeCreateFromWorktree bo
 		*out = append(*out, mergePR)
 	}
 	return nil
+}
+
+var (
+	prMergeLocksMu sync.Mutex
+	prMergeLocks   = map[string]*sync.Mutex{}
+)
+
+// lockPRMergeTarget serializes concurrent github_merge_pr calls targeting the
+// same repository and base branch so parallel conversation lanes do not race on
+// GitHub's merge endpoint.
+func lockPRMergeTarget(repoRoot, baseRef string) func() {
+	key := strings.ToLower(strings.TrimSpace(repoRoot)) + "::" + strings.ToLower(strings.TrimSpace(baseRef))
+	prMergeLocksMu.Lock()
+	mu, ok := prMergeLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		prMergeLocks[key] = mu
+	}
+	prMergeLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // syncJiraAfterPRMerge transitions linked Jira issue(s) to Done/Concluído right
