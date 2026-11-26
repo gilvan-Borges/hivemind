@@ -51,7 +51,10 @@ func (r *Runner) scoutSlots() chan struct{} {
 
 // reserveScoutSpawn conta um spawn do agente chamador e recusa quando o teto
 // por execução (EffectiveMaxSubagentCalls) foi atingido.
-func (r *Runner) reserveScoutSpawn(callerADKName string) error {
+func (r *Runner) reserveScoutSpawn(callerADKName string, unlimitedOpt ...bool) error {
+	if len(unlimitedOpt) > 0 && unlimitedOpt[0] {
+		return nil
+	}
 	maxSpawns := r.Project.Settings.EffectiveMaxSubagentCalls()
 	r.scoutMu.Lock()
 	defer r.scoutMu.Unlock()
@@ -69,7 +72,8 @@ func (r *Runner) reserveScoutSpawn(callerADKName string) error {
 // newSpawnSubagentTool dá a um agente do squad a capacidade de disparar um
 // subagente efêmero de contexto limpo (scout) para leitura/pesquisa sem queimar
 // as próprias chamadas de orçamento.
-func (r *Runner) newSpawnSubagentTool(caller team.Agent, callerADKName, root string) (tool.Tool, error) {
+func (r *Runner) newSpawnSubagentTool(caller team.Agent, callerADKName, root string, unlimitedOpt ...bool) (tool.Tool, error) {
+	unlimited := len(unlimitedOpt) > 0 && unlimitedOpt[0]
 	type spawnArgs struct {
 		Objective   string `json:"objective" jsonschema:"Objetivo pontual e autossuficiente da missão: o que investigar/ler/mapear e qual pergunta exata deve ser respondida. O subagente não vê esta conversa."`
 		Description string `json:"description,omitempty" jsonschema:"Rótulo curto (3-5 palavras) da missão, ex.: mapear endpoints do gateway."`
@@ -87,7 +91,7 @@ func (r *Runner) newSpawnSubagentTool(caller team.Agent, callerADKName, root str
 		if objective == "" {
 			return spawnRes{}, fmt.Errorf("informe objective com a missão autossuficiente do subagente")
 		}
-		if err := r.reserveScoutSpawn(callerADKName); err != nil {
+		if err := r.reserveScoutSpawn(callerADKName, unlimited); err != nil {
 			return spawnRes{}, err
 		}
 		slots := r.scoutSlots()

@@ -106,7 +106,7 @@ func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeTool
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
 		switch name {
-		case "edit_file", "write_file", "write_doc", "git_commit":
+		case "edit_file", "write_file", "write_doc", "git_commit", "run_shell":
 			p := normPath(args["path"])
 			mu.Lock()
 			if p != "" {

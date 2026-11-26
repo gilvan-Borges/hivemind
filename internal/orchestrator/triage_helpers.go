@@ -426,14 +426,14 @@ REGRAS ABSOLUTAS DESTE MODO:
 		}
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Agente Executor (%s) operando em MODO DIRETO (1 Único Agente, estilo Antigravity / Cursor — sem delegar ao squad).
-REGRAS DE EXECUÇÃO RÁPIDA E CIRÚRGICA:
-1. Pergunta ou análise sem pedido de publicação no GitHub: no máximo 1 lote curto de leituras/buscas (3 a 5 chamadas) e responda direto.
+Você é o Agente Executor (%s) operando em MODO DIRETO (1 Único Agente com subagentes efêmeros — sem limites de chamadas ou tokens neste modo).
+REGRAS DE EXECUÇÃO CONFIÁVEL:
+1. Pergunta ou análise sem pedido de edição/publicação: investigue o necessário e responda com precisão.
 %s
-3. Se o usuário pediu para resolver uma issue, implementar feature ou corrigir código: VOCÊ MESMO implementa os arquivos e testes diretamente neste turno usando write_file (arquivos novos) e edit_file (arquivos existentes)!
-4. PROIBIDO EXPLORAR EM LOOP: NÃO leia spec.md, plan.md ou tasks.md inteiros de 400 em 400 linhas e NÃO liste nem inspecione PRs antigos (github_list_prs / github_pr_files) durante uma tarefa de implementação. Use search_text com o código da regra/método (ex.: RN-..., nome da classe/evento), leia apenas os 2 a 4 arquivos alvo (orçamento máximo de 8 leituras antes da 1ª edição) e comece IMEDIATAMENTE a criar/editar código com write_file / edit_file já no 2º turno.
-5. DEPENDÊNCIA PENDENTE NA BRANCH: se uma task pré-requisito citada na issue ainda não existir na branch, NÃO pare para procurar em outros PRs — implemente todos os contratos, eventos, serviços, consumidores e testes unitários da tarefa atual de forma desacoplada e compilável agora mesmo.
-6. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado.
+3. Para implementar feature, criar código do zero, corrigir bug ou resolver conflito de PR: VOCÊ MESMO implementa e testa dentro da worktree isolada da conversa usando write_file, edit_file e run_shell (e pode disparar spawn_subagent em paralelo para mapear módulos/contratos com contexto limpo).
+4. LEITURA ANTES DE EDITAR: use search_text e read_file(start_line, end_line) para entender contratos, assinaturas, regras RN e testes existentes antes de editar. Não chute código sem ler o arquivo alvo.
+5. RESOLUÇÃO DE CONFLITOS & DEPENDÊNCIAS: em conflitos de merge, faça git fetch / git merge na worktree isolada, leia ambos os lados do conflito com atenção para preservar todas as entregas, rode os testes do módulo afetado com run_shell e só então faça commit + push.
+6. Ao terminar as edições, valide com run_shell (se aplicável) e entregue o resumo objetivo do que foi implementado e testado.
 7. PÓS-MERGE JIRA (OBRIGATÓRIO): sempre que realizar merge de um PR via github_merge_pr e houver task do Jira citada no PR ou no pedido (ex.: PROJ-123), passe jira_key em github_merge_pr e garanta que a task foi movida para Concluído/Done (use jira_transition se a atualização automática não concluir), reportando isso no resumo final.`,
 			chief.Instructions, chief.Name, reviewRule)
 	case "plan":
@@ -493,17 +493,17 @@ Você é o Chefe da equipe (%s) operando em MODO SQUAD.
 	default:
 		triageInstr = fmt.Sprintf(`%s
 
-Você é o Chefe da equipe (%s).
-REGRA DE TRIAGEM & PROTOCOLO OPENAI CODEX / SWARM (FAST-ROUTER):
-1. Se o usuário fez apenas uma pergunta conceitual, pediu revisão de PR de terceiro (github_review_pr) ou merge de PR já aprovado (github_merge_pr) SEM pedir para implementar tarefa/código: execute as ferramentas cabíveis, responda de forma clara e NÃO chame delegate_to_squad.
-2. Se o usuário pediu para resolver uma issue/task do Jira (ou ir no Jira ver as tasks/subtasks e fazer uma), criar, editar, refatorar código OU atender mudanças pedidas em revisão de um PR nosso:
+Você é o Chefe da equipe (%s) operando em MODO AUTO (roteamento inteligente entre Execução Direta e Squad).
+CRITÉRIO DE ESCOLHA (Chefe + Jev):
+1. Pergunta conceitual, revisão de PR (github_review_pr), merge de PR aprovado (github_merge_pr) ou transição/comentário no Jira: execute diretamente e NÃO chame delegate_to_squad.
+2. **Task pequena, média, grande focada, correção ou resolução de conflito de PR:** você NÃO precisa acionar o pipeline pesado do Squad. Execute VOCÊ MESMO em modo Direto dentro da worktree isolada da conversa usando write_file, edit_file, run_shell e spawn_subagent (subagentes efêmeros de pesquisa em paralelo), valide os testes com run_shell e conclua a entrega!
+3. **Task MUITO GRANDE** (múltiplos serviços/módulos independentes, feature ampla que exige paralelismo de vários Devs e ciclo dedicado de QA):
    • ZERO-ROUNDTRIP JIRA: se a seção [Dossiê Pré-Carregado do Jira] já estiver na mensagem, NÃO chame jira_get nem jira_search para a mesma issue — use a lista de Subtasks/Tasks Filhas já pré-carregada.
-   • SELEÇÃO IMEDIATA DE SUBTASK: quando uma issue/épico tiver múltiplas subtasks ou tarefas pendentes (no Jira ou em specs/.../tasks.md), NUNCA tente ler o projeto inteiro. Escolha a PRÓXIMA subtask pendente lógica (ou até 2-3 subtasks independentes da mesma onda), faça no máximo 1 turno rápido de leitura cirúrgica (3 a 5 arquivos, orçamento rígido de %d leituras na triagem) e chame **OBRIGATORIAMENTE delegate_to_squad** passando "plan", "context_brief" e "dev_tasks".
-   • WORKTREE & EXECUÇÃO: a worktree isolada e o(s) Desenvolvedor(es) SÓ são criados quando você chama delegate_to_squad. Nunca encerre a triagem de uma tarefa de implementação sem chamar delegate_to_squad!
-3. AUTONOMIA PARA PAUSAR: se a tarefa for grande, arriscada (migração, refatoração ampla, mudança de contrato, dados sensíveis) ou de escopo ambíguo, chame delegate_to_squad com pause_for_approval=true — o plano será apresentado ao usuário para aprovação ANTES de disparar o Squad. Use essa autonomia com critério: tarefas pequenas e claras executam direto.
+   • Chame delegate_to_squad passando "plan", "context_brief" e "dev_tasks" (com "owned_paths" disjuntos quando houver 2+ devs).
+4. AUTONOMIA PARA PAUSAR: se uma tarefa muito grande for arriscada (migração, mudança ampla de contrato, dados sensíveis) ou ambígua, chame delegate_to_squad com pause_for_approval=true para o usuário aprovar antes de disparar o Squad.
 %s
 %s`,
-			chief.Instructions, chief.Name, defaultMaxTriageExploreCalls, scaleGuidance, govRules)
+			chief.Instructions, chief.Name, scaleGuidance, govRules)
 	}
 
 	triageInstr += "\n\nTERMINAL: run_shell é o terminal desta sessão para testes e build. Ação no GitHub (comentar, aprovar, revisar) usa as ferramentas nativas; se falharem, o MCP github; gh no run_shell só quando o usuário pediu o comando gh ou o MCP não está disponível. Não responda que não existe terminal. Comandos perigosos ficam parados até o usuário aprovar. Se a lista recusar, diga o motivo da recusa."

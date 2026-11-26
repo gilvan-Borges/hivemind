@@ -29,6 +29,7 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 		overBudgetCount     int
 		postDelegateBlocked int
 		delegated           bool
+		directExecuting     bool
 	)
 
 	before := func(_ agent.Context, tl tool.Tool, args map[string]any) (map[string]any, error) {
@@ -49,6 +50,17 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 			}, nil
 		}
 
+		// Se o Chefe no modo Auto começou a escrever/editar diretamente na worktree isolada,
+		// ele escolheu o caminho Direto com subagentes (task focada/grande sem Squad); não bloqueie por limite de triagem.
+		if name == "write_file" || name == "edit_file" {
+			mu.Lock()
+			directExecuting = true
+			exploreCount = 0
+			overBudgetCount = 0
+			mu.Unlock()
+			return nil, nil
+		}
+
 		if cleanKey != "" && name == "jira_get" {
 			argKey := strings.ToUpper(strings.TrimSpace(fmt.Sprint(args["key"])))
 			if argKey == "" || argKey == "<NIL>" || argKey == cleanKey {
@@ -61,6 +73,10 @@ func newChiefTriageBudgetCallbacks(preloadedJiraKey string, maxExploreCalls int)
 		switch name {
 		case "read_file", "search_text", "find_files", "list_dir", "run_shell", "jira_get", "jira_search", "git_diff", "git_status", "github_get_pr", "github_list_prs", "github_pr_files", "github_pr_diff":
 			mu.Lock()
+			if directExecuting {
+				mu.Unlock()
+				return nil, nil
+			}
 			exploreCount++
 			cur := exploreCount
 			if cur > maxExploreCalls {

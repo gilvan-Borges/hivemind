@@ -245,7 +245,9 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 		return false, "", fmt.Errorf("modelo de %s: %w", chief.Name, err)
 	}
 
-	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, runMode == "direct")
+	isDirect := runMode == "direct"
+	isAuto := runMode == "" || runMode == "auto"
+	allTools, err := r.buildTriageBaseTools(toolRoot, jiraKey, sddDocs, sddJira, isAutoReview, isDirect || isAuto)
 	if err != nil {
 		return false, "", err
 	}
@@ -278,29 +280,35 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	adkName := names.ADK(chief.Name + "_triage")
 	// O Chefe também pode pesquisar com subagente efêmero (contexto limpo) sem
 	// queimar seu próprio orçamento de exploração na triagem.
-	if sp, pErr := r.newSpawnSubagentTool(chief, adkName, toolRoot); pErr == nil {
+	if sp, pErr := r.newSpawnSubagentTool(chief, adkName, toolRoot, isDirect); pErr == nil {
 		allTools = append(allTools, sp)
 	}
-	beforeToolCBs := []llmagent.BeforeToolCallback{
-		newRepeatReadGuardCallback(),
-	}
+	var beforeToolCBs []llmagent.BeforeToolCallback
 	var afterToolCBs []llmagent.AfterToolCallback
-	if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
+	if runMode == "direct" {
+		// Modo Direto: sem tetos artificiais de chamadas, tokens ou exploração.
+		// Mantemos apenas um guarda leve que reseta a cada edição ou run_shell.
+	} else if (r.reviewRequested || isAutoReview) && !preloadedOwnPR {
+		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback())
 		revBefore, revAfter := newPRReviewGuardCallbacks(preloadedPR, preloadedAllDiffs, defaultMaxReviewExploreCalls)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{revBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, revAfter)
-	} else if runMode == "direct" {
-		dirBefore, dirAfter := newDevExploreBudgetCallbacks(25, nil, 80)
-		beforeToolCBs = append([]llmagent.BeforeToolCallback{dirBefore}, beforeToolCBs...)
-		afterToolCBs = append(afterToolCBs, dirAfter)
 	} else if !sddDocs && !sddJira {
-		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, defaultMaxTriageExploreCalls)
+		beforeToolCBs = append(beforeToolCBs, newRepeatReadGuardCallback())
+		maxAutoExplore := defaultMaxTriageExploreCalls
+		if isAuto {
+			maxAutoExplore = 24
+		}
+		triBefore, triAfter := newChiefTriageBudgetCallbacks(preloadedJiraKey, maxAutoExplore)
 		beforeToolCBs = append([]llmagent.BeforeToolCallback{triBefore}, beforeToolCBs...)
 		afterToolCBs = append(afterToolCBs, triAfter)
 	}
 	keepInTurn := r.Project.Settings.EffectiveInTurnKeepToolResults()
 	if (r.reviewRequested || isAutoReview) && keepInTurn < 6 {
 		keepInTurn = 6
+	}
+	if ctxWin := agentContextWindow(chief); (runMode == "direct" || isAuto) && (ctxWin >= 200_000 || ctxWin == 0) && keepInTurn < 18 {
+		keepInTurn = 18
 	}
 	triageBeforeModelCBs := []llmagent.BeforeModelCallback{
 		r.newTriageTurnIsolationCallback(sess, toolRoot, runMode, &delegateMu, &delegated),
@@ -345,9 +353,13 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	}
 	printer := &ui.Printer{Out: r.Out, Labels: labels}
 	var summary string
+	maxLLMCalls := r.Project.Settings.MaxLLMCalls
+	if runMode == "direct" {
+		maxLLMCalls = 0
+	}
 	for ev, err := range triageRunner.Run(ctx, sessionx.UserID, sess.ID(), msg, agent.RunConfig{
 		StreamingMode: mode,
-		MaxLLMCalls:   r.Project.Settings.MaxLLMCalls,
+		MaxLLMCalls:   maxLLMCalls,
 	}) {
 		if err != nil {
 			return false, "", err
@@ -358,12 +370,14 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 			if r.OnEvent != nil {
 				r.emitEvent(ev, labels)
 			}
-			tokenLimit := r.Project.Settings.MaxTokens
-			if isAutoReview {
-				tokenLimit = r.Project.Settings.AutoReview.EffectiveMaxTokensPerPR(tokenLimit)
-			}
-			if tokenLimit > 0 && r.turnTotalTokens > tokenLimit {
-				return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, tokenLimit)
+			if runMode != "direct" {
+				tokenLimit := r.Project.Settings.MaxTokens
+				if isAutoReview {
+					tokenLimit = r.Project.Settings.AutoReview.EffectiveMaxTokensPerPR(tokenLimit)
+				}
+				if tokenLimit > 0 && r.turnTotalTokens > tokenLimit {
+					return false, "", fmt.Errorf("limite de tokens por execução atingido (%d > %d tokens)", r.turnTotalTokens, tokenLimit)
+				}
 			}
 		}
 		if ev != nil && !ev.Partial && ev.LLMResponse.Content != nil {
@@ -435,17 +449,7 @@ func (r *Runner) newTriageTurnIsolationCallback(
 	delegated *bool,
 ) llmagent.BeforeModelCallback {
 	var postDelegateModelCalls int
-	var reviewModelCalls int
 	return func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-		if runMode == "direct" && r.reviewRequested {
-			reviewModelCalls++
-			if reviewModelCalls > 8 {
-				return &model.LLMResponse{
-					Content:      &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "Parei esta revisão depois de 8 chamadas sem encerrar. Publique com github_review_pr ou mcp_call no servidor github. gh pr comment e gh pr review estão bloqueados."}}},
-					TurnComplete: true,
-				}, nil
-			}
-		}
 		if delegateMu != nil && delegated != nil {
 			delegateMu.Lock()
 			done := *delegated
