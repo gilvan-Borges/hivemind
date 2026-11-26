@@ -902,14 +902,27 @@ button.icon-btn:hover:not(:disabled) {
   color: var(--red);
 }
 .editor-breadcrumb {
-  height: 30px;
+  min-height: 36px;
+  height: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 6px;
+  padding: 4px 12px;
   background: var(--bg-deep);
   border-bottom: 1px solid var(--border);
   font-size: 11.5px;
+  flex-shrink: 0;
+}
+.editor-breadcrumb > span.dim {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-breadcrumb button,
+.editor-breadcrumb .mini {
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -9990,10 +10003,20 @@ button.primary {
 }
 .composer-tools-icons {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
+.composer-tools-icons .composer-icon-btn {
+  width: auto;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 9px;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
 .composer-tools-menu .composer-jira-input {
-  width: 100%;
+  width: 100% !important;
 }
 
 .status-bar {

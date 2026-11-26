@@ -497,6 +497,9 @@ export function mountCodeMirror(host: HTMLElement, tabKey: string, content: stri
     stateCache.set(tabKey, st);
   }
   if (view) {
+    if (view.dom.parentElement !== host) {
+      host.replaceChildren(view.dom);
+    }
     view.setState(st);
     return view;
   }
