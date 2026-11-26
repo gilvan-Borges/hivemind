@@ -34,6 +34,7 @@ type Deps struct {
 	Settings               team.Settings
 	DisableGitWrite        bool
 	DisableMerge           bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
+	LeanReviewTools        bool // Revisão pura de PR sem jiraKey: omite schemas Jira e github_create_pr para poupar tokens por chamada
 	ReviewCommentOnly      bool // Quando true, github_review_pr aceita apenas evento COMMENT
 	AllowReadOnlyTestShell bool // run_shell continua disponível, mas commit/push/merge/PR via shell ficam bloqueados (auto-review)
 	NoShell                bool // Revisão automática sem testes: não entrega run_shell
@@ -186,15 +187,17 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 		}
-		if err := deps.addJira(&out); err != nil {
-			return nil, err
+		if !deps.LeanReviewTools {
+			if err := deps.addJira(&out); err != nil {
+				return nil, err
+			}
 		}
 		if deps.DocsOnlyWrite {
 			if err := add(deps.writeDoc()); err != nil {
 				return nil, err
 			}
 		}
-		if err := deps.addGitHubGovernance(&out, !deps.DisableGitWrite); err != nil {
+		if err := deps.addGitHubGovernance(&out, !deps.DisableGitWrite && !deps.LeanReviewTools); err != nil {
 			return nil, err
 		}
 
@@ -217,8 +220,10 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.gitDiff()); err != nil {
 			return nil, err
 		}
-		if err := deps.addJiraComment(&out); err != nil {
-			return nil, err
+		if !deps.LeanReviewTools {
+			if err := deps.addJiraComment(&out); err != nil {
+				return nil, err
+			}
 		}
 		if err := deps.addGitHubRead(&out); err != nil {
 			return nil, err
@@ -265,7 +270,7 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 				return nil, err
 			}
 		}
-		if err := deps.addGitHubGovernance(&out, !deps.DisableGitWrite); err != nil {
+		if err := deps.addGitHubGovernance(&out, !deps.DisableGitWrite && !deps.LeanReviewTools); err != nil {
 			return nil, err
 		}
 
@@ -324,8 +329,10 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.qaChanges()); err != nil {
 			return nil, err
 		}
-		if err := deps.addJiraComment(&out); err != nil {
-			return nil, err
+		if !deps.LeanReviewTools {
+			if err := deps.addJiraComment(&out); err != nil {
+				return nil, err
+			}
 		}
 
 	default:

@@ -60,3 +60,19 @@ func TestNormalizeTaskStatus(t *testing.T) {
 		t.Fatal("esperava rejeição para status desconhecido")
 	}
 }
+
+func TestForRoleLeanReviewToolsOmitsCreatePR(t *testing.T) {
+	tl, err := ForRole(team.RoleArchitect, Deps{
+		Root:            t.TempDir(),
+		LeanReviewTools: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range tl {
+		n := item.Name()
+		if n == "github_create_pr" || n == "jira_get" || n == "jira_create_issue" {
+			t.Fatalf("LeanReviewTools=true não deveria expor %s", n)
+		}
+	}
+}

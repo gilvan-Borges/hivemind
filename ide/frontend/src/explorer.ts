@@ -421,28 +421,43 @@ function renderLeftSidebarInner(sidebar: HTMLElement) {
             <span class="dim" style="font-size:11px;font-weight:400">tokens</span>
           </div>
           <div class="dim" style="font-family:var(--mono);font-size:11px">
-            Entrada: ${exactTokens(sum.projectInputTokens)} · Saída: ${exactTokens(sum.projectOutputTokens)}
+            ${(() => {
+              const pCache = sum.projectCachedReadTokens || 0;
+              const pReal = Math.max(0, sum.projectInputTokens - pCache);
+              return pCache > 0
+                ? `Real: ${exactTokens(pReal)} · Cache: ${exactTokens(pCache)} · Saída: ${exactTokens(sum.projectOutputTokens)}`
+                : `Entrada: ${exactTokens(sum.projectInputTokens)} · Saída: ${exactTokens(sum.projectOutputTokens)}`;
+            })()}
           </div>
         </div>
         <div class="dim" style="font-weight:600;margin-bottom:6px">Histórico salvo (.hivemind/sessions)</div>
         ${sum.sessions.length === 0
           ? `<div class="dim">Nenhuma sessão salva neste projeto ainda. Envie uma mensagem ao Chefe para iniciar.</div>`
-          : sum.sessions.map((s) => `
+          : sum.sessions.map((s) => {
+            const sCache = s.cachedReadTokens || 0;
+            const sReal = Math.max(0, s.inputTokens - sCache);
+            const tip = sCache > 0
+              ? `Real: ${exactTokens(sReal)} | Cache: ${exactTokens(sCache)} | Saída: ${exactTokens(s.outputTokens)}`
+              : `Entrada: ${exactTokens(s.inputTokens)} | Saída: ${exactTokens(s.outputTokens)}`;
+            const line = sCache > 0
+              ? `Real: ${exactTokens(sReal)} · Cache: ${exactTokens(sCache)} · Saída: ${exactTokens(s.outputTokens)}`
+              : `Entrada: ${exactTokens(s.inputTokens)} · Saída: ${exactTokens(s.outputTokens)}`;
+            return `
             <div class="session-card ${lane?.sessionId === s.id ? "active" : ""}">
               <div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}${s.kind === "hive" ? ` <span class="dim">· Hive</span>` : ""}</div>
               <div class="session-meta">
                 <span>${escapeHtml(s.updatedAt)}${s.jiraKey ? ` · <strong>${escapeHtml(s.jiraKey)}</strong>` : ""}</span>
-                <span class="tok-pill" title="Entrada: ${exactTokens(s.inputTokens)} | Saída: ${exactTokens(s.outputTokens)}">${icons.bolt}<span>${exactTokens(s.totalTokens)} tok</span></span>
+                <span class="tok-pill" title="${tip}">${icons.bolt}<span>${exactTokens(s.totalTokens)} tok</span></span>
               </div>
               <div class="dim" style="font-family:var(--mono);font-size:10.5px">
-                Entrada: ${exactTokens(s.inputTokens)} · Saída: ${exactTokens(s.outputTokens)}
+                ${line}
               </div>
               <div style="display:flex;gap:6px;margin-top:2px">
                 <button class="mini primary" style="flex:1" data-resume-session="${escapeHtml(s.id)}">Retomar Sessão</button>
                 <button class="mini danger" data-delete-session="${escapeHtml(s.id)}" title="Excluir sessão">${icons.trash}</button>
               </div>
             </div>
-          `).join("")
+          `; }).join("")
         }
       </div>
     `;

@@ -487,6 +487,7 @@ export interface SessionSummary {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cachedReadTokens?: number;
   kind?: string;
 }
 
@@ -495,6 +496,7 @@ export interface WorkspaceSessionsSummary {
   projectInputTokens: number;
   projectOutputTokens: number;
   projectTotalTokens: number;
+  projectCachedReadTokens?: number;
 }
 
 export interface RestoredMessage {
@@ -734,12 +736,7 @@ export interface ProjectWorkspaceContext {
     results: TextSearchMatch[];
     searching: boolean;
   };
-  sessionsSummary: {
-    sessions: SessionSummary[];
-    projectInputTokens: number;
-    projectOutputTokens: number;
-    projectTotalTokens: number;
-  };
+  sessionsSummary: WorkspaceSessionsSummary;
   issues: {
     list: ProjectIssue[];
     loading: boolean;

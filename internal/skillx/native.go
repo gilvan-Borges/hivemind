@@ -87,7 +87,8 @@ func SeedProductSkills(dir string) (seeded []string, err error) {
 					(strings.Contains(cur, "Proibido escrever `Superfícies:") &&
 						(!strings.Contains(cur, "Pós-merge: atualizar a task no Jira") ||
 							!strings.Contains(cur, "Mudanças de Frontend / Visual") ||
-							!strings.Contains(cur, "uv run pytest"))) {
+							!strings.Contains(cur, "uv run pytest") ||
+							!strings.Contains(cur, "-Dstyle.color=never"))) {
 					_ = os.WriteFile(dest, body, 0o644)
 				}
 			}

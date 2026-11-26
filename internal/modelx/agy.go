@@ -389,9 +389,11 @@ type agyEnvelope struct {
 	Error      string          `json:"error"`
 	Structured json.RawMessage `json:"structured_output"`
 	Usage      struct {
-		Input  int32 `json:"input_tokens"`
-		Output int32 `json:"output_tokens"`
-		Total  int32 `json:"total_tokens"`
+		Input     int32 `json:"input_tokens"`
+		Output    int32 `json:"output_tokens"`
+		Total     int32 `json:"total_tokens"`
+		Cached    int32 `json:"cached_tokens"`
+		CacheRead int32 `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -494,10 +496,15 @@ func (e agyEnvelope) toResponse(structured bool) (*model.LLMResponse, error) {
 		TurnComplete: true,
 	}
 	if e.Usage.Total > 0 || e.Usage.Input > 0 || e.Usage.Output > 0 {
+		cached := e.Usage.Cached
+		if e.Usage.CacheRead > cached {
+			cached = e.Usage.CacheRead
+		}
 		resp.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
-			PromptTokenCount:     e.Usage.Input,
-			CandidatesTokenCount: e.Usage.Output,
-			TotalTokenCount:      e.Usage.Total,
+			PromptTokenCount:        e.Usage.Input,
+			CandidatesTokenCount:    e.Usage.Output,
+			TotalTokenCount:         e.Usage.Total,
+			CachedContentTokenCount: cached,
 		}
 	}
 	return resp, nil

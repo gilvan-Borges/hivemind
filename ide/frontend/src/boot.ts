@@ -821,6 +821,7 @@ export async function refreshSessions(targetRoot?: string) {
       projectInputTokens: Number(sum?.projectInputTokens || 0),
       projectOutputTokens: Number(sum?.projectOutputTokens || 0),
       projectTotalTokens: Number(sum?.projectTotalTokens || 0),
+      projectCachedReadTokens: Number(sum?.projectCachedReadTokens || 0),
     };
     const ctx = state.projectTabs.find((p) => normalizePathKey(p.project.root) === targetKey);
     if (ctx) ctx.sessionsSummary = summaryObj;

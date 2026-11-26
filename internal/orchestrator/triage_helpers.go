@@ -93,6 +93,7 @@ func (r *Runner) buildTriageBaseToolsWithGitHub(toolRoot, jiraKey string, sddDoc
 		Settings:               r.Project.Settings,
 		DisableGitWrite:        disableGitWrite,
 		DisableMerge:           isAutoReview,
+		LeanReviewTools:        inEphemeralReviewWT && strings.TrimSpace(jiraKey) == "",
 		ReviewCommentOnly:      isAutoReview && r.Project.Settings.AutoReview.EffectiveReviewAction() == "comment_only",
 		AllowReadOnlyTestShell: (isAutoReview && r.Project.Settings.AutoReview.EffectiveRunTests()) || inEphemeralReviewWT,
 		NoShell:                isAutoReview && !r.Project.Settings.AutoReview.EffectiveRunTests(),

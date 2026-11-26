@@ -18,32 +18,35 @@ import (
 
 // TokenStat holds accumulated input, output, and total tokens plus LLM call count.
 type TokenStat struct {
-	InputTokens  int64 `json:"inputTokens"`
-	OutputTokens int64 `json:"outputTokens"`
-	TotalTokens  int64 `json:"totalTokens"`
-	Calls        int64 `json:"calls"`
+	InputTokens      int64 `json:"inputTokens"`
+	OutputTokens     int64 `json:"outputTokens"`
+	TotalTokens      int64 `json:"totalTokens"`
+	CachedReadTokens int64 `json:"cachedReadTokens,omitempty"`
+	Calls            int64 `json:"calls"`
 }
 
 // SessionSummary represents one persisted session with its accumulated token usage.
 type SessionSummary struct {
-	ID           string `json:"id"`
-	UpdatedAt    string `json:"updatedAt"`
-	Title        string `json:"title"`
-	JiraKey      string `json:"jiraKey,omitempty"`
-	InputTokens  int64  `json:"inputTokens"`
-	OutputTokens int64  `json:"outputTokens"`
-	TotalTokens  int64  `json:"totalTokens"`
-	Kind         string `json:"kind,omitempty"`
-	Preview      string `json:"preview,omitempty"`
-	Unread       int    `json:"unread,omitempty"`
+	ID               string `json:"id"`
+	UpdatedAt        string `json:"updatedAt"`
+	Title            string `json:"title"`
+	JiraKey          string `json:"jiraKey,omitempty"`
+	InputTokens      int64  `json:"inputTokens"`
+	OutputTokens     int64  `json:"outputTokens"`
+	TotalTokens      int64  `json:"totalTokens"`
+	CachedReadTokens int64  `json:"cachedReadTokens,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	Preview          string `json:"preview,omitempty"`
+	Unread           int    `json:"unread,omitempty"`
 }
 
 // WorkspaceSessionsSummary aggregates all saved sessions and total project token consumption.
 type WorkspaceSessionsSummary struct {
-	Sessions            []SessionSummary `json:"sessions"`
-	ProjectInputTokens  int64            `json:"projectInputTokens"`
-	ProjectOutputTokens int64            `json:"projectOutputTokens"`
-	ProjectTotalTokens  int64            `json:"projectTotalTokens"`
+	Sessions                []SessionSummary `json:"sessions"`
+	ProjectInputTokens      int64            `json:"projectInputTokens"`
+	ProjectOutputTokens     int64            `json:"projectOutputTokens"`
+	ProjectTotalTokens      int64            `json:"projectTotalTokens"`
+	ProjectCachedReadTokens int64            `json:"projectCachedReadTokens,omitempty"`
 }
 
 // RestoredMessage is one chat message reconstructed from a persisted session.
@@ -57,15 +60,16 @@ type RestoredMessage struct {
 
 // SessionDetail holds the full transcript and per-agent token breakdown of one session.
 type SessionDetail struct {
-	ID           string               `json:"id"`
-	Title        string               `json:"title"`
-	JiraKey      string               `json:"jiraKey,omitempty"`
-	InputTokens  int64                `json:"inputTokens"`
-	OutputTokens int64                `json:"outputTokens"`
-	TotalTokens  int64                `json:"totalTokens"`
-	Kind         string               `json:"kind,omitempty"`
-	AgentUsage   map[string]TokenStat `json:"agentUsage"`
-	Messages     []RestoredMessage    `json:"messages"`
+	ID               string               `json:"id"`
+	Title            string               `json:"title"`
+	JiraKey          string               `json:"jiraKey,omitempty"`
+	InputTokens      int64                `json:"inputTokens"`
+	OutputTokens     int64                `json:"outputTokens"`
+	TotalTokens      int64                `json:"totalTokens"`
+	CachedReadTokens int64                `json:"cachedReadTokens,omitempty"`
+	Kind             string               `json:"kind,omitempty"`
+	AgentUsage       map[string]TokenStat `json:"agentUsage"`
+	Messages         []RestoredMessage    `json:"messages"`
 }
 
 func cleanObjectiveTitle(raw string) string {
@@ -102,7 +106,7 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 	// Reverse order so newest session comes first.
 	for i := len(metas) - 1; i >= 0; i-- {
 		m := metas[i]
-		inTok, outTok, totTok := m.InputTokens, m.OutputTokens, m.TotalTokens
+		inTok, outTok, totTok, cachedTok := m.InputTokens, m.OutputTokens, m.TotalTokens, m.CachedReadTokens
 		// Backfill older sessions whose index.json predates token fields.
 		if totTok == 0 {
 			if got, err := store.Get(ctx, &session.GetRequest{
@@ -119,6 +123,7 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 					u := ev.LLMResponse.UsageMetadata
 					inTok += int64(u.PromptTokenCount)
 					outTok += int64(u.CandidatesTokenCount)
+					cachedTok += int64(u.CachedContentTokenCount)
 					t := int64(u.TotalTokenCount)
 					if t == 0 && (u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0) {
 						t = int64(u.PromptTokenCount) + int64(u.CandidatesTokenCount)
@@ -131,6 +136,7 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 		out.ProjectInputTokens += inTok
 		out.ProjectOutputTokens += outTok
 		out.ProjectTotalTokens += totTok
+		out.ProjectCachedReadTokens += cachedTok
 
 		ts := ""
 		if !m.UpdatedAt.IsZero() {
@@ -139,14 +145,15 @@ func ListWorkspaceSessions(ctx context.Context, workspace string) (WorkspaceSess
 			ts = time.Now().Format("02/01 15:04")
 		}
 		out.Sessions = append(out.Sessions, SessionSummary{
-			ID:           m.ID,
-			UpdatedAt:    ts,
-			Title:        cleanObjectiveTitle(m.Objective),
-			JiraKey:      m.JiraKey,
-			InputTokens:  inTok,
-			OutputTokens: outTok,
-			TotalTokens:  totTok,
-			Kind:         m.Kind,
+			ID:               m.ID,
+			UpdatedAt:        ts,
+			Title:            cleanObjectiveTitle(m.Objective),
+			JiraKey:          m.JiraKey,
+			InputTokens:      inTok,
+			OutputTokens:     outTok,
+			TotalTokens:      totTok,
+			CachedReadTokens: cachedTok,
+			Kind:             m.Kind,
 		})
 	}
 	store.annotateConversations(ctx, out.Sessions)
@@ -209,6 +216,7 @@ func LoadSessionDetail(ctx context.Context, workspace, sessionID string) (Sessio
 			u := ev.LLMResponse.UsageMetadata
 			inT := int64(u.PromptTokenCount)
 			outT := int64(u.CandidatesTokenCount)
+			cachedT := int64(u.CachedContentTokenCount)
 			totT := int64(u.TotalTokenCount)
 			if totT == 0 && (inT > 0 || outT > 0) {
 				totT = inT + outT
@@ -217,6 +225,7 @@ func LoadSessionDetail(ctx context.Context, workspace, sessionID string) (Sessio
 			detail.InputTokens += inT
 			detail.OutputTokens += outT
 			detail.TotalTokens += totT
+			detail.CachedReadTokens += cachedT
 
 			author := ev.Author
 			if author == "" {
@@ -226,6 +235,7 @@ func LoadSessionDetail(ctx context.Context, workspace, sessionID string) (Sessio
 			st.InputTokens += inT
 			st.OutputTokens += outT
 			st.TotalTokens += totT
+			st.CachedReadTokens += cachedT
 			st.Calls++
 			detail.AgentUsage[author] = st
 		}

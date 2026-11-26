@@ -62,7 +62,8 @@ func TestSeedProductSkillsLeavesUntangleOff(t *testing.T) {
 		!strings.Contains(bodyText, "Proibido escrever `Superfícies:") ||
 		!strings.Contains(bodyText, "Pós-merge: atualizar a task no Jira") ||
 		!strings.Contains(bodyText, "Mudanças de Frontend / Visual") ||
-		!strings.Contains(bodyText, "uv run pytest") {
+		!strings.Contains(bodyText, "uv run pytest") ||
+		!strings.Contains(bodyText, "-Dstyle.color=never") {
 		t.Fatalf("revisar-e-testar deveria proibir cabeçalhos robóticos, orientar atualização do Jira pós-merge, classificar impacto visual e priorizar uv run pytest")
 	}
 	if byName["untangle-codebase"].Enabled {

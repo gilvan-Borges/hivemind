@@ -35,13 +35,14 @@ const (
 
 // Meta is the summary shown by `hivemind session list` and IDE session telemetry.
 type Meta struct {
-	ID           string    `json:"id"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	Objective    string    `json:"objective,omitempty"`
-	JiraKey      string    `json:"jiraKey,omitempty"`
-	InputTokens  int64     `json:"inputTokens,omitempty"`
-	OutputTokens int64     `json:"outputTokens,omitempty"`
-	TotalTokens  int64     `json:"totalTokens,omitempty"`
+	ID               string    `json:"id"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	Objective        string    `json:"objective,omitempty"`
+	JiraKey          string    `json:"jiraKey,omitempty"`
+	InputTokens      int64     `json:"inputTokens,omitempty"`
+	OutputTokens     int64     `json:"outputTokens,omitempty"`
+	TotalTokens      int64     `json:"totalTokens,omitempty"`
+	CachedReadTokens int64     `json:"cachedReadTokens,omitempty"`
 	// Kind is "hive" when the Agent Hive owns the thread. Empty means a team run.
 	Kind string `json:"kind,omitempty"`
 }
@@ -654,7 +655,7 @@ func cloneEvent(ev *session.Event) *session.Event {
 }
 
 func (s *fileSession) metaNoLock() Meta {
-	var inTok, outTok, totTok int64
+	var inTok, outTok, totTok, cachedTok int64
 	for _, ev := range s.events {
 		if ev == nil || ev.Partial || ev.LLMResponse.UsageMetadata == nil {
 			continue
@@ -662,6 +663,7 @@ func (s *fileSession) metaNoLock() Meta {
 		u := ev.LLMResponse.UsageMetadata
 		inTok += int64(u.PromptTokenCount)
 		outTok += int64(u.CandidatesTokenCount)
+		cachedTok += int64(u.CachedContentTokenCount)
 		t := int64(u.TotalTokenCount)
 		if t == 0 && (u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0) {
 			t = int64(u.PromptTokenCount) + int64(u.CandidatesTokenCount)
@@ -670,14 +672,15 @@ func (s *fileSession) metaNoLock() Meta {
 	}
 	kind, _ := s.state["conversationKind"].(string)
 	return Meta{
-		ID:           s.id,
-		UpdatedAt:    s.updatedAt,
-		Objective:    s.objective,
-		JiraKey:      s.jiraKey,
-		InputTokens:  inTok,
-		OutputTokens: outTok,
-		TotalTokens:  totTok,
-		Kind:         kind,
+		ID:               s.id,
+		UpdatedAt:        s.updatedAt,
+		Objective:        s.objective,
+		JiraKey:          s.jiraKey,
+		InputTokens:      inTok,
+		OutputTokens:     outTok,
+		TotalTokens:      totTok,
+		CachedReadTokens: cachedTok,
+		Kind:             kind,
 	}
 }
 

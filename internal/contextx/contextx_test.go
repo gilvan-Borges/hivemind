@@ -251,3 +251,23 @@ func TestCompactRequestNeverCompactsErrorsOrLatestParallelBatch(t *testing.T) {
 		t.Fatal("error response must never be compacted")
 	}
 }
+
+func TestCompactRequestLargeWindowAbsoluteFloor(t *testing.T) {
+	// With a 1M context window, 90k tokens is only 9% (far below 55%), yet
+	// MicroAbsoluteTokens (80k) must still compact older large read_file results.
+	hugeOld := strings.Repeat("linha de codigo antiga no contexto\n", 10_000) // ~350KB (~87k tokens)
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Revise o PR"}}},
+			{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "c1", Name: "read_file"}}}},
+			{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "c1", Name: "read_file", Response: map[string]any{"text": hugeOld}}}}},
+			{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "c2", Name: "read_file"}}}},
+			{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "c2", Name: "read_file", Response: map[string]any{"text": "arquivo recente"}}}}},
+		},
+	}
+
+	compacted, saved := CompactRequest(req, Budget{ContextWindow: 1_000_000, KeepRecent: 1})
+	if compacted == 0 || saved == 0 {
+		t.Fatalf("expected MicroAbsoluteTokens to compact 1M-window history at ~90k tokens, got compacted=%d saved=%d", compacted, saved)
+	}
+}

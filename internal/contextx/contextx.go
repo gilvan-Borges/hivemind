@@ -32,6 +32,10 @@ const (
 	// outputs are micro-compacted (Spec 02: 55%).
 	MicroThresholdPct = 0.55
 
+	// MicroAbsoluteTokens caps how many tokens may accumulate in huge-window
+	// models (e.g. 1M context) before older tool outputs are micro-compacted.
+	MicroAbsoluteTokens = 80_000
+
 	// SummaryThresholdPct of the context window above which the aggressive
 	// structural cut kicks in (Spec 02: 75%).
 	SummaryThresholdPct = 0.75
@@ -326,8 +330,9 @@ func compactRequestContext(ctx context.Context, req *model.LLMRequest, b Budget)
 		return pruned, prunedSaved, false
 	}
 	ratio := float64(est) / float64(window)
-	if ratio < MicroThresholdPct {
-		// Even below 55%, enforce proactive per-entry head-and-tail caps for
+	microTriggered := ratio >= MicroThresholdPct || (window > 250_000 && est >= MicroAbsoluteTokens)
+	if !microTriggered {
+		// Even below the micro trigger, enforce proactive per-entry head-and-tail caps for
 		// older oversized tool outputs when MaxToolEntryBytes is configured
 		// (subagent_default_context_limits).
 		if b.MaxToolEntryBytes > 0 {
