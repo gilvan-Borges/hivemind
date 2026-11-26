@@ -55,6 +55,8 @@ func (e *errLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, _ b
 
 func newTwoProviderTestEnv(t *testing.T, autoEscalateUSD float64) (*jev.CatalogStore, *jev.HealthStore, jev.Policy) {
 	t.Helper()
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "")
 	pol := jev.DefaultPolicy()
 	pol.Enabled = true
 	pol.AutoEscalateUSD = autoEscalateUSD
@@ -68,7 +70,7 @@ func newTwoProviderTestEnv(t *testing.T, autoEscalateUSD float64) (*jev.CatalogS
 			CompletionMicroUSD: 0,
 			LatencyP50Ms:       100,
 			Quality:            0.96,
-			Free:               true,
+			Free:               false,
 			Capabilities:       jev.Capabilities{Tools: true},
 			DataClass:          jev.DataClassHTTPAPI,
 			Tier:               jev.TierCheap,
@@ -81,7 +83,7 @@ func newTwoProviderTestEnv(t *testing.T, autoEscalateUSD float64) (*jev.CatalogS
 			CompletionMicroUSD: 0,
 			LatencyP50Ms:       150,
 			Quality:            0.90,
-			Free:               true,
+			Free:               false,
 			Capabilities:       jev.Capabilities{Tools: true},
 			DataClass:          jev.DataClassHTTPAPI,
 			Tier:               jev.TierCheap,
@@ -375,7 +377,7 @@ func TestJevIncompatibleModel400FailsOverOnce(t *testing.T) {
 		Policy:      &pol,
 		Catalog:     cat,
 		HealthStore: hs,
-		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true, "opencode": true} },
+		Creds:       func() map[string]bool { return map[string]bool{"openrouter": true} },
 		BuildModel: func(_ context.Context, _, mod string) (model.LLM, error) {
 			if mod == "cheap/a" {
 				return &errLLM{name: mod, fn: func(context.Context, *model.LLMRequest, int) (*model.LLMResponse, error) {

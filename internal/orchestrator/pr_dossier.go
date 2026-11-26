@@ -17,6 +17,7 @@ import (
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/tool"
 
+	"github.com/gilvan-Borges/HiveMind/internal/diffscan"
 	"github.com/gilvan-Borges/HiveMind/internal/githubx"
 	"github.com/gilvan-Borges/HiveMind/internal/gitx"
 	"github.com/gilvan-Borges/HiveMind/internal/jirax"
@@ -258,6 +259,18 @@ func buildPreHydratedPRDossierWithHead(parentCtx context.Context, gh githubx.Cli
 	sort.SliceStable(reviewable, func(i, j int) bool {
 		return reviewable[i].score < reviewable[j].score
 	})
+
+	patchInputs := make([]diffscan.FilePatchInput, 0, len(reviewable))
+	for _, item := range reviewable {
+		patchInputs = append(patchInputs, diffscan.FilePatchInput{
+			Filename: item.file.Filename,
+			Status:   item.file.Status,
+			Patch:    item.file.Patch,
+		})
+	}
+	if len(patchInputs) > 0 {
+		b.WriteString(diffscan.AnalyzePRFiles(patchInputs).FormatDossierSection())
+	}
 
 	b.WriteString("\n### Diff Unificado Pré-Carregado\n")
 	usedBytes := 0
