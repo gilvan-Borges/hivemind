@@ -1,5 +1,5 @@
 import type { AgentRuntime, ChatMessage, FileNode, GitHubStatus, GitHubSyncEvent, ProjectInfo, ProjectWorkspaceContext, TeamLane } from "./types";
-import { chipForAgent, describeModelRoute, exactTokens, formatMicroUsd, matchAgentRuntime } from "./utils";
+import { chipForAgent, describeModelRoute, exactTokens, formatMicroUsd, matchAgentRuntime, safeImageSrc } from "./utils";
 import { renderRightPane, renderTokenBar, scheduleChatFlush } from "./chat";
 import { sanitizeAssistantText } from "./chat-timeline";
 import { renderEditorBody, renderEditorTabs } from "./editor";
@@ -271,6 +271,35 @@ export async function boot() {
       noteActivity({ laneId: lane.id, kind: "tool_call", toolName: ev.toolName, stage: lane.stage, author: ev.author });
     } else if (ev.kind === "tool_result") {
       markToolsDone(lane, ev.detail || "", ev.toolName);
+      if (Array.isArray(ev.images) && ev.images.length > 0) {
+        const imgs = ev.images.map((x: unknown) => safeImageSrc(String(x || ""))).filter(Boolean);
+        if (imgs.length > 0) {
+          let targetChief: ChatMessage | undefined;
+          for (let i = lane.messages.length - 1; i >= 0; i--) {
+            if (lane.messages[i].kind === "user") break;
+            if (lane.messages[i].kind === "chief") {
+              targetChief = lane.messages[i];
+              break;
+            }
+          }
+          if (targetChief) {
+            const existing = targetChief.images || [];
+            const merged = [...existing];
+            for (const src of imgs) {
+              if (!merged.includes(src)) merged.push(src);
+            }
+            targetChief.images = merged;
+          } else {
+            lane.messages.push({
+              id: `chief-img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              kind: "chief",
+              label: ev.label || ev.author || "Chefe",
+              text: `Captura de tela (${ev.toolName || "ferramenta"})`,
+              images: imgs,
+            });
+          }
+        }
+      }
     } else if (ev.kind === "tasks_updated" && Array.isArray(ev.tasks)) {
       const tasks = ev.tasks
         .map((t: { title?: string; status?: string }) => ({

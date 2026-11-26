@@ -74,6 +74,7 @@ type Event struct {
 	LoopID            string                   `json:"loopId,omitempty"`
 	Iteration         int                      `json:"iteration,omitempty"`
 	Tasks             []tools.TaskItem         `json:"tasks,omitempty"`
+	Images            []string                 `json:"images,omitempty"`
 }
 
 // Attachment represents an image or file attached by the user in chat.

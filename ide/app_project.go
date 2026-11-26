@@ -331,6 +331,16 @@ func (a *App) SaveFile(workspace, relOrAbs, content string) error {
 	return idecore.WriteWorkspaceFile(workspace, relOrAbs, content)
 }
 
+// ReadLocalMedia returns a data:image/... URI for a local screenshot/image inside allowed roots.
+func (a *App) ReadLocalMedia(workspace, rawPath string) (string, error) {
+	return idecore.ReadLocalMediaDataURI(workspace, rawPath)
+}
+
+// OpenLocalFile opens a local file (e.g. PDF) using the system default viewer.
+func (a *App) OpenLocalFile(workspace, rawPath string) error {
+	return idecore.OpenLocalFile(workspace, rawPath)
+}
+
 // ListSessions returns all persisted sessions and token telemetry for workspace.
 func (a *App) ListSessions(workspace string) (idecore.WorkspaceSessionsSummary, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

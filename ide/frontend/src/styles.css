@@ -9149,6 +9149,70 @@ body.is-orb-mode #app {
   border: 1.5px solid currentColor;
   display: inline-block;
 }
+.md-img-card {
+  margin: 8px 0;
+  display: inline-block;
+  max-width: 100%;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--surface-card);
+  overflow: hidden;
+}
+.md-inline-img {
+  display: block;
+  max-width: min(460px, 100%);
+  max-height: 280px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.md-img-loading,
+.md-img-err {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.md-img-err {
+  color: var(--status-err);
+}
+.md-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 2px;
+  padding: 2px 7px 2px 4px;
+  border: 1px solid var(--border-divider);
+  border-radius: 6px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.md-file-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
+}
+.md-file-chip-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-card);
+  color: var(--accent-strong);
+  letter-spacing: 0.02em;
+}
+.md-file-chip.is-pdf .md-file-chip-badge {
+  color: var(--status-err);
+}
+.md-file-chip-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .activity-fold[open] .activity-fold-chev {
   transform: rotate(180deg);
 }

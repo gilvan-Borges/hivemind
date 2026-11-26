@@ -126,4 +126,18 @@ describe("renderMarkdownStreamed (parser incremental por blocos)", () => {
     }
     expect(markdownStats().cachedEntries).toBeLessThanOrEqual(64);
   });
+
+  it("renderiza imagens inline (data URI e local) e chips de PDF/arquivo", () => {
+    const md = [
+      "![Print](data:image/png;base64,iVBORw0KGgo=)",
+      "![Tela](file:///c:/acme/print.png)",
+      "Veja [relatorio.pdf](file:///c:/acme/relatorio.pdf)",
+      "Arquivo [tasks.go](file:///c:/acme/internal/tools/tasks.go#L10-L20)",
+    ].join("\n");
+    const html = renderMarkdownLite(md);
+    expect(html).toContain('data-preview-img="data:image/png;base64,iVBORw0KGgo="');
+    expect(html).toContain('data-local-img="file:///c:/acme/print.png"');
+    expect(html).toContain('class="md-file-chip is-pdf" data-open-pdf="file:///c:/acme/relatorio.pdf"');
+    expect(html).toContain('class="md-file-chip" data-open-file="file:///c:/acme/internal/tools/tasks.go#L10-L20"');
+  });
 });

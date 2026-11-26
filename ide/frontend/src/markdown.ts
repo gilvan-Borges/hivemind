@@ -7,9 +7,40 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
+const IMAGE_DATA_URI_RE = /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i;
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif)$/i;
+const KNOWN_FILE_EXT_RE = /\.(?:go|ts|tsx|js|jsx|mjs|cjs|py|java|kt|kts|rs|dart|css|scss|html|json|yaml|yml|toml|md|sql|sh|ps1|xml|txt|csv|log|pdf|png|jpe?g|webp|gif)$/i;
+
 function formatInline(escapedLine: string): string {
   return escapedLine
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (_m, alt: string, src: string) => {
+      if (IMAGE_DATA_URI_RE.test(src)) {
+        return `<figure class="md-img-card"><img class="md-inline-img" src="${src}" data-preview-img="${src}" alt="${alt}" /></figure>`;
+      }
+      const clean = src.split("#")[0];
+      if (!/^https?:\/\//i.test(src) && IMAGE_EXT_RE.test(clean)) {
+        return `<figure class="md-img-card" data-local-img="${src}" data-img-alt="${alt}"><div class="md-img-loading">Carregando imagem…</div></figure>`;
+      }
+      return `![${alt}](${src})`;
+    })
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (full, label: string, href: string) => {
+      if (/^https?:\/\//i.test(href)) {
+        return `<a class="md-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      }
+      const clean = href.split("#")[0];
+      if (/^file:\/\//i.test(href) || KNOWN_FILE_EXT_RE.test(clean)) {
+        if (/\.pdf$/i.test(clean)) {
+          return `<button type="button" class="md-file-chip is-pdf" data-open-pdf="${href}" title="${href}"><span class="md-file-chip-badge">PDF</span><span class="md-file-chip-name">${label}</span></button>`;
+        }
+        if (IMAGE_EXT_RE.test(clean)) {
+          return `<button type="button" class="md-file-chip is-img" data-open-img="${href}" title="${href}"><span class="md-file-chip-badge">IMG</span><span class="md-file-chip-name">${label}</span></button>`;
+        }
+        const extMatch = clean.match(/\.([a-z0-9]+)$/i);
+        const badge = extMatch ? extMatch[1].slice(0, 4).toUpperCase() : "ARQ";
+        return `<button type="button" class="md-file-chip" data-open-file="${href}" title="${href}"><span class="md-file-chip-badge">${badge}</span><span class="md-file-chip-name">${label}</span></button>`;
+      }
+      return full;
+    })
     .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
 }

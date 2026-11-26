@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -172,6 +173,7 @@ func (r *Runner) emitEvent(ev *session.Event, labels map[string]string) {
 				Label:    label,
 				ToolName: part.FunctionResponse.Name,
 				Detail:   summarizeToolResult(part.FunctionResponse.Response),
+				Images:   extractToolResultImages(part.FunctionResponse.Response),
 				Tokens:   tokens,
 			})
 		} else if part.Text != "" {
@@ -520,4 +522,57 @@ func (r *Runner) primaryChief() team.Agent {
 		return archs[0]
 	}
 	return r.Team.Agents[0]
+}
+
+var dataImageURIRe = regexp.MustCompile(`data:image/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+`)
+
+// extractToolResultImages scans a FunctionResponse payload recursively (up to depth 5,
+// max 4 images) for safe base64 image data URIs emitted by browser/screenshot tools.
+func extractToolResultImages(resp map[string]any) []string {
+	if len(resp) == 0 {
+		return nil
+	}
+	const maxImages = 4
+	const maxLen = 8 << 20
+	seen := make(map[string]struct{}, maxImages)
+	var out []string
+
+	var walk func(v any, depth int)
+	walk = func(v any, depth int) {
+		if depth > 5 || len(out) >= maxImages || v == nil {
+			return
+		}
+		switch x := v.(type) {
+		case string:
+			if len(x) == 0 || len(x) > maxLen || !strings.Contains(x, "data:image/") {
+				return
+			}
+			for _, m := range dataImageURIRe.FindAllString(x, maxImages-len(out)) {
+				if _, ok := seen[m]; ok {
+					continue
+				}
+				seen[m] = struct{}{}
+				out = append(out, m)
+				if len(out) >= maxImages {
+					return
+				}
+			}
+		case []any:
+			for _, item := range x {
+				walk(item, depth+1)
+				if len(out) >= maxImages {
+					return
+				}
+			}
+		case map[string]any:
+			for _, item := range x {
+				walk(item, depth+1)
+				if len(out) >= maxImages {
+					return
+				}
+			}
+		}
+	}
+	walk(resp, 0)
+	return out
 }

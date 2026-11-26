@@ -1201,6 +1201,8 @@ export interface WailsBackendApp {
   SearchFiles(workspace: string, query: string): Promise<string[]>;
   ReadFile(workspace: string, relOrAbs: string): Promise<string>;
   SaveFile(workspace: string, relOrAbs: string, content: string): Promise<void>;
+  ReadLocalMedia?(workspace: string, rawPath: string): Promise<string>;
+  OpenLocalFile?(workspace: string, rawPath: string): Promise<void>;
   ListModels(): Promise<AgyModel[]>;
   DoctorAgy(): Promise<AgyStatus>;
   ScanAllProviders?(workspace: string): Promise<ProvidersScanReport>;

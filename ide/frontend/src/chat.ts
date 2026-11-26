@@ -23,6 +23,24 @@ export let mentionTimer = 0;
 const laneIdleWaiters = new Map<string, Array<() => void>>();
 const laneRedirecting = new Set<string>();
 const expandedActivityGroups = new Set<string>();
+const localMediaCache = new Map<string, string>();
+
+function parseLocalHref(rawHref: string): { path: string; line?: number } {
+  const lineMatch = rawHref.match(/#L(\d+)/i);
+  const line = lineMatch ? parseInt(lineMatch[1], 10) : undefined;
+  let path = rawHref.split("#")[0];
+  if (/^file:\/\//i.test(path)) {
+    try {
+      path = decodeURIComponent(path.replace(/^file:\/\//i, ""));
+    } catch {
+      path = path.replace(/^file:\/\//i, "");
+    }
+    if (/^\/[A-Za-z]:\//.test(path)) {
+      path = path.slice(1);
+    }
+  }
+  return { path, line };
+}
 
 function notifyLaneIdle(laneId: string) {
   const list = laneIdleWaiters.get(laneId);
@@ -1088,6 +1106,95 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     imgEl.addEventListener("click", () => {
       state.imagePreviewUrl = (imgEl as HTMLElement).dataset.previewImg || "";
       renderModalLayer();
+    });
+  });
+
+  const bindPreviewImg = (imgEl: HTMLElement) => {
+    imgEl.addEventListener("click", () => {
+      state.imagePreviewUrl = imgEl.dataset.previewImg || "";
+      renderModalLayer();
+    });
+  };
+
+  el.querySelectorAll<HTMLElement>("[data-local-img]").forEach((fig) => {
+    const rawPath = fig.dataset.localImg || "";
+    const alt = fig.dataset.imgAlt || "imagem";
+    if (!rawPath) return;
+    const renderImg = (dataUri: string) => {
+      const safe = safeImageSrc(dataUri);
+      if (!safe) {
+        fig.innerHTML = `<div class="md-img-err">Imagem indisponível: ${escapeHtml(rawPath)}</div>`;
+        return;
+      }
+      fig.removeAttribute("data-local-img");
+      fig.innerHTML = `<img class="md-inline-img" src="${escapeHtml(safe)}" data-preview-img="${escapeHtml(safe)}" alt="${escapeHtml(alt)}" />`;
+      const img = fig.querySelector<HTMLElement>("[data-preview-img]");
+      if (img) bindPreviewImg(img);
+    };
+    const cached = localMediaCache.get(rawPath);
+    if (cached) {
+      renderImg(cached);
+      return;
+    }
+    const ws = state.project?.root || "";
+    api()?.ReadLocalMedia?.(ws, rawPath)
+      .then((uri) => {
+        if (uri) localMediaCache.set(rawPath, uri);
+        renderImg(uri);
+      })
+      .catch(() => {
+        fig.innerHTML = `<div class="md-img-err">Imagem indisponível: ${escapeHtml(rawPath)}</div>`;
+      });
+  });
+
+  el.querySelectorAll<HTMLElement>("[data-open-img]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const rawPath = btn.dataset.openImg || "";
+      if (!rawPath) return;
+      try {
+        let uri = localMediaCache.get(rawPath) || "";
+        if (!uri) {
+          uri = (await api()?.ReadLocalMedia?.(state.project?.root || "", rawPath)) || "";
+          if (uri) localMediaCache.set(rawPath, uri);
+        }
+        const safe = safeImageSrc(uri);
+        if (!safe) {
+          toastError("abrir a imagem", "formato ou caminho inválido");
+          return;
+        }
+        state.imagePreviewUrl = safe;
+        renderModalLayer();
+      } catch (err) {
+        toastError("abrir a imagem", err);
+      }
+    });
+  });
+
+  el.querySelectorAll<HTMLElement>("[data-open-pdf]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const rawPath = btn.dataset.openPdf || "";
+      if (!rawPath) return;
+      try {
+        await api()?.OpenLocalFile?.(state.project?.root || "", rawPath);
+      } catch (err) {
+        toastError("abrir o PDF", err);
+      }
+    });
+  });
+
+  el.querySelectorAll<HTMLElement>("[data-open-file]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const rawHref = btn.dataset.openFile || "";
+      if (!rawHref) return;
+      const { path, line } = parseLocalHref(rawHref);
+      const normWs = (state.project?.root || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      const normPath = path.replace(/\\/g, "/");
+      let rel = normPath;
+      if (normWs && normPath.toLowerCase().startsWith(`${normWs.toLowerCase()}/`)) {
+        rel = normPath.slice(normWs.length + 1);
+      }
+      const name = rel.split("/").pop() || rel;
+      void openFileInEditor(rel, name, line);
     });
   });
 }
