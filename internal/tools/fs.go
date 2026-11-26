@@ -54,19 +54,19 @@ func (d Deps) canRead() (tool.Tool, error) {
 }
 
 func readFileRange(root string, args readFileArgs) (string, error) {
-	// Spillover archives are the one scoped .hivemind carve-out: they hold
-	// payloads the model's own tools persisted, and read_file is how the
-	// model recovers exact ranges from them. Everything else under
-	// .hivemind stays sensitive.
+	// Spillover archives and the per-worktree vault are the scoped .hivemind
+	// read carve-outs: they hold tool payloads and repo-map/obsidian notes.
+	// Everything else under .hivemind stays sensitive.
 	spill := pathsec.IsSpilloverPath(args.Path)
-	if !spill && pathsec.IsSensitivePath(args.Path) {
+	vault := pathsec.IsVaultPath(args.Path)
+	if !spill && !vault && pathsec.IsSensitivePath(args.Path) {
 		return "", fmt.Errorf("leitura recusada: %s é um arquivo sensível (credencial, chave ou .env)", args.Path)
 	}
-	path, err := workspace.ResolveWithOptions(root, args.Path, workspace.Options{AllowMemoryRead: true, AllowSpilloverRead: spill})
+	path, err := workspace.ResolveWithOptions(root, args.Path, workspace.Options{AllowMemoryRead: true, AllowSpilloverRead: spill, AllowVaultRead: vault})
 	if err != nil {
 		return "", err
 	}
-	if !spill && pathsec.IsSensitivePath(path) {
+	if !spill && !vault && pathsec.IsSensitivePath(path) {
 		return "", fmt.Errorf("leitura recusada: %s é um arquivo sensível (credencial, chave ou .env)", args.Path)
 	}
 	f, err := os.Open(path)

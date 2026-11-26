@@ -30,6 +30,8 @@ func TestReadAndSearchSkipSensitiveFiles(t *testing.T) {
 	write("certs/app.pem", "-----BEGIN CERT-----\ns3cret-pem\n")
 	write("src/main.go", "package main\nfunc tokenHint() {}\n")
 	write(".hivemind/MEMORY.md", "memoria do time\n")
+	write(".hivemind/vault/INDEX.md", "# Vault Index\n")
+	write(".hivemind/api-keys.json", "{\"key\":\"s3cret\"}\n")
 
 	for _, rel := range []string{".env", ".env.local", ".ssh/id_rsa", "certs/app.pem"} {
 		_, err := readFileRange(root, readFileArgs{Path: rel})
@@ -44,6 +46,13 @@ func TestReadAndSearchSkipSensitiveFiles(t *testing.T) {
 	code, err := readFileRange(root, readFileArgs{Path: "src/main.go"})
 	if err != nil || !strings.Contains(code, "tokenHint") {
 		t.Fatalf("código: %v %q", err, code)
+	}
+	vaultIdx, err := readFileRange(root, readFileArgs{Path: ".hivemind/vault/INDEX.md"})
+	if err != nil || !strings.Contains(vaultIdx, "Vault Index") {
+		t.Fatalf("vault deveria ser legível: %v %q", err, vaultIdx)
+	}
+	if _, err := readFileRange(root, readFileArgs{Path: ".hivemind/api-keys.json"}); err == nil {
+		t.Fatal(".hivemind/api-keys.json deve continuar bloqueado")
 	}
 
 	out, err := runSearchText(context.Background(), root, searchTextArgs{Query: "s3cret"})

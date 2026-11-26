@@ -22,6 +22,9 @@ type Options struct {
 	// first path segment so nested ".hivemind/spillover" lookalikes in
 	// subdirectories do not inherit it.
 	AllowSpilloverRead bool
+	// AllowVaultRead permits read-only access to the .hivemind/vault subtree ONLY
+	// (the per-worktree Obsidian/RepoMap vault).
+	AllowVaultRead bool
 }
 
 // Resolve returns the absolute path of rel inside root, blocking .git and .hivemind.
@@ -80,6 +83,9 @@ func ResolveWithOptions(root, rel string, opts Options) (string, error) {
 				continue
 			}
 			if opts.AllowSpilloverRead && i == 0 && len(parts) >= 3 && normalizeSegment(parts[1]) == "spillover" {
+				continue
+			}
+			if opts.AllowVaultRead && i == 0 && len(parts) >= 3 && normalizeSegment(parts[1]) == "vault" {
 				continue
 			}
 			return "", fmt.Errorf("acesso a .hivemind não é permitido para agentes: %s", rel)

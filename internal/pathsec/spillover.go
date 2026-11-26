@@ -14,6 +14,17 @@ import (
 // least one file segment; lookalikes such as ".hivemind/spilloverx" or
 // "docs/.hivemind/spillover/x" do NOT match.
 func IsSpilloverPath(rel string) bool {
+	return isHivemindSubtree(rel, "spillover")
+}
+
+// IsVaultPath reports whether rel is strictly a workspace-relative path inside
+// the .hivemind/vault subtree (the local Obsidian/RepoMap vault generated for
+// the worktree). Only relative paths qualify; lookalikes do NOT match.
+func IsVaultPath(rel string) bool {
+	return isHivemindSubtree(rel, "vault")
+}
+
+func isHivemindSubtree(rel, sub string) bool {
 	s := strings.TrimSpace(strings.ReplaceAll(rel, `\`, "/"))
 	if s == "" || filepath.IsAbs(s) {
 		return false
@@ -23,7 +34,7 @@ func IsSpilloverPath(rel string) bool {
 	if len(parts) < 3 {
 		return false
 	}
-	if cleanSegment(parts[0]) != ".hivemind" || cleanSegment(parts[1]) != "spillover" {
+	if cleanSegment(parts[0]) != ".hivemind" || cleanSegment(parts[1]) != sub {
 		return false
 	}
 	for _, p := range parts[2:] {
