@@ -139,7 +139,8 @@ export function ensureThinkingTicker() {
         anyLaneRunning &&
         state.lanes.some(
           (l) =>
-            l.messages.some((m) => m.kind === "thinking" && m.active) ||
+            Boolean(l.runStartedAt) ||
+            l.messages.some((m) => (m.kind === "thinking" || m.kind === "tool" || m.kind === "tasks") && m.active) ||
             l.agents.some((a) => a.status === "running" && Boolean(a.runningSince))
         );
       if (!stillRunning) {

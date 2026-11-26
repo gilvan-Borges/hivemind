@@ -78,6 +78,8 @@ export async function boot() {
       autoLane.id = "lane-autoreview";
       autoLane.label = "auto-review";
       autoLane.running = true;
+      autoLane.runStartedAt = Date.now();
+      ensureThinkingTicker();
       state.lanes.push(autoLane);
       renderLaneBarOnly();
       hit = { lane: autoLane, isActiveProject: true };
@@ -399,6 +401,17 @@ export async function boot() {
     } else if (ev.kind === "error") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      const nowMs = Date.now();
+      if (lane.runStartedAt) {
+        lane.lastRunDurationMs = Math.max(0, nowMs - lane.runStartedAt);
+        lane.runStartedAt = 0;
+      }
+      for (const m of lane.messages) {
+        if (m.kind === "tasks" && m.active) {
+          m.active = false;
+          if (m.startedAt) m.durationMs = Math.max(0, nowMs - m.startedAt);
+        }
+      }
       stopLaneRunningAgents(lane, "error", ev.author, ev.label);
       const errText = String(ev.text || "Erro desconhecido");
       const isUserCancel = Boolean(lane.canceledByUser) && /context canceled|canceled/i.test(errText);
@@ -420,8 +433,16 @@ export async function boot() {
     } else if (ev.kind === "finish") {
       markToolsDone(lane);
       markThinkingDone(lane);
+      const nowMs = Date.now();
+      if (lane.runStartedAt) {
+        lane.lastRunDurationMs = Math.max(0, nowMs - lane.runStartedAt);
+        lane.runStartedAt = 0;
+      }
       for (const m of lane.messages) {
-        if (m.kind === "tasks") m.active = false;
+        if (m.kind === "tasks" && m.active) {
+          m.active = false;
+          if (m.startedAt) m.durationMs = Math.max(0, nowMs - m.startedAt);
+        }
       }
       const stageNow = lane.stage || "";
       const wasSolo = isCurrentTurnSolo(lane);

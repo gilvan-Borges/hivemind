@@ -142,6 +142,7 @@ export function renderRightPane() {
   right.innerHTML = `
     <div class="chat-top">
       <div class="lane-bar" id="lane-bar"></div>
+      <div class="chat-run-timer-slot" id="chat-run-timer-slot">${renderChatRunTimerHtml(lane)}</div>
       <button type="button" class="icon-btn chat-add-lane-btn" id="btn-add-lane-inline" title="Abrir conversa paralela" aria-label="Abrir conversa paralela">${icons.plus}</button>
       <div class="chat-actions">
         <button type="button" class="icon-btn" id="btn-chat-actions" title="Ações da conversa" aria-haspopup="menu" aria-expanded="${state.chatActionsOpen ? "true" : "false"}" aria-label="Ações da conversa">${icons.moreHoriz}</button>
@@ -199,6 +200,14 @@ export function renderRightPane() {
   renderComposerModeBar();
   renderLaneBarOnly();
   renderPipelineBar();
+  const timerSlot = document.getElementById("chat-run-timer-slot");
+  if (timerSlot) {
+    const timerKey = `${lane?.running ? 1 : 0}|${lane?.runStartedAt || 0}|${lane?.lastRunDurationMs || 0}`;
+    if (timerSlot.dataset.timerKey !== timerKey) {
+      timerSlot.dataset.timerKey = timerKey;
+      timerSlot.innerHTML = renderChatRunTimerHtml(lane);
+    }
+  }
   renderTokenBar();
   renderComposerImages();
   rebuildChatMessagesFull();
@@ -717,9 +726,25 @@ function formatActiveToolSummary(m: ChatMessage): string {
   return `${spec.verb} ${spec.targetText || m.toolName || m.text}`.trim();
 }
 
+function renderChatRunTimerHtml(lane: TeamLane | undefined): string {
+  if (!lane) return "";
+  if (lane.running && lane.runStartedAt) {
+    const elapsed = formatElapsedThinking(Math.max(0, Date.now() - lane.runStartedAt));
+    return `<span class="chat-run-timer is-active" title="Tempo decorrido da conversa/execução atual"><span class="chat-run-dot" aria-hidden="true"></span><span class="chat-run-timer-val" data-thinking-started="${lane.runStartedAt}">${escapeHtml(elapsed)}</span></span>`;
+  }
+  if (lane.lastRunDurationMs && lane.lastRunDurationMs > 0) {
+    return `<span class="chat-run-timer" title="Duração da última execução"><span class="chat-run-timer-val">${escapeHtml(formatElapsedThinking(lane.lastRunDurationMs))}</span></span>`;
+  }
+  return "";
+}
+
 function renderMinimalToolHtml(m: ChatMessage, wasOpen: boolean, subOpenId?: string): string {
   const spec = formatMinimalToolStep(m);
-  const durLabel = formatToolDuration(m.durationMs);
+  const durLabel = m.active && m.startedAt
+    ? formatElapsedThinking(Math.max(0, Date.now() - m.startedAt))
+    : formatToolDuration(m.durationMs);
+  const durAttr = m.active && m.startedAt ? ` data-thinking-started="${m.startedAt}"` : "";
+  const durCls = m.active ? "tool-minimal-dur is-live" : "tool-minimal-dur";
   const hasDrawer = Boolean(m.toolDetail || m.toolOutput);
   const agentChip = m.solo === false && m.label
     ? `<span class="tool-agent-tag">${escapeHtml(m.label.split("·")[0].trim())}</span>`
@@ -746,7 +771,7 @@ function renderMinimalToolHtml(m: ChatMessage, wasOpen: boolean, subOpenId?: str
   }
 
   if (!hasDrawer) {
-    return `<div class="tool-minimal-row">${contentHtml}${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}</div>`;
+    return `<div class="tool-minimal-row">${contentHtml}${durLabel ? `<span class="${durCls}"${durAttr}>${escapeHtml(durLabel)}</span>` : ""}</div>`;
   }
 
   const drawerLines: string[] = [];
@@ -758,7 +783,7 @@ function renderMinimalToolHtml(m: ChatMessage, wasOpen: boolean, subOpenId?: str
       <summary class="tool-minimal-row">
         ${contentHtml}
         ${spec.expandChevron ? `<span class="tool-step-chev">${icons.chevronRight}</span>` : `<span class="tool-step-chev hover-only">${icons.chevronRight}</span>`}
-        ${durLabel ? `<span class="tool-minimal-dur">${escapeHtml(durLabel)}</span>` : ""}
+        ${durLabel ? `<span class="${durCls}"${durAttr}>${escapeHtml(durLabel)}</span>` : ""}
       </summary>
       <div class="tool-drawer">${escapeHtml(drawerLines.join("\n\n"))}</div>
     </details>
@@ -893,6 +918,11 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
     const existingDet = el.querySelector("details.task-checklist");
     const isOpen = existingDet ? existingDet.hasAttribute("open") : true;
     const headerSuffix = current ? ` · ${current.title}` : doneCount === tasks.length && tasks.length > 0 ? " · Concluído" : "";
+    const elapsedHtml = m.active && m.startedAt
+      ? `<span class="task-checklist-elapsed is-live" data-thinking-started="${m.startedAt}">${escapeHtml(formatElapsedThinking(Math.max(0, Date.now() - m.startedAt)))}</span>`
+      : m.durationMs && m.durationMs > 0
+        ? `<span class="task-checklist-elapsed">${escapeHtml(formatElapsedThinking(m.durationMs))}</span>`
+        : "";
     const timeHtml = m.updatedAtText ? `<span class="task-checklist-time">${escapeHtml(m.updatedAtText)}</span>` : "";
     const statusIcon = (st: string) => {
       switch (st) {
@@ -915,6 +945,7 @@ export function updateMessageElement(el: HTMLElement, m: ChatMessage) {
           <span class="task-checklist-lead">${icons.plan}</span>
           <span class="task-checklist-title">Tarefas <span class="task-checklist-count">${doneCount}/${tasks.length}</span>${escapeHtml(headerSuffix)}</span>
           <span class="spacer"></span>
+          ${elapsedHtml}
           ${timeHtml}
           <span class="task-checklist-chev">${icons.chevronDown}</span>
         </summary>
@@ -1322,6 +1353,14 @@ export function flushChatUpdates() {
   }
   renderLaneBarOnly();
   renderPipelineBar();
+  const timerSlot = document.getElementById("chat-run-timer-slot");
+  if (timerSlot) {
+    const timerKey = `${lane?.running ? 1 : 0}|${lane?.runStartedAt || 0}|${lane?.lastRunDurationMs || 0}`;
+    if (timerSlot.dataset.timerKey !== timerKey) {
+      timerSlot.dataset.timerKey = timerKey;
+      timerSlot.innerHTML = renderChatRunTimerHtml(lane);
+    }
+  }
   renderTokenBar();
   syncComposerButtons();
   renderChatApprovalDock();
@@ -1867,6 +1906,7 @@ export async function sendToChief(overrideText?: string, overrideMode?: RunMode)
   const runProjectId = state.activeProjectId;
   const runProjectRoot = state.project.root;
   lane.running = true;
+  lane.runStartedAt = Date.now();
   lane.canceledByUser = false;
   lane.stage = effectiveMode === "squad" ? "dev" : "chief";
   lane.doneStages = [];

@@ -9213,6 +9213,47 @@ body.is-orb-mode #app {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-run-timer-slot {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chat-run-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-divider);
+  background: var(--surface-card);
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-run-timer.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
+  color: var(--accent-strong);
+}
+.chat-run-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  flex-shrink: 0;
+}
+.task-checklist-elapsed {
+  font-size: 11px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.task-checklist-elapsed.is-live,
+.tool-minimal-dur.is-live {
+  color: var(--accent-strong);
+}
 .activity-fold[open] .activity-fold-chev {
   transform: rotate(180deg);
 }

@@ -293,6 +293,8 @@ export interface TeamLane {
   sessionCostMicroUsd: number;
   costByRole: Record<string, number>;
   viewMode?: "chat" | "pty";
+  runStartedAt?: number;
+  lastRunDurationMs?: number;
 }
 
 export interface TerminalEntry {
