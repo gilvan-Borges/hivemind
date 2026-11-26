@@ -52,3 +52,17 @@ func TestLocalEchoAndDeny(t *testing.T) {
 		t.Fatalf("esperava recusa de perigoso, got %v", err)
 	}
 }
+
+
+func TestSanitizeWindowsPowerShellCommand(t *testing.T) {
+	got := sanitizeWindowsPowerShellCommand(`cd app && echo "a && b" 2>&1 && git status`)
+	if strings.Contains(got, "2>&1") {
+		t.Fatalf("unexpected 2>&1 in sanitized command: %s", got)
+	}
+	if !strings.Contains(got, `"a && b"`) {
+		t.Fatalf("&& inside quotes should be preserved: %s", got)
+	}
+	if !strings.Contains(got, "if ($? -and ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0))") {
+		t.Fatalf("expected conditional && translation: %s", got)
+	}
+}

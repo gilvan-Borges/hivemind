@@ -28,10 +28,10 @@ import (
 
 const (
 	// maxPreloadedPRDiffBytes caps the total unified diff patches injected into Turn 1
-	// (~6k-7k tokens), enough to fit 100% of small/medium PRs in a single turn.
-	maxPreloadedPRDiffBytes = 26000
+	// (~16k tokens), fitting medium/large PRs in a single turn without extra diff calls.
+	maxPreloadedPRDiffBytes = 64000
 	// maxSingleFilePreloadPatchBytes caps a single file's patch in the pre-hydrated dossier.
-	maxSingleFilePreloadPatchBytes = 4500
+	maxSingleFilePreloadPatchBytes = 12000
 	// defaultMaxReviewExploreCalls caps repository exploration calls during a PR review
 	// so the reviewer never spirals into a 40-turn / 2M-token repo crawl.
 	defaultMaxReviewExploreCalls = 6

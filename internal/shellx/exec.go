@@ -89,7 +89,8 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 // sanitizeWindowsPowerShellCommand strips redundant `2>&1` redirections (which
 // cause PowerShell 5.1 to wrap native stderr lines like `git push` progress in
 // NativeCommandError/RemoteException) since Stdout and Stderr are already merged
-// into cappedBuffer, and preserves the native $LASTEXITCODE.
+// into cappedBuffer, translates POSIX `&&` outside quotes into PowerShell 5.1
+// conditional execution, and preserves the native $LASTEXITCODE.
 func sanitizeWindowsPowerShellCommand(command string) string {
 	cleaned := strings.ReplaceAll(command, " 2>&1", "")
 	cleaned = strings.ReplaceAll(cleaned, "2>&1", "")
@@ -97,7 +98,61 @@ func sanitizeWindowsPowerShellCommand(command string) string {
 	if cleaned == "" {
 		return command
 	}
+	if parts := splitOutsideQuotes(cleaned, "&&"); len(parts) > 1 {
+		var b strings.Builder
+		b.WriteString("$global:LASTEXITCODE = 0; ")
+		b.WriteString(strings.TrimSpace(parts[0]))
+		for _, p := range parts[1:] {
+			b.WriteString("; if ($? -and ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0)) { ")
+			b.WriteString(strings.TrimSpace(p))
+		}
+		for i := 1; i < len(parts); i++ {
+			b.WriteString(" }")
+		}
+		cleaned = b.String()
+	}
 	return "$ErrorActionPreference = 'Continue'; " + cleaned + "; if ($LASTEXITCODE -is [int]) { exit $LASTEXITCODE }"
+}
+
+func splitOutsideQuotes(s, sep string) []string {
+	var (
+		parts   []string
+		start   int
+		inS     bool
+		inD     bool
+		escaped bool
+	)
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '`' && inD {
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inD {
+			inS = !inS
+			continue
+		}
+		if ch == '"' && !inS {
+			inD = !inD
+			continue
+		}
+		if !inS && !inD && strings.HasPrefix(s[i:], sep) {
+			part := strings.TrimSpace(s[start:i])
+			if part != "" {
+				parts = append(parts, part)
+			}
+			i += len(sep) - 1
+			start = i + 1
+		}
+	}
+	if tail := strings.TrimSpace(s[start:]); tail != "" {
+		parts = append(parts, tail)
+	}
+	return parts
 }
 
 // cappedBuffer is an io.Writer safe for the concurrent stdout/stderr writers
