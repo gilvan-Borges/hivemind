@@ -10,7 +10,6 @@ import { StreamLanguage, HighlightStyle, bracketMatching, defaultHighlightStyle,
 import { tags as highlightTags } from "@lezer/highlight";
 import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { go } from "@codemirror/lang-go";
 import { java } from "@codemirror/lang-java";
 import { javascript } from "@codemirror/lang-javascript";
@@ -20,28 +19,102 @@ import { rust } from "@codemirror/lang-rust";
 import { markdown } from "@codemirror/lang-markdown";
 import { css } from "@codemirror/lang-css";
 import { html as htmlLang } from "@codemirror/lang-html";
-import { clike } from "@codemirror/legacy-modes/mode/clike";
+import { kotlin } from "@codemirror/legacy-modes/mode/clike";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 
-// Tema visual casado com o Obsidian. Palavra-chave usa o dourado de --accent-strong.
-const goldTokenStyle = syntaxHighlighting(HighlightStyle.define([
-  { tag: highlightTags.keyword, color: "var(--accent-strong)" },
+// Tema visual Havrus Obsidian & Brand Gold para o CodeMirror 6 (substitui o oneDark azulado).
+const hivemindHighlightStyle = syntaxHighlighting(HighlightStyle.define([
+  { tag: [highlightTags.keyword, highlightTags.modifier, highlightTags.operatorKeyword], color: "#E8C881", fontWeight: "500" },
+  { tag: [highlightTags.controlKeyword, highlightTags.moduleKeyword], color: "#E8C881" },
+  { tag: [highlightTags.string, highlightTags.special(highlightTags.string), highlightTags.inserted], color: "#6EE7B7" },
+  { tag: [highlightTags.number, highlightTags.bool, highlightTags.null, highlightTags.atom], color: "#F5B971" },
+  { tag: [highlightTags.function(highlightTags.variableName), highlightTags.function(highlightTags.propertyName), highlightTags.macroName], color: "#7DD3FC" },
+  { tag: [highlightTags.typeName, highlightTags.className, highlightTags.namespace, highlightTags.self], color: "#C4B5FD" },
+  { tag: [highlightTags.definition(highlightTags.variableName), highlightTags.definition(highlightTags.propertyName)], color: "#F4F4F5" },
+  { tag: [highlightTags.propertyName, highlightTags.attributeName], color: "#BAE6FD" },
+  { tag: [highlightTags.variableName], color: "#E4E4E7" },
+  { tag: [highlightTags.comment, highlightTags.lineComment, highlightTags.blockComment, highlightTags.docComment], color: "#6F6E68", fontStyle: "italic" },
+  { tag: [highlightTags.operator, highlightTags.punctuation, highlightTags.separator, highlightTags.bracket], color: "#8E8E93" },
+  { tag: [highlightTags.tagName], color: "#E8C881" },
+  { tag: [highlightTags.meta, highlightTags.annotation], color: "#C6A15B" },
+  { tag: [highlightTags.heading], color: "#E8C881", fontWeight: "700" },
+  { tag: [highlightTags.link], color: "#7DD3FC", textDecoration: "underline" },
+  { tag: [highlightTags.invalid, highlightTags.deleted], color: "#E58C98" },
 ]));
+
 const hivemindTheme = EditorView.theme(
   {
-    "&": { height: "100%", backgroundColor: "transparent", fontSize: "13px" },
-    ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55", overflow: "auto" },
-    ".cm-content": { caretColor: "#7aa2ff", paddingBottom: "36px" },
-    ".cm-gutters": { backgroundColor: "transparent", color: "#767680", border: "none", paddingRight: "4px" },
-    ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.035)" },
-    ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.05)", color: "#e2e0ec" },
-    ".cm-foldGutter span": { color: "#767680" },
+    "&": {
+      height: "100%",
+      backgroundColor: "#09090B",
+      color: "#E4E4E7",
+      fontSize: "13px",
+    },
+    ".cm-scroller": {
+      fontFamily: "var(--mono)",
+      lineHeight: "1.6",
+      overflow: "auto",
+      paddingTop: "8px",
+      fontVariantLigatures: "contextual",
+    },
+    ".cm-content": {
+      caretColor: "#E8C881",
+      paddingBottom: "48px",
+    },
+    ".cm-line": {
+      padding: "0 16px 0 10px",
+    },
+    ".cm-gutters": {
+      backgroundColor: "#09090B",
+      color: "#5A5954",
+      borderRight: "1px solid rgba(255, 255, 255, 0.05)",
+      paddingLeft: "6px",
+      paddingRight: "8px",
+    },
+    ".cm-lineNumbers .cm-gutterElement": {
+      minWidth: "34px",
+      fontSize: "11.5px",
+    },
+    ".cm-activeLine": {
+      backgroundColor: "rgba(255, 255, 255, 0.03)",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "rgba(198, 161, 91, 0.08)",
+      color: "#E8C881",
+    },
+    ".cm-foldGutter span": {
+      color: "#6F6E68",
+    },
     "&.cm-focused": { outline: "none" },
-    "&.cm-focused .cm-selectionBackground, .cm-content ::selection": { backgroundColor: "rgba(76,141,255,0.30)" },
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#7aa2ff", borderLeftWidth: "2px" },
-    ".cm-selectionMatch": { backgroundColor: "rgba(76,141,255,0.16)" },
-    ".cm-panels": { backgroundColor: "#17171f", color: "#e2e0ec" },
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+      backgroundColor: "rgba(198, 161, 91, 0.24)",
+    },
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "#E8C881",
+      borderLeftWidth: "2px",
+    },
+    ".cm-selectionMatch": {
+      backgroundColor: "rgba(198, 161, 91, 0.14)",
+      outline: "1px solid rgba(232, 200, 129, 0.25)",
+      borderRadius: "2px",
+    },
+    "&.cm-focused .cm-matchingBracket": {
+      backgroundColor: "rgba(232, 200, 129, 0.18)",
+      outline: "1px solid rgba(232, 200, 129, 0.45)",
+      color: "#FFFFFF",
+    },
+    ".cm-panels": {
+      backgroundColor: "#111111",
+      color: "#E5E5E5",
+      borderTop: "1px solid #262626",
+    },
+    ".cm-tooltip": {
+      backgroundColor: "#171717",
+      border: "1px solid #2A2A2A",
+      borderRadius: "8px",
+      boxShadow: "0 10px 28px rgba(0, 0, 0, 0.55)",
+    },
   },
   { dark: true }
 );
@@ -427,7 +500,7 @@ export interface CmDocChange {
 export function languageExtensionFor(fileName: string): Extension {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".go")) return go();
-  if (lower.endsWith(".kt") || lower.endsWith(".kts")) return StreamLanguage.define(clike({ name: "kotlin" }));
+  if (lower.endsWith(".kt") || lower.endsWith(".kts")) return StreamLanguage.define(kotlin);
   if (lower.endsWith(".java")) return java();
   if (/\.(jsx?|mjs|tsx?)$/.test(lower)) return javascript({ typescript: /\.(ts|tsx)$/.test(lower), jsx: /\.(jsx|tsx)$/.test(lower) });
   if (lower.endsWith(".json")) return json();
@@ -435,7 +508,7 @@ export function languageExtensionFor(fileName: string): Extension {
   if (lower.endsWith(".rs")) return rust();
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return markdown();
   if (lower.endsWith(".css")) return css();
-  if (lower.endsWith(".html") || lower.endsWith(".htm")) return htmlLang();
+  if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xml") || lower.endsWith(".svg")) return htmlLang();
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return StreamLanguage.define(yaml);
   if (lower.endsWith(".sh") || lower.endsWith(".bash")) return StreamLanguage.define(shell);
   return [];
@@ -476,9 +549,8 @@ export function createBaseExtensions(onDocChange: CmDocChange, fileName: string)
       indentWithTab,
     ]),
     languageExtensionFor(fileName),
-    oneDark,
-    goldTokenStyle,
     hivemindTheme,
+    hivemindHighlightStyle,
     EditorView.updateListener.of((v) => {
       if (v.docChanged) onDocChange(v.state.doc.toString());
     }),
