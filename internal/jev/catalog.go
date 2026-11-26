@@ -763,16 +763,109 @@ func IsTrustedOpenRouterModel(modelID string) bool {
 
 // CuratedModelMeta returns the curated display name, difficulty tier, quality score,
 // and baseline discount percentage for any of the 21 flagship OpenRouter models.
+// CuratedModelMeta returns curated display metadata, tier and quality prior for
+// models across OpenRouter, OpenCode Go/Zen, Agy and direct providers so models
+// in the same tier never tie at 0 quality and fall back to alphabetical order.
 func CuratedModelMeta(provider, modelID string) (displayName string, tier Tier, quality float64, baselineDiscountPct int, ok bool) {
-	if !strings.EqualFold(strings.TrimSpace(provider), "openrouter") {
+	prov := strings.ToLower(strings.TrimSpace(provider))
+	low := strings.ToLower(strings.TrimSpace(modelID))
+	if low == "" {
 		return "", "", 0, 0, false
 	}
-	low := strings.ToLower(strings.TrimSpace(modelID))
-	for _, seed := range CuratedOpenRouterSeedEntries() {
-		if strings.EqualFold(seed.Model, low) {
-			return seed.DisplayName, seed.Tier, seed.Quality, seed.DiscountPct, true
+	if prov == "openrouter" {
+		for _, seed := range CuratedOpenRouterSeedEntries() {
+			if strings.EqualFold(seed.Model, low) {
+				return seed.DisplayName, seed.Tier, seed.Quality, seed.DiscountPct, true
+			}
 		}
 	}
+	if prov == "agy" {
+		for _, seed := range StaticSeedEntries() {
+			if strings.EqualFold(seed.Provider, "agy") && strings.EqualFold(seed.Model, low) {
+				return seed.DisplayName, seed.Tier, seed.Quality, seed.DiscountPct, true
+			}
+		}
+	}
+	return inferCuratedMeta(prov, low)
+}
+
+func inferCuratedMeta(prov, low string) (string, Tier, float64, int, bool) {
+	// Strip provider/tier prefixes like "opencode-go:", "opencode:", "agy:", "anthropic/".
+	slug := low
+	for _, pref := range []string{"opencode-go:", "opencode:", "agy:"} {
+		slug = strings.TrimPrefix(slug, pref)
+	}
+	if idx := strings.LastIndex(slug, "/"); idx >= 0 {
+		slug = slug[idx+1:]
+	}
+	if strings.HasSuffix(slug, "-free") || strings.HasSuffix(slug, ":free") || strings.Contains(slug, "big-pickle") {
+		return "", TierCheap, 0.62, 0, true
+	}
+
+	switch {
+	// Strong (explicit escalation only)
+	case strings.Contains(slug, "opus"),
+		strings.Contains(slug, "fable"),
+		strings.Contains(slug, "gpt-6.2-astra"),
+		strings.Contains(slug, "gpt-6-astra"),
+		strings.Contains(slug, "gpt-5.5-pro"):
+		return "", TierStrong, 0.96, 0, true
+
+	// Mid — Flagships & strong reviewers (ordered by real capability)
+	case strings.Contains(slug, "claude-sonnet-5-5"), strings.Contains(slug, "claude-sonnet-5.5"):
+		return "", TierMid, 0.95, 0, true
+	case strings.Contains(slug, "claude-sonnet"):
+		return "", TierMid, 0.93, 0, true
+	case strings.Contains(slug, "gemini-4-argon"):
+		return "", TierMid, 0.95, 0, true
+	case strings.Contains(slug, "gemini-4-carbon"):
+		return "", TierMid, 0.93, 0, true
+	case strings.Contains(slug, "gemini-4-neon-high"):
+		return "", TierMid, 0.91, 0, true
+	case strings.Contains(slug, "gpt-6.2-sol"):
+		return "", TierMid, 0.94, 0, true
+	case strings.Contains(slug, "gpt-6.1-sol"), strings.Contains(slug, "gpt-6-sol"):
+		return "", TierMid, 0.92, 0, true
+	case strings.Contains(slug, "gpt-5.3-codex"), strings.Contains(slug, "gpt-5.6-terra"), strings.Contains(slug, "gpt-5.5"):
+		return "", TierMid, 0.91, 0, true
+	case strings.Contains(slug, "kimi-k3.1-pro"):
+		return "", TierMid, 0.91, 0, true
+	case strings.Contains(slug, "kimi-k3"):
+		return "", TierMid, 0.89, 0, true
+	case strings.Contains(slug, "glm-5.3") && !strings.Contains(slug, "flash"):
+		return "", TierMid, 0.89, 0, true
+	case strings.Contains(slug, "qwen4-max"), strings.Contains(slug, "qwen3.8-max"):
+		return "", TierMid, 0.88, 0, true
+	case strings.Contains(slug, "deepseek-v4-pro"):
+		return "", TierMid, 0.86, 0, true
+	case strings.Contains(slug, "grok-4.7"):
+		return "", TierMid, 0.87, 0, true
+	case strings.Contains(slug, "minimax-m3") && !strings.Contains(slug, "flash"):
+		return "", TierMid, 0.84, 0, true
+	case strings.Contains(slug, "mimo-v2.6-pro"):
+		return "", TierMid, 0.84, 0, true
+
+	// Cheap — Fast & economical
+	case strings.Contains(slug, "claude-haiku-5-5"), strings.Contains(slug, "claude-haiku"):
+		return "", TierCheap, 0.84, 0, true
+	case strings.Contains(slug, "gpt-6-luna"), strings.Contains(slug, "gpt-5.6-luna"):
+		return "", TierCheap, 0.83, 0, true
+	case strings.Contains(slug, "gemini-4-hydrogen"), strings.Contains(slug, "gpt-5.4-mini"):
+		return "", TierCheap, 0.81, 0, true
+	case strings.Contains(slug, "gemini-3.8-flash"), strings.Contains(slug, "gemini-4-neon-low"):
+		return "", TierCheap, 0.80, 0, true
+	case strings.Contains(slug, "deepseek-v4.1-flash"):
+		return "", TierCheap, 0.78, 0, true
+	case strings.Contains(slug, "kimi-k2.7-code"):
+		return "", TierCheap, 0.77, 0, true
+	case strings.Contains(slug, "glm-5.3-flash"), strings.Contains(slug, "gpt-5.4-nano"):
+		return "", TierCheap, 0.76, 0, true
+	case strings.Contains(slug, "qwen3.8-flash"), strings.Contains(slug, "qwen3.7-plus"):
+		return "", TierCheap, 0.75, 0, true
+	case strings.Contains(slug, "minimax-m3.1-flash"), strings.Contains(slug, "mimo-v2.6-flash"):
+		return "", TierCheap, 0.74, 0, true
+	}
+	_ = prov
 	return "", "", 0, 0, false
 }
 
