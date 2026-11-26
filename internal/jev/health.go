@@ -130,6 +130,9 @@ func isIncompatibleModel400(msg string) bool {
 		"no endpoints found",
 		"is not available",
 		"not available for",
+		"hosted outside",
+		"select global at",
+		"not available in your region",
 	} {
 		if strings.Contains(msg, pat) {
 			return true
