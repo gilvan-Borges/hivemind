@@ -848,3 +848,24 @@ func TestPrepareEphemeralReviewWorktreeFetchesRemotePRWhenLocalOnDifferentBranch
 		t.Fatalf("expected review worktree %s to be cleaned up", wtPath)
 	}
 }
+
+func TestRepeatRunShellGuardResetsOnEdit(t *testing.T) {
+	guard := newRepeatReadGuardCallback()
+	shellTool := stubNamedTool{name: "run_shell"}
+	editTool := stubNamedTool{name: "edit_file"}
+	args := map[string]any{"command": "mvn -B -Dtest=PaymentGuardTest test", "dir": "app-financeiro"}
+
+	if res, err := guard(nil, shellTool, args); err != nil || res != nil {
+		t.Fatalf("1st run_shell should pass, got res=%v err=%v", res, err)
+	}
+	res, err := guard(nil, shellTool, map[string]any{"command": "mvn  -B  -Dtest=PaymentGuardTest  test", "dir": "app-financeiro"})
+	if err != nil || res == nil || !strings.Contains(fmt.Sprint(res["text"]), "AVISO ANTI-LOOP") {
+		t.Fatalf("2nd identical run_shell without edit should trigger anti-loop, got res=%v err=%v", res, err)
+	}
+	if _, err := guard(nil, editTool, map[string]any{"path": "app-financeiro/PaymentGuard.java"}); err != nil {
+		t.Fatalf("edit_file failed: %v", err)
+	}
+	if res, err := guard(nil, shellTool, args); err != nil || res != nil {
+		t.Fatalf("run_shell after edit_file must reset and pass, got res=%v err=%v", res, err)
+	}
+}

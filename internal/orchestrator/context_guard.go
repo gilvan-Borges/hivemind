@@ -74,6 +74,7 @@ func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeTool
 	diffCalls := make(map[string]int)
 	searchCalls := make(map[string]int)
 	gitInspectCalls := make(map[string]int)
+	shellCalls := make(map[string]int)
 	lastRound := -1
 	if roundFn != nil {
 		lastRound = roundFn()
@@ -100,13 +101,14 @@ func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeTool
 				clear(diffCalls)
 				clear(searchCalls)
 				clear(gitInspectCalls)
+				clear(shellCalls)
 				lastRound = cur
 			}
 			mu.Unlock()
 		}
 		name := strings.ToLower(strings.TrimSpace(tl.Name()))
 		switch name {
-		case "edit_file", "write_file", "write_doc", "git_commit", "run_shell":
+		case "edit_file", "write_file", "write_doc", "git_commit":
 			p := normPath(args["path"])
 			mu.Lock()
 			if p != "" {
@@ -119,6 +121,26 @@ func newRepeatReadGuardCallbackWithRound(roundFn func() int) llmagent.BeforeTool
 				delete(fileTotalReads, p)
 			}
 			clear(gitInspectCalls)
+			clear(shellCalls)
+			mu.Unlock()
+			return nil, nil
+
+		case "run_shell":
+			cmd := strings.Join(strings.Fields(strings.TrimSpace(fmt.Sprint(args["command"]))), " ")
+			dir := normPath(args["dir"])
+			mu.Lock()
+			clear(gitInspectCalls)
+			if cmd != "" && cmd != "<nil>" {
+				key := dir + "::" + cmd
+				shellCalls[key]++
+				n := shellCalls[key]
+				if n >= 2 {
+					mu.Unlock()
+					return map[string]any{
+						"text": "AVISO ANTI-LOOP: você já executou este mesmo comando no run_shell neste turno sem alterar nenhum arquivo desde então. NÃO re-execute os mesmos testes/comandos — use o resultado já obtido e avance imediatamente para o parecer ou próxima etapa.",
+					}, nil
+				}
+			}
 			mu.Unlock()
 			return nil, nil
 
