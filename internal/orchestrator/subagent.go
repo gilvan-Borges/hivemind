@@ -124,7 +124,6 @@ func (r *Runner) newSpawnSubagentTool(caller team.Agent, callerADKName, root str
 // O nome do filho carrega o chamador (scout_<n>_from_<pai>) para o custo cair
 // na rota/papel corretos sem que o guard de dev seja afetado.
 func (r *Runner) runScout(ctx context.Context, caller team.Agent, callerADKName, root, objective, label string) (string, int, int64, error) {
-	maxLLMCalls := r.Project.Settings.EffectiveMaxSubagentLLMCalls()
 	ctx, cancel := context.WithTimeout(ctx, scoutTimeout)
 	defer cancel()
 	ctx = modelx.WithAgentDir(ctx, root)
@@ -147,7 +146,7 @@ func (r *Runner) runScout(ctx context.Context, caller team.Agent, callerADKName,
 		DisallowTransferToParent: true,
 		DisallowTransferToPeers:  true,
 		Tools:                    scoutTools,
-		Instruction:              scoutInstruction(maxLLMCalls),
+		Instruction:              scoutInstruction(),
 	})
 	if err != nil {
 		return "", 0, 0, err
@@ -169,7 +168,7 @@ func (r *Runner) runScout(ctx context.Context, caller team.Agent, callerADKName,
 	)
 	for ev, err := range adkRunner.Run(ctx, sessionx.UserID, created.Session.ID(),
 		genai.NewContentFromText(scoutUserMessage(objective, label), genai.RoleUser),
-		agent.RunConfig{MaxLLMCalls: maxLLMCalls}) {
+		agent.RunConfig{MaxLLMCalls: 0}) {
 		if err != nil {
 			return "", calls, inTok, fmt.Errorf("subagente falhou: %w", err)
 		}
@@ -212,20 +211,20 @@ func (r *Runner) runScout(ctx context.Context, caller team.Agent, callerADKName,
 	return strx.TruncateBytes(report, scoutReportBytes, "\n…(relatório do subagente truncado)"), calls, inTok, nil
 }
 
-func scoutInstruction(maxLLMCalls int) string {
-	return fmt.Sprintf(`Você é um subagente efêmero do HiveMind, criado por um agente do time para uma missão pontual de leitura e análise.
+func scoutInstruction() string {
+	return `Você é um subagente efêmero do HiveMind, criado por um agente do time para uma missão pontual de leitura e análise.
 
 REGRAS DA MISSÃO:
 - Contexto LIMPO: você não tem o histórico da conversa que te criou; tudo o que precisa está no objetivo da missão.
 - Você é SOMENTE LEITURA: nunca edite ou grave arquivos, nunca execute comandos. Use read_file, search_text, find_files, list_dir, git_status e git_diff.
-- Orçamento rígido: no máximo %d chamadas de LLM. Localize o que precisa com 1-2 buscas, leia trechos (start_line/end_line) em vez de arquivos inteiros e conclua.
+- Seja objetivo: se existir .hivemind/vault/INDEX.md ou repomap.md na worktree, use-os para ir direto aos arquivos certos, leia trechos (start_line/end_line) em vez de arquivos inteiros e conclua assim que tiver as evidências.
 - NÃO spawne outros subagentes e não peça aprovações: ninguém vai responder.
 
 RELATÓRIO FINAL (sua última mensagem é o que o chamador recebe):
 1. Resposta direta e conclusiva ao objetivo.
 2. Evidências: caminhos de arquivo e símbolos exatos, com arquivo:linha quando possível.
 3. Riscos ou pendências que o chamador precisa conhecer (se houver).
-Sem preâmbulo, sem repetir o objetivo, máximo de ~40 linhas.`, maxLLMCalls)
+Sem preâmbulo, sem repetir o objetivo, máximo de ~40 linhas.`
 }
 
 func scoutUserMessage(objective, label string) string {
