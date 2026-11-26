@@ -80,11 +80,13 @@ func SeedProductSkills(dir string) (seeded []string, err error) {
 		}
 		dest := filepath.Join(dir, name, "SKILL.md")
 		if existing, readExistingErr := os.ReadFile(dest); readExistingErr == nil {
-			// Upgrade legacy or pre-Jira-post-merge revisar-e-testar seeds automatically while preserving user edits on other skills.
+			// Upgrade legacy or outdated revisar-e-testar seeds automatically while preserving user edits on other skills.
 			if name == "revisar-e-testar" {
 				cur := string(existing)
 				if strings.Contains(cur, "Não é: mobile, extensão") ||
-					(strings.Contains(cur, "Proibido escrever `Superfícies:") && !strings.Contains(cur, "Pós-merge: atualizar a task no Jira")) {
+					(strings.Contains(cur, "Proibido escrever `Superfícies:") &&
+						(!strings.Contains(cur, "Pós-merge: atualizar a task no Jira") ||
+							!strings.Contains(cur, "Mudanças de Frontend / Visual"))) {
 					_ = os.WriteFile(dest, body, 0o644)
 				}
 			}

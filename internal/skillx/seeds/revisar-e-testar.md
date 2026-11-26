@@ -30,6 +30,19 @@ Inspecione os arquivos alterados no PR e identifique os módulos/serviços tocad
 - Rode apenas os testes dos módulos/serviços efetivamente alterados pelo diff (não rode o monorepo inteiro sem necessidade).
 - No Windows / PowerShell, execute um comando por chamada (ou encadeie com `;`).
 
+### Mudanças de Frontend / Visual (proporcional ao impacto)
+
+Antes de testar um PR ou pedido avulso que toque arquivos de frontend/UI (`*.tsx`, `*.jsx`, `*.css`, `*.scss`, `*.html`, `*.vue`, `*.svelte`, `*.dart` de UI/widgets, `*.kt` Compose), avalie se houve **impacto visual** e qual o **porte da mudança**:
+
+1. **Sem impacto visual** (lógica pura, hooks de dados sem renderização, tipos, backend, docs): siga apenas a tabela acima, sem abrir browser nem rodar suíte visual.
+2. **Mudança visual pontual / pequena** (ajuste de texto, 1–2 componentes isolados, correção pontual de classe/token): rode os testes unitários/de componente do pacote afetado, validação de design tokens (`npm run check:design` / `check-design-tokens.mjs` se existir) e `npm run build` (ou `flutter test <arquivo>`). **Não** abra browser nem tire screenshots.
+3. **Mudança visual grande / estrutural** (nova tela/página/fluxo, refactor de layout/shell/navegação, alteração em CSS global/tokens de tema, múltiplos componentes/telas ou ajustes responsivos amplos):
+   - Rode a **suíte completa** de testes e build do módulo de frontend afetado (ex.: `npm test && npm run build`, `npm run check:design`, ou `flutter test` completo do módulo/app; mais testes E2E se existirem no repo).
+   - Se houver ambiente renderizável local e ferramenta de browser disponível (`playwright` via `mcp_enable`, `chrome-devtools` ou `hivemind-browser`), abra a rota/tela alterada e inspecione primeiro via `browser_snapshot` (econômico em tokens) e erros de console/layout.
+   - **Tire screenshot (`browser_take_screenshot` / captura) somente do que ficar ruim ou suspeito** (quebra de layout, overflow, sobreposição, contraste ilegível, desalinhamento ou erro visual) — nunca tire prints em série de telas saudáveis para não desperdiçar tempo e tokens.
+   - Se for **revisão de PR**, reporte objetivamente o defeito visual encontrado (rota/viewport/elemento) e use `event=REQUEST_CHANGES` (sem expor caminhos temporários ou cabeçalhos robóticos). Se for **pedido de implementação**, corrija o defeito visual antes de concluir.
+   - Se o ambiente não permitir renderizar a tela ao vivo (ex.: falta de backend/credencial externa no checkout), registre o que foi validado via testes completos + build sem inventar inspeção visual.
+
 ## 2. Checkout do PR e execução obrigatória dos testes
 
 - Em revisões de PR, o HiveMind já prepara automaticamente uma **worktree efêmera destacada** com o commit exato do PR (`pull/<N>/head`) como diretório de trabalho das ferramentas.

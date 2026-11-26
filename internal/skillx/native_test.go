@@ -58,8 +58,11 @@ func TestSeedProductSkillsLeavesUntangleOff(t *testing.T) {
 	if !strings.Contains(byName["revisar-e-testar"].Description, "Pull Request") {
 		t.Fatalf("descrição de revisar-e-testar: %q", byName["revisar-e-testar"].Description)
 	}
-	if bodyText, ok := ProductSkillBody("revisar-e-testar"); !ok || !strings.Contains(bodyText, "Proibido escrever `Superfícies:") || !strings.Contains(bodyText, "Pós-merge: atualizar a task no Jira") {
-		t.Fatalf("revisar-e-testar deveria proibir cabeçalhos robóticos e orientar atualização do Jira pós-merge")
+	if bodyText, ok := ProductSkillBody("revisar-e-testar"); !ok ||
+		!strings.Contains(bodyText, "Proibido escrever `Superfícies:") ||
+		!strings.Contains(bodyText, "Pós-merge: atualizar a task no Jira") ||
+		!strings.Contains(bodyText, "Mudanças de Frontend / Visual") {
+		t.Fatalf("revisar-e-testar deveria proibir cabeçalhos robóticos, orientar atualização do Jira pós-merge e classificar impacto visual")
 	}
 	if byName["untangle-codebase"].Enabled {
 		t.Fatal("untangle-codebase deveria nascer desligada")
