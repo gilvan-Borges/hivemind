@@ -25,6 +25,7 @@ type FileChangeEvent struct {
 const (
 	watchDebounce = 250 * time.Millisecond
 	watchMaxBatch = 400
+	watchMaxDirs  = 4000
 )
 
 // FileWatcher recursively watches root for filesystem changes (agents editing
@@ -81,13 +82,16 @@ func (fw *FileWatcher) Start() error {
 	fw.w = w
 	fw.mu.Unlock()
 
+	// Start the event loop BEFORE walking the directory tree so w.Events is
+	// drained immediately on Windows if files change during registration.
+	go fw.loop()
+
 	if err := fw.watchTree(fw.root); err != nil {
-		_ = w.Close()
+		fw.Close()
 		return err
 	}
 	fw.watchGitDirs()
 
-	go fw.loop()
 	return nil
 }
 
@@ -220,6 +224,11 @@ func (fw *FileWatcher) emitFlush() {
 func (fw *FileWatcher) watchGitDirs() {
 	var scan func(dir string, depth int)
 	scan = func(dir string, depth int) {
+		select {
+		case <-fw.done:
+			return
+		default:
+		}
 		fw.mu.Lock()
 		w := fw.w
 		fw.mu.Unlock()
@@ -273,6 +282,7 @@ func isWatchedGitStateRel(rel string) bool {
 }
 
 func (fw *FileWatcher) watchTree(dir string) error {
+	watched := 0
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -280,10 +290,18 @@ func (fw *FileWatcher) watchTree(dir string) error {
 		if !d.IsDir() {
 			return nil
 		}
+		select {
+		case <-fw.done:
+			return filepath.SkipAll
+		default:
+		}
 		if path != dir {
 			if ignoredDirs[d.Name()] || d.Name() == ".hivemind" {
 				return filepath.SkipDir
 			}
+		}
+		if watched >= watchMaxDirs {
+			return filepath.SkipAll
 		}
 		fw.mu.Lock()
 		w := fw.w
@@ -294,6 +312,7 @@ func (fw *FileWatcher) watchTree(dir string) error {
 		if err := w.Add(path); err != nil {
 			return nil // unreadable or already removed; keep walking
 		}
+		watched++
 		return nil
 	})
 }

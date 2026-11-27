@@ -46,10 +46,16 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		_, _ = idecore.RecordRecentProject("", abs)
 	}
 	_, _ = loopx.PauseRunning(abs)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	idecore.CleanupLegacyProjectState(ctx, abs)
+	if !a.smokeCheck {
+		go func(root string) {
+			cctx, ccancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer ccancel()
+			idecore.CleanupLegacyProjectState(cctx, root)
+		}(abs)
+	}
 
 	proj := ProjectInfo{
 		Root:   abs,
@@ -70,12 +76,21 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 	}
 	files, _ := idecore.ListDir(abs, "")
 	proj.Files = files
+	refKey := projectRefKey(abs)
+	a.openMu.Lock()
+	if a.openProjects == nil {
+		a.openProjects = make(map[string]int)
+	}
+	a.openProjects[refKey]++
+	a.openMu.Unlock()
 	if a.fileIndex != nil {
 		go func(target string) {
 			_ = a.fileIndex.Refresh(target)
 		}(abs)
 	}
-	a.startWatcher(abs)
+	if !a.smokeCheck {
+		go a.startWatcher(abs)
+	}
 	if a.autoReview != nil && !a.smokeCheck {
 		go func(root string) {
 			baseCtx := a.ctx
@@ -92,13 +107,6 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		}
 		a.githubMonitor.EnsureWatching(baseCtx, abs)
 	}
-	refKey := projectRefKey(abs)
-	a.openMu.Lock()
-	if a.openProjects == nil {
-		a.openProjects = make(map[string]int)
-	}
-	a.openProjects[refKey]++
-	a.openMu.Unlock()
 	a.orbSetProject(proj.Name)
 	return proj, nil
 }
@@ -188,6 +196,15 @@ func (a *App) startWatcher(root string) {
 	if a.smokeCheck {
 		return
 	}
+	refKey := projectRefKey(root)
+	isProjectStillOpen := func() bool {
+		a.openMu.Lock()
+		defer a.openMu.Unlock()
+		return a.openProjects == nil || a.openProjects[refKey] > 0
+	}
+	if !isProjectStillOpen() {
+		return
+	}
 	key := strings.ToLower(filepath.Clean(root))
 	a.watcherMu.Lock()
 	if _, exists := a.watchers[key]; exists {
@@ -198,6 +215,9 @@ func (a *App) startWatcher(root string) {
 
 	w, err := idecore.NewFileWatcher(root, a.onFSChange)
 	if err != nil {
+		return
+	}
+	if !isProjectStillOpen() {
 		return
 	}
 	a.watcherMu.Lock()
@@ -212,6 +232,10 @@ func (a *App) startWatcher(root string) {
 		a.watcherMu.Lock()
 		delete(a.watchers, key)
 		a.watcherMu.Unlock()
+		return
+	}
+	if !isProjectStillOpen() {
+		a.stopWatcher(root)
 	}
 }
 

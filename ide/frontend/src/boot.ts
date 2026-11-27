@@ -964,7 +964,10 @@ export async function openProjectPath(dir: string, inNewTab = true) {
       renderEditorBody();
     }
     try {
-      const proj = await backend.OpenProject(dir);
+      const openTimeout = new Promise<never>((_, rej) =>
+        window.setTimeout(() => rej(new Error("Tempo esgotado ao abrir o projeto. Tente novamente.")), 20_000),
+      );
+      const proj = await Promise.race([backend.OpenProject(dir), openTimeout]);
       state.recent = await backend.GetRecentProjects();
       state.projectLoading = { active: false, label: "" };
       applyProject(proj, inNewTab);
