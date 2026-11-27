@@ -26,7 +26,8 @@ type ProviderScanItem struct {
 	Name         string                `json:"name"`
 	Found        bool                  `json:"found"`
 	Connected    bool                  `json:"connected"`
-	StatusLabel  string                `json:"statusLabel"` // "Conectado" | "Parcial" | "Desconectado" | "Não instalado"
+	Disabled     bool                  `json:"disabled,omitempty"`
+	StatusLabel  string                `json:"statusLabel"` // "Conectado" | "Parcial" | "Desconectado" | "Desativado" | "Não instalado"
 	Source       string                `json:"source,omitempty"`
 	Path         string                `json:"path,omitempty"`
 	Detail       string                `json:"detail"`
@@ -83,6 +84,7 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 		ctx = context.Background()
 	}
 	overview := deps.listProfiles(workspace)
+	disabled := overview.DisabledProviders
 	stored := deps.storedKeys()
 	if stored == nil {
 		stored = map[string]string{}
@@ -94,7 +96,7 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 		profilesByProv[k] = append(profilesByProv[k], p)
 	}
 
-	// Parallel active probes for CLI/HTTP providers.
+	// Parallel active probes for CLI/HTTP providers (skipping disabled providers).
 	var (
 		agySt       AgyStatus
 		agyModels   []AgyModel
@@ -111,34 +113,42 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 		tsChecked   bool
 	)
 
-	hasORCred := strings.TrimSpace(deps.getenv("OPENROUTER_API_KEY")) != "" ||
+	hasORCred := !disabled["openrouter"] && (strings.TrimSpace(deps.getenv("OPENROUTER_API_KEY")) != "" ||
 		stored["OPENROUTER_API_KEY"] != "" ||
-		hasReadyProfile(profilesByProv["openrouter"])
+		hasReadyProfile(profilesByProv["openrouter"]))
 
-	hasTSCred := strings.TrimSpace(deps.getenv("TYPESAFE_API_KEY")) != "" ||
+	hasTSCred := !disabled["typesafe"] && (strings.TrimSpace(deps.getenv("TYPESAFE_API_KEY")) != "" ||
 		stored["TYPESAFE_API_KEY"] != "" ||
-		hasReadyProfile(profilesByProv["typesafe"])
+		hasReadyProfile(profilesByProv["typesafe"]))
 
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		pCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		defer cancel()
-		agySt, agyModels = deps.probeAgy(pCtx)
-	}()
-	go func() {
-		defer wg.Done()
-		pCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		defer cancel()
-		ocSt, ocGoModels, ocZenModels = deps.probeOpenCode(pCtx)
-	}()
-	go func() {
-		defer wg.Done()
-		pCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		curModels, curSt, _ = deps.probeCursor(pCtx)
-	}()
+	if !disabled["agy"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+			defer cancel()
+			agySt, agyModels = deps.probeAgy(pCtx)
+		}()
+	}
+	if !disabled["opencode"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+			defer cancel()
+			ocSt, ocGoModels, ocZenModels = deps.probeOpenCode(pCtx)
+		}()
+	}
+	if !disabled["cursor"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			curModels, curSt, _ = deps.probeCursor(pCtx)
+		}()
+	}
 	if hasORCred {
 		wg.Add(1)
 		go func() {
@@ -175,13 +185,22 @@ func scanAllProvidersWithDeps(ctx context.Context, workspace string, deps provid
 		buildCursorScanItem(curSt, curModels, profilesByProv["cursor"], stored, deps.getenv),
 	}
 
+	for i := range items {
+		if disabled[NormalizeProfileProvider(items[i].ID)] {
+			items[i].Disabled = true
+			items[i].Connected = false
+			items[i].StatusLabel = "Desativado"
+			items[i].Detail = "Desativado manualmente nas configurações (suas chaves/contas continuam salvas)"
+		}
+	}
+
 	report := ProvidersScanReport{
 		ScannedAt:      time.Now().UTC().Format(time.RFC3339),
 		TotalProviders: len(items),
 		Providers:      items,
 	}
 	for _, it := range items {
-		if it.Connected {
+		if !it.Disabled && it.Connected {
 			report.ConnectedProviders++
 		}
 		report.TotalAccounts += len(it.Accounts)

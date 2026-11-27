@@ -439,6 +439,7 @@ export interface ProfilesOverview {
   identity: OrgIdentity;
   profiles: ProviderProfileSummary[];
   resolved: Record<string, ResolvedProviderInfo>;
+  disabledProviders?: Record<string, boolean>;
 }
 
 export interface ProviderScanAccount {
@@ -455,6 +456,7 @@ export interface ProviderScanItem {
   name: string;
   found: boolean;
   connected: boolean;
+  disabled?: boolean;
   statusLabel: string;
   source?: string;
   path?: string;
@@ -1260,6 +1262,7 @@ export interface WailsBackendApp {
   SaveProviderProfile?(req: SaveProfileRequest): Promise<ProfilesOverview>;
   DeleteProviderProfile?(profileID: string, workspace: string): Promise<ProfilesOverview>;
   BindProviderWorkspace?(workspace: string, provider: string, profileID: string): Promise<ProfilesOverview>;
+  SetProviderEnabled?(provider: string, enabled: boolean, workspace: string): Promise<ProfilesOverview>;
   LoginAgyProfile?(profileID: string): Promise<string>;
   ConnectNewAgyGoogleAccount?(workspace: string): Promise<ProfilesOverview>;
   SubmitAgyOAuthCode?(code: string, workspace: string): Promise<ProfilesOverview>;

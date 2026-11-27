@@ -402,6 +402,8 @@ export function SetMobileBridgeEnabled(arg1:boolean):Promise<remote.StatusInfo>;
 
 export function SetNativeSkillEnabled(arg1:string,arg2:boolean):Promise<void>;
 
+export function SetProviderEnabled(arg1:string,arg2:boolean,arg3:string):Promise<modelx.ProfilesOverview>;
+
 export function ShowDesktopNotification(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
 export function StageFile(arg1:string,arg2:string,arg3:boolean):Promise<void>;

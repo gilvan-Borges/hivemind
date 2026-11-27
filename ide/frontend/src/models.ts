@@ -78,6 +78,34 @@ export function inferModelProvider(modelSpec: string, includeDefaultBlank = fals
   return "agy";
 }
 
+export function canonicalProviderId(providerId: string): string {
+  const { baseProv } = splitProviderAccount(providerId);
+  switch (baseProv) {
+    case "antigravity":
+      return "agy";
+    case "opencode-go":
+    case "opencode_go":
+    case "opencode-zen":
+    case "zen":
+      return "opencode";
+    case "vertex":
+      return "gemini";
+    case "openai-responses":
+      return "openai";
+    case "typesafe-ai":
+    case "typesafe_ai":
+      return "typesafe";
+    default:
+      return baseProv;
+  }
+}
+
+export function isProviderDisabled(providerId: string): boolean {
+  const norm = canonicalProviderId(providerId);
+  if (!norm || norm === "default" || norm === "jev") return false;
+  return Boolean(state.profilesOverview?.disabledProviders?.[norm]);
+}
+
 export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelProviderId; label: string }> {
   const out: Array<{ id: ModelProviderId; label: string }> = [];
   if (includeDefaultBlank) {
@@ -120,7 +148,7 @@ export function getProviderList(includeDefaultBlank = false): Array<{ id: ModelP
     out.push({ id: "openrouter", label: "OpenRouter" });
   }
   out.push({ id: "cursor", label: "Cursor CLI" });
-  return out;
+  return out.filter((p) => !isProviderDisabled(p.id));
 }
 
 export function getModelsForProvider(providerId: ModelProviderId, currentModel = ""): Array<{ value: string; label: string }> {
@@ -134,11 +162,13 @@ export function getModelsForProvider(providerId: ModelProviderId, currentModel =
     case "jev":
       return [
         { value: "jev:auto", label: "auto — Todos os provedores ativos (por dificuldade + promoção)" },
-        { value: "jev:openrouter", label: "openrouter — Só modelos do OpenRouter (Jev escolhe c/ promoção)" },
-        { value: "jev:opencode", label: "opencode — Só modelos do OpenCode Go/Zen (Jev escolhe)" },
-        { value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe c/ Pool de Contas)" },
-        { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
-        { value: "jev:vertex", label: "vertex — Só modelos do Vertex AI/Google Cloud (Jev escolhe)" },
+        ...(isProviderDisabled("openrouter") ? [] : [{ value: "jev:openrouter", label: "openrouter — Só modelos do OpenRouter (Jev escolhe c/ promoção)" }]),
+        ...(isProviderDisabled("opencode") ? [] : [{ value: "jev:opencode", label: "opencode — Só modelos do OpenCode Go/Zen (Jev escolhe)" }]),
+        ...(isProviderDisabled("agy") ? [] : [{ value: "jev:agy", label: "agy — Só modelos do Antigravity (Jev escolhe c/ Pool de Contas)" }]),
+        ...(isProviderDisabled("gemini") ? [] : [
+          { value: "jev:gemini", label: "gemini — Só modelos do Google Gemini (Jev escolhe)" },
+          { value: "jev:vertex", label: "vertex — Só modelos do Vertex AI/Google Cloud (Jev escolhe)" },
+        ]),
       ];
     case "agy": {
       const agyProfiles = (state.profilesOverview?.profiles || []).filter((p) => p.provider === "agy");
@@ -303,6 +333,21 @@ export function renderModelPickerPairHtml(opts: {
   const includeBlank = Boolean(opts.includeDefaultBlank);
   const prov = inferModelProvider(opts.currentModel, includeBlank);
   const providers = getProviderList(includeBlank);
+  if (prov && !providers.some((p) => p.id === prov)) {
+    const labelMap: Record<string, string> = {
+      agy: "Antigravity (agy)",
+      opencode: "OpenCode",
+      "opencode-go": "OpenCode Go",
+      gemini: "Google Gemini",
+      vertex: "Vertex AI (Google Cloud)",
+      anthropic: "Anthropic (Claude)",
+      openai: "OpenAI / Grok",
+      openrouter: "OpenRouter",
+      cursor: "Cursor CLI",
+    };
+    const baseLabel = labelMap[canonicalProviderId(prov)] || labelMap[prov] || prov;
+    providers.push({ id: prov, label: `${baseLabel} (desativado)` });
+  }
   const provOpts = providers
     .map((p) => `<option value="${p.id}" ${p.id === prov ? "selected" : ""}>${escapeHtml(p.label)}</option>`)
     .join("");

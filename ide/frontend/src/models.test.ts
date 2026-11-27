@@ -220,4 +220,37 @@ describe("seletor de provedor Jev", () => {
       state.aiUsagePage.loading = prevLoading;
     }
   });
+
+  it("oculta provedor desativado nos seletores de modelo e no jev até ser reativado", () => {
+    const prevOverview = state.profilesOverview;
+    try {
+      const baseOv = {
+        identity: { workspace: "" },
+        profiles: [
+          { id: "or-1", provider: "openrouter", name: "Reserva", ready: true },
+        ],
+        resolved: {},
+        disabledProviders: { openrouter: true },
+      };
+      state.profilesOverview = baseOv;
+
+      const provs = getProviderList();
+      expect(provs.some((p) => p.id === "openrouter" || p.id.startsWith("openrouter@"))).toBe(false);
+      expect(provs.some((p) => p.id === "agy")).toBe(true);
+
+      const jevOpts = getModelsForProvider("jev");
+      expect(jevOpts.some((m) => m.value === "jev:openrouter")).toBe(false);
+      expect(jevOpts.some((m) => m.value === "jev:auto")).toBe(true);
+
+      state.profilesOverview = {
+        ...baseOv,
+        disabledProviders: {},
+      };
+      const restored = getProviderList();
+      expect(restored.some((p) => p.id === "openrouter")).toBe(true);
+      expect(getModelsForProvider("jev").some((m) => m.value === "jev:openrouter")).toBe(true);
+    } finally {
+      state.profilesOverview = prevOverview;
+    }
+  });
 });

@@ -1981,6 +1981,7 @@ export namespace modelx {
 	    identity: orgx.Identity;
 	    profiles: ProviderProfileSummary[];
 	    resolved: Record<string, ResolvedProviderInfo>;
+	    disabledProviders?: Record<string, boolean>;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProfilesOverview(source);
@@ -1991,6 +1992,7 @@ export namespace modelx {
 	        this.identity = this.convertValues(source["identity"], orgx.Identity);
 	        this.profiles = this.convertValues(source["profiles"], ProviderProfileSummary);
 	        this.resolved = this.convertValues(source["resolved"], ResolvedProviderInfo, true);
+	        this.disabledProviders = source["disabledProviders"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2040,6 +2042,7 @@ export namespace modelx {
 	    name: string;
 	    found: boolean;
 	    connected: boolean;
+	    disabled?: boolean;
 	    statusLabel: string;
 	    source?: string;
 	    path?: string;
@@ -2058,6 +2061,7 @@ export namespace modelx {
 	        this.name = source["name"];
 	        this.found = source["found"];
 	        this.connected = source["connected"];
+	        this.disabled = source["disabled"];
 	        this.statusLabel = source["statusLabel"];
 	        this.source = source["source"];
 	        this.path = source["path"];
@@ -3203,6 +3207,7 @@ export namespace sessionx {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    cachedReadTokens?: number;
 	    calls: number;
 	
 	    static createFrom(source: any = {}) {
@@ -3214,6 +3219,7 @@ export namespace sessionx {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.cachedReadTokens = source["cachedReadTokens"];
 	        this.calls = source["calls"];
 	    }
 	}
@@ -3224,6 +3230,7 @@ export namespace sessionx {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    cachedReadTokens?: number;
 	    kind?: string;
 	    agentUsage: Record<string, TokenStat>;
 	    messages: RestoredMessage[];
@@ -3240,6 +3247,7 @@ export namespace sessionx {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.cachedReadTokens = source["cachedReadTokens"];
 	        this.kind = source["kind"];
 	        this.agentUsage = this.convertValues(source["agentUsage"], TokenStat, true);
 	        this.messages = this.convertValues(source["messages"], RestoredMessage);
@@ -3271,6 +3279,7 @@ export namespace sessionx {
 	    inputTokens: number;
 	    outputTokens: number;
 	    totalTokens: number;
+	    cachedReadTokens?: number;
 	    kind?: string;
 	    preview?: string;
 	    unread?: number;
@@ -3288,6 +3297,7 @@ export namespace sessionx {
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];
+	        this.cachedReadTokens = source["cachedReadTokens"];
 	        this.kind = source["kind"];
 	        this.preview = source["preview"];
 	        this.unread = source["unread"];
@@ -3299,6 +3309,7 @@ export namespace sessionx {
 	    projectInputTokens: number;
 	    projectOutputTokens: number;
 	    projectTotalTokens: number;
+	    projectCachedReadTokens?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceSessionsSummary(source);
@@ -3310,6 +3321,7 @@ export namespace sessionx {
 	        this.projectInputTokens = source["projectInputTokens"];
 	        this.projectOutputTokens = source["projectOutputTokens"];
 	        this.projectTotalTokens = source["projectTotalTokens"];
+	        this.projectCachedReadTokens = source["projectCachedReadTokens"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

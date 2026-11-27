@@ -187,3 +187,69 @@ func TestMultiOrgProviderProfilesResolution(t *testing.T) {
 		t.Fatalf("expected vault reference in provider-profiles.json:\n%s", string(rawDisk))
 	}
 }
+
+func TestSetProviderEnabledDisablesRoutingFactoryAndPreservesKeys(t *testing.T) {
+	tmp := t.TempDir()
+	prevProf := profilesFilePathFn
+	prevKeys := keysFilePathFn
+	profilesFilePathFn = func() (string, error) {
+		return filepath.Join(tmp, "provider-profiles.json"), nil
+	}
+	keysFilePathFn = func() (string, error) {
+		return filepath.Join(tmp, "api-keys.json"), nil
+	}
+	t.Cleanup(func() {
+		profilesFilePathFn = prevProf
+		keysFilePathFn = prevKeys
+	})
+	t.Setenv("OPENROUTER_API_KEY", "")
+
+	if _, err := SaveStoredAPIKeys(map[string]string{
+		"OPENROUTER_API_KEY": "sk-test-fake-0000",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !JevCredentialPresence()["openrouter"] {
+		t.Fatalf("expected openrouter presence true before disabling")
+	}
+
+	ov, err := SetProviderEnabled("openrouter", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsProviderDisabled("openrouter") || !ov.DisabledProviders["openrouter"] {
+		t.Fatalf("expected openrouter disabled in overview: %+v", ov.DisabledProviders)
+	}
+	if JevCredentialPresence()["openrouter"] {
+		t.Fatalf("expected openrouter presence false when disabled")
+	}
+	if _, err := New(context.Background(), "openrouter", "deepseek/deepseek-v4.1-flash"); err == nil || !strings.Contains(err.Error(), "desativado") {
+		t.Fatalf("expected factory error mentioning desativado, got %v", err)
+	}
+
+	// Saving another profile must preserve DisabledProviders.
+	ov2, err := SaveProviderProfile(SaveProfileRequest{
+		ID:       "or-acme",
+		Provider: "openrouter",
+		Name:     "Acme OpenRouter",
+		Env:      map[string]string{"OPENROUTER_API_KEY": "sk-test-fake-1111"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ov2.DisabledProviders["openrouter"] {
+		t.Fatalf("saving profile wiped disabledProviders: %+v", ov2.DisabledProviders)
+	}
+
+	// Re-enabling must restore Jev presence with stored key intact.
+	ov3, err := SetProviderEnabled("openrouter", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsProviderDisabled("openrouter") || ov3.DisabledProviders["openrouter"] {
+		t.Fatalf("expected openrouter re-enabled: %+v", ov3.DisabledProviders)
+	}
+	if !JevCredentialPresence()["openrouter"] {
+		t.Fatalf("expected openrouter presence true again after re-enabling (stored key preserved)")
+	}
+}

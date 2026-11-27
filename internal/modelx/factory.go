@@ -24,6 +24,9 @@ import (
 // other models continue running on Conta 1.
 func New(ctx context.Context, provider, modelName string) (model.LLM, error) {
 	baseProv, preferredAccountID, cleanModel := SplitAccountModelSpec(provider, modelName)
+	if IsProviderDisabled(baseProv) {
+		return nil, fmt.Errorf("provedor %q está desativado em Configurações → Provedores & Contas (ative-o novamente quando quiser usar)", NormalizeProfileProvider(baseProv))
+	}
 	if preferredAccountID != "" {
 		ctx = WithProfileOverride(ctx, baseProv, preferredAccountID)
 	}

@@ -95,10 +95,10 @@ func HasGoogleAPIKey() bool {
 // DefaultProviderModel is the team default. agy wins when it is installed and
 // no Gemini API key is set.
 func DefaultProviderModel() (provider, modelName string) {
-	if HasGoogleAPIKey() {
+	if HasGoogleAPIKey() && !IsProviderDisabled("gemini") {
 		return "gemini", "gemini-flash-latest"
 	}
-	if AgyAvailable() {
+	if AgyAvailable() && !IsProviderDisabled("agy") {
 		return "agy", "agy"
 	}
 	return "gemini", "gemini-flash-latest"

@@ -28,8 +28,9 @@ func JevCredentialPresenceForContext(ctx context.Context) map[string]bool {
 	_, cursorErr := LookCursorCached()
 	cursorKey := strings.TrimSpace(resolveEnvForContext(ctx, "cursor", "CURSOR_API_KEY")) != ""
 	agyOK := AgyAvailableCached() && (!hasWS || !CredentialIsolated(ctx, "agy"))
+	disabled := DisabledProviders()
 
-	return map[string]bool{
+	presence := map[string]bool{
 		"typesafe":         strings.TrimSpace(resolveEnvForContext(ctx, "typesafe", "TYPESAFE_API_KEY")) != "",
 		"agy":              agyOK,
 		"cursor":           cursorErr == nil && cursorKey,
@@ -42,6 +43,18 @@ func JevCredentialPresenceForContext(ctx context.Context) map[string]bool {
 		"openai":           strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")) != "",
 		"openai-responses": strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_API_KEY")) != "" || strings.TrimSpace(resolveEnvForContext(ctx, "openai", "OPENAI_BASE_URL")) != "",
 	}
+	for k := range presence {
+		if k == "opencode_free" {
+			if disabled["opencode"] {
+				presence[k] = false
+			}
+			continue
+		}
+		if disabled[NormalizeProfileProvider(k)] {
+			presence[k] = false
+		}
+	}
+	return presence
 }
 
 // JevSourceFetchers returns non-blocking per-source catalog refreshers backed by

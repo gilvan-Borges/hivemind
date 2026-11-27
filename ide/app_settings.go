@@ -277,6 +277,11 @@ func (a *App) BindProviderWorkspace(workspace, provider, profileID string) (mode
 	return modelx.BindProviderWorkspace(workspace, provider, profileID)
 }
 
+// SetProviderEnabled enables or disables an LLM provider globally without deleting saved credentials.
+func (a *App) SetProviderEnabled(provider string, enabled bool, workspace string) (modelx.ProfilesOverview, error) {
+	return modelx.SetProviderEnabled(provider, enabled, workspace)
+}
+
 // LoginAgyProfile opens an interactive terminal window running `gcloud auth application-default login`
 // inside the isolated CLOUDSDK_CONFIG directory for the given AGY profile ID.
 func (a *App) LoginAgyProfile(profileID string) (string, error) {

@@ -229,16 +229,20 @@ export function renderProvidersScanTabHtml(
   }
 
   const cards = report.providers.map((item) => {
-    const pillClass = item.connected
-      ? "approved"
-      : item.statusLabel === "Parcial"
-        ? "pending"
-        : "neutral";
-    const statusColor = item.connected
-      ? "var(--green)"
-      : item.statusLabel === "Parcial"
-        ? "var(--amber)"
-        : "var(--text-dim)";
+    const pillClass = item.disabled
+      ? "neutral"
+      : item.connected
+        ? "approved"
+        : item.statusLabel === "Parcial"
+          ? "pending"
+          : "neutral";
+    const statusColor = item.disabled
+      ? "var(--text-tertiary)"
+      : item.connected
+        ? "var(--green)"
+        : item.statusLabel === "Parcial"
+          ? "var(--amber)"
+          : "var(--text-dim)";
     const isExpanded = Boolean(expanded[item.id]);
     const hasModels = (item.modelsSample?.length || 0) > 0;
     const accRows = (item.accounts || []).map((a) => `
@@ -254,7 +258,7 @@ export function renderProvidersScanTabHtml(
     `).join("");
 
     return `
-      <div style="padding:12px 14px;border-radius:10px;background:var(--bg-card);border:1px solid ${item.connected ? "rgba(52,211,153,0.28)" : "var(--border)"};display:flex;flex-direction:column;gap:8px">
+      <div style="padding:12px 14px;border-radius:10px;background:var(--bg-card);border:1px solid ${item.disabled ? "var(--border)" : item.connected ? "var(--color-success-border)" : "var(--border)"};opacity:${item.disabled ? "0.72" : "1"};display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0">
             <span style="display:inline-flex;color:${statusColor}">${icons.dot}</span>
@@ -265,6 +269,7 @@ export function renderProvidersScanTabHtml(
           </div>
           <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
             ${hasModels ? `<button type="button" class="mini ghost" data-scan-toggle-models="${escapeHtml(item.id)}">${isExpanded ? "Ocultar modelos" : "Ver modelos"}</button>` : ""}
+            <button type="button" class="mini ${item.disabled ? "primary" : "ghost"}" data-provider-toggle-btn="${escapeHtml(item.id)}" data-next-enabled="${item.disabled ? "1" : "0"}">${item.disabled ? "Reativar" : "Desativar"}</button>
             <button type="button" class="mini" data-scan-configure="${escapeHtml(item.id)}">${item.connected ? "Gerenciar" : "+ Conectar"}</button>
           </div>
         </div>
@@ -564,7 +569,47 @@ export function renderProvidersContentHtml(opts?: { inline?: boolean }): string 
     `
     : "";
 
+  const toggleableProviders: Array<{ id: string; label: string }> = [
+    { id: "agy", label: "Antigravity (Google)" },
+    { id: "openrouter", label: "OpenRouter" },
+    { id: "opencode", label: "OpenCode Go & Zen" },
+    { id: "anthropic", label: "Anthropic (Claude)" },
+    { id: "openai", label: "OpenAI / Grok" },
+    { id: "gemini", label: "Google Gemini / Vertex" },
+    { id: "cursor", label: "Cursor CLI" },
+    { id: "typesafe", label: "TypeSafe AI (Jev Oficial)" },
+  ];
+  const disabledMap = ov?.disabledProviders || {};
+  const activeProvidersCardHtml = `
+    <div class="provider-switch-card">
+      <div class="provider-switch-head">
+        <div>
+          <strong class="provider-switch-card-title">Provedores Ativos</strong>
+          <div class="dim provider-switch-card-sub">Desative qualquer provedor sem perder chaves ou contas salvas — o Jev e os seletores param de usá-lo até você reativar.</div>
+        </div>
+      </div>
+      <div class="provider-switch-grid">
+        ${toggleableProviders.map((prov) => {
+          const isDisabled = Boolean(disabledMap[prov.id]);
+          return `
+            <label class="provider-switch-row ${isDisabled ? "is-disabled" : ""}">
+              <div class="provider-switch-info">
+                <span class="provider-switch-name">${escapeHtml(prov.label)}</span>
+                <span class="flow-pill ${isDisabled ? "neutral" : "approved"}">${isDisabled ? "Desativado" : "Ativo"}</span>
+              </div>
+              <span class="provider-switch">
+                <input type="checkbox" role="switch" data-provider-toggle="${escapeHtml(prov.id)}" ${isDisabled ? "" : "checked"} aria-label="Ativar ou desativar ${escapeHtml(prov.label)}" />
+                <span class="provider-switch-track"></span>
+              </span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+
   const bodyHtml = tab === "profiles" ? `
+    ${activeProvidersCardHtml}
     <div style="padding:14px 16px;border-radius:12px;background:var(--accent-subtle);border:1px solid var(--accent-border);display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:10px">
@@ -725,6 +770,56 @@ export function bindProvidersContentEvents(rerender: () => void): void {
   });
   document.getElementById("btn-scan-all-providers")?.addEventListener("click", () => {
     void runProvidersScan();
+  });
+
+  const handleProviderEnableChange = async (providerId: string, nextEnabled: boolean) => {
+    const backend = api();
+    if (!backend?.SetProviderEnabled || !providerId) return;
+    try {
+      state.profilesOverview = await backend.SetProviderEnabled(providerId, nextEnabled, wsRoot);
+      if (state.providersScan) {
+        for (const item of state.providersScan.providers || []) {
+          if (item.id === providerId) {
+            item.disabled = !nextEnabled;
+            if (!nextEnabled) {
+              item.connected = false;
+              item.statusLabel = "Desativado";
+              item.detail = "Desativado manualmente nas configurações (suas chaves/contas continuam salvas)";
+            }
+          }
+        }
+        state.providersScan.connectedProviders = (state.providersScan.providers || []).filter((it) => !it.disabled && it.connected).length;
+        if (nextEnabled && state.apiKeysTab === "scan") {
+          void runProvidersScan();
+        }
+      }
+      updateStatusBar();
+      updateMissionBoardIfOpen();
+      rerender();
+      const lbl = provLabels[providerId] || providerId;
+      toast(
+        nextEnabled
+          ? `${lbl} reativado!`
+          : `${lbl} desativado — suas chaves continuam salvas.`,
+        nextEnabled ? "success" : "info",
+      );
+    } catch (err: any) {
+      toastError(`alterar estado do provedor ${providerId}`, err);
+      rerender();
+    }
+  };
+  document.querySelectorAll<HTMLInputElement>("[data-provider-toggle]").forEach((chk) => {
+    chk.addEventListener("change", () => {
+      const id = chk.dataset.providerToggle || "";
+      void handleProviderEnableChange(id, chk.checked);
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-provider-toggle-btn]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.providerToggleBtn || "";
+      const nextEnabled = btn.dataset.nextEnabled === "1";
+      void handleProviderEnableChange(id, nextEnabled);
+    });
   });
   document.querySelectorAll<HTMLElement>("[data-scan-toggle-models]").forEach((btn) => {
     btn.addEventListener("click", () => {

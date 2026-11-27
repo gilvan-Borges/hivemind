@@ -68,14 +68,16 @@ type ResolvedProviderInfo struct {
 
 // ProfilesOverview bundles org detection + all profiles + active resolution per provider.
 type ProfilesOverview struct {
-	Identity orgx.Identity                   `json:"identity"`
-	Profiles []ProviderProfileSummary        `json:"profiles"`
-	Resolved map[string]ResolvedProviderInfo `json:"resolved"`
+	Identity          orgx.Identity                   `json:"identity"`
+	Profiles          []ProviderProfileSummary        `json:"profiles"`
+	Resolved          map[string]ResolvedProviderInfo `json:"resolved"`
+	DisabledProviders map[string]bool                 `json:"disabledProviders,omitempty"`
 }
 
 type storedProfilesFile struct {
 	Profiles          []ProviderProfile            `json:"profiles,omitempty"`
 	WorkspaceBindings map[string]map[string]string `json:"workspace_bindings,omitempty"` // normWorkspace -> provider -> profileID
+	DisabledProviders map[string]bool              `json:"disabled_providers,omitempty"` // canonical provider -> true when manually disabled
 }
 
 type workspaceCtxKey struct{}
@@ -229,6 +231,18 @@ func loadProfilesLocked() (storedProfilesFile, error) {
 			}
 		}
 	}
+	if len(out.DisabledProviders) > 0 {
+		cleanDisabled := make(map[string]bool, len(out.DisabledProviders))
+		for k, v := range out.DisabledProviders {
+			if !v {
+				continue
+			}
+			if norm := NormalizeProfileProvider(k); norm != "" {
+				cleanDisabled[norm] = true
+			}
+		}
+		out.DisabledProviders = cleanDisabled
+	}
 	if migrated {
 		_ = saveProfilesLocked(out)
 	}
@@ -240,9 +254,25 @@ func saveProfilesLocked(doc storedProfilesFile) error {
 	if err != nil {
 		return err
 	}
+	var cleanDisabled map[string]bool
+	if len(doc.DisabledProviders) > 0 {
+		cleanDisabled = make(map[string]bool, len(doc.DisabledProviders))
+		for k, v := range doc.DisabledProviders {
+			if !v {
+				continue
+			}
+			if norm := NormalizeProfileProvider(k); norm != "" {
+				cleanDisabled[norm] = true
+			}
+		}
+		if len(cleanDisabled) == 0 {
+			cleanDisabled = nil
+		}
+	}
 	diskDoc := storedProfilesFile{
 		Profiles:          make([]ProviderProfile, len(doc.Profiles)),
 		WorkspaceBindings: doc.WorkspaceBindings,
+		DisabledProviders: cleanDisabled,
 	}
 	for i, p := range doc.Profiles {
 		cp := p
@@ -517,10 +547,23 @@ func ListProfilesOverview(workspace string) ProfilesOverview {
 		resolved[prov] = info
 	}
 
+	var disabledCopy map[string]bool
+	if len(doc.DisabledProviders) > 0 {
+		disabledCopy = make(map[string]bool, len(doc.DisabledProviders))
+		for k, v := range doc.DisabledProviders {
+			if v {
+				if norm := NormalizeProfileProvider(k); norm != "" {
+					disabledCopy[norm] = true
+				}
+			}
+		}
+	}
+
 	return ProfilesOverview{
-		Identity: orgID,
-		Profiles: summaries,
-		Resolved: resolved,
+		Identity:          orgID,
+		Profiles:          summaries,
+		Resolved:          resolved,
+		DisabledProviders: disabledCopy,
 	}
 }
 
@@ -847,6 +890,71 @@ func BindProviderWorkspace(workspace, provider, profileID string) (ProfilesOverv
 			return ProfilesOverview{}, fmt.Errorf("perfil %q não encontrado para %s", val, prov)
 		}
 		doc.WorkspaceBindings[wsKey][prov] = found
+	}
+	err = saveProfilesLocked(doc)
+	profilesMu.Unlock()
+	if err != nil {
+		return ProfilesOverview{}, err
+	}
+	return ListProfilesOverview(workspace), nil
+}
+
+// DisabledProviders returns a copy of all canonical provider IDs manually
+// disabled by the user without removing their stored credentials.
+func DisabledProviders() map[string]bool {
+	profilesMu.Lock()
+	doc, err := loadProfilesLocked()
+	profilesMu.Unlock()
+	if err != nil || len(doc.DisabledProviders) == 0 {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(doc.DisabledProviders))
+	for k, v := range doc.DisabledProviders {
+		if v {
+			if norm := NormalizeProfileProvider(k); norm != "" {
+				out[norm] = true
+			}
+		}
+	}
+	return out
+}
+
+// IsProviderDisabled reports whether provider (or any of its aliases) was
+// manually disabled by the user in Settings -> Providers & Accounts.
+func IsProviderDisabled(provider string) bool {
+	norm := NormalizeProfileProvider(provider)
+	if norm == "" {
+		return false
+	}
+	profilesMu.Lock()
+	doc, err := loadProfilesLocked()
+	profilesMu.Unlock()
+	if err != nil || len(doc.DisabledProviders) == 0 {
+		return false
+	}
+	return doc.DisabledProviders[norm]
+}
+
+// SetProviderEnabled enables or disables provider globally while preserving all
+// stored API keys and accounts so the user can toggle it back on later.
+func SetProviderEnabled(provider string, enabled bool, workspace string) (ProfilesOverview, error) {
+	norm := NormalizeProfileProvider(provider)
+	if norm == "" {
+		return ProfilesOverview{}, fmt.Errorf("provedor inválido")
+	}
+	profilesMu.Lock()
+	doc, err := loadProfilesLocked()
+	if err != nil {
+		profilesMu.Unlock()
+		return ProfilesOverview{}, err
+	}
+	if doc.DisabledProviders == nil {
+		doc.DisabledProviders = map[string]bool{}
+	}
+	if enabled {
+		delete(doc.DisabledProviders, norm)
+	} else {
+		doc.DisabledProviders[norm] = true
 	}
 	err = saveProfilesLocked(doc)
 	profilesMu.Unlock()
