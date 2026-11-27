@@ -74,6 +74,13 @@ func (fw *FileWatcher) Start() error {
 		return err
 	}
 	fw.mu.Lock()
+	select {
+	case <-fw.done:
+		fw.mu.Unlock()
+		_ = w.Close()
+		return nil
+	default:
+	}
 	if fw.w != nil { // already started
 		fw.mu.Unlock()
 		_ = w.Close()

@@ -89,7 +89,7 @@ func (a *App) OpenProject(dir string) (ProjectInfo, error) {
 		}(abs)
 	}
 	if !a.smokeCheck {
-		go a.startWatcher(abs)
+		a.startWatcher(abs)
 	}
 	if a.autoReview != nil && !a.smokeCheck {
 		go func(root string) {
@@ -196,15 +196,6 @@ func (a *App) startWatcher(root string) {
 	if a.smokeCheck {
 		return
 	}
-	refKey := projectRefKey(root)
-	isProjectStillOpen := func() bool {
-		a.openMu.Lock()
-		defer a.openMu.Unlock()
-		return a.openProjects == nil || a.openProjects[refKey] > 0
-	}
-	if !isProjectStillOpen() {
-		return
-	}
 	key := strings.ToLower(filepath.Clean(root))
 	a.watcherMu.Lock()
 	if _, exists := a.watchers[key]; exists {
@@ -217,9 +208,6 @@ func (a *App) startWatcher(root string) {
 	if err != nil {
 		return
 	}
-	if !isProjectStillOpen() {
-		return
-	}
 	a.watcherMu.Lock()
 	if _, exists := a.watchers[key]; exists {
 		a.watcherMu.Unlock()
@@ -228,15 +216,16 @@ func (a *App) startWatcher(root string) {
 	}
 	a.watchers[key] = w
 	a.watcherMu.Unlock()
-	if err := w.Start(); err != nil {
-		a.watcherMu.Lock()
-		delete(a.watchers, key)
-		a.watcherMu.Unlock()
-		return
-	}
-	if !isProjectStillOpen() {
-		a.stopWatcher(root)
-	}
+
+	go func() {
+		if err := w.Start(); err != nil {
+			a.watcherMu.Lock()
+			if a.watchers[key] == w {
+				delete(a.watchers, key)
+			}
+			a.watcherMu.Unlock()
+		}
+	}()
 }
 
 // onFSChange refreshes the FileIndex for the changed root and forwards the
