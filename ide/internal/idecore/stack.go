@@ -105,6 +105,27 @@ func inspectStackDir(dir, relPrefix string, addStack, addBuild, setTestHint func
 		addBuild("go")
 		setTestHint(hintFor("go test ./..."))
 	}
+	if has("pubspec.yaml") {
+		pubData, _ := os.ReadFile(filepath.Join(dir, "pubspec.yaml"))
+		isFlutter := strings.Contains(string(pubData), "flutter:")
+		if isFlutter {
+			addStack("Flutter / Dart")
+			addBuild("flutter")
+		} else {
+			addStack("Dart")
+			addBuild("dart")
+		}
+		if has(".fvmrc") {
+			addBuild("fvm")
+			if isFlutter {
+				setTestHint(hintFor("fvm flutter test"))
+			}
+		} else if isFlutter {
+			setTestHint(hintFor("flutter test"))
+		} else {
+			setTestHint(hintFor("dart test"))
+		}
+	}
 	if has("pom.xml") {
 		addStack("Java / Maven")
 		addBuild("mvn")

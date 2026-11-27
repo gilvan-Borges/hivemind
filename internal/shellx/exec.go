@@ -64,8 +64,7 @@ func (Local) Run(ctx context.Context, dir, command string, allowlist []string, c
 			cmd = exec.CommandContext(runCtx, "sh", "-c", command)
 		}
 	} else {
-		argv := append([]string(nil), dec.Argv...)
-		argv[0] = ResolveLocalExecutable(dir, argv[0])
+		argv := ResolveCommandArgv(dir, dec.Argv)
 		cmd = exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	}
 	cmd.Dir = dir
@@ -226,6 +225,72 @@ func ResolveLocalExecutable(dir, name string) string {
 func isRegularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// ResolveCommandArgv resolves local wrapper executables inside dir and, on
+// Windows, falls back to Git Bash when `bash`/`sh` points to the broken WSL
+// stub under WindowsApps/System32 or when running a `.sh` script directly.
+func ResolveCommandArgv(dir string, argv []string) []string {
+	if len(argv) == 0 {
+		return argv
+	}
+	out := append([]string(nil), argv...)
+	out[0] = ResolveLocalExecutable(dir, out[0])
+	if runtime.GOOS != "windows" {
+		return out
+	}
+	raw0 := strings.TrimSpace(out[0])
+	lower0 := strings.ToLower(raw0)
+	if !strings.ContainsAny(raw0, `/\`) && (lower0 == "bash" || lower0 == "bash.exe" || lower0 == "sh" || lower0 == "sh.exe") {
+		looked, err := exec.LookPath(raw0)
+		if err != nil || isBrokenWindowsBashStub(looked) {
+			if gb := findGitBash(); gb != "" {
+				out[0] = gb
+			}
+		}
+		return out
+	}
+	if strings.HasSuffix(lower0, ".sh") {
+		scriptExists := isRegularFile(raw0) || (dir != "" && isRegularFile(filepath.Join(dir, raw0)))
+		if scriptExists {
+			if gb := findGitBash(); gb != "" {
+				out = append([]string{gb}, out...)
+			}
+		}
+	}
+	return out
+}
+
+func isBrokenWindowsBashStub(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	clean := strings.ToLower(filepath.Clean(path))
+	return strings.Contains(clean, `\windowsapps\`) || strings.HasSuffix(clean, `\system32\bash.exe`)
+}
+
+func findGitBash() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	candidates := []string{
+		`C:\Program Files\Git\bin\bash.exe`,
+		`C:\Program Files\Git\usr\bin\bash.exe`,
+		`C:\Program Files (x86)\Git\bin\bash.exe`,
+	}
+	if gitPath, err := exec.LookPath("git"); err == nil && strings.TrimSpace(gitPath) != "" {
+		gitDir := filepath.Dir(gitPath)
+		candidates = append(candidates,
+			filepath.Join(gitDir, "..", "bin", "bash.exe"),
+			filepath.Join(gitDir, "..", "usr", "bin", "bash.exe"),
+		)
+	}
+	for _, cand := range candidates {
+		if isRegularFile(cand) {
+			return filepath.Clean(cand)
+		}
+	}
+	return ""
 }
 
 // RunDirect executes argv with the process environment and no allowlist.

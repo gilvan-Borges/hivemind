@@ -907,3 +907,32 @@ func TestDirectExploreGuardBlocksAt51AndResetsOnEdit(t *testing.T) {
 		t.Fatalf("read after edit_file should pass again, got res=%v err=%v", res, err)
 	}
 }
+
+func TestDirectReviewInEphemeralWorktreeBlocksFileEdits(t *testing.T) {
+	ws := t.TempDir()
+	wt := t.TempDir()
+	r := &Runner{
+		Workspace:       ws,
+		Project:         team.File{Settings: team.DefaultSettings()},
+		GitHub:          &fakeGitHub{},
+		reviewRequested: true,
+	}
+	directTools, err := r.buildTriageBaseTools(wt, "", false, false, false, true)
+	if err != nil {
+		t.Fatalf("buildTriageBaseTools(direct=true) failed: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, tl := range directTools {
+		seen[tl.Name()] = true
+	}
+	for _, forbidden := range []string{"write_file", "edit_file", "git_commit", "git_push"} {
+		if seen[forbidden] {
+			t.Fatalf("ephemeral PR review must omit %s, got tools=%v", forbidden, seen)
+		}
+	}
+	for _, required := range []string{"read_file", "run_shell", "github_review_pr"} {
+		if !seen[required] {
+			t.Fatalf("ephemeral PR review must keep %s, got tools=%v", required, seen)
+		}
+	}
+}

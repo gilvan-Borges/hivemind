@@ -20,6 +20,7 @@ import (
 	"github.com/gilvan-Borges/HiveMind/internal/modelx"
 	"github.com/gilvan-Borges/HiveMind/internal/names"
 	"github.com/gilvan-Borges/HiveMind/internal/sessionx"
+	"github.com/gilvan-Borges/HiveMind/internal/shellx"
 	"github.com/gilvan-Borges/HiveMind/internal/team"
 	"github.com/gilvan-Borges/HiveMind/internal/ui"
 	"github.com/gilvan-Borges/HiveMind/internal/vaultx"
@@ -217,6 +218,11 @@ func (r *Runner) runTriageChief(ctx context.Context, sess session.Session, msg *
 	} else if r.resumedSession && r.Git != nil && strings.TrimSpace(r.Workspace) != "" {
 		if slotWT := workspace.WorktreePath(r.Workspace, r.conversationSlot()); r.Git.IsRepo(ctx, slotWT) {
 			toolRoot = slotWT
+		}
+	}
+	if (r.reviewRequested || isAutoReview) && strings.TrimSpace(toolRoot) != "" {
+		if envReport := shellx.ProbeWorktreeEnvironment(toolRoot); envReport != "" {
+			msg = appendTextToFirstPart(msg, "\n"+envReport)
 		}
 	}
 	if !sddDocs && !sddJira && !isAutoReview && strings.TrimSpace(toolRoot) != "" {

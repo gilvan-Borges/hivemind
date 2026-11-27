@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 
 	"google.golang.org/adk/v2/agent"
@@ -144,6 +146,7 @@ func (d Deps) runShellUnsandboxed(ctx context.Context, dir, command string) (str
 	log.Printf("squad run_shell SEM sandbox; o ambiente não leva segredos do cofre")
 	shellx.AuditUnsandboxedShell(command)
 	out, err := d.hostShell().Run(ctx, dir, command, d.shellAllowlist(), d.Confirm)
+	err = decorateMissingToolError(command, err)
 	if out == "" {
 		out = unsandboxedWarning
 	} else {
@@ -169,8 +172,7 @@ func (d Deps) runShellSandboxed(ctx context.Context, dir, command string) (strin
 	if sb == nil {
 		sb = sandboxx.NewOSRunner()
 	}
-	argv := append([]string(nil), dec.Argv...)
-	argv[0] = shellx.ResolveLocalExecutable(dir, argv[0])
+	argv := shellx.ResolveCommandArgv(dir, dec.Argv)
 	res, err := sb.Run(ctx, sandboxx.Options{
 		Argv:           argv,
 		WorkDir:        dir,
@@ -202,12 +204,30 @@ func (d Deps) runShellSandboxed(ctx context.Context, dir, command string) (strin
 		text += "\n[saída completa persistida em: " + spillPath + " — recupere trechos com read_file (start_line/end_line)]"
 	}
 	if err != nil {
+		err = decorateMissingToolError(command, err)
 		if strings.TrimSpace(text) == "" {
 			return "", err
 		}
 		return text, err
 	}
 	return text, nil
+}
+
+func decorateMissingToolError(command string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, exec.ErrNotFound) && !strings.Contains(strings.ToLower(err.Error()), "executable file not found") {
+		return err
+	}
+	var bin string
+	dec := shellx.Evaluate(command, []string{"*"})
+	if len(dec.Argv) > 0 {
+		bin = dec.Argv[0]
+	} else if fields := strings.Fields(command); len(fields) > 0 {
+		bin = fields[0]
+	}
+	return fmt.Errorf("%w\n%s", err, shellx.FormatMissingExecutableDiagnostic(bin, err))
 }
 
 func (d Deps) canShell() (tool.Tool, error) {

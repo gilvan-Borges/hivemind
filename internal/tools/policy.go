@@ -34,6 +34,7 @@ type Deps struct {
 	Settings               team.Settings
 	DisableGitWrite        bool
 	DisableMerge           bool // Hard-gate: omite github_merge_pr do catálogo (usado no modo auto-review)
+	ReadOnlyFiles          bool // Quando true (revisão de PR em worktree efêmera), omite write_file e edit_file
 	LeanReviewTools        bool // Revisão pura de PR sem jiraKey: omite schemas Jira e github_create_pr para poupar tokens por chamada
 	ReviewCommentOnly      bool // Quando true, github_review_pr aceita apenas evento COMMENT
 	AllowReadOnlyTestShell bool // run_shell continua disponível, mas commit/push/merge/PR via shell ficam bloqueados (auto-review)
@@ -242,11 +243,13 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canFindFiles()); err != nil {
 			return nil, err
 		}
-		if err := add(deps.canWrite()); err != nil {
-			return nil, err
-		}
-		if err := add(deps.canEdit()); err != nil {
-			return nil, err
+		if !deps.ReadOnlyFiles {
+			if err := add(deps.canWrite()); err != nil {
+				return nil, err
+			}
+			if err := add(deps.canEdit()); err != nil {
+				return nil, err
+			}
 		}
 		if err := add(deps.gitStatus()); err != nil {
 			return nil, err
@@ -288,11 +291,13 @@ func ForRole(role string, deps Deps) ([]tool.Tool, error) {
 		if err := add(deps.canFindFiles()); err != nil {
 			return nil, err
 		}
-		if err := add(deps.canWrite()); err != nil {
-			return nil, err
-		}
-		if err := add(deps.canEdit()); err != nil {
-			return nil, err
+		if !deps.ReadOnlyFiles {
+			if err := add(deps.canWrite()); err != nil {
+				return nil, err
+			}
+			if err := add(deps.canEdit()); err != nil {
+				return nil, err
+			}
 		}
 		if err := add(deps.canShell()); err != nil {
 			return nil, err

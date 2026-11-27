@@ -22,6 +22,7 @@ Inspecione os arquivos alterados no PR e identifique os módulos/serviços tocad
 | Java / Kotlin / Android (`build.gradle*`) | `./gradlew --no-daemon :modulo:test` (ou `testDebugUnitTest` em Android) |
 | Go (`go.mod`, `*.go`) | `go test -count=1 ./caminho/do/pacote/...` (em `ide/frontend/**`: `npm test` + `node scripts/check-design-tokens.mjs` se tocar CSS) |
 | Node / TypeScript (`package.json`, `*.ts`, `*.tsx`, `*.js`) | `npm test` (ou `pnpm test` / `npx vitest run <arquivo>`) no pacote tocado |
+| Flutter / Dart (`pubspec.yaml`, `*.dart`) | `fvm flutter test <arquivo>` (se houver `.fvmrc`) ou `flutter test <arquivo>` + `flutter analyze <arquivo>` (1 comando Flutter por vez no Windows; nunca dois `flutter` em paralelo) |
 | Python (`pyproject.toml`, `*.py`) | `uv run pytest -q <caminho_dos_testes>` (ou `.venv/Scripts/pytest -q` / `pytest -q <caminho_dos_testes>`) |
 | Rust (`Cargo.toml`, `*.rs`) | `cargo test -p <crate>` |
 | .NET (`*.csproj`, `*.sln`, `*.cs`) | `dotnet test <projeto>` |
@@ -29,7 +30,7 @@ Inspecione os arquivos alterados no PR e identifique os módulos/serviços tocad
 
 - Rode apenas os testes dos módulos/serviços efetivamente alterados pelo diff.
 - No Windows / PowerShell, execute um comando por chamada (ou encadeie com `;`).
-- **Runtime/ferramenta ausente (ex.: Python):** em projetos Python, tente `uv run pytest` ou `.venv` local primeiro; **nunca** faça varredura recursiva no disco (`dir /s`, `find /`) procurando `python`. Se o runtime/ferramenta não existir no ambiente, pare e **peça permissão ao usuário antes de instalar**.
+- **Runtime/ferramenta ou versão ausente (qualquer stack):** confira primeiro o bloco `[Ambiente da Worktree]` injetado na conversa. Se faltar o runtime/serviço exigido pelo PR (ex.: `flutter`, `fvm`, `mvn`, `node`, `uv`/`pytest`, `go`, Docker parado) **ou** a versão local divergir da trava do projeto (`.fvmrc`, `pubspec.yaml`, `.nvmrc`, `go.mod`, etc.): **PARE na 1ª detecção** — **NUNCA** faça varredura no disco (`dir /s`, `find /`, `Test-Path` em loop) nem edite `pubspec.yaml`, `package.json`, `pom.xml` ou qualquer arquivo do PR para burlar versão. Informe ao usuário exatamente o que falta (e qual arquivo do PR exige), forneça o **link oficial / comando exato de instalação** (ex.: `dart pub global activate fvm && fvm install <versão>`, `winget install ...`, ou iniciar o Docker Desktop) e **pergunte se ele deseja instalar agora (ou autorizar a instalação) para concluir os testes**, ou se prefere publicar `COMMENT` sem execução local. Em modo autônomo (`auto-review`, sem usuário no chat), publique `COMMENT` explicando objetivamente o que faltou localmente.
 
 ### Mudanças de Frontend / Visual (proporcional ao impacto)
 
@@ -57,6 +58,7 @@ O comentário publicado no PR é lido por toda a equipe de engenharia. **NUNCA**
 Estruture o parecer como um **Engenheiro Sênior / Tech Lead humano**:
 1. **Parecer técnico direto:** correção das regras de negócio, contratos, segurança, tratamento de erros e aderência arquitetural.
 2. **Validação executada:** linha objetiva com os testes realmente rodados e o resultado. Em PRs exclusivos de documentação (`.md`/specs), mencione apenas a consistência documental.
+   - **Transparência em teste parcial:** se parte dos testes do PR passou (ex.: unitários), mas algum teste de integração (ex.: Testcontainers/PostgreSQL com Docker parado) ou script auxiliar (`.sh`) não pôde rodar por ambiente, registre explicitamente no parecer quais passaram e quais ficaram fora por ambiente — nunca omita falhas de ambiente.
 3. **Pontos de ajuste (se houver):** `arquivo:linha`, causa raiz e sugestão objetiva apenas quando existir problema real.
 
 ## 4. Veredito formal no GitHub

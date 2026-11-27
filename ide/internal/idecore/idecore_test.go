@@ -85,6 +85,20 @@ func TestDetectStack(t *testing.T) {
 			t.Fatalf("expected Java / Maven + Angular, got %+v", s)
 		}
 	})
+
+	t.Run("FlutterAndFvmrc", func(t *testing.T) {
+		dir := t.TempDir()
+		_ = os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: app_mobile\ndependencies:\n  flutter:\n    sdk: flutter\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(dir, ".fvmrc"), []byte(`{"flutter":"3.24.0"}`), 0o644)
+		s := DetectStack(dir)
+		if !strings.Contains(s.Summary, "Flutter / Dart") || s.TestHint != "fvm flutter test" {
+			t.Fatalf("expected Flutter / Dart stack with fvm hint, got %+v", s)
+		}
+		joinedTools := strings.Join(s.BuildTools, ",")
+		if !strings.Contains(joinedTools, "flutter") || !strings.Contains(joinedTools, "fvm") {
+			t.Fatalf("expected flutter and fvm build tools, got %+v", s.BuildTools)
+		}
+	})
 }
 
 func TestExplorerPathSafetyAndReadWrite(t *testing.T) {
